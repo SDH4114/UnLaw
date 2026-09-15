@@ -1,0 +1,1 @@
+"""Obsidian Kanban command."""

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "unlaw"
+version = "2.1.0"
+description = "A small, extensible macOS command launcher"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Haos" }]
+dependencies = []
+
+[project.scripts]
+unlaw = "unlawful.cli:entrypoint"
+ul = "unlawful.cli:entrypoint"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/unlawful"]
+
+[tool.hatch.build]
+include = [
+  "src/unlawful/**/*.py",
+]

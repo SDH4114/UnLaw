@@ -1,0 +1,1 @@
+"""macOS media capture command."""
