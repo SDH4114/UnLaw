@@ -1,6 +1,6 @@
 # Project Templates and Venv Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Add saved project templates that switch the current Zsh directory and open configured apps, plus `ul venv` for creating and activating `.venv` in the current shell.
 
@@ -33,7 +33,7 @@
 - Consumes: `config.templates_dir()` and existing `ConfigError` conventions.
 - Produces: `WorkspaceTemplate`, `workspace_templates_dir()`, `discover_workspace_templates()`, `load_workspace_template(name)`, and `create_workspace_template(name, path, app, ai)`.
 
-- [ ] **Step 1: Write failing registry tests**
+- [x] **Step 1: Write failing registry tests**
 
 ```python
 def test_create_and_load_template(self):
@@ -47,12 +47,12 @@ def test_manifest_rejects_unknown_keys(self):
         load_workspace_template("demo")
 ```
 
-- [ ] **Step 2: Run the focused tests and confirm imports fail**
+- [x] **Step 2: Run the focused tests and confirm imports fail**
 
 Run: `python -m unittest tests.test_workspace_templates -v`
 Expected: FAIL because `unlawful.workspace_templates` does not exist.
 
-- [ ] **Step 3: Implement strict manifest storage**
+- [x] **Step 3: Implement strict manifest storage**
 
 ```python
 @dataclass(frozen=True)
@@ -69,12 +69,12 @@ def create_workspace_template(name: str, path: Path, app: str, ai: bool) -> Work
 
 Add `projects` to the template layout created by `ensure_layout()` without changing overlay behavior.
 
-- [ ] **Step 4: Run registry and config tests**
+- [x] **Step 4: Run registry and config tests**
 
 Run: `python -m unittest tests.test_workspace_templates tests.test_config -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit the registry**
+- [x] **Step 5: Commit the registry**
 
 ```bash
 git add src/unlawful/workspace_templates.py src/unlawful/config.py tests/test_workspace_templates.py
@@ -93,7 +93,7 @@ git commit -m "feat: add saved project template registry"
 - Consumes: Task 1 registry functions and existing `discover_commands()`/alias loading.
 - Produces: `create template [name]`, `templates`, `list`, and deterministic routing of template names.
 
-- [ ] **Step 1: Add failing public-command tests**
+- [x] **Step 1: Add failing public-command tests**
 
 ```python
 def test_create_template_prompts_and_saves_current_directory(self):
@@ -109,12 +109,12 @@ def test_list_prints_templates_then_commands(self):
 
 Cover named creation, invalid answers that reprompt, EOF cancellation, all collision classes, sorted empty/non-empty lists, and `ul commands` exclusion.
 
-- [ ] **Step 2: Run focused tests and confirm failures**
+- [x] **Step 2: Run focused tests and confirm failures**
 
 Run: `python -m unittest tests.test_system_commands tests.test_cli -v`
 Expected: FAIL because the new system commands and create mode are absent.
 
-- [ ] **Step 3: Implement public create/list behavior**
+- [x] **Step 3: Implement public create/list behavior**
 
 ```python
 SYSTEM_COMMAND_NAMES = {
@@ -132,12 +132,12 @@ def list_all(argv: Sequence[str] = ()) -> int:
 Extend `create_command()` to dispatch `command` and `template` modes and use
 small prompt helpers that accept only specified values.
 
-- [ ] **Step 4: Run system and CLI tests**
+- [x] **Step 4: Run system and CLI tests**
 
 Run: `python -m unittest tests.test_system_commands tests.test_cli -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit commands and routing**
+- [x] **Step 5: Commit commands and routing**
 
 ```bash
 git add src/unlawful/system_commands.py src/unlawful/cli.py tests/test_system_commands.py tests/test_cli.py
@@ -157,7 +157,7 @@ git commit -m "feat: create and list project templates"
 - Consumes: `load_workspace_template(name)` and `apps.editor` configuration.
 - Produces: `render_zsh_integration()`, hidden `_template-path` and `_template-launch` CLI routes, template fallback routing, and managed `.zshrc` installation.
 
-- [ ] **Step 1: Write failing launch and shell tests**
+- [x] **Step 1: Write failing launch and shell tests**
 
 ```python
 def test_launch_opens_editor_then_chatgpt(self):
@@ -178,12 +178,12 @@ Cover Obsidian, missing path, editor failure stopping AI, no extra template
 arguments, hidden helper exclusion, direct invocation guidance, `.zshrc`
 preservation, replacement, and idempotence.
 
-- [ ] **Step 2: Run focused tests and confirm failures**
+- [x] **Step 2: Run focused tests and confirm failures**
 
 Run: `python -m unittest tests.test_shell_integration tests.test_system_commands -v`
 Expected: FAIL because shell integration and hidden helpers are absent.
 
-- [ ] **Step 3: Implement launcher and Zsh wrapper**
+- [x] **Step 3: Implement launcher and Zsh wrapper**
 
 ```python
 def launch_workspace_template(template: WorkspaceTemplate) -> int:
@@ -198,7 +198,7 @@ The wrapper asks `_template-path` whether `$1` is a saved template, performs
 `builtin cd -- "$path"`, then calls `_template-launch`. Non-template commands
 delegate unchanged to `command ul "$@"`.
 
-- [ ] **Step 4: Validate Python tests and generated Zsh syntax**
+- [x] **Step 4: Validate Python tests and generated Zsh syntax**
 
 Run: `python -m unittest tests.test_shell_integration tests.test_system_commands tests.test_cli -v`
 Expected: PASS.
@@ -206,7 +206,7 @@ Expected: PASS.
 Run: `PYTHONPATH=src python -c 'from unlawful.shell_integration import render_zsh_integration; print(render_zsh_integration())' | zsh -n`
 Expected: exit status 0.
 
-- [ ] **Step 5: Commit launch integration**
+- [x] **Step 5: Commit launch integration**
 
 ```bash
 git add src/unlawful/shell_integration.py src/unlawful/system_commands.py src/unlawful/cli.py tests/test_shell_integration.py tests/test_system_commands.py
@@ -225,7 +225,7 @@ git commit -m "feat: launch project templates in current shell"
 - Consumes: generated Zsh wrapper from Task 3 and `venv.EnvBuilder`.
 - Produces: `ensure_venv(directory) -> Path`, hidden `_venv-path`, and public `venv` guidance when shell integration is absent.
 
-- [ ] **Step 1: Add failing venv tests**
+- [x] **Step 1: Add failing venv tests**
 
 ```python
 def test_ensure_venv_creates_missing_environment(self):
@@ -240,12 +240,12 @@ def test_wrapper_sources_returned_activation_path(self):
 Cover existing valid `.venv`, invalid `.venv`, creation failure, extra args,
 and source only after successful helper completion.
 
-- [ ] **Step 2: Run focused tests and confirm failures**
+- [x] **Step 2: Run focused tests and confirm failures**
 
 Run: `python -m unittest tests.test_shell_integration tests.test_system_commands -v`
 Expected: FAIL for absent venv behavior.
 
-- [ ] **Step 3: Implement venv creation and activation handoff**
+- [x] **Step 3: Implement venv creation and activation handoff**
 
 ```python
 def ensure_venv(directory: Path) -> Path:
@@ -261,7 +261,7 @@ def ensure_venv(directory: Path) -> Path:
 The Zsh wrapper handles `ul venv` before template resolution, captures the
 absolute activation path from `_venv-path`, and sources it in the current shell.
 
-- [ ] **Step 4: Run focused tests and Zsh syntax validation**
+- [x] **Step 4: Run focused tests and Zsh syntax validation**
 
 Run: `python -m unittest tests.test_shell_integration tests.test_system_commands -v`
 Expected: PASS.
@@ -269,7 +269,7 @@ Expected: PASS.
 Run: `PYTHONPATH=src python -c 'from unlawful.shell_integration import render_zsh_integration; print(render_zsh_integration())' | zsh -n`
 Expected: exit status 0.
 
-- [ ] **Step 5: Commit venv support**
+- [x] **Step 5: Commit venv support**
 
 ```bash
 git add src/unlawful/shell_integration.py src/unlawful/system_commands.py tests/test_shell_integration.py tests/test_system_commands.py
@@ -287,7 +287,7 @@ git commit -m "feat: add current-shell venv activation"
 - Consumes: all public behavior from Tasks 1-4.
 - Produces: user documentation and verified source/build/install behavior.
 
-- [ ] **Step 1: Add documentation examples**
+- [x] **Step 1: Add documentation examples**
 
 ```markdown
 ul create template hearme
@@ -301,7 +301,7 @@ ul doctor --fix
 Document that project templates save paths rather than copy files, and that a
 new shell session is required after first installing the managed Zsh function.
 
-- [ ] **Step 2: Run formatting and full tests**
+- [x] **Step 2: Run formatting and full tests**
 
 Run: `python -m unittest discover -s tests -v`
 Expected: all tests PASS.
@@ -312,7 +312,7 @@ Expected: no findings.
 Run: `git diff --check`
 Expected: no output.
 
-- [ ] **Step 3: Verify build and generated standalone sources**
+- [x] **Step 3: Verify build and generated standalone sources**
 
 Run: `uv build`
 Expected: wheel and sdist build successfully.
@@ -323,7 +323,7 @@ Expected: exit status 0.
 Run: `rg -n '(^from unlawful|^import unlawful|from \.)' "$XDG_CONFIG_HOME/unlaw/commands"`
 Expected: no matches.
 
-- [ ] **Step 4: Verify installed CLI in an isolated config**
+- [x] **Step 4: Verify installed CLI in an isolated config**
 
 ```bash
 uv tool install --force .
@@ -334,7 +334,7 @@ XDG_CONFIG_HOME="$(mktemp -d)" ul templates
 Expected: `commands` includes `templates`, `list`, and `venv`; `templates`
 exits successfully with no project names.
 
-- [ ] **Step 5: Commit docs and final adjustments**
+- [x] **Step 5: Commit docs and final adjustments**
 
 ```bash
 git add README.md src tests hatch_build.py pyproject.toml
