@@ -46,7 +46,7 @@ class GitDoctorFeatureTests(unittest.TestCase):
             [call(["git", "add", "."], check=False), call(["git", "commit", "-m", "fix parser"], check=False)],
         )
 
-    def test_git_default_respects_disabled_auto_push(self) -> None:
+    def test_git_default_always_pushes(self) -> None:
         from unlawful.built_in_commands.git import main as git_command
         from unlawful.config import ensure_layout, set_config_value
 
@@ -55,7 +55,14 @@ class GitDoctorFeatureTests(unittest.TestCase):
         completed = subprocess.CompletedProcess([], 0)
         with patch.object(git_command.subprocess, "run", return_value=completed) as run:
             self.assertEqual(git_command.main(["message"]), 0)
-        self.assertEqual(run.call_count, 2)
+        self.assertEqual(
+            run.call_args_list,
+            [
+                call(["git", "add", "."], check=False),
+                call(["git", "commit", "-m", "message"], check=False),
+                call(["git", "push"], check=False),
+            ],
+        )
 
     def test_git_sync_pulls_rebases_commits_and_pushes(self) -> None:
         from unlawful.built_in_commands.git import main as git_command

@@ -4,8 +4,6 @@ import subprocess
 import sys
 from collections.abc import Sequence
 
-from unlawful.config import ConfigError, load_config
-
 USAGE = "Usage: ul git [message|status|pull|push|commit [message]|sync [message]]"
 
 
@@ -21,9 +19,31 @@ def _run_all(commands: list[list[str]]) -> int:
     return 0
 
 
-def _commit(message: list[str]) -> list[list[str]]:
-    command = ["git", "commit", "-m", " ".join(message)] if message else ["git", "commit"]
-    return [["git", "add", "."], command]
+def _commit_message(tokens: list[str]) -> str | None:
+    if tokens:
+        return " ".join(tokens).strip()
+    try:
+        message = input("Commit message: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nunlaw git: commit cancelled.", file=sys.stderr)
+        return None
+    if not message:
+        print("unlaw git: commit message cannot be empty.", file=sys.stderr)
+        return None
+    return message
+
+
+def _commit_workflow(tokens: list[str], *, push: bool) -> int:
+    code = _run_all([["git", "add", "."]])
+    if code:
+        return code
+    message = _commit_message(tokens)
+    if message is None:
+        return 2
+    commands = [["git", "commit", "-m", message]]
+    if push:
+        commands.append(["git", "push"])
+    return _run_all(commands)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -37,19 +57,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         return _run_all([["git", args[0]]])
     if args and args[0] == "commit":
-        return _run_all(_commit(args[1:]))
+        return _commit_workflow(args[1:], push=False)
     if args and args[0] == "sync":
-        return _run_all([["git", "pull", "--rebase"], *_commit(args[1:]), ["git", "push"]])
+        code = _run_all([["git", "pull", "--rebase"]])
+        return code or _commit_workflow(args[1:], push=True)
 
-    try:
-        auto_push = load_config()["git"]["auto_push"]
-    except ConfigError as error:
-        print(f"unlaw git: {error}", file=sys.stderr)
-        return 2
-    commands = _commit(args)
-    if auto_push:
-        commands.append(["git", "push"])
-    return _run_all(commands)
+    return _commit_workflow(args, push=True)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -59,6 +60,33 @@ class GitCommandTests(unittest.TestCase):
             [
                 call(["git", "add", "."], check=False),
                 call(["git", "commit", "-m", "fix parser"], check=False),
+                call(["git", "push"], check=False),
+            ],
+        )
+
+    def test_git_without_message_prompts_between_add_and_commit(self) -> None:
+        from unlawful.config import ensure_layout
+
+        script = ensure_layout() / "commands" / "git" / "main.py"
+        spec = importlib.util.spec_from_file_location("standalone_git_command", script)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader if spec else None)
+        assert spec is not None and spec.loader is not None
+        command = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(command)
+
+        completed = subprocess.CompletedProcess([], 0)
+        with patch.object(command.subprocess, "run", return_value=completed) as run, patch(
+            "builtins.input", return_value="update docs"
+        ) as prompt:
+            self.assertEqual(command.main([]), 0)
+
+        prompt.assert_called_once_with("Commit message: ")
+        self.assertEqual(
+            run.call_args_list,
+            [
+                call(["git", "add", "."], check=False),
+                call(["git", "commit", "-m", "update docs"], check=False),
                 call(["git", "push"], check=False),
             ],
         )

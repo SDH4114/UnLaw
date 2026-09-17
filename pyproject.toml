@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "unlaw"
-version = "2.1.0"
+version = "2.1.2"
 description = "A small, extensible macOS command launcher"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,3 +23,5 @@ packages = ["src/unlawful"]
 include = [
   "src/unlawful/**/*.py",
 ]
+
+[tool.hatch.build.hooks.custom]

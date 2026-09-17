@@ -10,6 +10,8 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
+from .command_sources import command_source, is_replaceable_command_source
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "core": {
         "color": True,
@@ -62,19 +64,33 @@ DEFAULT_CONFIG: dict[str, Any] = {
 TEMPLATE_NAMES = ("commands", "python", "rust", "cpp")
 DEFAULT_COMMAND_NAMES = (
     "app",
+    "browser",
     "capture",
     "cpp",
     "game",
     "git",
+    "gpt",
     "lm",
+    "lofi",
     "mac",
+    "minecraft",
     "music",
+    "netflix",
+    "obsidian",
     "py",
     "rust",
+    "steam",
     "tg",
     "todo",
     "work",
     "yt",
+    "zed",
+)
+STORAGE_SUBDIRECTORIES = (
+    ("captures", "screenshots"),
+    ("captures", "recordings"),
+    ("telegram", "downloads"),
+    ("runtime",),
 )
 BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -111,16 +127,26 @@ def _seed_default_commands() -> None:
     root = user_commands_dir()
     for name in DEFAULT_COMMAND_NAMES:
         destination = root / name / "main.py"
-        if destination.exists():
+        if destination.exists() and not is_replaceable_command_source(
+            destination.read_text(encoding="utf-8"), name
+        ):
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(
-            "from unlawful.built_in_commands."
-            f"{name}.main import main\n\n\n"
-            'if __name__ == "__main__":\n'
-            "    raise SystemExit(main())\n",
-            encoding="utf-8",
-        )
+        destination.write_text(command_source(name), encoding="utf-8")
+
+
+def _ensure_storage_layout() -> None:
+    configured: object = DEFAULT_CONFIG["storage"]["root"]
+    try:
+        with config_file().open("rb") as handle:
+            user_config = tomllib.load(handle)
+        configured = user_config.get("storage", {}).get("root", configured)
+    except (AttributeError, OSError, tomllib.TOMLDecodeError):
+        pass
+    configured_path = Path(configured).expanduser() if isinstance(configured, str) else Path("data")
+    root = configured_path if configured_path.is_absolute() else config_dir() / configured_path
+    for parts in STORAGE_SUBDIRECTORIES:
+        root.joinpath(*parts).mkdir(parents=True, exist_ok=True)
 
 
 def ensure_layout() -> Path:
@@ -132,6 +158,7 @@ def ensure_layout() -> Path:
     if not path.exists():
         write_config(copy.deepcopy(DEFAULT_CONFIG))
     _seed_default_commands()
+    _ensure_storage_layout()
     return root
 
 

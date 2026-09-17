@@ -6,7 +6,16 @@ Unlaw — быстрая персональная CLI-утилита для macO
 
 ## Установка и обновление
 
-Нужен Python 3.11+ и желательно [uv](https://docs.astral.sh/uv/).
+Установка последней версии из GitHub одной командой:
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/SDH4114/UnLaw/main/install.sh | sh
+```
+
+Установщик использует [uv](https://docs.astral.sh/uv/) и автоматически установит
+его, если команды `uv` ещё нет. Нужен Python 3.11+.
+
+Для установки из локального checkout:
 
 ```bash
 uv tool install .
@@ -24,8 +33,8 @@ uv tool install --force .
 uv tool install --force --editable .
 ```
 
-`unlaw` и `ul` полностью эквивалентны. При первом запуске Unlaw автоматически
-создаёт пользовательскую структуру:
+`unlaw` и `ul` полностью эквивалентны. Сборка из исходников и первый запуск
+автоматически создают пользовательскую структуру:
 
 ```text
 ~/.config/unlaw/
@@ -45,10 +54,11 @@ uv tool install --force --editable .
     └── cpp/
 ```
 
-Существующие конфиги, команды и шаблоны не перезаписываются. Системными остаются
-только `init`, `commands`, `which`, `create`, `doctor`, `completion`, `version` и
-`config`; остальные команды создаются в `commands/<name>/main.py` и доступны для
-редактирования.
+Существующие конфиги, команды и шаблоны не перезаписываются. Старые официальные
+import-обёртки автоматически заменяются полноценным кодом, а вручную изменённые
+команды сохраняются. Системными остаются только `init`, `commands`, `which`,
+`create`, `doctor`, `completion`, `version` и `config`; остальные команды создаются
+в `commands/<name>/main.py` и доступны для редактирования.
 
 ## Основные команды
 
@@ -209,8 +219,10 @@ ul create command anime
 
 ## Команды в config
 
-Все команды ниже имеют вид `~/.config/unlaw/commands/<name>/main.py`. Эти файлы —
-видимые entrypoint-обёртки; системный dispatcher ищет команды только в этой папке.
+Все команды ниже имеют вид `~/.config/unlaw/commands/<name>/main.py`. Это полные
+самостоятельные исходники: во время запуска они не импортируют `unlawful` и не
+зависят от внутренней структуры пакета. Системный dispatcher ищет команды только
+в этой папке.
 
 ### Приложения
 
@@ -223,7 +235,7 @@ ul app "Visual Studio Code"
 
 ```bash
 ul git "fix parser"       # add, commit, push
-ul git                    # add, интерактивный commit, push
+ul git                    # add, спросить сообщение в терминале, commit -m, push
 ul git status
 ul git pull
 ul git push
@@ -231,8 +243,9 @@ ul git commit "message"  # add + commit, без push
 ul git sync "message"    # pull --rebase + add + commit + push
 ```
 
-`git.auto_push = false` отключает push только в стандартном workflow. Любой
-workflow останавливается на первой ошибке.
+Без аргумента `ul git` показывает обычный однострочный prompt `Commit message:` в
+текущем терминале и никогда не открывает Git-редактор. Стандартный workflow всегда
+завершается `git push` и останавливается на первой ошибке.
 
 ### Python
 
@@ -311,6 +324,15 @@ Microphone и Accessibility. `camera_device` и `audio_device` можно под
 ## Быстрые приложения
 
 ```bash
+ul lofi                           # открыть Lofi Engine
+ul zed                            # открыть текущую папку в Zed
+ul netflix                        # открыть Netflix
+ul tg                             # открыть Telegram
+ul obsidian                       # открыть Obsidian
+ul gpt                            # открыть ChatGPT
+ul browser                        # открыть браузер по умолчанию
+ul steam                          # открыть Steam
+ul minecraft                      # открыть Prism Launcher
 ul music
 ul music "Killer Queen"           # поиск и запуск первого результата в Spotify
 ul work                            # Lofi Engine + текущая папка в Zed
@@ -340,6 +362,7 @@ ul game invaders hard
 ## Telegram
 
 ```bash
+ul tg                              # открыть приложение Telegram
 ul tg setup                        # токен скрыто сохраняется в macOS Keychain
 ul tg "Сообщение из терминала"
 ul tg send report.pdf
@@ -448,6 +471,6 @@ python3 -m compileall -q src tests
 uv build
 ```
 
-Unlaw 2.1 остаётся local-first: команды не используют shell-строки, LM Studio
+Unlaw 2.1.2 остаётся local-first: команды не используют shell-строки, LM Studio
 принимает только loopback endpoint, а секрет Telegram хранится в macOS Keychain.
 Внешние приложения и разрешения остаются явно видимыми через `ul doctor`.

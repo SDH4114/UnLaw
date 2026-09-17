@@ -15,7 +15,8 @@ from typing import Any
 
 from .config import ConfigError, load_config, set_config_value, storage_path
 
-USAGE = """Usage: ul tg <message>|send <message-or-file>|photo <file>|video <file>|file <path>|capture
+USAGE = """Usage: ul tg                              Open Telegram
+       ul tg <message>|send <message-or-file>|photo <file>|video <file>|file <path>|capture
        ul tg setup|status|last|download [directory]
 
 The bot token is stored in macOS Keychain, never in config.toml.
@@ -229,8 +230,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args == ["setup"]:
             return _setup()
         if not args and sys.stdin.isatty():
-            print(USAGE, end="")
-            return 2
+            return subprocess.run(["open", "-a", "Telegram"], check=False).returncode
         client, settings = _client()
         chat_id = settings["chat_id"]
         if args == ["status"]:
