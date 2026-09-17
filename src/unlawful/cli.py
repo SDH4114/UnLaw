@@ -14,7 +14,9 @@ from .system_commands import (
     create_command,
     doctor,
     init_command,
+    list_all,
     list_commands,
+    list_templates,
     version_command,
     which_command,
 )
@@ -26,6 +28,8 @@ SYSTEM_COMMANDS = {
     "create": create_command,
     "doctor": doctor,
     "init": init_command,
+    "list": list_all,
+    "templates": list_templates,
     "version": version_command,
     "which": which_command,
 }

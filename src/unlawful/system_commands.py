@@ -25,22 +25,31 @@ from .config import (
     user_commands_dir,
 )
 from .runner import command_source, discover_commands, resolve_command
+from .workspace_templates import (
+    WorkspaceTemplateError,
+    create_workspace_template,
+    discover_workspace_templates,
+    validate_workspace_template_name,
+)
 
-SYSTEM_COMMAND_NAMES = {"commands", "completion", "config", "create", "doctor", "init", "version", "which"}
+SYSTEM_COMMAND_NAMES = {
+    "commands",
+    "completion",
+    "config",
+    "create",
+    "doctor",
+    "init",
+    "list",
+    "templates",
+    "version",
+    "which",
+}
 COMMAND_NAME = re.compile(r"^[a-z][a-z0-9_-]*$")
 
 
-def list_commands(argv: Sequence[str] = ()) -> int:
-    args = list(argv)
-    if args not in ([], ["--verbose"], ["--json"]):
-        print("Usage: ul commands [--verbose|--json]", file=sys.stderr)
-        return 2
+def _command_records() -> list[dict[str, object]]:
     discovered = discover_commands()
-    try:
-        aliases = load_config()["aliases"]
-    except ConfigError as error:
-        print(f"unlaw commands: {error}", file=sys.stderr)
-        return 2
+    aliases = load_config()["aliases"]
     records_by_name: dict[str, dict[str, object]] = {}
     for name in sorted(SYSTEM_COMMAND_NAMES | discovered.keys()):
         path = discovered.get(name)
@@ -57,7 +66,19 @@ def list_commands(argv: Sequence[str] = ()) -> int:
                 "path": None,
                 "expansion": expansion,
             }
-    records = [records_by_name[name] for name in sorted(records_by_name)]
+    return [records_by_name[name] for name in sorted(records_by_name)]
+
+
+def list_commands(argv: Sequence[str] = ()) -> int:
+    args = list(argv)
+    if args not in ([], ["--verbose"], ["--json"]):
+        print("Usage: ul commands [--verbose|--json]", file=sys.stderr)
+        return 2
+    try:
+        records = _command_records()
+    except ConfigError as error:
+        print(f"unlaw commands: {error}", file=sys.stderr)
+        return 2
     if args == ["--json"]:
         print(json.dumps(records, ensure_ascii=False, indent=2))
     elif args == ["--verbose"]:
@@ -67,6 +88,39 @@ def list_commands(argv: Sequence[str] = ()) -> int:
     else:
         for record in records:
             print(record["name"])
+    return 0
+
+
+def list_templates(argv: Sequence[str] = ()) -> int:
+    if argv:
+        print("Usage: ul templates", file=sys.stderr)
+        return 2
+    try:
+        names = sorted(discover_workspace_templates())
+    except WorkspaceTemplateError as error:
+        print(f"unlaw templates: {error}", file=sys.stderr)
+        return 2
+    for name in names:
+        print(name)
+    return 0
+
+
+def list_all(argv: Sequence[str] = ()) -> int:
+    if argv:
+        print("Usage: ul list", file=sys.stderr)
+        return 2
+    try:
+        templates = sorted(discover_workspace_templates())
+        commands = [str(record["name"]) for record in _command_records()]
+    except (ConfigError, WorkspaceTemplateError) as error:
+        print(f"unlaw list: {error}", file=sys.stderr)
+        return 2
+    print("Templates")
+    for name in templates:
+        print(name)
+    print("\nCommands")
+    for name in commands:
+        print(name)
     return 0
 
 
@@ -133,11 +187,11 @@ compdef _unlaw ul unlaw
     return 0
 
 
-def create_command(argv: Sequence[str]) -> int:
-    if len(argv) != 2 or argv[0] != "command":
+def _create_user_command(args: list[str]) -> int:
+    if len(args) != 1:
         print("Usage: ul create command <name>", file=sys.stderr)
         return 2
-    name = argv[1]
+    name = args[0]
     if not COMMAND_NAME.fullmatch(name) or name in SYSTEM_COMMAND_NAMES:
         print(
             "unlaw: Command names must start with a lowercase letter and contain only "
@@ -162,6 +216,71 @@ def create_command(argv: Sequence[str]) -> int:
     print(f"Created command '{name}': {destination}")
     print(f"Run it with: ul {name}")
     return 0
+
+
+class _PromptCancelled(Exception):
+    pass
+
+
+def _prompt_value(prompt: str, allowed: set[str], error: str) -> str:
+    while True:
+        try:
+            value = input(prompt).strip().lower()
+        except (EOFError, KeyboardInterrupt) as cause:
+            raise _PromptCancelled from cause
+        if value in allowed:
+            return value
+        print(error, file=sys.stderr)
+
+
+def _create_project_template(args: list[str]) -> int:
+    if len(args) > 1:
+        print("Usage: ul create template [name]", file=sys.stderr)
+        return 2
+    try:
+        name = args[0] if args else input("Name of template > ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("unlaw create template: Cancelled.", file=sys.stderr)
+        return 1
+    try:
+        validate_workspace_template_name(name)
+        ensure_layout()
+        aliases = load_config()["aliases"]
+        commands = discover_commands()
+        templates = discover_workspace_templates()
+        if name in SYSTEM_COMMAND_NAMES or name in commands or name in aliases or name in templates:
+            print(f"unlaw create template: Name already in use: {name}", file=sys.stderr)
+            return 1
+        app = _prompt_value(
+            "Open with (zed/obsidian) > ",
+            {"zed", "obsidian"},
+            "Please enter zed or obsidian.",
+        )
+        ai = _prompt_value(
+            "Add AI? (y/n) > ",
+            {"y", "n"},
+            "Please enter y or n.",
+        ) == "y"
+        template = create_workspace_template(name, Path.cwd(), app, ai)
+    except _PromptCancelled:
+        print("unlaw create template: Cancelled.", file=sys.stderr)
+        return 1
+    except (ConfigError, WorkspaceTemplateError, OSError) as error:
+        print(f"unlaw create template: {error}", file=sys.stderr)
+        return 2
+    print(f"Created template '{name}' for {template.path}")
+    print(f"Run it with: ul {name}")
+    return 0
+
+
+def create_command(argv: Sequence[str]) -> int:
+    args = list(argv)
+    if args and args[0] == "command":
+        return _create_user_command(args[1:])
+    if args and args[0] == "template":
+        return _create_project_template(args[1:])
+    print("Usage: ul create command <name> | ul create template [name]", file=sys.stderr)
+    return 2
 
 
 def _harness_permissions(executable: str | None = None) -> tuple[bool, str]:

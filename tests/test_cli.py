@@ -77,6 +77,16 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(["--version"]), 0)
         self.assertEqual(output.getvalue(), "Unlaw 2.1.3\n")
 
+    def test_cli_routes_templates_and_list_as_system_commands(self) -> None:
+        from unlawful.cli import main
+
+        with patch.dict(os.environ, self.env, clear=False), patch(
+            "unlawful.cli.SYSTEM_COMMANDS",
+            {"templates": lambda args: 7, "list": lambda args: 8},
+        ):
+            self.assertEqual(main(["templates"]), 7)
+            self.assertEqual(main(["list"]), 8)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -103,6 +103,118 @@ class SystemCommandTests(unittest.TestCase):
         created = template.parents[2] / "commands" / "custom" / "main.py"
         self.assertEqual(created.read_text(), "print('custom template')\n")
 
+    def test_create_named_project_template_prompts_for_app_and_ai(self) -> None:
+        from unlawful.system_commands import create_command
+        from unlawful.workspace_templates import load_workspace_template
+
+        project = Path(self.temp.name) / "HearMe"
+        project.mkdir()
+        output = StringIO()
+        with patch.dict(os.environ, self.env, clear=False), patch(
+            "unlawful.system_commands.Path.cwd", return_value=project
+        ), patch("builtins.input", side_effect=["zed", "y"]), redirect_stdout(output):
+            self.assertEqual(create_command(["template", "hearme"]), 0)
+            template = load_workspace_template("hearme")
+        self.assertEqual(template.path, project.resolve())
+        self.assertEqual(template.app, "zed")
+        self.assertTrue(template.ai)
+        self.assertIn("Created template 'hearme'", output.getvalue())
+
+    def test_create_project_template_prompts_for_missing_name(self) -> None:
+        from unlawful.system_commands import create_command
+        from unlawful.workspace_templates import load_workspace_template
+
+        project = Path(self.temp.name) / "Dante"
+        project.mkdir()
+        with patch.dict(os.environ, self.env, clear=False), patch(
+            "unlawful.system_commands.Path.cwd", return_value=project
+        ), patch("builtins.input", side_effect=["dante", "obsidian", "n"]):
+            self.assertEqual(create_command(["template"]), 0)
+            template = load_workspace_template("dante")
+        self.assertEqual(template.app, "obsidian")
+        self.assertFalse(template.ai)
+
+    def test_create_project_template_reprompts_invalid_choices(self) -> None:
+        from unlawful.system_commands import create_command
+        from unlawful.workspace_templates import load_workspace_template
+
+        project = Path(self.temp.name) / "Dante"
+        project.mkdir()
+        error = StringIO()
+        with patch.dict(os.environ, self.env, clear=False), patch(
+            "unlawful.system_commands.Path.cwd", return_value=project
+        ), patch("builtins.input", side_effect=["code", "zed", "maybe", "n"]), redirect_stderr(error):
+            self.assertEqual(create_command(["template", "dante"]), 0)
+            template = load_workspace_template("dante")
+        self.assertEqual(template.app, "zed")
+        self.assertFalse(template.ai)
+        self.assertIn("zed or obsidian", error.getvalue())
+        self.assertIn("y or n", error.getvalue())
+
+    def test_create_project_template_cancellation_writes_nothing(self) -> None:
+        from unlawful.system_commands import create_command
+        from unlawful.workspace_templates import discover_workspace_templates
+
+        error = StringIO()
+        with patch.dict(os.environ, self.env, clear=False), patch(
+            "builtins.input", side_effect=EOFError
+        ), redirect_stderr(error):
+            self.assertEqual(create_command(["template"]), 1)
+            self.assertEqual(discover_workspace_templates(), {})
+        self.assertIn("cancelled", error.getvalue().lower())
+
+    def test_create_project_template_rejects_all_name_conflicts(self) -> None:
+        from unlawful.config import ensure_layout, set_config_value
+        from unlawful.system_commands import create_command
+        from unlawful.workspace_templates import create_workspace_template
+
+        project = Path(self.temp.name) / "project"
+        project.mkdir()
+        with patch.dict(os.environ, self.env, clear=False), patch(
+            "unlawful.system_commands.Path.cwd", return_value=project
+        ), patch("builtins.input", side_effect=["zed", "n"]):
+            ensure_layout()
+            set_config_value("aliases.shortcut", ["git"])
+            create_workspace_template("saved", project, "zed", False)
+            for name in ("doctor", "git", "shortcut", "saved"):
+                with self.subTest(name=name), redirect_stderr(StringIO()):
+                    self.assertEqual(create_command(["template", name]), 1)
+
+    def test_templates_and_list_have_separate_sorted_sections(self) -> None:
+        from unlawful.config import ensure_layout
+        from unlawful.system_commands import list_all, list_templates
+        from unlawful.workspace_templates import create_workspace_template
+
+        project = Path(self.temp.name) / "project"
+        project.mkdir()
+        with patch.dict(os.environ, self.env, clear=False):
+            ensure_layout()
+            create_workspace_template("zeta", project, "zed", False)
+            create_workspace_template("alpha", project, "obsidian", True)
+            templates_output = StringIO()
+            with redirect_stdout(templates_output):
+                self.assertEqual(list_templates([]), 0)
+            all_output = StringIO()
+            with redirect_stdout(all_output):
+                self.assertEqual(list_all([]), 0)
+        self.assertEqual(templates_output.getvalue(), "alpha\nzeta\n")
+        listing = all_output.getvalue()
+        self.assertTrue(listing.startswith("Templates\nalpha\nzeta\n\nCommands\n"))
+        self.assertNotIn("\nalpha\n", listing.split("Commands\n", 1)[1])
+
+    def test_templates_empty_is_success_and_list_keeps_headings(self) -> None:
+        from unlawful.system_commands import list_all, list_templates
+
+        with patch.dict(os.environ, self.env, clear=False):
+            templates_output = StringIO()
+            with redirect_stdout(templates_output):
+                self.assertEqual(list_templates([]), 0)
+            all_output = StringIO()
+            with redirect_stdout(all_output):
+                self.assertEqual(list_all([]), 0)
+        self.assertEqual(templates_output.getvalue(), "")
+        self.assertTrue(all_output.getvalue().startswith("Templates\n\nCommands\n"))
+
     def test_cli_routes_system_commands_without_subprocess(self) -> None:
         from unlawful.cli import main
 
