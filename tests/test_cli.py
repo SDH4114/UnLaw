@@ -69,13 +69,13 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("Unknown command", error.getvalue())
 
-    def test_cli_reports_version_2_1_2(self) -> None:
+    def test_cli_reports_version_2_1_3(self) -> None:
         from unlawful.cli import main
 
         output = StringIO()
         with patch.dict(os.environ, self.env, clear=False), redirect_stdout(output):
             self.assertEqual(main(["--version"]), 0)
-        self.assertEqual(output.getvalue(), "Unlaw 2.1.2\n")
+        self.assertEqual(output.getvalue(), "Unlaw 2.1.3\n")
 
 
 if __name__ == "__main__":

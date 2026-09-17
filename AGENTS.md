@@ -1,7 +1,7 @@
 # Unlaw project notes
 
 - Purpose: small macOS CLI that dispatches commands from `<name>/main.py`.
-- Runtime: Python 3.11+, standard library only; current release is 2.1.2.
+- Runtime: Python 3.11+, standard library only; current release is 2.1.3.
 - Package: `src/unlawful`; console scripts: `unlaw` and `ul`.
 - User data: `${XDG_CONFIG_HOME:-~/.config}/unlaw`; a source build and first CLI invocation bootstrap it without overwriting user files.
 - Extension rule: only system commands live in the dispatcher; every other command is seeded as standalone source into `${XDG_CONFIG_HOME:-~/.config}/unlaw/commands/<name>/main.py`. Legacy official import wrappers are migrated, but manually edited command files are never overwritten.

@@ -471,6 +471,6 @@ python3 -m compileall -q src tests
 uv build
 ```
 
-Unlaw 2.1.2 остаётся local-first: команды не используют shell-строки, LM Studio
+Unlaw 2.1.3 остаётся local-first: команды не используют shell-строки, LM Studio
 принимает только loopback endpoint, а секрет Telegram хранится в macOS Keychain.
 Внешние приложения и разрешения остаются явно видимыми через `ul doctor`.

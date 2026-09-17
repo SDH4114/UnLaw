@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -16,9 +17,30 @@ APPLICATIONS = {
 }
 
 URLS = {
-    "browser": "https://www.google.com/",
     "lofi": "https://lofi-engine.vercel.app/",
 }
+
+
+def _default_browser_bundle() -> str:
+    result = subprocess.run(
+        [
+            "defaults",
+            "read",
+            "com.apple.LaunchServices/com.apple.launchservices.secure",
+            "LSHandlers",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise OSError("could not read the macOS default browser")
+    for block in re.findall(r"\{([^{}]*)\}", result.stdout):
+        if re.search(r"LSHandlerURLScheme\s*=\s*https?;", block):
+            match = re.search(r"LSHandlerRoleAll\s*=\s*([^;]+);", block)
+            if match:
+                return match.group(1).strip().strip('"')
+    raise OSError("no default browser is configured for http")
 
 
 def launch(command: str, argv: Sequence[str] | None = None) -> int:
@@ -35,6 +57,8 @@ def launch(command: str, argv: Sequence[str] | None = None) -> int:
             open_args = ["open", url]
         elif command in APPLICATIONS:
             open_args = ["open", "-a", APPLICATIONS[command]]
+        elif command == "browser":
+            open_args = ["open", "-b", _default_browser_bundle()]
         else:
             open_args = ["open", URLS[command]]
         return subprocess.run(open_args, check=False).returncode

@@ -33,6 +33,13 @@ class LauncherCommandTests(unittest.TestCase):
             encoding="utf-8",
         )
         fake_open.chmod(0o755)
+        fake_defaults = self.bin_dir / "defaults"
+        fake_defaults.write_text(
+            "#!/bin/sh\n"
+            "printf '%s\\n' '( { LSHandlerURLScheme = http; LSHandlerRoleAll = com.google.Chrome; } )'\n",
+            encoding="utf-8",
+        )
+        fake_defaults.chmod(0o755)
         self.env = {
             **os.environ,
             "XDG_CONFIG_HOME": str(self.config_home),
@@ -89,7 +96,7 @@ class LauncherCommandTests(unittest.TestCase):
                 self.assertEqual(self._run(command), arguments)
 
     def test_browser_opens_the_default_browser(self) -> None:
-        self.assertEqual(self._run("browser"), ["https://www.google.com/"])
+        self.assertEqual(self._run("browser"), ["-b", "com.google.Chrome"])
 
     def test_tg_without_arguments_opens_telegram(self) -> None:
         self.assertEqual(self._run("tg", tty=True), ["-a", "Telegram"])
