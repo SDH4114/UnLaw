@@ -256,6 +256,18 @@ class SystemCommandTests(unittest.TestCase):
         self.assertFalse(available)
         self.assertIn("timed out", detail)
 
+    def test_doctor_fix_installs_shell_integration(self) -> None:
+        from unlawful.system_commands import _apply_doctor_fixes
+
+        with patch.dict(os.environ, self.env, clear=False), patch(
+            "unlawful.system_commands._fix_shell_path", return_value=False
+        ), patch(
+            "unlawful.system_commands.install_zsh_integration", return_value=True
+        ) as install:
+            changes = _apply_doctor_fixes()
+        install.assert_called_once_with()
+        self.assertTrue(any("shell integration" in change.lower() for change in changes))
+
 
 if __name__ == "__main__":
     unittest.main()

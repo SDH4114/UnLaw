@@ -161,6 +161,7 @@ class CliFeatureTests(unittest.TestCase):
             self.assertEqual(completion_command(["zsh"]), 0)
         self.assertIn("#compdef ul unlaw", output.getvalue())
         self.assertIn("_unlaw", output.getvalue())
+        self.assertIn("ul templates", output.getvalue())
 
 
 if __name__ == "__main__":

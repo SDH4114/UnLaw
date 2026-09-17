@@ -8,6 +8,12 @@ from . import __version__
 from .config import ConfigError, ensure_layout, load_config
 from .config_commands import config_command
 from .runner import discover_commands, run_command
+from .shell_integration import (
+    ShellIntegrationError,
+    launch_workspace_template,
+    render_zsh_integration,
+    template_path,
+)
 from .system_commands import (
     SYSTEM_COMMAND_NAMES,
     completion_command,
@@ -19,6 +25,12 @@ from .system_commands import (
     list_templates,
     version_command,
     which_command,
+)
+from .workspace_templates import (
+    WorkspaceTemplateError,
+    discover_workspace_templates,
+    load_workspace_template,
+    workspace_templates_dir,
 )
 
 SYSTEM_COMMANDS = {
@@ -85,6 +97,34 @@ def _unknown(name: str, aliases: dict[str, list[str]]) -> int:
     return 2
 
 
+def _hidden_command(name: str, args: list[str]) -> int | None:
+    try:
+        if name == "_shell-init":
+            if args != ["zsh"]:
+                print("Usage: ul _shell-init zsh", file=sys.stderr)
+                return 2
+            print(render_zsh_integration(), end="")
+            return 0
+        if name == "_template-path":
+            if len(args) != 1:
+                print("Usage: ul _template-path <name>", file=sys.stderr)
+                return 2
+            manifest = workspace_templates_dir() / f"{args[0]}.toml"
+            if not manifest.is_file():
+                return 3
+            print(template_path(args[0]))
+            return 0
+        if name == "_template-launch":
+            if len(args) != 1:
+                print("Usage: ul _template-launch <name>", file=sys.stderr)
+                return 2
+            return launch_workspace_template(load_workspace_template(args[0]))
+    except (ShellIntegrationError, WorkspaceTemplateError) as error:
+        print(f"unlaw: {error}", file=sys.stderr)
+        return 1
+    return None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     try:
@@ -102,6 +142,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     name, command_args = args[0], args[1:]
+    hidden = _hidden_command(name, command_args)
+    if hidden is not None:
+        return hidden
     if name in RAW_SYSTEM_COMMANDS:
         return SYSTEM_COMMANDS[name](command_args)
 
@@ -118,6 +161,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     if name in SYSTEM_COMMANDS:
         return SYSTEM_COMMANDS[name](command_args)
     if name not in discover_commands():
+        try:
+            templates = discover_workspace_templates()
+        except WorkspaceTemplateError as error:
+            print(f"unlaw: {error}", file=sys.stderr)
+            return 2
+        if name in templates:
+            if command_args:
+                print(f"Usage: ul {name}", file=sys.stderr)
+                return 2
+            print(
+                "unlaw: Project templates require current-shell integration. "
+                "Run `ul doctor --fix`, then restart the shell or run `exec zsh`.",
+                file=sys.stderr,
+            )
+            return 1
         return _unknown(name, config["aliases"])
 
     core = config["core"]

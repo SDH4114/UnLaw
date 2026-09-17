@@ -87,6 +87,42 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(["templates"]), 7)
             self.assertEqual(main(["list"]), 8)
 
+    def test_direct_template_invocation_requires_shell_integration(self) -> None:
+        from unlawful.cli import main
+        from unlawful.workspace_templates import create_workspace_template
+
+        project = Path(self.temp.name) / "HearMe"
+        project.mkdir()
+        error = StringIO()
+        with patch.dict(os.environ, self.env, clear=False):
+            create_workspace_template("hearme", project, "zed", False)
+            with redirect_stderr(error):
+                self.assertEqual(main(["hearme"]), 1)
+        self.assertIn("doctor --fix", error.getvalue())
+
+    def test_hidden_template_helpers_resolve_and_launch(self) -> None:
+        from unlawful.cli import main
+        from unlawful.workspace_templates import create_workspace_template
+
+        project = Path(self.temp.name) / "HearMe"
+        project.mkdir()
+        with patch.dict(os.environ, self.env, clear=False):
+            create_workspace_template("hearme", project, "zed", False)
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(main(["_template-path", "hearme"]), 0)
+            self.assertEqual(output.getvalue().strip(), str(project.resolve()))
+            with patch("unlawful.cli.launch_workspace_template", return_value=6) as launch:
+                self.assertEqual(main(["_template-launch", "hearme"]), 6)
+        launch.assert_called_once()
+
+    def test_hidden_template_helpers_reject_extra_arguments(self) -> None:
+        from unlawful.cli import main
+
+        with patch.dict(os.environ, self.env, clear=False), redirect_stderr(StringIO()):
+            self.assertEqual(main(["_template-path", "one", "two"]), 2)
+            self.assertEqual(main(["_template-launch", "one", "two"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

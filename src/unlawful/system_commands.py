@@ -25,6 +25,7 @@ from .config import (
     user_commands_dir,
 )
 from .runner import command_source, discover_commands, resolve_command
+from .shell_integration import install_zsh_integration
 from .workspace_templates import (
     WorkspaceTemplateError,
     create_workspace_template,
@@ -175,7 +176,7 @@ def completion_command(argv: Sequence[str]) -> int:
     print("""#compdef ul unlaw
 _unlaw() {
   local -a commands
-  commands=( ${(f)\"$(ul commands 2>/dev/null)\"} )
+  commands=( ${(f)\"$( { ul commands; ul templates; } 2>/dev/null )\"} )
   if (( CURRENT == 2 )); then
     _describe 'unlaw command' commands
   else
@@ -349,6 +350,8 @@ def _apply_doctor_fixes() -> list[str]:
     ensure_layout()
     if _fix_shell_path():
         changes.append("Added ~/.local/bin before system commands in ~/.zshrc")
+    if install_zsh_integration():
+        changes.append("Installed current-shell integration in ~/.zshrc")
     if materialize_config():
         changes.append("Added current defaults and removed deprecated storage settings in config.toml")
     for parts in (
