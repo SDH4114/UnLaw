@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import venv
 from pathlib import Path
 
 from .config import ConfigError, load_config
@@ -45,9 +46,38 @@ def launch_workspace_template(template: WorkspaceTemplate) -> int:
         raise ShellIntegrationError(str(error)) from error
 
 
+def ensure_venv(directory: Path) -> Path:
+    project = directory.expanduser().resolve()
+    root = project / ".venv"
+    activation = root / "bin" / "activate"
+    if root.exists():
+        if not root.is_dir() or not activation.is_file():
+            raise ShellIntegrationError(f"Invalid virtual environment: {root}")
+        return activation
+    try:
+        venv.EnvBuilder(with_pip=True).create(root)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ShellIntegrationError(f"Could not create {root}: {error}") from error
+    if not activation.is_file():
+        raise ShellIntegrationError(
+            f"Virtual environment was created without an activation script: {activation}"
+        )
+    return activation
+
+
 def render_zsh_integration() -> str:
     return '''ul() {
   if (( $# > 0 )); then
+    if [[ "$1" == "venv" ]]; then
+      if (( $# != 1 )); then
+        command ul "$@"
+        return $?
+      fi
+      local _unlaw_activation
+      _unlaw_activation="$(command ul _venv-path)" || return $?
+      source "$_unlaw_activation"
+      return $?
+    fi
     local _unlaw_path
     _unlaw_path="$(command ul _template-path "$1" 2>/dev/null)"
     local _unlaw_status=$?

@@ -42,6 +42,7 @@ SYSTEM_COMMAND_NAMES = {
     "init",
     "list",
     "templates",
+    "venv",
     "version",
     "which",
 }
@@ -167,6 +168,18 @@ def version_command(argv: Sequence[str] = ()) -> int:
         return 2
     print(f"Unlaw {__version__}")
     return 0
+
+
+def venv_command(argv: Sequence[str] = ()) -> int:
+    if argv:
+        print("Usage: ul venv", file=sys.stderr)
+        return 2
+    print(
+        "unlaw venv: Current-shell integration is required. "
+        "Run `ul doctor --fix`, then restart the shell or run `exec zsh`.",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def completion_command(argv: Sequence[str]) -> int:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import difflib
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 from . import __version__
 from .config import ConfigError, ensure_layout, load_config
@@ -10,6 +11,7 @@ from .config_commands import config_command
 from .runner import discover_commands, run_command
 from .shell_integration import (
     ShellIntegrationError,
+    ensure_venv,
     launch_workspace_template,
     render_zsh_integration,
     template_path,
@@ -23,6 +25,7 @@ from .system_commands import (
     list_all,
     list_commands,
     list_templates,
+    venv_command,
     version_command,
     which_command,
 )
@@ -42,6 +45,7 @@ SYSTEM_COMMANDS = {
     "init": init_command,
     "list": list_all,
     "templates": list_templates,
+    "venv": venv_command,
     "version": version_command,
     "which": which_command,
 }
@@ -119,6 +123,12 @@ def _hidden_command(name: str, args: list[str]) -> int | None:
                 print("Usage: ul _template-launch <name>", file=sys.stderr)
                 return 2
             return launch_workspace_template(load_workspace_template(args[0]))
+        if name == "_venv-path":
+            if args:
+                print("Usage: ul _venv-path", file=sys.stderr)
+                return 2
+            print(ensure_venv(Path.cwd()))
+            return 0
     except (ShellIntegrationError, WorkspaceTemplateError) as error:
         print(f"unlaw: {error}", file=sys.stderr)
         return 1

@@ -123,6 +123,55 @@ class ShellIntegrationTests(unittest.TestCase):
         self.assertIn("before", text)
         self.assertIn("after", text)
 
+    def test_ensure_venv_creates_missing_environment(self) -> None:
+        from unlawful.shell_integration import ensure_venv
+
+        root = self.project.resolve() / ".venv"
+        activation = root / "bin" / "activate"
+
+        def create(path: Path) -> None:
+            self.assertEqual(path, root)
+            activation.parent.mkdir(parents=True)
+            activation.write_text("# activate\n", encoding="utf-8")
+
+        with patch("unlawful.shell_integration.venv.EnvBuilder.create", side_effect=create) as make:
+            self.assertEqual(ensure_venv(self.project), activation.resolve())
+        make.assert_called_once_with(root)
+
+    def test_ensure_venv_reuses_valid_environment(self) -> None:
+        from unlawful.shell_integration import ensure_venv
+
+        activation = self.project / ".venv" / "bin" / "activate"
+        activation.parent.mkdir(parents=True)
+        activation.write_text("# activate\n", encoding="utf-8")
+        with patch("unlawful.shell_integration.venv.EnvBuilder.create") as make:
+            self.assertEqual(ensure_venv(self.project), activation.resolve())
+        make.assert_not_called()
+
+    def test_ensure_venv_rejects_invalid_existing_directory(self) -> None:
+        from unlawful.shell_integration import ShellIntegrationError, ensure_venv
+
+        (self.project / ".venv").mkdir()
+        with self.assertRaisesRegex(ShellIntegrationError, "Invalid virtual environment"):
+            ensure_venv(self.project)
+
+    def test_ensure_venv_reports_creation_failure(self) -> None:
+        from unlawful.shell_integration import ShellIntegrationError, ensure_venv
+
+        with patch(
+            "unlawful.shell_integration.venv.EnvBuilder.create",
+            side_effect=OSError("disk full"),
+        ), self.assertRaisesRegex(ShellIntegrationError, "disk full"):
+            ensure_venv(self.project)
+
+    def test_rendered_zsh_sources_venv_in_current_shell(self) -> None:
+        from unlawful.shell_integration import render_zsh_integration
+
+        script = render_zsh_integration()
+        self.assertIn('if [[ "$1" == "venv" ]]', script)
+        self.assertIn('command ul _venv-path', script)
+        self.assertIn('source "$_unlaw_activation"', script)
+
 
 if __name__ == "__main__":
     unittest.main()

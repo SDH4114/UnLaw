@@ -215,6 +215,14 @@ class SystemCommandTests(unittest.TestCase):
         self.assertEqual(templates_output.getvalue(), "")
         self.assertTrue(all_output.getvalue().startswith("Templates\n\nCommands\n"))
 
+    def test_venv_is_a_listed_system_command(self) -> None:
+        from unlawful.system_commands import list_commands
+
+        output = StringIO()
+        with patch.dict(os.environ, self.env, clear=False), redirect_stdout(output):
+            self.assertEqual(list_commands([]), 0)
+        self.assertIn("venv", output.getvalue().splitlines())
+
     def test_cli_routes_system_commands_without_subprocess(self) -> None:
         from unlawful.cli import main
 

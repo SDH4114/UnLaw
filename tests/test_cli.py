@@ -123,6 +123,32 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(["_template-path", "one", "two"]), 2)
             self.assertEqual(main(["_template-launch", "one", "two"]), 2)
 
+    def test_hidden_venv_helper_returns_activation_path(self) -> None:
+        from unlawful.cli import main
+
+        activation = Path(self.temp.name) / ".venv" / "bin" / "activate"
+        output = StringIO()
+        with patch.dict(os.environ, self.env, clear=False), patch(
+            "unlawful.cli.ensure_venv", return_value=activation
+        ) as ensure, redirect_stdout(output):
+            self.assertEqual(main(["_venv-path"]), 0)
+        ensure.assert_called_once_with(Path.cwd())
+        self.assertEqual(output.getvalue().strip(), str(activation))
+
+    def test_hidden_venv_helper_rejects_arguments(self) -> None:
+        from unlawful.cli import main
+
+        with patch.dict(os.environ, self.env, clear=False), redirect_stderr(StringIO()):
+            self.assertEqual(main(["_venv-path", "extra"]), 2)
+
+    def test_direct_venv_command_requires_shell_integration(self) -> None:
+        from unlawful.cli import main
+
+        error = StringIO()
+        with patch.dict(os.environ, self.env, clear=False), redirect_stderr(error):
+            self.assertEqual(main(["venv"]), 1)
+        self.assertIn("doctor --fix", error.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
