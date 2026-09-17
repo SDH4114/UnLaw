@@ -62,7 +62,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
 }
 
-TEMPLATE_NAMES = ("commands", "python", "rust", "cpp")
+TEMPLATE_NAMES = ("commands", "python", "rust", "cpp", "projects")
 DEFAULT_COMMAND_NAMES = (
     "app",
     "browser",

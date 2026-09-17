@@ -31,7 +31,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(root, self.config_home / "unlaw")
         self.assertTrue((root / "config.toml").is_file())
         self.assertTrue((root / "commands").is_dir())
-        for name in ("commands", "python", "rust", "cpp"):
+        for name in ("commands", "python", "rust", "cpp", "projects"):
             self.assertTrue((root / "templates" / name).is_dir())
         for relative in (
             "data/captures/screenshots",
