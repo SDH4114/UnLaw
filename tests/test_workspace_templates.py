@@ -40,7 +40,10 @@ class WorkspaceTemplateTests(unittest.TestCase):
         self.assertEqual(discovered, {"hearme": created})
 
     def test_manifest_has_only_expected_fields(self) -> None:
-        from unlawful.workspace_templates import create_workspace_template, workspace_templates_dir
+        from unlawful.workspace_templates import (
+            create_workspace_template,
+            workspace_templates_dir,
+        )
 
         with patch.dict(os.environ, self.env, clear=False):
             create_workspace_template("hearme", self.project, "obsidian", False)
@@ -51,7 +54,10 @@ class WorkspaceTemplateTests(unittest.TestCase):
         )
 
     def test_create_rejects_invalid_name_app_and_missing_path(self) -> None:
-        from unlawful.workspace_templates import WorkspaceTemplateError, create_workspace_template
+        from unlawful.workspace_templates import (
+            WorkspaceTemplateError,
+            create_workspace_template,
+        )
 
         with patch.dict(os.environ, self.env, clear=False):
             with self.assertRaisesRegex(WorkspaceTemplateError, "name"):
@@ -62,7 +68,10 @@ class WorkspaceTemplateTests(unittest.TestCase):
                 create_workspace_template("hearme", self.root / "missing", "zed", True)
 
     def test_create_never_overwrites_existing_template(self) -> None:
-        from unlawful.workspace_templates import WorkspaceTemplateError, create_workspace_template
+        from unlawful.workspace_templates import (
+            WorkspaceTemplateError,
+            create_workspace_template,
+        )
 
         with patch.dict(os.environ, self.env, clear=False):
             create_workspace_template("hearme", self.project, "zed", False)

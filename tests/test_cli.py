@@ -59,6 +59,8 @@ class CliTests(unittest.TestCase):
             code = main([])
         self.assertEqual(code, 0)
         self.assertIn("Usage: ul", output.getvalue())
+        self.assertIn("ul create template", output.getvalue())
+        self.assertIn("ul venv", output.getvalue())
 
     def test_unknown_command_is_an_error(self) -> None:
         from unlawful.cli import main

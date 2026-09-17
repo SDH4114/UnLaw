@@ -61,6 +61,8 @@ Global options:
 
 Run `ul commands` to list available commands.
 Run `ul create command <name>` to create one.
+Run `ul create template [name]` to save the current project.
+Run `ul venv` to create and activate .venv in the current Zsh.
 Run `ul config show` to inspect configuration.
 """
 
