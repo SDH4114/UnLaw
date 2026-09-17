@@ -95,8 +95,16 @@ class LauncherCommandTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self._run(command), arguments)
 
-    def test_browser_opens_the_default_browser(self) -> None:
-        self.assertEqual(self._run("browser"), ["-b", "com.google.Chrome"])
+    def test_browser_opens_duckduckgo_by_default(self) -> None:
+        self.assertEqual(self._run("browser"), ["https://duckduckgo.com/"])
+
+    def test_browser_opens_the_user_configured_page(self) -> None:
+        from unlawful.config import ensure_layout, set_config_value
+
+        with patch.dict(os.environ, self.env, clear=True):
+            ensure_layout()
+            set_config_value("apps.browser_url", "https://example.com/start")
+        self.assertEqual(self._run("browser"), ["https://example.com/start"])
 
     def test_tg_without_arguments_opens_telegram(self) -> None:
         self.assertEqual(self._run("tg", tty=True), ["-a", "Telegram"])

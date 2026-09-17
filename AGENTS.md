@@ -5,6 +5,7 @@
 - Package: `src/unlawful`; console scripts: `unlaw` and `ul`.
 - User data: `${XDG_CONFIG_HOME:-~/.config}/unlaw`; a source build and first CLI invocation bootstrap it without overwriting user files.
 - Extension rule: only system commands live in the dispatcher; every other command is seeded as standalone source into `${XDG_CONFIG_HOME:-~/.config}/unlaw/commands/<name>/main.py`. Legacy official import wrappers are migrated, but manually edited command files are never overwritten.
+- Seeded sources contain only that command's logic and minimal config helpers/defaults; unrelated command code must never be concatenated into them.
 - Configuration: `config.toml` is validated and atomically rewritten; aliases are token arrays, not shell strings.
 - Test: `python -m unittest discover -s tests -v`.
 - Build check: `python -m build` when `build` is available, otherwise install into a temporary venv with `pip install .`.

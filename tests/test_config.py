@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import os
 import sys
@@ -87,6 +88,104 @@ class ConfigTests(unittest.TestCase):
             self.assertNotIn("unlawful.", source, script)
             self.assertNotIn("from .", source, script)
             compile(source, str(script), "exec")
+
+    def test_seeded_commands_include_only_their_own_config_defaults(self) -> None:
+        from unlawful.config import ensure_layout
+
+        expected = {
+            "browser": {"apps": {"browser_url": "https://duckduckgo.com/"}},
+            "capture": {
+                "storage": {"root": "data"},
+                "capture": {
+                    "camera_device": "0",
+                    "audio_device": "0",
+                    "screen_audio": True,
+                    "show_clicks": True,
+                },
+            },
+            "cpp": {"projects": {"cpp": {"standard": 20, "initialize_git": False}}},
+            "game": {"games": {"difficulty": "normal"}},
+            "lm": {
+                "lm": {
+                    "base_url": "http://127.0.0.1:1234/v1",
+                    "model": "auto",
+                    "system_prompt": "You are a concise and practical local assistant.",
+                    "temperature": 0.7,
+                    "timeout": 120,
+                }
+            },
+            "lofi": {"apps": {"lofi_url": "https://lofi-engine.vercel.app/"}},
+            "mac": {"mac": {"executable": "macos-harness", "timeout": 30}},
+            "music": {
+                "apps": {
+                    "spotify": "Spotify",
+                    "spotify_autoplay_delay": 2.0,
+                }
+            },
+            "py": {"projects": {"python": {"environment": "auto", "initialize_git": False}}},
+            "rust": {"projects": {"rust": {"initialize_git": False}}},
+            "tg": {
+                "storage": {"root": "data"},
+                "telegram": {
+                    "chat_id": "",
+                    "api_base": "https://api.telegram.org",
+                    "keychain_service": "unlaw.telegram",
+                },
+            },
+            "todo": {
+                "todo": {
+                    "vault_path": "~/aiwork/data-obsidian",
+                    "file": "TODO.md",
+                    "completed_column": "Completed",
+                }
+            },
+            "work": {
+                "apps": {
+                    "editor": "Zed",
+                    "lofi_url": "https://lofi-engine.vercel.app/",
+                }
+            },
+            "yt": {"apps": {"youtube_url": "https://www.youtube.com/"}},
+            "zed": {"apps": {"editor": "Zed"}},
+        }
+        with patch.dict(os.environ, self.env, clear=False):
+            root = ensure_layout()
+        for script in sorted((root / "commands").glob("*/main.py")):
+            assignments = {
+                node.targets[0].id: ast.literal_eval(node.value)
+                for node in ast.parse(script.read_text(encoding="utf-8")).body
+                if isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "DEFAULT_CONFIG"
+            }
+            if script.parent.name in expected:
+                self.assertEqual(assignments.get("DEFAULT_CONFIG"), expected[script.parent.name], script)
+            else:
+                self.assertNotIn("DEFAULT_CONFIG", assignments, script)
+
+    def test_each_launcher_source_contains_only_its_own_target(self) -> None:
+        from unlawful.config import ensure_layout
+
+        targets = {
+            "gpt": "ChatGPT",
+            "minecraft": "Prism Launcher",
+            "netflix": "Netflix",
+            "obsidian": "Obsidian",
+            "steam": "Steam",
+        }
+        with patch.dict(os.environ, self.env, clear=False):
+            commands = ensure_layout() / "commands"
+        for command, target in targets.items():
+            source = (commands / command / "main.py").read_text(encoding="utf-8")
+            self.assertIn(target, source)
+            for other_command, other_target in targets.items():
+                if other_command != command:
+                    self.assertNotIn(other_target, source, f"{command} contains {other_command}")
+        browser = (commands / "browser" / "main.py").read_text(encoding="utf-8")
+        self.assertIn("browser_url", browser)
+        self.assertNotIn("LSHandler", browser)
+        self.assertNotIn("google.com", browser)
 
     def test_bootstrap_replaces_the_old_official_wrapper_with_full_source(self) -> None:
         from unlawful.config import ensure_layout

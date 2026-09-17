@@ -58,7 +58,9 @@ uv tool install --force --editable .
 import-обёртки автоматически заменяются полноценным кодом, а вручную изменённые
 команды сохраняются. Системными остаются только `init`, `commands`, `which`,
 `create`, `doctor`, `completion`, `version` и `config`; остальные команды создаются
-в `commands/<name>/main.py` и доступны для редактирования.
+в `commands/<name>/main.py` и доступны для редактирования. Каждый такой файл
+содержит только код своей команды и минимальные необходимые ей настройки — код
+других команд в него не подмешивается.
 
 ## Основные команды
 
@@ -155,6 +157,7 @@ difficulty = "normal"
 spotify = "Spotify"
 editor = "Zed"
 spotify_autoplay_delay = 2.0
+browser_url = "https://duckduckgo.com/"
 lofi_url = "https://lofi-engine.vercel.app/"
 youtube_url = "https://www.youtube.com/"
 
@@ -330,7 +333,7 @@ ul netflix                        # открыть Netflix
 ul tg                             # открыть Telegram
 ul obsidian                       # открыть Obsidian
 ul gpt                            # открыть ChatGPT
-ul browser                        # открыть браузер по умолчанию
+ul browser                        # открыть настроенную стартовую страницу
 ul steam                          # открыть Steam
 ul minecraft                      # открыть Prism Launcher
 ul music
@@ -342,6 +345,12 @@ ul yt "omarchy linux"             # поиск YouTube в браузере
 
 Для автоматического запуска результата Spotify терминалу понадобится разрешение
 Accessibility.
+
+Стартовая страница `ul browser` настраивается через config:
+
+```bash
+ul config set apps.browser_url '"https://duckduckgo.com/"'
+```
 
 ## Unlaw Arcade
 
