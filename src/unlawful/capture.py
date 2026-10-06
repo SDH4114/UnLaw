@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
+from unlawful.command_help import COMMAND_HELP
 from .config import ConfigError, load_config, storage_path
 
 USAGE = """Usage: ul capture <action> [output]
@@ -165,6 +166,9 @@ def latest_capture() -> Path | None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['capture'], end="")
+        return 0
     if not args or args[0] in {"-h", "--help", "help"}:
         print(USAGE, end="")
         return 0 if args else 2

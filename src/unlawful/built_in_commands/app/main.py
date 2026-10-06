@@ -4,9 +4,14 @@ import subprocess
 import sys
 from collections.abc import Sequence
 
+from unlawful.command_help import COMMAND_HELP
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['app'], end="")
+        return 0
     if not args:
         print("Usage: ul app <application>", file=sys.stderr)
         return 2

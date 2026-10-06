@@ -11,6 +11,7 @@ import urllib.request
 from collections.abc import Sequence
 from typing import Any
 
+from unlawful.command_help import COMMAND_HELP
 from .config import ConfigError, load_config
 
 
@@ -142,6 +143,9 @@ def _interactive(settings: dict[str, object]) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['lm'], end="")
+        return 0
     try:
         settings = load_config()["lm"]
         _local_base_url(str(settings["base_url"]))

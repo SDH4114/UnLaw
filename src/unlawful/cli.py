@@ -60,6 +60,7 @@ Global options:
   --version     Show the installed version
 
 Run `ul commands` to list available commands.
+Run `ul <command> --help` or `ul help <command>` for command usage.
 Run `ul create command <name>` to create one.
 Run `ul create template [name]` to save the current project.
 Run `ul venv` to create and activate .venv in the current Zsh.
@@ -149,6 +150,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args == ["--version"]:
         print(f"Unlaw {__version__}")
         return 0
+    if args[:1] == ["help"] and len(args) > 1:
+        args = [*args[1:], "--help"]
     if not args or args[0] in {"-h", "--help", "help"}:
         print(HELP, end="")
         return 0
@@ -179,6 +182,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"unlaw: {error}", file=sys.stderr)
             return 2
         if name in templates:
+            if command_args in (["--help"], ["-h"], ["help"]):
+                print(f"Open the saved project in its configured app.\nUsage: ul {name}\nExample: ul {name}")
+                return 0
             if command_args:
                 print(f"Usage: ul {name}", file=sys.stderr)
                 return 2

@@ -3,7 +3,9 @@ from __future__ import annotations
 import sys
 from collections.abc import Sequence
 
+from unlawful.command_help import COMMAND_HELP
 from unlawful import harness
+
 
 HELP = """Usage:
   ul mac see <application>
@@ -15,6 +17,9 @@ HELP = """Usage:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['mac'], end="")
+        return 0
     if not args or args[0] in {"-h", "--help", "help"}:
         print(HELP, end="")
         return 0 if args else 2

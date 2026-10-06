@@ -5,6 +5,7 @@ import sys
 from collections.abc import Sequence
 from urllib.parse import quote
 
+from unlawful.command_help import COMMAND_HELP
 from unlawful.config import ConfigError, load_config
 
 
@@ -14,6 +15,9 @@ def _apple_string(value: str) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['music'], end="")
+        return 0
     try:
         settings = load_config()["apps"]
     except ConfigError as error:

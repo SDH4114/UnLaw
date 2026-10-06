@@ -17,3 +17,8 @@
 - Terminal arcade: `ul game` includes Tetris, Snake, Minesweeper, and Space Invaders using only stdlib curses.
 - Storage: captures, Telegram downloads, and runtime files default to the single configurable `storage.root` (`data`, relative to the Unlaw config directory).
 - Arcade difficulty: every game supports `easy`, `normal`, and `hard`; the default comes from `games.difficulty`.
+
+- Every new or changed command must support `--help` and `-h` before any side effects, returning 0 and showing its purpose, all actions/options, defaults, dependencies and examples. Keep help accurate when behavior changes; include it in standalone seeded sources and command templates.
+- YouTube downloads: `ul yt download <URL> [--format mov|mp4|raw] [--audio] [--quality <height>] [--output <directory>]` invokes optional external yt-dlp and ffmpeg/ffprobe, defaults to MOV in `storage.root/youtube` (`raw` keeps source codecs/container; `--audio` saves MP3), and never downloads an entire playlist or overwrites existing files.
+
+- YouTube subtitles: `--sub` or `--sub-lang [code]` saves only Markdown (original language if omitted); invalid codes list available tracks. Markdown starts with the video link and labels authored/automatic captions. `--full` saves video, separate MP3 and Markdown using one media download; unavailable/failed captions report an incomplete result while retaining saved media. Subtitle-only mode needs no ffmpeg.

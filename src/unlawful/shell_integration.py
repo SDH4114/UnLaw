@@ -68,6 +68,10 @@ def ensure_venv(directory: Path) -> Path:
 def render_zsh_integration() -> str:
     return '''ul() {
   if (( $# > 0 )); then
+    if [[ "$2" == "--help" || "$2" == "-h" || "$2" == "help" ]]; then
+      command ul "$@"
+      return $?
+    fi
     if [[ "$1" == "venv" ]]; then
       if (( $# != 1 )); then
         command ul "$@"

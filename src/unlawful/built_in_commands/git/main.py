@@ -4,6 +4,9 @@ import subprocess
 import sys
 from collections.abc import Sequence
 
+from unlawful.command_help import COMMAND_HELP
+
+
 USAGE = "Usage: ul git [message|status|pull|push|commit [message]|sync [message]]"
 
 
@@ -48,6 +51,9 @@ def _commit_workflow(tokens: list[str], *, push: bool) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['git'], end="")
+        return 0
     if args and args[0] in {"-h", "--help", "help"}:
         print(USAGE)
         return 0

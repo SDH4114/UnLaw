@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .command_help import COMMAND_HELP
+
 import hashlib
 import pprint
 from pathlib import Path
@@ -59,12 +61,45 @@ LEGACY_SOURCE_HASHES: dict[str, set[str]] = {
     },
     "todo": {"d74e2f777a824840c8d064c2a9237dcbfd78ed6e28cda1d3054c42f19a64b9d0"},
     "work": {"35b3d9d20deb6d2927a36446d1986439ab18184f14a67b27dc6b47eef4da8e27"},
-    "yt": {"1a1cc7ec191f33960644a15553cf02b796af6deffd5380f245e408561c8998cb"},
+    "yt": {
+        "435ff09674eb854cd96050936f843ab83f67eec8f2fcad00566b7e099ce4a884",
+        "1a1cc7ec191f33960644a15553cf02b796af6deffd5380f245e408561c8998cb",
+        "4dc2aa8198cb48e36a79bbc2b801ab0405a146397e11fc030f4d92c8992654a0",
+        "3350048da95a672c85208ed5710d66627807cbc62a76f8566617672092f357f2",
+    },
     "zed": {
         "b38672c8a421b0d577e2b63f41f284a35a8dd5ce2489c618a9a9cd48c65b8a05",
         "b5bb1b8f6896d7a4c6b0d0e595e2b71dafdd759d85aa6d3ca6371707ac1467a1",
     },
 }
+
+# Sources from release 2.1.3, before per-command help and YouTube downloads.
+_PRE_HELP_SOURCE_HASHES = {
+    "app": "ff749fdbfe8a0337509612b46a4324aaf081355778048f519d2f9508d34630c2",
+    "browser": "b1462695784f6221564c0d314af3ef6df27345bdc919c70da641ab6b97e8ade9",
+    "capture": "2fbfa8cc5fa3ea0da183253963e630ff22dbd49d3d4c90d4678d70e41f3f6143",
+    "cpp": "6d532eaef990f9bdfceae510d58bab5c42d2d25fa0a43fd0061d33cd0de7da39",
+    "game": "662c73a70addfbd05c0f20cdc1e41db3060a229c1ef933539e9bd278beea7b4b",
+    "git": "501cbe4a5335db87f85a0cd36ecd66ec65aa828cce9b264a6a880e1d6b66baad",
+    "gpt": "d3173ac6e23c41acd60b311e4e9c9282831cec1e7716524b8e5a6f7da41ec29f",
+    "lm": "a97d4d88d2bbf02971d999c95e93b16f63b14581b7765afcba8821f766fc54f2",
+    "lofi": "e848ba5b972072af3a4ec949fdad5637fcbc31da020ed3b84251d3758ae84317",
+    "mac": "519e0e2bf9e58797dce587e663bef76d72db5dd96a791d86d55ab1186106053a",
+    "minecraft": "216ea401f929ede9ca0dbb49d728c195982d1513090f5fef00f9d17ec44d6444",
+    "music": "3d96b1ed4cd85685119b7f52b76b1c7132e2c8118524eca00f05e71f70b23370",
+    "netflix": "3420b878961c6660f1f1107469e0d2f2c32a1b2583e6a5d34e2b22d499b20088",
+    "obsidian": "6ea9e20ea40bee08917df361cf1dbbc55ca1c7fdba01e1ac2959b68b007bcfb7",
+    "py": "eb946afd8b4bcdd34cd43e3f8ae66f099ece29d6f410e29ea4818303b058096d",
+    "rust": "15223569f5f416ac2bfbf685859cea545eeee1b3106132ec955b9fece4a5c038",
+    "steam": "108d07567bbb4e760a9bf1ee0cca18ff7aa727a6c620b759e50caa8e9260efd9",
+    "tg": "b38fc67ad385da929ec43048fd3839e43f983f4bd9304390de89bb4f96c1c883",
+    "todo": "633f9fc925ec0d04c15853aeb9a65c964478379b24e960f78b9029f40c5c96ce",
+    "work": "6ed6e3a9c6e65e69e7d15f409408191a432962c5da3c1d53cb81f276de1b1bf7",
+    "yt": "a99712c19f8378ea9808eb4907c3c0500fb58ba02e1c35799165b64f817b5440",
+    "zed": "2ce9028b831ef998d0552a919349be78558c0b46ea30ebdff5a21341dc6e240a"
+}
+for _name, _digest in _PRE_HELP_SOURCE_HASHES.items():
+    LEGACY_SOURCE_HASHES.setdefault(_name, set()).add(_digest)
 
 _HEADER = """# Unlaw command source. Edit freely: this file has no runtime dependency on Unlaw.
 from __future__ import annotations
@@ -113,7 +148,7 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
         }
     },
     "work": {"apps": {"editor": "Zed", "lofi_url": "https://lofi-engine.vercel.app/"}},
-    "yt": {"apps": {"youtube_url": "https://www.youtube.com/"}},
+    "yt": {"storage": {"root": "data"}, "apps": {"youtube_url": "https://www.youtube.com/"}},
     "zed": {"apps": {"editor": "Zed"}},
 }
 
@@ -274,7 +309,7 @@ def _support_source(name: str) -> str:
         parts.append(_CONFIG_SUPPORT.replace("__DEFAULT_CONFIG__", rendered))
     if name in {"cpp", "py", "rust"}:
         parts.append(_TEMPLATES_SUPPORT)
-    if name in {"capture", "tg"}:
+    if name in {"capture", "tg", "yt"}:
         parts.append(_STORAGE_SUPPORT)
     if name == "tg":
         parts.extend((_CONFIG_WRITE_SUPPORT, _LATEST_CAPTURE_SUPPORT))
@@ -284,6 +319,7 @@ def _support_source(name: str) -> str:
 def _clean_fragment(source: str, *, command: str) -> str:
     removed_prefixes = (
         "from __future__ import annotations",
+        "from unlawful.command_help import ",
         "from .config import ",
         "from unlawful.config import ",
         "from unlawful.project_templates import ",
@@ -292,6 +328,9 @@ def _clean_fragment(source: str, *, command: str) -> str:
     )
     lines = [line for line in source.splitlines() if not line.lstrip().startswith(removed_prefixes)]
     text = "\n".join(lines).strip() + "\n"
+    text = text.replace(f"COMMAND_HELP[{command!r}]", "COMMAND_HELP").replace(
+        f'COMMAND_HELP["{command}"]', "COMMAND_HELP"
+    )
     if command == "mac":
         text = text.replace("harness.see", "see").replace("harness.key", "key")
         text = text.replace("harness.type_text", "type_text").replace("harness.click", "click")
@@ -308,7 +347,7 @@ def command_source(name: str) -> str:
         _clean_fragment((_ROOT / relative).read_text(encoding="utf-8"), command=name)
         for relative in paths
     ]
-    sections = [_HEADER, _support_source(name), *fragments]
+    sections = [_HEADER, f"COMMAND_HELP = {COMMAND_HELP[name]!r}", _support_source(name), *fragments]
     return "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
 
 

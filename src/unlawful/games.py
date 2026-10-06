@@ -7,6 +7,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Sequence
 
+from unlawful.command_help import COMMAND_HELP
 from .config import ConfigError, load_config
 
 GAME_NAMES = ("tetris", "snake", "minesweeper", "invaders")
@@ -435,6 +436,9 @@ def _choose_and_run(stdscr: curses.window, default_difficulty: str) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['game'], end="")
+        return 0
     if args in (["-h"], ["--help"], ["help"]):
         print("Usage: ul game [tetris|snake|minesweeper|invaders] [easy|normal|hard]")
         return 0

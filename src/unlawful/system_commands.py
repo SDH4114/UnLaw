@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from . import __version__
+from .command_help import COMMAND_HELP
 from .config import (
     DEFAULT_CONFIG,
     ConfigError,
@@ -72,6 +73,9 @@ def _command_records() -> list[dict[str, object]]:
 
 
 def list_commands(argv: Sequence[str] = ()) -> int:
+    if argv and argv[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['commands'], end="")
+        return 0
     args = list(argv)
     if args not in ([], ["--verbose"], ["--json"]):
         print("Usage: ul commands [--verbose|--json]", file=sys.stderr)
@@ -94,6 +98,9 @@ def list_commands(argv: Sequence[str] = ()) -> int:
 
 
 def list_templates(argv: Sequence[str] = ()) -> int:
+    if argv and argv[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['templates'], end="")
+        return 0
     if argv:
         print("Usage: ul templates", file=sys.stderr)
         return 2
@@ -108,6 +115,9 @@ def list_templates(argv: Sequence[str] = ()) -> int:
 
 
 def list_all(argv: Sequence[str] = ()) -> int:
+    if argv and argv[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['list'], end="")
+        return 0
     if argv:
         print("Usage: ul list", file=sys.stderr)
         return 2
@@ -127,6 +137,9 @@ def list_all(argv: Sequence[str] = ()) -> int:
 
 
 def init_command(argv: Sequence[str] = ()) -> int:
+    if argv and argv[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['init'], end="")
+        return 0
     if argv:
         print("Usage: ul init", file=sys.stderr)
         return 2
@@ -139,6 +152,9 @@ def init_command(argv: Sequence[str] = ()) -> int:
 
 
 def which_command(argv: Sequence[str]) -> int:
+    if argv and argv[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['which'], end="")
+        return 0
     if len(argv) != 1:
         print("Usage: ul which <command>", file=sys.stderr)
         return 2
@@ -163,6 +179,9 @@ def which_command(argv: Sequence[str]) -> int:
 
 
 def version_command(argv: Sequence[str] = ()) -> int:
+    if argv and argv[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['version'], end="")
+        return 0
     if argv:
         print("Usage: ul version", file=sys.stderr)
         return 2
@@ -171,6 +190,9 @@ def version_command(argv: Sequence[str] = ()) -> int:
 
 
 def venv_command(argv: Sequence[str] = ()) -> int:
+    if argv and argv[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['venv'], end="")
+        return 0
     if argv:
         print("Usage: ul venv", file=sys.stderr)
         return 2
@@ -183,6 +205,9 @@ def venv_command(argv: Sequence[str] = ()) -> int:
 
 
 def completion_command(argv: Sequence[str]) -> int:
+    if argv and argv[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['completion'], end="")
+        return 0
     if list(argv) != ["zsh"]:
         print("Usage: ul completion zsh", file=sys.stderr)
         return 2
@@ -288,6 +313,9 @@ def _create_project_template(args: list[str]) -> int:
 
 
 def create_command(argv: Sequence[str]) -> int:
+    if argv and argv[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['create'], end="")
+        return 0
     args = list(argv)
     if args and args[0] == "command":
         return _create_user_command(args[1:])
@@ -476,6 +504,9 @@ def _doctor_records() -> list[dict[str, object]]:
 
 
 def doctor(argv: Sequence[str] = ()) -> int:
+    if argv and argv[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['doctor'], end="")
+        return 0
     args = list(argv)
     if args not in ([], ["--verbose"], ["--json"], ["--fix"]):
         print("Usage: ul doctor [--verbose|--json|--fix]", file=sys.stderr)

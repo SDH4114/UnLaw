@@ -145,7 +145,7 @@ class ConfigTests(unittest.TestCase):
                     "lofi_url": "https://lofi-engine.vercel.app/",
                 }
             },
-            "yt": {"apps": {"youtube_url": "https://www.youtube.com/"}},
+            "yt": {"storage": {"root": "data"}, "apps": {"youtube_url": "https://www.youtube.com/"}},
             "zed": {"apps": {"editor": "Zed"}},
         }
         with patch.dict(os.environ, self.env, clear=False):

@@ -11,6 +11,7 @@ import tomllib
 from collections.abc import Sequence
 from datetime import datetime
 
+from .command_help import COMMAND_HELP
 from .config import (
     DEFAULT_CONFIG,
     ConfigError,
@@ -53,8 +54,11 @@ def _edit() -> int:
 
 
 def config_command(argv: Sequence[str]) -> int:
-    ensure_layout()
     args = list(argv)
+    if args and args[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP["config"], end="")
+        return 0
+    ensure_layout()
     if not args or args[0] in {"-h", "--help", "help"}:
         print(USAGE)
         return 0 if args else 2

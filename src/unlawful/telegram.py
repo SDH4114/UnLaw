@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from unlawful.command_help import COMMAND_HELP
 from .config import ConfigError, load_config, set_config_value, storage_path
 
 USAGE = """Usage: ul tg                              Open Telegram
@@ -226,6 +227,9 @@ def _download(client: TelegramClient, destination: Path) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] in {"-h", "--help", "help"}:
+        print(COMMAND_HELP['tg'], end="")
+        return 0
     try:
         if args == ["setup"]:
             return _setup()
