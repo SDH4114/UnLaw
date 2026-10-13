@@ -457,6 +457,9 @@ def _doctor_records() -> list[dict[str, object]]:
         tool("screencapture", "screencapture", "built into macOS"),
         tool("ffmpeg", "ffmpeg", "needed for camera and audio recording"),
         tool("Zed", "zed", "needed by `ul work`"),
+        tool("7-Zip", "7z", "needed by `ul zip` for 7z, rar reading and AES zip"),
+        tool("zstd", "zstd", "needed by `ul zip` for .tar.zst and .zst"),
+        tool("RAR", "rar", "optional; needed to create .rar with `ul zip -f rar`"),
         tool("macOS Keychain", "security", "needed to store the Telegram token"),
         {
             "name": "Unlaw PATH",

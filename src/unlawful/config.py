@@ -40,6 +40,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "show_clicks": True,
     },
     "games": {"difficulty": "normal"},
+    "zip": {"format": "zip", "level": "max", "keep_junk": False},
     "apps": {
         "spotify": "Spotify",
         "editor": "Zed",
@@ -86,6 +87,7 @@ DEFAULT_COMMAND_NAMES = (
     "work",
     "yt",
     "zed",
+    "zip",
 )
 STORAGE_SUBDIRECTORIES = (
     ("captures", "screenshots"),
@@ -223,6 +225,8 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ("capture.screen_audio", bool, None),
         ("capture.show_clicks", bool, None),
         ("games.difficulty", str, {"easy", "normal", "hard"}),
+        ("zip.format", str, {"zip", "7z", "rar", "tar.zst", "tar.xz", "tar.gz"}),
+        ("zip.keep_junk", bool, None),
         ("apps.spotify", str, None),
         ("apps.editor", str, None),
         ("apps.spotify_autoplay_delay", (int, float), None),
@@ -276,6 +280,16 @@ def validate_config(config: dict[str, Any]) -> list[str]:
             errors.append("Invalid apps.spotify_autoplay_delay: must be zero or greater")
     except ConfigError:
         pass
+    try:
+        level = _get_from(config, "zip.level")
+        names = {"store", "fastest", "fast", "normal", "max", "ultra"}
+        if not (
+            (isinstance(level, int) and not isinstance(level, bool) and 0 <= level <= 9)
+            or (isinstance(level, str) and level in names)
+        ):
+            errors.append("Invalid zip.level: expected 0-9 or store, fastest, fast, normal, max, ultra")
+    except ConfigError as error:
+        errors.append(str(error))
     aliases = config.get("aliases")
     if not isinstance(aliases, dict):
         errors.append("Invalid aliases: expected table")

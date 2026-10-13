@@ -70,6 +70,7 @@ class ConfigTests(unittest.TestCase):
             "work",
             "yt",
             "zed",
+            "zip",
         }
         self.assertTrue(expected <= {path.name for path in commands.iterdir() if path.is_dir()})
         game = (commands / "game" / "main.py").read_text(encoding="utf-8")
@@ -147,6 +148,7 @@ class ConfigTests(unittest.TestCase):
             },
             "yt": {"storage": {"root": "data"}, "apps": {"youtube_url": "https://www.youtube.com/"}},
             "zed": {"apps": {"editor": "Zed"}},
+            "zip": {"zip": {"format": "zip", "level": "max", "keep_junk": False}},
         }
         with patch.dict(os.environ, self.env, clear=False):
             root = ensure_layout()

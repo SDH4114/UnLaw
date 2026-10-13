@@ -177,6 +177,48 @@ Usage: ul zed
 Setting: apps.editor
 Example: ul zed
 ''',
+    "zip": '''Compress files and folders, or extract almost any archive.
+Usage:
+  ul zip <path>... [options]            Compress into one archive (default: .zip)
+  ul zip <archive>...                   Extract (when every path is an archive)
+  ul zip x|extract <archive>... [-o <dir>] [--here]   Extract explicitly
+  ul zip c|create <path>... [options]   Compress explicitly (even an archive)
+  ul zip ls <archive>                   List contents
+  ul zip test <archive>                 Verify integrity
+Create options:
+  -f, --format zip|7z|rar|tar.zst|tar.xz|tar.gz   Also: zst, xz, gz, tgz, txz, tzst
+  -o, --output <file|dir>   Archive path; its extension selects the format
+  -0 ... -9, -l <level>     Compression level (default: zip.level = max = 7)
+  --store|--fastest|--fast|--normal|--max|--ultra   Named levels 0, 1, 3, 5, 7, 9
+  -p, --password            Ask for a password: AES-256 (7z/rar also hide file names)
+  --keep-junk               Keep .DS_Store, ._*, __MACOSX, Thumbs.db, desktop.ini
+Extract options:
+  -o, --output <dir>        Destination (default: next to the archive)
+  --here                    Put contents directly into the destination folder
+  --keep-junk               Keep __MACOSX/.DS_Store found at the archive root
+Behavior: a single input is archived next to itself, several inputs into
+./Archive.<ext>. A one-item archive extracts as that item; otherwise into a
+folder named after the archive. Existing files are never overwritten: a
+" 2" suffix is added. Encrypted archives ask for their password.
+Levels: 0 stores without compression (zstd/gzip use their fastest), 1-3 favor
+speed, 5 is balanced, 7 gives near-best size, 9 is the slowest and smallest
+(7z/zip -mx9, rar -m5, xz -9, zstd --ultra -22). If at least 90% of the input is
+already-compressed media (jpg, heic, mp4, zip...) and no level is given, level 1
+is used: stronger levels only cost time there.
+Reads: zip, 7z, rar, tar(.gz/.bz2/.xz/.zst), gz, bz2, xz, zst, cab, iso, cpio, xar.
+Settings: zip.format (zip), zip.level (max), zip.keep_junk (false).
+Dependencies: 7-Zip (7z/rar reading, AES zip; falls back to zip/bsdtar),
+zstd for .zst, rar for creating .rar (brew install sevenzip zstd; brew install --cask rar).
+Examples:
+  ul zip project
+  ul zip photo.png notes/ -o ~/Desktop/pack.7z
+  ul zip project -f 7z -p
+  ul zip project -f zst --fast
+  ul zip project -f 7z -9
+  ul zip project.zip
+  ul zip x backup.rar -o ~/Downloads
+  ul zip ls backup.7z
+''',
     "commands": '''List available system commands, installed commands and aliases.
 Usage: ul commands [--verbose|--json]
 Options: --verbose includes source/path; --json prints structured records.

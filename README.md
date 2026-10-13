@@ -208,6 +208,11 @@ show_clicks = true
 [games]
 difficulty = "normal"
 
+[zip]
+format = "zip"                  # zip, 7z, rar, tar.zst, tar.xz, tar.gz
+level = "max"                   # 0–9 или store, fastest, fast, normal, max, ultra
+keep_junk = false
+
 [apps]
 spotify = "Spotify"
 editor = "Zed"
@@ -413,6 +418,45 @@ Accessibility.
 ```bash
 ul config set apps.browser_url '"https://duckduckgo.com/"'
 ```
+
+## Архивы
+
+`ul zip` сжимает файлы и папки и распаковывает почти любой архив. Без действия
+команда сама понимает, что делать: архивы распаковываются, остальное сжимается.
+
+```bash
+ul zip project                     # project.zip рядом с папкой, максимальное сжатие
+ul zip a.png b.png notes/          # несколько путей → ./Archive.zip
+ul zip project -f 7z               # сильнее всего (LZMA2)
+ul zip project -f rar              # RAR5 с recovery record (нужен rar)
+ul zip project -f zst --fast       # tar.zst: быстро и плотно, для бэкапов
+ul zip project -f 7z -9            # уровень 0–9 (или --store … --ultra)
+ul zip project -p -f 7z            # пароль AES-256, имена файлов тоже скрыты
+ul zip project -o ~/Desktop/pack.7z  # формат берётся из расширения
+ul zip project.zip                 # распаковать рядом
+ul zip x backup.rar -o ~/Downloads # распаковать в папку
+ul zip x pack.zip --here           # содержимое прямо в папку назначения
+ul zip ls backup.7z                # содержимое
+ul zip test backup.7z              # проверка целостности
+```
+
+Создаёт `zip` (по умолчанию), `7z`, `rar`, `tar.zst`, `tar.xz`, `tar.gz`; читает
+также `rar`, `gz`, `bz2`, `xz`, `zst`, `cab`, `iso`, `cpio`, `xar`. Мусор macOS
+(`.DS_Store`, `._*`, `__MACOSX`) не попадает в архивы; `--keep-junk` оставляет его.
+Архив из одного элемента распаковывается как этот элемент, иначе — в папку с
+именем архива. Ничего не перезаписывается: добавляется суффикс ` 2`. Пароль
+запрашивается в терминале и не передаётся в аргументах процесса.
+
+Уровни идут по шкале 7-Zip: `0` store, `1` fastest, `3` fast, `5` normal,
+`7` max (по умолчанию), `9` ultra. Каждый уровень переводится в лучшие настройки
+формата (`-mx`, `rar -m0…5`, `xz -0…9`, `zstd -1…19` и `--ultra -22`). Замер на
+68 МБ кода и бинарников: 7z `1/5/7/9` даёт 16.7/14.1/13.8/13.8 МБ, zip — 20.0/19.0/18.7/18.6 МБ,
+Finder — 20.3 МБ. Если уровень не указан и ≥90% входа уже сжатые медиа (jpg,
+heic, mp4, zip…), используется уровень 1: на 236 МБ HEIC уровень 9 давал выигрыш
+0.01% за 37 с вместо 3 с.
+
+Зависимости: `brew install sevenzip zstd`; для создания `.rar` — `brew install --cask rar`.
+Без 7-Zip `zip` создаётся системным `zip`, а распаковка идёт через `bsdtar`.
 
 ## Unlaw Arcade
 

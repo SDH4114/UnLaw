@@ -150,6 +150,7 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
     "work": {"apps": {"editor": "Zed", "lofi_url": "https://lofi-engine.vercel.app/"}},
     "yt": {"storage": {"root": "data"}, "apps": {"youtube_url": "https://www.youtube.com/"}},
     "zed": {"apps": {"editor": "Zed"}},
+    "zip": {"zip": {"format": "zip", "level": "max", "keep_junk": False}},
 }
 
 _CONFIG_SUPPORT = r'''
@@ -298,6 +299,7 @@ _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "work": ("desktop/work.py",),
     "yt": ("desktop/youtube.py",),
     "zed": ("built_in_commands/zed/main.py",),
+    "zip": ("archive.py",),
 }
 
 
