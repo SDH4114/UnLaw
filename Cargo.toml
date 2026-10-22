@@ -21,6 +21,7 @@ name = "unlaw"
 path = "rust/src/bin/unlaw.rs"
 
 [dependencies]
+crossterm = { version = "0.28", default-features = false, features = ["events"] }
 libc = "0.2"
 sha2 = "0.10"
 toml_edit = { version = "0.22", default-features = false, features = ["parse", "display"] }

@@ -131,6 +131,24 @@ _PRE_DOCSTRING_SOURCE_HASHES = {
 for _name, _digest in _PRE_DOCSTRING_SOURCE_HASHES.items():
     LEGACY_SOURCE_HASHES.setdefault(_name, set()).add(_digest)
 
+# Commands now built into the Rust core. Untouched seeds with these hashes are
+# removed so the built-in runs; edited copies stay and override it.
+RETIRED_COMMANDS = ("game", "zip")
+LEGACY_SOURCE_HASHES["game"].add("4eb7ad4f73245d473ae986086fc5943893fb9656d350703018e97f57a7b292e7")
+LEGACY_SOURCE_HASHES["zip"].add("e69649db613965b2d5a2235467e4e5e4d5a2b8cb5f694bcb1c9a0132eecc34e6")
+# Hashes of official sources with blank lines removed: some installs got copies
+# that differ only in blank lines, which are untouched code, not user edits.
+RETIRED_NORMALIZED_HASHES = {
+    "game": {
+        "2822ae92d02cfa55faa4194920c2e0a85c7359929c7482e54d86c8d59fc4558f",
+        "f6e4c0a2fc55f721a471ef773a823be6b4d7f9df8260d443e03f63dc3aaa2cce",
+    },
+    "zip": {
+        "aa50d2c9ce9231bdbf493456307412bca9fbdaed01b334c64bfbf4a365d195c9",
+        "ef55d79d19dd5f0d468c7dc588cd7b1999350d862d0de861e8225567973292fd",
+    },
+}
+
 _HEADER = """# Unlaw command source. Edit freely: this file has no runtime dependency on Unlaw.
 __SUMMARY__
 from __future__ import annotations
@@ -148,7 +166,6 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
         },
     },
     "cpp": {"projects": {"cpp": {"standard": 20, "initialize_git": False}}},
-    "game": {"games": {"difficulty": "normal"}},
     "lm": {
         "lm": {
             "base_url": "http://127.0.0.1:1234/v1",
@@ -181,7 +198,6 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
     "work": {"apps": {"editor": "Zed", "lofi_url": "https://lofi-engine.vercel.app/"}},
     "yt": {"storage": {"root": "data"}, "apps": {"youtube_url": "https://www.youtube.com/"}},
     "zed": {"apps": {"editor": "Zed"}},
-    "zip": {"zip": {"format": "zip", "level": "max", "keep_junk": False}},
 }
 
 _CONFIG_SUPPORT = r'''
@@ -312,7 +328,6 @@ _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "browser": ("built_in_commands/browser/main.py",),
     "capture": ("capture.py",),
     "cpp": ("project_templates.py", "built_in_commands/cpp/main.py"),
-    "game": ("games.py",),
     "git": ("built_in_commands/git/main.py",),
     "gpt": ("built_in_commands/gpt/main.py",),
     "lm": ("lmstudio.py",),
@@ -330,7 +345,6 @@ _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "work": ("desktop/work.py",),
     "yt": ("desktop/youtube.py",),
     "zed": ("built_in_commands/zed/main.py",),
-    "zip": ("archive.py",),
 }
 
 

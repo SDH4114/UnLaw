@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use sha2::{Digest, Sha256};
 
-use crate::assets::SEEDS;
+use crate::assets::{RETIRED, SEEDS};
 use crate::commands::entry_point;
 use crate::config::{commands_dir, config_dir, configured_storage_root, templates_dir, write_defaults_if_missing};
 
@@ -21,14 +21,17 @@ fn is_legacy_wrapper(source: &str, name: &str) -> bool {
     trimmed == format!("{import}\n\n\n{tail}") || trimmed == format!("{import}\n\n{tail}")
 }
 
+fn sha256_hex(text: &str) -> String {
+    Sha256::digest(text.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn without_blank_lines(source: &str) -> String {
+    source.lines().filter(|line| !line.trim().is_empty()).collect::<Vec<_>>().join("\n")
+}
+
 /// Only untouched sources shipped by earlier releases may be upgraded.
 pub fn is_replaceable(source: &str, name: &str, hashes: &[&str]) -> bool {
-    if is_legacy_wrapper(source, name) {
-        return true;
-    }
-    let digest = Sha256::digest(source.as_bytes());
-    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-    hashes.contains(&hex.as_str())
+    is_legacy_wrapper(source, name) || hashes.contains(&sha256_hex(source).as_str())
 }
 
 fn seed_default_commands() -> io::Result<()> {
@@ -54,6 +57,23 @@ fn seed_default_commands() -> io::Result<()> {
     Ok(())
 }
 
+/// Remove untouched seeds of commands that are now built in, so the Rust
+/// version runs; edited copies stay and keep overriding it.
+fn retire_builtin_seeds() -> io::Result<()> {
+    for (name, hashes, normalized) in RETIRED {
+        let directory = commands_dir().join(name);
+        let script = directory.join("main.py");
+        let Ok(source) = fs::read_to_string(&script) else { continue };
+        if !is_replaceable(&source, name, hashes) && !normalized.contains(&sha256_hex(&without_blank_lines(&source)).as_str()) {
+            continue;
+        }
+        fs::remove_file(&script)?;
+        let _ = fs::remove_file(directory.join(".DS_Store"));
+        let _ = fs::remove_dir(&directory);
+    }
+    Ok(())
+}
+
 pub fn ensure_storage_layout() -> io::Result<PathBuf> {
     let root = configured_storage_root();
     for parts in STORAGE_SUBDIRECTORIES {
@@ -70,6 +90,7 @@ pub fn ensure_layout() -> io::Result<PathBuf> {
     }
     write_defaults_if_missing()?;
     seed_default_commands()?;
+    retire_builtin_seeds()?;
     ensure_storage_layout()?;
     Ok(config_dir())
 }
@@ -86,6 +107,13 @@ mod tests {
         let digest = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
         assert!(is_replaceable("hello", "git", &[digest]));
         assert!(!is_replaceable("hello!", "git", &[digest]));
+    }
+
+    #[test]
+    fn blank_lines_are_ignored_only_by_the_normalized_hash() {
+        assert_eq!(without_blank_lines("a\n\n  \nb\n"), "a\nb");
+        assert_eq!(sha256_hex(&without_blank_lines("x\n\ny")), sha256_hex(&without_blank_lines("x\ny\n\n")));
+        assert!(!is_replaceable("x\n\ny", "git", &[&sha256_hex("x\ny")]), "exact matching stays exact");
     }
 
     #[test]

@@ -345,7 +345,9 @@ class LMStudioCommandTests(ConfiguredTestCase):
         from unlawful import lmstudio
 
         completed = subprocess.CompletedProcess([], 0)
-        with patch.dict(os.environ, self.env, clear=False), patch.object(
+        terminal = io.StringIO()
+        terminal.isatty = lambda: True  # type: ignore[method-assign]
+        with patch.dict(os.environ, self.env, clear=False), patch.object(sys, "stdin", terminal), patch.object(
             lmstudio, "json_request", side_effect=[OSError("offline"), {"data": [{"id": "local"}]}]
         ), patch.object(lmstudio, "_interactive", return_value=0) as interactive, patch.object(
             lmstudio.shutil, "which", return_value="/bin/lms"
@@ -355,44 +357,6 @@ class LMStudioCommandTests(ConfiguredTestCase):
             self.assertEqual(lmstudio.main([]), 0)
         self.assertEqual(run.call_args.args[0], ["/bin/lms", "server", "start"])
         interactive.assert_called_once()
-
-
-class GameCommandTests(ConfiguredTestCase):
-    def test_four_games_are_exposed(self) -> None:
-        from unlawful.games import GAME_NAMES
-
-        self.assertEqual(set(GAME_NAMES), {"tetris", "snake", "minesweeper", "invaders"})
-
-    def test_named_game_is_dispatched_without_menu(self) -> None:
-        from unlawful import games
-
-        with patch.object(games, "run_game", return_value=0) as run:
-            self.assertEqual(games.main(["snake", "hard"]), 0)
-        run.assert_called_once_with("snake", "hard")
-
-    def test_each_game_has_three_difficulty_levels(self) -> None:
-        from unlawful.games import DIFFICULTIES, difficulty_rules
-
-        self.assertEqual(DIFFICULTIES, ("easy", "normal", "hard"))
-        self.assertGreater(difficulty_rules("snake", "hard")["speed"], difficulty_rules("snake", "easy")["speed"])
-        self.assertGreater(
-            difficulty_rules("minesweeper", "hard")["mines"],
-            difficulty_rules("minesweeper", "normal")["mines"],
-        )
-
-    def test_fullscreen_playfield_uses_available_terminal_space(self) -> None:
-        from unlawful.games import playfield_size
-
-        self.assertEqual(playfield_size(40, 120), (38, 118))
-
-    def test_terminal_without_cursor_visibility_support_still_starts(self) -> None:
-        from unlawful import games
-
-        screen = Mock()
-        with patch.object(games.curses, "curs_set", side_effect=games.curses.error("unsupported")):
-            games._screen(screen, timeout=90)
-        screen.keypad.assert_called_once_with(True)
-        screen.timeout.assert_called_once_with(90)
 
 
 if __name__ == "__main__":

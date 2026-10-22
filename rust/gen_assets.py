@@ -18,7 +18,12 @@ def main() -> int:
     source, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2])
     sys.path.insert(0, str(source))
     from unlawful import __version__
-    from unlawful.command_sources import LEGACY_SOURCE_HASHES, command_source
+    from unlawful.command_sources import (
+        LEGACY_SOURCE_HASHES,
+        RETIRED_COMMANDS,
+        RETIRED_NORMALIZED_HASHES,
+        command_source,
+    )
     from unlawful.config import DEFAULT_COMMAND_NAMES, DEFAULT_CONFIG, serialize_config
 
     seeds = output / "seeds"
@@ -35,6 +40,13 @@ def main() -> int:
         lines.append(
             f'    ({json.dumps(name)}, include_str!(concat!(env!("OUT_DIR"), "/seeds/{name}.py")), &[{hashes}]),'
         )
+    lines.append("];")
+    lines.append("/// Former seeded commands now built into the core: (name, exact hashes, blank-line-free hashes).")
+    lines.append("pub const RETIRED: &[(&str, &[&str], &[&str])] = &[")
+    for name in RETIRED_COMMANDS:
+        hashes = ", ".join(json.dumps(digest) for digest in sorted(LEGACY_SOURCE_HASHES[name]))
+        normalized = ", ".join(json.dumps(digest) for digest in sorted(RETIRED_NORMALIZED_HASHES[name]))
+        lines.append(f"    ({json.dumps(name)}, &[{hashes}], &[{normalized}]),")
     lines.append("];")
     (output / "default_config.toml").write_text(serialize_config(DEFAULT_CONFIG), encoding="utf-8")
     (output / "assets.rs").write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -5,6 +5,7 @@
 mod assets {
     include!(concat!(env!("OUT_DIR"), "/assets.rs"));
 }
+mod builtin;
 mod commands;
 mod config;
 mod config_cmd;
@@ -126,6 +127,7 @@ fn hidden(name: &str, args: &[String]) -> Option<i32> {
 fn unknown(name: &str, aliases: &[(String, Vec<String>)]) -> i32 {
     let mut available: BTreeSet<String> = help::system_names().map(str::to_string).collect();
     available.extend(commands::discover().into_keys());
+    available.extend(builtin::names().map(str::to_string));
     available.extend(aliases.iter().map(|(alias, _)| alias.clone()));
     let available: Vec<String> = available.into_iter().collect();
     let suggestions = util::close_matches(name, &available, 3, 0.55);
@@ -197,6 +199,9 @@ pub fn main_with(argv: Vec<String>) -> i32 {
         return code;
     }
     let Some(command) = commands::resolve(name) else {
+        if let Some(code) = builtin::run(name, rest, &config) {
+            return code;
+        }
         return match workspace::discover() {
             Ok(templates) if templates.contains_key(name) => system::run_template_hint(name, rest),
             Ok(_) => unknown(name, &aliases),

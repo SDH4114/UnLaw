@@ -1,0 +1,20 @@
+[package]
+name = "unlaw-command-{{command_name}}"
+version = "0.1.0"
+edition = "2021"
+# Shown by `ul commands --describe` and Zsh completion.
+description = "Custom Unlaw command."
+publish = false
+
+# `ul {{command_name}}` runs this binary; Unlaw rebuilds it when the sources change.
+[[bin]]
+name = "main"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+strip = true
+
+# Keeps this command independent of any Cargo workspace above it.
+[workspace]

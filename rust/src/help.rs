@@ -53,13 +53,18 @@ Example: ul config set storage.root ~/Downloads/unlaw
         "create",
         "Create an editable command or save the current project as a template.
 Usage:
-  ul create command <name>          Create commands/<name>/main.py
-  ul create template [name]         Prompt for project name, app and AI preference
-Existing commands/templates are not overwritten. The command template comes
-from templates/commands/main.py when present.
+  ul create command <name>              Create commands/<name>/main.py
+  ul create command <name> --lang rust  Create a Cargo project in commands/<name>
+  ul create template [name]             Prompt for project name, app and AI preference
+Existing commands/templates are not overwritten. Templates come from
+templates/commands/main.py and templates/commands/rust/ when present
+({{command_name}} is replaced). Rust commands need cargo and are rebuilt
+automatically when their sources change.
 A command folder may instead contain main.sh, main.js or an executable main.
 Commands receive UNLAW_COMMAND, UNLAW_COMMAND_DIR, UNLAW_CONFIG_DIR and UNLAW_STORAGE.
-Example: ul create command hello
+Examples:
+  ul create command hello
+  ul create command fast --lang rust
 ",
     ),
     (

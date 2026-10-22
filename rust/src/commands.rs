@@ -20,12 +20,19 @@ pub enum Kind {
     Python,
     Shell,
     Node,
+    /// A Cargo project, built on demand into target/release.
+    Cargo,
     Executable,
 }
 
 /// Checked in this order; the first existing file is the command.
-pub const ENTRY_POINTS: [(&str, Kind); 4] =
-    [("main.py", Kind::Python), ("main.sh", Kind::Shell), ("main.js", Kind::Node), ("main", Kind::Executable)];
+pub const ENTRY_POINTS: [(&str, Kind); 5] = [
+    ("main.py", Kind::Python),
+    ("main.sh", Kind::Shell),
+    ("main.js", Kind::Node),
+    ("Cargo.toml", Kind::Cargo),
+    ("main", Kind::Executable),
+];
 
 #[derive(Clone, Debug)]
 pub struct UserCommand {
@@ -104,10 +111,87 @@ pub fn command_line(command: &UserCommand, args: &[String], config: &Config) -> 
         }
         Kind::Shell if !is_executable(&command.path) => vec!["/bin/sh".into(), path],
         Kind::Node => vec!["node".into(), path],
+        Kind::Cargo => vec![cargo_binary(&command.path).into_os_string()],
         Kind::Shell | Kind::Executable => vec![path],
     };
     line.extend(args.iter().map(OsString::from));
     line
+}
+
+fn manifest(path: &Path) -> Option<toml_edit::DocumentMut> {
+    std::fs::read_to_string(path).ok()?.parse().ok()
+}
+
+/// target/release/<first [[bin]] name, else the package name>.
+pub fn cargo_binary(manifest_path: &Path) -> PathBuf {
+    let directory = manifest_path.parent().unwrap_or(Path::new("."));
+    let name = manifest(manifest_path)
+        .and_then(|document| {
+            let bin = document.get("bin").and_then(|bins| bins.as_array_of_tables()).and_then(|bins| bins.iter().next());
+            bin.and_then(|bin| bin.get("name")?.as_str().map(str::to_string))
+                .or_else(|| document.get("package")?.get("name")?.as_str().map(str::to_string))
+        })
+        .unwrap_or_else(|| "main".into());
+    directory.join("target").join("release").join(name)
+}
+
+fn newest_source(directory: &Path) -> Option<std::time::SystemTime> {
+    fn walk(path: &Path, newest: &mut Option<std::time::SystemTime>) {
+        let Ok(meta) = std::fs::metadata(path) else { return };
+        if meta.is_dir() {
+            for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
+                walk(&entry.path(), newest);
+            }
+        } else if let Ok(modified) = meta.modified() {
+            *newest = Some(newest.map_or(modified, |current| current.max(modified)));
+        }
+    }
+    let mut newest = None;
+    for part in ["Cargo.toml", "Cargo.lock", "build.rs", "src"] {
+        walk(&directory.join(part), &mut newest);
+    }
+    newest
+}
+
+/// Rebuild a Cargo command when its binary is missing or older than its sources.
+pub fn ensure_built(command: &UserCommand) -> Result<(), i32> {
+    let binary = cargo_binary(&command.path);
+    let built = std::fs::metadata(&binary).and_then(|meta| meta.modified()).ok();
+    let stale = match (built, newest_source(command.directory())) {
+        (Some(built), Some(source)) => source > built,
+        (Some(_), None) => false,
+        (None, _) => true,
+    };
+    if !stale {
+        return Ok(());
+    }
+    let Some(cargo) = which("cargo").or_else(|| Some(crate::util::home().join(".cargo/bin/cargo")).filter(|p| is_executable(p))) else {
+        eprintln!("unlaw: {} is a Rust command but cargo was not found; install Rust from https://rustup.rs", command.name);
+        return Err(1);
+    };
+    eprintln!("unlaw: building {}…", command.name);
+    let mut build = Command::new(cargo);
+    // An explicit target dir: a global CARGO_TARGET_DIR must not move the binary.
+    build
+        .args(["build", "--release", "--quiet", "--manifest-path"])
+        .arg(&command.path)
+        .arg("--target-dir")
+        .arg(command.directory().join("target"));
+    match status_shielded(&mut build) {
+        Ok(status) if status.success() && binary.is_file() => Ok(()),
+        Ok(status) if status.success() => {
+            eprintln!("unlaw: {} built, but {} is missing; check [[bin]] in Cargo.toml", command.name, binary.display());
+            Err(1)
+        }
+        Ok(status) => {
+            eprintln!("unlaw: building {} failed", command.name);
+            Err(exit_code(status))
+        }
+        Err(error) => {
+            eprintln!("unlaw: could not run cargo: {error}");
+            Err(1)
+        }
+    }
 }
 
 pub fn environment(command: &UserCommand, config: &Config) -> Vec<(&'static str, OsString)> {
@@ -125,7 +209,7 @@ pub struct RunOptions {
     pub timeout: Duration,
 }
 
-fn exit_code(status: ExitStatus) -> i32 {
+pub(crate) fn exit_code(status: ExitStatus) -> i32 {
     status.code().unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
 }
 
@@ -162,8 +246,37 @@ impl Drop for IgnoreSignals {
     }
 }
 
+/// Run a helper tool to completion: Ctrl-C reaches the tool, while Unlaw keeps
+/// running so it can clean up and report (a SIGINT exit becomes 130).
+pub(crate) fn status_shielded(process: &mut Command) -> io::Result<ExitStatus> {
+    let _guard = IgnoreSignals::new();
+    spawn_shielded(process)?.wait()
+}
+
+/// Spawn with default signal handling in the child; pair with `shield()`.
+pub(crate) fn spawn_shielded(process: &mut Command) -> io::Result<std::process::Child> {
+    unsafe {
+        process.pre_exec(|| {
+            libc::signal(libc::SIGINT, libc::SIG_DFL);
+            libc::signal(libc::SIGQUIT, libc::SIG_DFL);
+            Ok(())
+        });
+    }
+    process.spawn()
+}
+
+/// Ignore Ctrl-C in Unlaw itself until the returned guard is dropped.
+pub(crate) fn shield() -> impl Drop {
+    IgnoreSignals::new()
+}
+
 pub fn run(command: &UserCommand, args: &[String], config: &Config, options: &RunOptions) -> i32 {
     let line = command_line(command, args, config);
+    if command.kind == Kind::Cargo && !options.dry_run {
+        if let Err(code) = ensure_built(command) {
+            return code;
+        }
+    }
     if options.dry_run {
         println!("DRY RUN: {}", shell_join(&line));
         return 0;
@@ -265,6 +378,9 @@ pub fn summary(command: &UserCommand) -> Option<String> {
     };
     match command.kind {
         Kind::Python => python_docstring(head),
+        Kind::Cargo => manifest(&command.path)
+            .and_then(|document| document.get("package")?.get("description")?.as_str().map(str::to_string))
+            .and_then(|text| first_line(&text)),
         _ => script_comment(head),
     }
 }

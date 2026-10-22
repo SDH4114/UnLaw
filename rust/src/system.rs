@@ -10,6 +10,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::builtin;
 use crate::commands;
 use crate::config::{self, commands_dir, config_dir, config_file, templates_dir, Config, ConfigError};
 use crate::help::{self, is_system, print_if_requested, system_names, system_summary};
@@ -35,6 +36,10 @@ fn records(config: &Config, describe: bool) -> Vec<Record> {
     for name in system_names() {
         let summary = describe.then(|| system_summary(name).to_string());
         by_name.insert(name.into(), Record { name: name.into(), source: "system", path: None, expansion: None, summary });
+    }
+    for name in builtin::names() {
+        let summary = describe.then(|| builtin::summary(name).to_string());
+        by_name.insert(name.into(), Record { name: name.into(), source: "builtin", path: None, expansion: None, summary });
     }
     for (name, command) in &discovered {
         if is_system(name) {
@@ -221,6 +226,10 @@ pub fn which_command(args: &[String]) -> i32 {
             println!("{name}: config {}", command.path.display());
             0
         }
+        None if builtin::is_builtin(name) => {
+            println!("{name}: builtin (Rust)");
+            0
+        }
         None => {
             eprintln!("unlaw: Unknown command: {name}");
             1
@@ -302,7 +311,7 @@ pub fn complete(args: &[String]) -> i32 {
         .map(|(name, text)| candidate(name, text))
         .collect(),
         (2, Some("create")) => vec![
-            candidate("command", "Create commands/<name>/main.py"),
+            candidate("command", "Create commands/<name> (--lang python|rust)"),
             candidate("template", "Save the current project as a template"),
         ],
         (2, Some("completion")) => vec![candidate("zsh", "Zsh completion code")],
@@ -311,6 +320,10 @@ pub fn complete(args: &[String]) -> i32 {
             .iter()
             .map(|(name, text)| candidate(name, text))
             .collect(),
+        (4, Some("create")) if words.get(2).is_some_and(|word| word == "--lang") || words.get(1).is_some_and(|word| word == "command") => {
+            vec![candidate("--lang", "python (default) or rust")]
+        }
+        (5, Some("create")) => vec![candidate("python", "main.py (default)"), candidate("rust", "Cargo project, rebuilt on change")],
         (2, Some("doctor")) => ["--verbose", "--json", "--fix"].iter().map(|f| candidate(f, "")).collect(),
         _ => Vec::new(),
     };
@@ -320,22 +333,100 @@ pub fn complete(args: &[String]) -> i32 {
     0
 }
 
-fn create_user_command(args: &[String]) -> i32 {
-    let [name] = args else {
-        return usage("Usage: ul create command <name>");
+const RUST_TEMPLATE: [(&str, &str); 2] = [
+    ("Cargo.toml", include_str!("../assets/command_rust/Cargo.toml")),
+    ("src/main.rs", include_str!("../assets/command_rust/src/main.rs")),
+];
+
+/// Template files as (relative path, text): templates/commands/rust/ when the
+/// user made one, otherwise the built-in Cargo project.
+fn rust_template_files() -> Result<Vec<(PathBuf, String)>, String> {
+    let custom = templates_dir().join("commands").join("rust");
+    if !custom.is_dir() {
+        return Ok(RUST_TEMPLATE.iter().map(|(path, text)| (PathBuf::from(path), text.to_string())).collect());
+    }
+    fn collect(root: &Path, directory: &Path, files: &mut Vec<(PathBuf, String)>) -> Result<(), String> {
+        for entry in fs::read_dir(directory).map_err(|error| error.to_string())?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect(root, &path, files)?;
+            } else {
+                let text = fs::read_to_string(&path).map_err(|error| format!("Could not read {}: {error}", path.display()))?;
+                files.push((path.strip_prefix(root).unwrap_or(&path).to_path_buf(), text));
+            }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    collect(&custom, &custom, &mut files)?;
+    if !files.iter().any(|(path, _)| path == Path::new("Cargo.toml")) {
+        return Err(format!("{} has no Cargo.toml", custom.display()));
+    }
+    Ok(files)
+}
+
+fn create_rust_command(name: &str, directory: &Path) -> i32 {
+    if commands::entry_point(directory).is_none() && which("cargo").is_none() && !home().join(".cargo/bin/cargo").is_file() {
+        eprintln!("unlaw: Rust commands need cargo. Install Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh");
+        return 1;
+    }
+    let files = match rust_template_files() {
+        Ok(files) => files,
+        Err(error) => {
+            eprintln!("unlaw: {error}");
+            return 1;
+        }
     };
-    if !workspace::valid_name(name) || is_system(name) {
+    for (relative, text) in &files {
+        let path = directory.join(relative);
+        if path.exists() {
+            eprintln!("unlaw: Command already exists: {}", path.display());
+            return 1;
+        }
+        let rendered = text.replace("{{command_name}}", name);
+        if let Err(error) = path.parent().map_or(Ok(()), fs::create_dir_all).and_then(|_| fs::write(&path, rendered)) {
+            eprintln!("unlaw: Could not create {}: {error}", path.display());
+            return 1;
+        }
+    }
+    let command = commands::UserCommand { name: name.into(), path: directory.join("Cargo.toml"), kind: commands::Kind::Cargo };
+    println!("Created Rust command '{name}': {}", directory.display());
+    if let Err(code) = commands::ensure_built(&command) {
+        eprintln!("unlaw: Fix the build, then run: ul {name}");
+        return code;
+    }
+    println!("Edit {} — `ul {name}` rebuilds it automatically.", directory.join("src").join("main.rs").display());
+    println!("Run it with: ul {name}");
+    0
+}
+
+fn create_user_command(args: &[String]) -> i32 {
+    let usage_text = "Usage: ul create command <name> [--lang python|rust]";
+    let (name, language) = match args {
+        [name] => (name, "python"),
+        [name, flag, language] if flag == "--lang" => (name, language.as_str()),
+        [flag, language, name] if flag == "--lang" => (name, language.as_str()),
+        _ => return usage(usage_text),
+    };
+    if !["python", "py", "rust", "rs"].contains(&language) {
+        eprintln!("unlaw: Unknown language: {language}. Use python or rust.");
+        return 2;
+    }
+    if !workspace::valid_name(name) || is_system(name) || builtin::is_builtin(name) {
         eprintln!(
-            "unlaw: Command names must start with a lowercase letter and contain only lowercase letters, numbers, '-' or '_'."
+            "unlaw: Command names must start with a lowercase letter and contain only lowercase letters, numbers, '-' or '_', and must not be a system or built-in command."
         );
         return 2;
     }
     let directory = commands_dir().join(name);
-    let destination = directory.join("main.py");
     if let Some((existing, _)) = commands::entry_point(&directory) {
         eprintln!("unlaw: Command already exists: {}", existing.display());
         return 1;
     }
+    if matches!(language, "rust" | "rs") {
+        return create_rust_command(name, &directory);
+    }
+    let destination = directory.join("main.py");
     if destination.exists() {
         eprintln!("unlaw: Command already exists: {}", destination.display());
         return 1;
@@ -413,7 +504,11 @@ fn create_project_template(args: &[String]) -> i32 {
         Ok(templates) => templates,
         Err(error) => return fail(&error),
     };
-    if is_system(&name) || commands::resolve(&name).is_some() || config.alias(&name).is_some() || templates.contains_key(&name)
+    if is_system(&name)
+        || builtin::is_builtin(&name)
+        || commands::resolve(&name).is_some()
+        || config.alias(&name).is_some()
+        || templates.contains_key(&name)
     {
         eprintln!("unlaw create template: Name already in use: {name}");
         return 1;

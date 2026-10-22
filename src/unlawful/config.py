@@ -70,7 +70,6 @@ DEFAULT_COMMAND_NAMES = (
     "browser",
     "capture",
     "cpp",
-    "game",
     "git",
     "gpt",
     "lm",
@@ -88,7 +87,6 @@ DEFAULT_COMMAND_NAMES = (
     "work",
     "yt",
     "zed",
-    "zip",
 )
 STORAGE_SUBDIRECTORIES = (
     ("captures", "screenshots"),

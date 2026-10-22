@@ -51,7 +51,6 @@ class ConfigTests(unittest.TestCase):
             "browser",
             "capture",
             "cpp",
-            "game",
             "git",
             "gpt",
             "lm",
@@ -69,13 +68,14 @@ class ConfigTests(unittest.TestCase):
             "work",
             "yt",
             "zed",
-            "zip",
         }
         self.assertTrue(expected <= {path.name for path in commands.iterdir() if path.is_dir()})
-        game = (commands / "game" / "main.py").read_text(encoding="utf-8")
-        self.assertIn("def main", game)
-        self.assertNotIn("unlawful.", game)
-        self.assertNotIn("from .", game)
+        todo = (commands / "todo" / "main.py").read_text(encoding="utf-8")
+        self.assertIn("def main", todo)
+        self.assertNotIn("unlawful.", todo)
+        self.assertNotIn("from .", todo)
+        self.assertFalse((commands / "game").exists(), "game is built into the Rust core")
+        self.assertFalse((commands / "zip").exists(), "zip is built into the Rust core")
         self.assertFalse((commands / "doctor").exists())
 
     def test_every_seeded_command_is_self_contained_python(self) -> None:
@@ -104,7 +104,6 @@ class ConfigTests(unittest.TestCase):
                 },
             },
             "cpp": {"projects": {"cpp": {"standard": 20, "initialize_git": False}}},
-            "game": {"games": {"difficulty": "normal"}},
             "lm": {
                 "lm": {
                     "base_url": "http://127.0.0.1:1234/v1",
@@ -147,7 +146,6 @@ class ConfigTests(unittest.TestCase):
             },
             "yt": {"storage": {"root": "data"}, "apps": {"youtube_url": "https://www.youtube.com/"}},
             "zed": {"apps": {"editor": "Zed"}},
-            "zip": {"zip": {"format": "zip", "level": "max", "keep_junk": False}},
         }
         with patch.dict(os.environ, self.env, clear=False):
             root = ensure_layout()
