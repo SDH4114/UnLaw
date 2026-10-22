@@ -101,12 +101,12 @@ Example: ul templates
         "Download and install the newest Unlaw from GitHub.
 Usage: ul update [--check] [--branch <name>|--tag <name>]
 Options:
-  --check            Compare the installed version with GitHub; installs nothing
+  --check            Compare the installed version and commit with GitHub; installs nothing
   --branch <name>    Install from a branch instead of main
   --tag <name>       Install a tagged release
 Runs `cargo install --locked --force --git https://github.com/SDH4114/UnLaw.git`
 into the directory that holds the current ul (default ~/.local/bin).
-Dependencies: cargo (Rust), Python 3.11+ for the build, curl for --check.
+Dependencies: cargo (Rust), Python 3.11+ for the build, curl and git for --check.
 Your config, edited commands and data are never touched; unchanged default
 commands are upgraded on the next run. UNLAW_UPDATE_REPOSITORY selects a fork.
 Examples:
@@ -126,7 +126,7 @@ Example: ul venv
     ),
     (
         "version",
-        "Show the installed Unlaw version.
+        "Show the installed Unlaw version and the commit it was built from.
 Usage: ul version
 Example: ul version
 ",

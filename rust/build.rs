@@ -19,8 +19,45 @@ fn python() -> String {
     "python3".to_string()
 }
 
+/// The commit being built: a git checkout of this repository, or the
+/// `~/.cargo/git/checkouts/<repo>/<short rev>` folder `cargo install --git` uses.
+fn commit(root: &Path) -> String {
+    if let Ok(explicit) = env::var("UNLAW_COMMIT") {
+        return explicit;
+    }
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    };
+    let top = git(&["rev-parse", "--show-toplevel"]).and_then(|top| Path::new(&top).canonicalize().ok());
+    if top.is_some() && top == root.canonicalize().ok() {
+        if let Some(hash) = git(&["rev-parse", "--short=7", "HEAD"]) {
+            return hash;
+        }
+    }
+    let name = root.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let in_checkouts = root.to_string_lossy().contains("/git/checkouts/");
+    if in_checkouts && name.len() >= 7 && name.chars().all(|c| c.is_ascii_hexdigit()) {
+        return name[..7].to_string();
+    }
+    String::new()
+}
+
 fn main() {
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    println!("cargo:rerun-if-env-changed=UNLAW_COMMIT");
+    for file in [".git/HEAD", ".git/index"] {
+        if root.join(file).exists() {
+            println!("cargo:rerun-if-changed={file}");
+        }
+    }
+    println!("cargo:rustc-env=UNLAW_COMMIT={}", commit(&root));
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     println!("cargo:rerun-if-changed=src/unlawful");
     println!("cargo:rerun-if-changed=rust/gen_assets.py");

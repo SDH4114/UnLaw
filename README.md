@@ -21,12 +21,13 @@ rustup, если его нет. Команды в `commands/` остаются �
 Обновление до последней версии с GitHub:
 
 ```bash
-ul update --check          # сравнить установленную версию с GitHub, ничего не ставя
+ul update --check          # сравнить версию и коммит с GitHub, ничего не ставя
 ul update                  # переустановить из main (cargo install --locked --force)
 ul update --tag v2.2.0     # конкретный релиз; --branch <name> — ветка
 ```
 
-`ul update` ставит новый бинарник туда же, где лежит текущий `ul` (по умолчанию
+`ul --version` показывает версию и коммит сборки (`Unlaw 3.0.0 (dd061d1)`), поэтому
+обновление видно даже без смены номера версии. `ul update` ставит новый бинарник туда же, где лежит текущий `ul` (по умолчанию
 `~/.local/bin`). Конфигурация, данные и изменённые вручную команды не трогаются;
 неизменённые стандартные команды обновятся при следующем запуске. Нужны `cargo`
 и Python 3.11+, для `--check` — `curl`. `UNLAW_UPDATE_REPOSITORY` задаёт форк.
@@ -674,7 +675,7 @@ python3 -m unittest discover -s tests -v   # сам собирает target/debu
 cargo build --release
 ```
 
-Unlaw 2.1.3 остаётся local-first: команды не используют shell-строки, LM Studio
+Unlaw 3 остаётся local-first: команды не используют shell-строки, LM Studio
 принимает только loopback endpoint, а секрет Telegram хранится в macOS Keychain.
 Внешние приложения и разрешения остаются явно видимыми через `ul doctor`.
 

@@ -24,6 +24,17 @@ use std::time::Duration;
 use crate::commands::RunOptions;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Short git commit of this build, or empty when it is unknown.
+pub const COMMIT: &str = env!("UNLAW_COMMIT");
+
+/// `Unlaw 3.0.0 (dd061d1)`.
+pub fn version_line() -> String {
+    if COMMIT.is_empty() {
+        format!("Unlaw {VERSION}")
+    } else {
+        format!("Unlaw {VERSION} ({COMMIT})")
+    }
+}
 
 const RAW_SYSTEM_COMMANDS: [&str; 6] = ["completion", "config", "doctor", "init", "update", "version"];
 
@@ -157,7 +168,7 @@ pub fn main_with(argv: Vec<String>) -> i32 {
         args.remove(0);
     }
     if args == ["--version"] {
-        println!("Unlaw {VERSION}");
+        println!("{}", version_line());
         return 0;
     }
     if args.len() > 1 && args[0] == "help" {

@@ -18,7 +18,6 @@ use crate::layout::{ensure_layout, STORAGE_SUBDIRECTORIES};
 use crate::shell;
 use crate::util::{home, shell_join, which, Json};
 use crate::workspace;
-use crate::VERSION;
 
 const COMMAND_TEMPLATE: &str = include_str!("../assets/command_main.py");
 
@@ -244,7 +243,7 @@ pub fn version(args: &[String]) -> i32 {
     if !args.is_empty() {
         return usage("Usage: ul version");
     }
-    println!("Unlaw {VERSION}");
+    println!("{}", crate::version_line());
     0
 }
 
@@ -795,7 +794,7 @@ fn doctor_checks() -> Vec<Check> {
         detail: path.into(),
     };
     vec![
-        Check { name: "Unlaw", available: true, required: true, detail: format!("version {VERSION}") },
+        Check { name: "Unlaw", available: true, required: true, detail: crate::version_line().replacen("Unlaw ", "version ", 1) },
         Check { name: "Layout", available: root.is_dir(), required: true, detail: root.display().to_string() },
         Check { name: "Configuration", available: config_ok, required: true, detail: config_detail },
         Check { name: "Storage", available: storage.is_dir(), required: false, detail: storage.display().to_string() },

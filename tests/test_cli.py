@@ -39,9 +39,11 @@ class CliTests(CoreTestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("Unknown command", result.stderr)
 
-    def test_cli_reports_version_2_1_3(self) -> None:
-        self.assertEqual(self.ok("--version").stdout, "Unlaw 2.1.3\n")
-        self.assertEqual(self.ok("version").stdout, "Unlaw 2.1.3\n")
+    def test_cli_reports_version_3_with_the_build_commit(self) -> None:
+        line = self.ok("--version").stdout
+        self.assertRegex(line, r"^Unlaw 3\.0\.0( \([0-9a-f]{7}\))?\n$")
+        self.assertEqual(self.ok("version").stdout, line)
+        self.assertIn(line.strip().replace("Unlaw ", "version "), self.ok("doctor", "--verbose", timeout=60).stdout)
 
     def test_direct_template_invocation_requires_shell_integration(self) -> None:
         project = self.root / "HearMe"

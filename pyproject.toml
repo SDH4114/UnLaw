@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "unlaw"
-version = "2.1.3"
+version = "3.0.0"
 description = "Seeded command sources for the Unlaw macOS command launcher"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -17,6 +17,21 @@ class UpdateTests(CoreTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.env["PATH"] = f"{self.bin}:/usr/bin:/bin"
+        self.fake_git("1234567890abcdef1234567890abcdef12345678")
+        version = self.ok("--version").stdout.split()
+        self.installed_commit = version[2].strip("()") if len(version) > 2 else ""
+
+    def fake_git(self, commit: str | None, *, exit_code: int = 0) -> Path:
+        """`git ls-remote` stand-in printing one ref, or nothing."""
+        log = self.root / "git.log"
+        line = f"{commit}\trefs/heads/main\n" if commit else ""
+        self.tool(
+            "git",
+            f"#!{sys.executable}\nimport pathlib, sys\n"
+            f"pathlib.Path({str(log)!r}).write_text('\\n'.join(sys.argv[1:]))\n"
+            f"sys.stdout.write({line!r})\nraise SystemExit({exit_code})\n",
+        )
+        return log
 
     def fake_cargo(self, *, exit_code: int = 0, version: str = "9.9.9") -> Path:
         """Logs argv and UNLAW_PYTHON, then installs a fake `ul` into --root/bin."""
@@ -108,15 +123,34 @@ class UpdateTests(CoreTestCase):
         cargo_log = self.fake_cargo()
         curl_log = self.fake_curl('[package]\nname = "unlaw"\nversion = "9.0.0"\n')
         result = self.ok("update", "--check")
-        self.assertEqual(result.stdout.splitlines()[:2], ["Installed: 2.1.3", "Latest:    9.0.0 (main)"])
-        self.assertIn("Update available", result.stdout)
+        installed = f"3.0.0 ({self.installed_commit})" if self.installed_commit else "3.0.0"
+        self.assertEqual(result.stdout.splitlines()[:2], [f"Installed: {installed}", "Latest:    9.0.0 (1234567, main)"])
+        self.assertIn("Update available: a new version", result.stdout)
         self.assertIn("https://raw.githubusercontent.com/SDH4114/UnLaw/main/Cargo.toml", curl_log.read_text())
         self.assertFalse(cargo_log.exists())
-        self.fake_curl('[package]\nversion = "2.1.3"\n')
-        self.assertIn("Same version number", self.ok("update", "--check").stdout)
         self.fake_curl('[package]\nversion = "1.0.0"\n')
-        self.assertIn("newer than the published", self.ok("update", "--check", "--tag", "v1").stdout)
-        self.assertIn("/v1/Cargo.toml", curl_log.read_text())
+        self.assertIn("/v1/Cargo.toml", (self.ok("update", "--check", "--tag", "v1"), curl_log.read_text())[1])
+
+    @unittest.skipUnless(shutil.which("git"), "git is not installed")
+    def test_check_compares_commits_when_the_version_is_the_same(self) -> None:
+        if not self.installed_commit:
+            self.skipTest("this build has no commit")
+        self.fake_curl('[package]\nversion = "3.0.0"\n')
+        self.fake_git(self.installed_commit + "0" * 33)
+        self.assertIn("Up to date.", self.ok("update", "--check").stdout)
+        self.fake_git("f" * 40)
+        self.assertIn("Update available: newer commits", self.ok("update", "--check").stdout)
+        log = self.fake_git(None)
+        self.assertIn("commit is unknown", self.ok("update", "--check").stdout)
+        self.assertIn("ls-remote\nhttps://github.com/SDH4114/UnLaw.git\nrefs/heads/main", log.read_text())
+
+    def test_check_uses_the_peeled_commit_of_annotated_tags(self) -> None:
+        self.fake_curl('[package]\nversion = "3.0.0"\n')
+        self.tool(
+            "git",
+            "#!/bin/sh\nprintf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\trefs/tags/v3\\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\\trefs/tags/v3^{}\\n'\n",
+        )
+        self.assertIn("(bbbbbbb, v3)", self.ok("update", "--check", "--tag", "v3").stdout)
 
     def test_check_failures(self) -> None:
         self.fake_curl("", exit_code=22)
