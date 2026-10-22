@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
-from io import StringIO
 from pathlib import Path
 from unittest.mock import call, patch
 
@@ -79,45 +76,6 @@ class GitDoctorFeatureTests(unittest.TestCase):
                 call(["git", "push"], check=False),
             ],
         )
-
-    def test_doctor_json_is_machine_readable(self) -> None:
-        from unlawful.system_commands import doctor
-
-        output = StringIO()
-        with patch("unlawful.system_commands._harness_permissions", return_value=(True, "ready")), redirect_stdout(
-            output
-        ):
-            self.assertEqual(doctor(["--json"]), 0)
-        records = json.loads(output.getvalue())
-        names = {record["name"] for record in records}
-        self.assertTrue({"Configuration", "Python", "Git", "Cargo", "CMake", "macOS Harness"} <= names)
-        self.assertTrue(all({"name", "available", "required", "detail"} <= record.keys() for record in records))
-
-    def test_doctor_verbose_includes_config_path(self) -> None:
-        from unlawful.system_commands import doctor
-
-        output = StringIO()
-        with patch("unlawful.system_commands._harness_permissions", return_value=(False, "missing permission")), redirect_stdout(
-            output
-        ):
-            self.assertEqual(doctor(["--verbose"]), 0)
-        self.assertIn(str(Path(self.temp.name) / "config" / "unlaw" / "config.toml"), output.getvalue())
-
-    def test_doctor_checks_configured_harness_executable(self) -> None:
-        from unlawful.config import ensure_layout, set_config_value
-        from unlawful.system_commands import doctor
-
-        executable = Path(self.temp.name) / "custom-harness"
-        executable.write_text("#!/bin/sh\nexit 0\n")
-        executable.chmod(0o755)
-        ensure_layout()
-        set_config_value("mac.executable", str(executable))
-        output = StringIO()
-        with redirect_stdout(output):
-            self.assertEqual(doctor(["--json"]), 0)
-        records = json.loads(output.getvalue())
-        permissions = next(record for record in records if record["name"] == "macOS permissions")
-        self.assertTrue(permissions["available"])
 
 
 if __name__ == "__main__":

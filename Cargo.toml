@@ -1,0 +1,31 @@
+[package]
+name = "unlaw"
+version = "2.1.3"
+edition = "2021"
+rust-version = "1.82"
+description = "A small, extensible macOS command launcher"
+license = "GPL-3.0-or-later"
+authors = ["Haos"]
+build = "rust/build.rs"
+publish = false
+
+[lib]
+path = "rust/src/lib.rs"
+
+[[bin]]
+name = "ul"
+path = "rust/src/bin/ul.rs"
+
+[[bin]]
+name = "unlaw"
+path = "rust/src/bin/unlaw.rs"
+
+[dependencies]
+libc = "0.2"
+sha2 = "0.10"
+toml_edit = { version = "0.22", default-features = false, features = ["parse", "display"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

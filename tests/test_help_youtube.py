@@ -47,42 +47,6 @@ class HelpAndYouTubeTests(unittest.TestCase):
                     self.assertIn(f"ul {name}", output.getvalue())
                     self.assertIn("Example", output.getvalue())
 
-    def test_every_system_command_has_help(self):
-        from unlawful.cli import SYSTEM_COMMANDS
-        from unlawful.command_help import COMMAND_HELP
-        for name, function in SYSTEM_COMMANDS.items():
-            with self.subTest(name=name), redirect_stdout(StringIO()) as output, patch(
-                "subprocess.run", side_effect=AssertionError("help must not run a process")
-            ):
-                self.assertEqual(function(["--help"]), 0)
-                self.assertEqual(output.getvalue(), COMMAND_HELP[name])
-
-    def test_cli_help_alias_and_new_command_template(self):
-        from unlawful.cli import main
-        from unlawful.config import set_config_value
-        with redirect_stdout(StringIO()) as output:
-            self.assertEqual(main(["help", "yt"]), 0)
-            self.assertEqual(main(["create", "command", "hello"]), 0)
-        # run_command inherits stdout, so capture via actual isolated subprocess.
-        env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
-        result = subprocess.run([sys.executable, "-m", "unlawful.cli", "hello", "--help"], env=env, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Usage: ul hello", result.stdout)
-        set_config_value("aliases", {"youtube": ["yt"]})
-        result = subprocess.run([sys.executable, "-m", "unlawful.cli", "youtube", "--help"], env=env, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("ul yt download", result.stdout)
-
-    def test_template_help_does_not_launch_project(self):
-        from unlawful.cli import main
-        from unlawful.workspace_templates import create_workspace_template
-        from unlawful.config import ensure_layout
-        ensure_layout()
-        create_workspace_template("demo", self.root, "zed", False)
-        with redirect_stdout(StringIO()) as output, patch("subprocess.run", side_effect=AssertionError("no launch")):
-            self.assertEqual(main(["demo", "--help"]), 0)
-        self.assertIn("Usage: ul demo", output.getvalue())
-
     def _download(self, args, *, missing=(), returncode=0):
         def completed(command, **kwargs):
             if returncode == 0 and "--print-to-file" in command:

@@ -5,7 +5,6 @@ import hashlib
 import os
 import sys
 import tempfile
-import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -295,21 +294,7 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ConfigError, "core.command_timeout"):
                 load_config()
 
-    def test_source_build_bootstraps_full_user_command_sources(self) -> None:
-        from hatch_build import bootstrap_user_layout
 
-        with patch.dict(os.environ, self.env, clear=False):
-            bootstrap_user_layout()
-        command = self.config_home / "unlaw" / "commands" / "music" / "main.py"
-        self.assertTrue(command.is_file())
-        source = command.read_text(encoding="utf-8")
-        self.assertIn("def main", source)
-        self.assertNotIn("unlawful.", source)
-
-    def test_source_build_registers_the_custom_hatch_hook(self) -> None:
-        with (ROOT / "pyproject.toml").open("rb") as handle:
-            project = tomllib.load(handle)
-        self.assertIn("custom", project["tool"]["hatch"]["build"]["hooks"])
 
 
 if __name__ == "__main__":

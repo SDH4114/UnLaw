@@ -111,37 +111,59 @@ class LauncherCommandTests(unittest.TestCase):
 
 
 class CurlInstallerTests(unittest.TestCase):
-    def test_installer_uses_uv_to_install_the_github_repository(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            fake_bin = root / "bin"
-            fake_bin.mkdir()
-            log = root / "uv-args.txt"
-            uv = fake_bin / "uv"
-            uv.write_text(
-                "#!/bin/sh\n"
-                'printf "%s\\n" "$@" > "$UV_LOG"\n',
-                encoding="utf-8",
-            )
-            uv.chmod(0o755)
-            installer = ROOT / "install.sh"
-            self.assertTrue(installer.is_file(), "curl installer is missing")
-            result = subprocess.run(
-                ["sh", str(installer)],
-                env={
-                    **os.environ,
-                    "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
-                    "UV_LOG": str(log),
-                },
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(
-                log.read_text(encoding="utf-8").splitlines(),
-                ["tool", "install", "--force", "git+https://github.com/SDH4114/UnLaw.git"],
-            )
+    def _fake(self, directory: Path, name: str, body: str) -> None:
+        script = directory / name
+        script.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        script.chmod(0o755)
+
+    def _install(self, *, uv_has_unlaw: bool) -> tuple[subprocess.CompletedProcess[str], Path]:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        fake_bin = root / "bin"
+        fake_bin.mkdir()
+        cargo_log, uv_log = root / "cargo.txt", root / "uv.txt"
+        self._fake(fake_bin, "cargo", f'printf "%s\\n" "UNLAW_PYTHON=$UNLAW_PYTHON" "$@" > "{cargo_log}"\n')
+        self._fake(fake_bin, "python3.13", "exit 0\n")
+        listing = "unlaw v2.1.3" if uv_has_unlaw else "ruff v0.1"
+        self._fake(
+            fake_bin,
+            "uv",
+            f'if [ "$2" = list ]; then echo "{listing}"; else printf "%s\\n" "$@" > "{uv_log}"; fi\n',
+        )
+        installer = ROOT / "install.sh"
+        result = subprocess.run(
+            ["sh", str(installer)],
+            env={"PATH": f"{fake_bin}{os.pathsep}/usr/bin{os.pathsep}/bin", "HOME": str(root / "home")},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result, root
+
+    def test_installer_builds_the_rust_core_into_local_bin(self) -> None:
+        result, root = self._install(uv_has_unlaw=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            (root / "cargo.txt").read_text(encoding="utf-8").splitlines(),
+            [
+                "UNLAW_PYTHON=python3.13",
+                "install",
+                "--locked",
+                "--force",
+                "--git",
+                "https://github.com/SDH4114/UnLaw.git",
+                "--root",
+                str(root / "home" / ".local"),
+                "unlaw",
+            ],
+        )
+        self.assertFalse((root / "uv.txt").exists())
+
+    def test_installer_removes_the_previous_uv_tool(self) -> None:
+        result, root = self._install(uv_has_unlaw=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((root / "uv.txt").read_text(encoding="utf-8").splitlines(), ["tool", "uninstall", "unlaw"])
 
 
 if __name__ == "__main__":

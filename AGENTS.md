@@ -1,14 +1,17 @@
 # Unlaw project notes
 
-- Purpose: small macOS CLI that dispatches commands from `<name>/main.py`.
-- Runtime: Python 3.11+, standard library only; current release is 2.1.3.
-- Package: `src/unlawful`; console scripts: `unlaw` and `ul`.
+- License: GPL-3.0-or-later (`LICENSE`, `Cargo.toml`, `pyproject.toml`).
+- Update: `ul update [--check] [--branch|--tag]` reinstalls from GitHub with `cargo install --locked --force --git` into the running binary's prefix; it never touches user config, data or edited commands.
+- Purpose: small macOS CLI that dispatches commands from `commands/<name>/` (entry point `main.py`, `main.sh`, `main.js` or executable `main`, checked in that order).
+- Core: Rust crate (`Cargo.toml`, `rust/src`), binaries `ul` and `unlaw`; deps limited to `toml_edit`, `sha2`, `libc`. Dispatcher, config, system commands, completion, doctor, shell integration and project templates live there. Current release is 2.1.3; `Cargo.toml` and `src/unlawful/__init__.py` versions must match (build.rs enforces it).
+- Commands: Python 3.11+, standard library only. `src/unlawful` holds seeded command sources, their help (`command_help.py`), legacy hashes and `DEFAULT_CONFIG`; `rust/build.rs` runs `rust/gen_assets.py` to embed them, so build needs Python 3.11+. System command help lives in `rust/src/help.rs`.
+- Command contract: commands receive `UNLAW_COMMAND`, `UNLAW_COMMAND_DIR`, `UNLAW_CONFIG_DIR`, `UNLAW_STORAGE`; `main.py` runs with `UNLAW_PYTHON`, else `core.python`, else the newest `python3.x` on PATH. Descriptions for `ul commands --describe`/completion come from `help.txt`, the `main.py` docstring or a script's first comment, never by running the command. Changing a seed's content requires adding the previous release's hashes to `LEGACY_SOURCE_HASHES`.
 - User data: `${XDG_CONFIG_HOME:-~/.config}/unlaw`; a source build and first CLI invocation bootstrap it without overwriting user files.
 - Extension rule: only system commands live in the dispatcher; every other command is seeded as standalone source into `${XDG_CONFIG_HOME:-~/.config}/unlaw/commands/<name>/main.py`. Legacy official import wrappers are migrated, but manually edited command files are never overwritten.
 - Seeded sources contain only that command's logic and minimal config helpers/defaults; unrelated command code must never be concatenated into them.
-- Configuration: `config.toml` is validated and atomically rewritten; aliases are token arrays, not shell strings.
-- Test: `python -m unittest discover -s tests -v`.
-- Build check: `python -m build` when `build` is available, otherwise install into a temporary venv with `pip install .`.
+- Configuration: `config.toml` is validated and atomically written with `toml_edit`, preserving comments and unknown keys; validation rules exist in both `rust/src/config.rs` and `src/unlawful/config.py` and must stay identical; aliases are token arrays, not shell strings.
+- Test: `cargo test`, `cargo clippy --all-targets`, and `python -m unittest discover -s tests -v` (black-box tests build and run `target/debug/ul`; tests must never reach the network or real user tools — use fake executables on a restricted PATH and local servers).
+- Build check: `cargo build --release`; install with `cargo install --path . --root ~/.local --force` (install.sh does this from GitHub).
 - Project templates live in `templates/{commands,python,rust,cpp}` and may override generated files.
 - macOS Harness is optional; only `ul mac` and its doctor checks may depend on it.
 - Personal commands: `todo` edits the configured Obsidian `TODO.md`; `capture` uses macOS `screencapture` and optional ffmpeg; `music`, `work`, and `yt` drive macOS apps/URLs.

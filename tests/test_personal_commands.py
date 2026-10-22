@@ -395,33 +395,5 @@ class GameCommandTests(ConfiguredTestCase):
         screen.timeout.assert_called_once_with(90)
 
 
-class DoctorFixTests(ConfiguredTestCase):
-    def test_path_fix_is_idempotent_and_preserves_existing_zshrc(self) -> None:
-        from unlawful.system_commands import _fix_shell_path
-
-        home = Path(self.env["HOME"])
-        home.mkdir()
-        zshrc = home / ".zshrc"
-        zshrc.write_text("export EDITOR=zed\n", encoding="utf-8")
-        with patch.dict(os.environ, self.env, clear=False):
-            first = _fix_shell_path()
-            second = _fix_shell_path()
-        self.assertTrue(first)
-        self.assertFalse(second)
-        text = zshrc.read_text(encoding="utf-8")
-        self.assertEqual(text.count('export PATH="$HOME/.local/bin:$PATH"'), 1)
-        self.assertIn("export EDITOR=zed", text)
-
-    def test_doctor_fix_creates_all_storage_subdirectories(self) -> None:
-        from unlawful.config import storage_path
-        from unlawful.system_commands import _apply_doctor_fixes
-
-        _apply_doctor_fixes()
-        self.assertTrue(storage_path("captures", "screenshots").is_dir())
-        self.assertTrue(storage_path("captures", "recordings").is_dir())
-        self.assertTrue(storage_path("telegram", "downloads").is_dir())
-        self.assertTrue(storage_path("runtime").is_dir())
-
-
 if __name__ == "__main__":
     unittest.main()

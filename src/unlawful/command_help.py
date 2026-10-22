@@ -1,4 +1,7 @@
-"""Command documentation; generated sources embed only their own entry."""
+"""Help for seeded commands; generated sources embed only their own entry.
+
+System command help lives in the Rust core (rust/src/help.rs).
+"""
 
 COMMAND_HELP = {
     "app": '''Open a macOS application by name.
@@ -218,59 +221,5 @@ Examples:
   ul zip project.zip
   ul zip x backup.rar -o ~/Downloads
   ul zip ls backup.7z
-''',
-    "commands": '''List available system commands, installed commands and aliases.
-Usage: ul commands [--verbose|--json]
-Options: --verbose includes source/path; --json prints structured records.
-Example: ul commands --verbose
-''',
-    "completion": '''Print Zsh completion code for ul and unlaw.
-Usage: ul completion zsh
-Example: eval "$(ul completion zsh)"
-''',
-    "config": '''Inspect or edit the Unlaw TOML configuration.
-Usage:
-  ul config path|show|edit|check     Print path/content, edit, or validate
-  ul config get <key>               Read a dotted configuration key
-  ul config set <key> <value>       Set and validate a value atomically
-  ul config reset --yes             Reset defaults, preserving a backup
-Example: ul config set storage.root ~/Downloads/unlaw
-''',
-    "create": '''Create an editable command or save the current project as a template.
-Usage:
-  ul create command <name>          Create commands/<name>/main.py
-  ul create template [name]         Prompt for project name, app and AI preference
-Existing commands/templates are not overwritten.
-Example: ul create command hello
-''',
-    "doctor": '''Check Unlaw configuration, tools and shell integration.
-Usage: ul doctor [--verbose|--json|--fix]
-Options: --verbose adds details; --json prints a report; --fix repairs supported issues.
-Example: ul doctor --verbose
-''',
-    "init": '''Initialize the Unlaw configuration and editable command sources.
-Usage: ul init
-Example: ul init
-''',
-    "list": '''List saved project templates and available commands.
-Usage: ul list
-Example: ul list
-''',
-    "templates": '''List saved project templates.
-Usage: ul templates
-Example: ul templates
-''',
-    "venv": '''Create and activate .venv in the current project's Zsh shell.
-Usage: ul venv
-Requires current-shell integration: ul doctor --fix, then restart Zsh.
-Example: ul venv
-''',
-    "version": '''Show the installed Unlaw version.
-Usage: ul version
-Example: ul version
-''',
-    "which": '''Print the source path of an installed command.
-Usage: ul which <command>
-Example: ul which yt
 ''',
 }

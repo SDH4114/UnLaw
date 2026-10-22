@@ -1,167 +1,133 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
-import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
-from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from ulbin import CoreTestCase  # noqa: E402
 
 
-class CliFeatureTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.config_home = Path(self.temp.name) / "config"
-        self.env = {"XDG_CONFIG_HOME": str(self.config_home)}
-
-    def _command(self, name: str, body: str) -> Path:
-        script = self.config_home / "unlaw" / "commands" / name / "main.py"
-        script.parent.mkdir(parents=True, exist_ok=True)
-        script.write_text(body)
-        return script
-
+class CliFeatureTests(CoreTestCase):
     def test_first_help_bootstraps_user_directory(self) -> None:
-        from unlawful.cli import main
-
-        with patch.dict(os.environ, self.env, clear=False), redirect_stdout(StringIO()):
-            self.assertEqual(main([]), 0)
-        root = self.config_home / "unlaw"
-        self.assertTrue((root / "config.toml").is_file())
-        self.assertTrue((root / "commands").is_dir())
+        self.ok()
+        self.assertTrue((self.unlaw / "config.toml").is_file())
+        self.assertTrue((self.unlaw / "commands").is_dir())
 
     def test_alias_expands_tokens_and_appends_arguments(self) -> None:
-        from unlawful.cli import main
-        from unlawful.config import ensure_layout, set_config_value
-
-        output_file = Path(self.temp.name) / "alias.txt"
-        self._command(
+        output_file = self.root / "alias.txt"
+        self.command(
             "capture",
             f"import pathlib, sys\npathlib.Path({str(output_file)!r}).write_text('|'.join(sys.argv[1:]))\n",
         )
-        with patch.dict(os.environ, self.env, clear=False):
-            ensure_layout()
-            set_config_value("aliases.c", ["capture", "preset"])
-            self.assertEqual(main(["c", "extra"]), 0)
+        self.ok("config", "set", "aliases.c", '["capture", "preset"]')
+        self.ok("c", "extra")
         self.assertEqual(output_file.read_text(), "preset|extra")
 
     def test_alias_cycle_is_reported_without_traceback(self) -> None:
-        from unlawful.cli import main
-        from unlawful.config import ensure_layout, set_config_value
-
-        error = StringIO()
-        with patch.dict(os.environ, self.env, clear=False):
-            ensure_layout()
-            set_config_value("aliases.a", ["b"])
-            set_config_value("aliases.b", ["a"])
-            with redirect_stderr(error):
-                code = main(["a"])
-        self.assertEqual(code, 2)
-        self.assertIn("Alias cycle", error.getvalue())
+        self.ok("config", "set", "aliases.a", '["b"]')
+        self.ok("config", "set", "aliases.b", '["a"]')
+        result = self.ul("a")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Alias cycle: a -> b -> a", result.stderr)
 
     def test_dry_run_does_not_execute_command(self) -> None:
-        from unlawful.cli import main
-
-        marker = Path(self.temp.name) / "ran"
-        self._command("touch", f"import pathlib\npathlib.Path({str(marker)!r}).touch()\n")
-        output = StringIO()
-        with patch.dict(os.environ, self.env, clear=False), redirect_stdout(output):
-            self.assertEqual(main(["--dry-run", "touch"]), 0)
+        marker = self.root / "ran"
+        script = self.command("touch", f"import pathlib\npathlib.Path({str(marker)!r}).touch()\n")
+        result = self.ok("--dry-run", "touch", "a b")
         self.assertFalse(marker.exists())
-        self.assertIn("DRY RUN", output.getvalue())
+        self.assertEqual(result.stdout, f"DRY RUN: {sys.executable} {script} 'a b'\n")
 
     def test_timeout_returns_124(self) -> None:
-        from unlawful.runner import run_command
+        self.command("slow", "import time\ntime.sleep(5)\n")
+        self.ok("config", "set", "core.command_timeout", "1")
+        result = self.ul("slow")
+        self.assertEqual(result.returncode, 124)
+        self.assertIn("timed out", result.stderr)
 
-        self._command("slow", "import time\ntime.sleep(2)\n")
-        with patch.dict(os.environ, self.env, clear=False), redirect_stderr(StringIO()):
-            self.assertEqual(run_command("slow", [], timeout=0.01), 124)
+    def test_verbose_reports_invocation_and_timing(self) -> None:
+        self.command("quick", "print('done')\n")
+        result = self.ok("--verbose", "quick")
+        self.assertEqual(result.stdout, "done\n")
+        self.assertIn("unlaw: running quick (config):", result.stderr)
+        self.assertIn("unlaw: finished in", result.stderr)
 
     def test_unknown_command_suggests_close_match(self) -> None:
-        from unlawful.cli import main
-
-        error = StringIO()
-        with patch.dict(os.environ, self.env, clear=False), redirect_stderr(error):
-            self.assertEqual(main(["gti"]), 2)
-        self.assertIn("git", error.getvalue())
+        result = self.ul("gti")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("git", result.stderr)
 
     def test_commands_json_contains_source_and_path(self) -> None:
-        from unlawful.config import ensure_layout, set_config_value
-        from unlawful.system_commands import list_commands
-
-        self._command("mine", "print('mine')\n")
-        with patch.dict(os.environ, self.env, clear=False):
-            ensure_layout()
-            set_config_value("aliases.m", ["mine", "preset"])
-        output = StringIO()
-        with patch.dict(os.environ, self.env, clear=False), redirect_stdout(output):
-            self.assertEqual(list_commands(["--json"]), 0)
-        records = json.loads(output.getvalue())
+        self.command("mine", "print('mine')\n")
+        self.ok("config", "set", "aliases.m", '["mine", "preset"]')
+        records = json.loads(self.ok("commands", "--json").stdout)
         mine = next(record for record in records if record["name"] == "mine")
         alias = next(record for record in records if record["name"] == "m")
+        system = next(record for record in records if record["name"] == "doctor")
         self.assertEqual(mine["source"], "config")
         self.assertTrue(mine["path"].endswith("commands/mine/main.py"))
         self.assertEqual(alias["source"], "alias")
         self.assertEqual(alias["expansion"], ["mine", "preset"])
+        self.assertEqual((system["source"], system["path"]), ("system", None))
 
     def test_which_reports_user_command(self) -> None:
-        from unlawful.system_commands import which_command
-
-        script = self._command("mine", "print('mine')\n")
-        output = StringIO()
-        with patch.dict(os.environ, self.env, clear=False), redirect_stdout(output):
-            self.assertEqual(which_command(["mine"]), 0)
-        self.assertIn(str(script), output.getvalue())
-        self.assertIn("config", output.getvalue())
+        script = self.command("mine", "print('mine')\n")
+        self.assertEqual(self.ok("which", "mine").stdout, f"mine: config {script}\n")
+        self.assertEqual(self.ok("which", "doctor").stdout, "doctor: system\n")
+        self.assertEqual(self.ul("which", "nope").returncode, 1)
 
     def test_which_reports_alias_expansion(self) -> None:
-        from unlawful.config import ensure_layout, set_config_value
-        from unlawful.system_commands import which_command
-
-        with patch.dict(os.environ, self.env, clear=False):
-            ensure_layout()
-            set_config_value("aliases.g", ["git", "status"])
-            output = StringIO()
-            with redirect_stdout(output):
-                self.assertEqual(which_command(["g"]), 0)
-        self.assertIn("alias -> git status", output.getvalue())
+        self.ok("config", "set", "aliases.g", '["git", "status"]')
+        self.assertIn("alias -> git status", self.ok("which", "g").stdout)
 
     def test_config_set_and_get_through_cli(self) -> None:
-        from unlawful.cli import main
+        self.ok("config", "set", "core.command_timeout", "12")
+        self.assertEqual(self.ok("config", "get", "core.command_timeout").stdout, "12\n")
+        self.ok("config", "set", "apps.editor", "Visual", "Studio", "Code")
+        self.assertEqual(self.ok("config", "get", "apps.editor").stdout, "Visual Studio Code\n")
+        self.assertEqual(self.ok("config", "get", "apps.spotify_autoplay_delay").stdout, "2.0\n")
+        self.assertEqual(self.ul("config", "get", "core.nope").returncode, 2)
 
-        output = StringIO()
-        with patch.dict(os.environ, self.env, clear=False), redirect_stdout(output):
-            self.assertEqual(main(["config", "set", "core.command_timeout", "12"]), 0)
-            self.assertEqual(main(["config", "get", "core.command_timeout"]), 0)
-        self.assertTrue(output.getvalue().rstrip().endswith("12"))
+    def test_config_set_preserves_comments_and_rejects_invalid_values(self) -> None:
+        self.ok("init")
+        config = self.unlaw / "config.toml"
+        config.write_text("# mine\n[core]\nverbose = false # quiet\n\n[custom]\nanswer = 42\n")
+        self.ok("config", "set", "core.command_timeout", "15")
+        text = config.read_text()
+        self.assertTrue(text.startswith("# mine\n[core]\nverbose = false # quiet\ncommand_timeout = 15\n"), text)
+        self.assertIn("answer = 42", text)
+        result = self.ul("config", "set", "games.difficulty", "brutal")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("games.difficulty", result.stderr)
+        self.assertEqual(config.read_text(), text)
+        self.assertEqual(self.ul("config", "set", "core.color.deep", "1").returncode, 2)
+
+    def test_config_check_reports_each_error(self) -> None:
+        self.ok("init")
+        (self.unlaw / "config.toml").write_text('[core]\ncommand_timeout = "forever"\n[games]\ndifficulty = "x"\n')
+        result = self.ul("config", "check")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(
+            result.stderr.splitlines(),
+            ["Invalid core.command_timeout: expected int", "Invalid games.difficulty: expected one of easy, hard, normal"],
+        )
 
     def test_config_reset_requires_yes_and_creates_backup(self) -> None:
-        from unlawful.cli import main
-
-        with patch.dict(os.environ, self.env, clear=False), redirect_stdout(StringIO()), redirect_stderr(StringIO()):
-            self.assertEqual(main(["config", "reset"]), 2)
-            self.assertEqual(main(["config", "set", "core.verbose", "true"]), 0)
-            self.assertEqual(main(["config", "reset", "--yes"]), 0)
-        backups = list((self.config_home / "unlaw").glob("config.toml.backup-*"))
+        self.assertEqual(self.ul("config", "reset").returncode, 2)
+        self.ok("config", "set", "core.verbose", "true")
+        self.ok("config", "reset", "--yes")
+        backups = list(self.unlaw.glob("config.toml.backup-*"))
         self.assertEqual(len(backups), 1)
+        self.assertIn("verbose = true", backups[0].read_text())
+        self.assertEqual(self.ok("config", "get", "core.verbose").stdout, "false\n")
 
     def test_completion_outputs_zsh_function(self) -> None:
-        from unlawful.system_commands import completion_command
-
-        output = StringIO()
-        with redirect_stdout(output):
-            self.assertEqual(completion_command(["zsh"]), 0)
-        self.assertIn("#compdef ul unlaw", output.getvalue())
-        self.assertIn("_unlaw", output.getvalue())
-        self.assertIn("ul templates", output.getvalue())
+        output = self.ok("completion", "zsh").stdout
+        self.assertIn("#compdef ul unlaw", output)
+        self.assertIn("_unlaw", output)
+        self.assertIn("command ul _complete", output)
 
 
 if __name__ == "__main__":

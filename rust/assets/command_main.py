@@ -1,3 +1,10 @@
+"""Custom Unlaw command."""
+# The first docstring line is the description shown by `ul commands --describe`
+# and Zsh completion. Unlaw passes these environment variables to every command:
+#   UNLAW_COMMAND      command name, e.g. "hello"
+#   UNLAW_COMMAND_DIR  this command's folder
+#   UNLAW_CONFIG_DIR   Unlaw configuration folder (config.toml lives here)
+#   UNLAW_STORAGE      resolved storage.root folder for files your command saves
 from __future__ import annotations
 
 import sys

@@ -12,25 +12,29 @@ Unlaw — быстрая персональная CLI-утилита для macO
 curl -LsSf https://raw.githubusercontent.com/SDH4114/UnLaw/main/install.sh | sh
 ```
 
-Установщик использует [uv](https://docs.astral.sh/uv/) и автоматически установит
-его, если команды `uv` ещё нет. Нужен Python 3.11+.
+Ядро Unlaw (dispatcher, конфигурация, системные команды, completion, doctor)
+написано на Rust и собирается через `cargo`; установщик поставит Rust через
+rustup, если его нет. Команды в `commands/` остаются обычными Python-файлами,
+поэтому нужен Python 3.11+ (`brew install python`). Бинарники `ul` и `unlaw`
+ставятся в `~/.local/bin`; старая uv-версия Unlaw удаляется автоматически.
 
-Для установки из локального checkout:
+Обновление до последней версии с GitHub:
 
 ```bash
-uv tool install .
+ul update --check          # сравнить установленную версию с GitHub, ничего не ставя
+ul update                  # переустановить из main (cargo install --locked --force)
+ul update --tag v2.2.0     # конкретный релиз; --branch <name> — ветка
 ```
 
-Обновление уже установленной версии:
+`ul update` ставит новый бинарник туда же, где лежит текущий `ul` (по умолчанию
+`~/.local/bin`). Конфигурация, данные и изменённые вручную команды не трогаются;
+неизменённые стандартные команды обновятся при следующем запуске. Нужны `cargo`
+и Python 3.11+, для `--check` — `curl`. `UNLAW_UPDATE_REPOSITORY` задаёт форк.
+
+Из локального checkout (установка и обновление — одна и та же команда):
 
 ```bash
-uv tool install --force .
-```
-
-Для разработки с мгновенным применением изменений:
-
-```bash
-uv tool install --force --editable .
+cargo install --path . --root ~/.local --force
 ```
 
 `unlaw` и `ul` полностью эквивалентны. Сборка из исходников и первый запуск
@@ -70,6 +74,7 @@ ul                              # помощь и инициализация
 ul init                         # показать пользовательские пути
 ul commands                     # все команды и алиасы
 ul commands --verbose           # источники и реальные пути
+ul commands --describe          # однострочные описания (без запуска команд)
 ul commands --json              # машинный JSON
 ul templates                    # сохранённые project templates
 ul list                         # сначала templates, затем commands
@@ -82,6 +87,7 @@ ul doctor --fix                 # безопасные автоматическ�
 ul doctor --json                # диагностика для скриптов
 ul completion zsh               # zsh completion
 ul version
+ul update --check              # есть ли новая версия на GitHub
 ```
 
 Глобальные опции:
@@ -94,7 +100,7 @@ ul --version
 ```
 
 Неизвестная команда получает подсказку по ближайшему имени. `--dry-run` показывает
-точный Python-процесс, не выполняя `main.py` из config.
+точный процесс команды (интерпретатор и путь), не запуская её.
 
 ## Сохранённые проекты
 
@@ -142,7 +148,8 @@ cd ~/giti/HearMe
 ul venv
 ```
 
-Если `.venv` отсутствует, команда создаёт его стандартным Python `venv`, а затем
+Если `.venv` отсутствует, команда создаёт его через `python -m venv` (интерпретатор из
+`core.python`), а затем
 активирует в текущем Zsh. Существующее корректное `.venv` просто активируется.
 Project templates не сохраняют и не активируют виртуальное окружение.
 
@@ -161,6 +168,7 @@ ul config reset --yes
 
 `reset --yes` сначала создаёт timestamped backup. Запись выполняется атомарно.
 `config set` принимает TOML-значения; некавыченный текст сохраняется как строка.
+Комментарии, порядок и неизвестные ключи в `config.toml` при записи сохраняются.
 
 Конфигурация по умолчанию:
 
@@ -170,6 +178,7 @@ color = true
 verbose = false
 command_timeout = 0
 show_timing = false
+python = "auto"
 
 [aliases]
 
@@ -273,6 +282,35 @@ ul create command anime
 `sys.argv[1:]`, а exit code скрипта возвращается shell. Пользовательская команда
 может быть полностью изменена вручную. Автоматическое обновление никогда не
 перезаписывает существующий `main.py`.
+
+Команда — это папка с одной точкой входа. Проверяются по порядку:
+
+| Файл | Чем запускается |
+|---|---|
+| `main.py` | Python 3.11+ из `core.python` (`auto` — самый новый `python3.x` в PATH) |
+| `main.sh` | `/bin/sh`, или напрямую по shebang, если файл исполняемый |
+| `main.js` | `node` |
+| `main` | напрямую; любой исполняемый файл, например собранный Rust/C++ бинарник |
+
+Никакой SDK не нужен: Unlaw передаёт команде переменные окружения.
+
+| Переменная | Значение |
+|---|---|
+| `UNLAW_COMMAND` | имя команды |
+| `UNLAW_COMMAND_DIR` | папка команды |
+| `UNLAW_CONFIG_DIR` | папка конфигурации Unlaw (`config.toml`) |
+| `UNLAW_STORAGE` | итоговый путь `storage.root` для файлов команды |
+
+```sh
+#!/bin/sh
+# Show today's notes folder.
+mkdir -p "$UNLAW_STORAGE/notes" && open "$UNLAW_STORAGE/notes"
+```
+
+Описание для `ul commands --describe` и Zsh completion читается без запуска
+команды: первая строка `help.txt` в папке команды, иначе первая строка docstring
+`main.py`, иначе первый комментарий `#`/`//` у других скриптов. `--help` внутри
+самой команды по-прежнему обязателен.
 
 Свой шаблон новых команд:
 
@@ -520,8 +558,8 @@ ul doctor --json
 ul doctor --fix
 ```
 
-`--fix` материализует новые настройки, создаёт каталоги внутри `storage.root`,
-переносит старый runtime-log, добавляет `~/.local/bin` перед `/usr/bin` и
+`--fix` дописывает недостающие настройки (комментарии в `config.toml` сохраняются), создаёт каталоги внутри `storage.root`,
+переносит старый runtime-log, добавляет папку бинарника `ul` перед `/usr/bin` и
 устанавливает управляемую Zsh-функцию в `~/.zshrc`. Она нужна для `ul <template>`
 и `ul venv`, потому что только функция текущего shell может выполнить постоянный
 `cd` или `source`. После исправления запустите `exec zsh`.
@@ -550,15 +588,12 @@ ul mac type Telegram "hello"
 ul mac click Spotify 500 300
 ```
 
-Пользовательские команды могут использовать тот же мост:
+Пользовательские команды могут вызывать тот же мост через CLI:
 
 ```python
-from unlawful import harness
+import subprocess
 
-harness.see("Spotify")
-harness.key("Spotify", "cmd+k")
-harness.type_text("Telegram", "hello")
-harness.click("Spotify", 500, 300)
+subprocess.run(["ul", "mac", "key", "Spotify", "cmd+k"], check=False)
 ```
 
 Исполняемый файл и timeout задаются в секции `[mac]`. `doctor` проверяет Harness
@@ -578,12 +613,29 @@ fpath=(~/.zfunc $fpath)
 autoload -Uz compinit && compinit
 ```
 
+Completion показывает команды с описаниями, затем подкоманды `config`, `create`,
+`doctor` и т.д. Его обслуживает Rust-ядро (`ul _complete`), Python при этом не
+запускается.
+
 ## Разработка
 
+```text
+Cargo.toml, rust/      Rust-ядро: dispatcher, config, system commands, doctor
+rust/build.rs          встраивает данные из Python через rust/gen_assets.py
+src/unlawful/          исходники seeded-команд, их справка и DEFAULT_CONFIG
+tests/                 Python-тесты команд и black-box тесты бинарника
+```
+
+Seeded-команды, их справка, legacy-хеши и конфигурация по умолчанию определены
+один раз в `src/unlawful`; `cargo build` экспортирует их в бинарник, поэтому
+сборке нужен Python 3.11+. Версия в `Cargo.toml` обязана совпадать с
+`src/unlawful/__init__.py` — иначе сборка остановится.
+
 ```bash
-python3 -m unittest discover -s tests -v
-python3 -m compileall -q src tests
-uv build
+cargo test
+cargo clippy --all-targets
+python3 -m unittest discover -s tests -v   # сам собирает target/debug/ul
+cargo build --release
 ```
 
 Unlaw 2.1.3 остаётся local-first: команды не используют shell-строки, LM Studio
@@ -609,3 +661,12 @@ ul yt download "https://youtu.be/VIDEO_ID" --full --sub-lang en --format mp4 --q
 `--sub-lang` без значения выбирает оригинал; сам этот флаг включает режим субтитров, кроме случая `--full`. Неизвестный код выводит все доступные языки и завершает команду до скачивания медиа. Авторские субтитры приоритетнее автоматических на выбранном языке. Когда язык оригинала определить невозможно, команда явно сообщает о выбранном доступном языке. `.md` начинается со ссылки на видео, далее идут название, язык, источник субтитров и текст. Время, служебная разметка и перекрывающиеся повторы убираются; текст не пересказывается. Автосубтитры могут содержать ошибки распознавания. Для субтитров достаточно `yt-dlp`, `ffmpeg` не нужен.
 
 `--full` сохраняет файлы рядом в `storage.root/youtube` или папке `--output`: видео выбранного формата со звуком, отдельный `.mp3`, субтитры `.<язык>.md`. Видео с YouTube скачивается один раз; аудио извлекается локально. Режимы `--sub`, `--audio`, `--full` взаимоисключающие. Если субтитров нет или их загрузка не удалась, `--full` сохраняет медиа, сообщает о неполном результате и возвращает ненулевой код. Существующие файлы сохраняются, временные файлы удаляются.
+
+## Лицензия
+
+Copyright (C) 2026 Haos
+
+Unlaw — свободная программа: её можно распространять и изменять на условиях
+GNU General Public License версии 3 или (по вашему выбору) любой более поздней
+версии, опубликованной Free Software Foundation (`GPL-3.0-or-later`). Программа
+распространяется без каких-либо гарантий. Полный текст — в файле [LICENSE](LICENSE).

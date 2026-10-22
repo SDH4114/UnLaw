@@ -1,3 +1,6 @@
+# The `ul`/`unlaw` executables are built from Cargo.toml (Rust core). This
+# package holds the Python sources of the seeded commands, which the Rust
+# build embeds and the unit tests import.
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -5,16 +8,12 @@ build-backend = "hatchling.build"
 [project]
 name = "unlaw"
 version = "2.1.3"
-description = "A small, extensible macOS command launcher"
+description = "Seeded command sources for the Unlaw macOS command launcher"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "Haos" }]
 dependencies = []
-
-[project.scripts]
-unlaw = "unlawful.cli:entrypoint"
-ul = "unlawful.cli:entrypoint"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/unlawful"]
@@ -23,5 +22,3 @@ packages = ["src/unlawful"]
 include = [
   "src/unlawful/**/*.py",
 ]
-
-[tool.hatch.build.hooks.custom]

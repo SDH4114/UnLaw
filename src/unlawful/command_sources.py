@@ -101,7 +101,38 @@ _PRE_HELP_SOURCE_HASHES = {
 for _name, _digest in _PRE_HELP_SOURCE_HASHES.items():
     LEGACY_SOURCE_HASHES.setdefault(_name, set()).add(_digest)
 
+# Sources from release 2.1.3 with system commands still in Python, before the
+# summary docstring that the Rust core reads for `ul commands --describe`.
+_PRE_DOCSTRING_SOURCE_HASHES = {
+    "app": "10235e245be4ecc36ccf5ce4fb4d2bb9036274f550379405245aba3112be5c29",
+    "browser": "d0a4b632c9e7f6abb04c6b92c1b3375052b672299dc40ea8b7053c7059d0ca69",
+    "capture": "b5e35ad947834700df64f8997c2351e3e4db7b9af055b26ffd576fd3d5690bed",
+    "cpp": "e855ff8c8359eb4a1d20158332088d81af8e15cbbbe074533bdb5c1bfd81cc30",
+    "game": "110395cbd7cc87d062aaca6e771e8cc35f7cd5b9951009e3e3652ee88d736d0a",
+    "git": "27e82c3c303fd9209990be27181e2cb95b1b915806437779f20ce033dfe2a28d",
+    "gpt": "0a0963a527c4b2ee1ffb9dcc332783c2235c617dbf8048630ab14463095f0511",
+    "lm": "d9b8d11671bea8ac073baeeb56605c63d81b538003ce6cf0885e477cd16d517e",
+    "lofi": "76c2205b5d42beaba68f7ef3f54240a8918ff6daf2a7b64710a8e260985e989b",
+    "mac": "ffb2f8a5bd5fb9b0f161ab5aef2d4764fc509150a10572ca8bff17e5f4c38386",
+    "minecraft": "1b5d1560ecacf1233405d6cedb9cb46a996d52af00760371e5c9a21db43c17e6",
+    "music": "882cab2eeb6d1693714bddd50f87f7e5b2fe4f4e162a8c7bc43225b13bc0cd89",
+    "netflix": "b6c7779d3320b67988cf62d235e24b2b179b2009a5350c07c14fab032043e557",
+    "obsidian": "d51e3753445c0fd14036dc1c68b161aea87004413b2e90b3fc55781ef1467214",
+    "py": "2b267968edaf91d3a908d94b08792de85b05ec79e271b6f55aab4cda2f23b54f",
+    "rust": "beee62b8ad66e45cd716917686b25258a99b221da2c9a26791ba6d4cdcd59152",
+    "steam": "9f41c5a66a9af8bad5492d1a038b8d2f77a6fb3391cfa26f9208f2a017a76a69",
+    "tg": "d922eb7771d5361b084188d5a3999acde0d88fcee0f8502a17c374204bb2ffce",
+    "todo": "85c73209980c5688016734021918b70e3400db6cc87189402a03940eb9ae1dd9",
+    "work": "8f73f8847b2b4c9e46540108d6f6fe8748793555b76a26aee631a7e8f98ba30b",
+    "yt": "d1421ccafb5bce9032b2d84c77aacf38c758721dc73fb7b059604b84d14bc3d2",
+    "zed": "1f2ad9ca218f1b35a3ab16dfbf2e6f29f920e34e2ff74c0dbf8a1cfc257c346a",
+    "zip": "60aafae91fe0a346e72245736eea66c4dcf1c42e8406f59ffd3b73430e808b80",
+}
+for _name, _digest in _PRE_DOCSTRING_SOURCE_HASHES.items():
+    LEGACY_SOURCE_HASHES.setdefault(_name, set()).add(_digest)
+
 _HEADER = """# Unlaw command source. Edit freely: this file has no runtime dependency on Unlaw.
+__SUMMARY__
 from __future__ import annotations
 """
 
@@ -339,6 +370,12 @@ def _clean_fragment(source: str, *, command: str) -> str:
     return text
 
 
+def _summary_docstring(help_text: str) -> str:
+    """The first help line becomes the module docstring that `ul commands` shows."""
+    summary = help_text.strip().splitlines()[0].replace("\\", "\\\\").replace('"', '\\"')
+    return f'"""{summary}"""'
+
+
 def command_source(name: str) -> str:
     """Return the complete focused source installed for one default command."""
     try:
@@ -349,7 +386,8 @@ def command_source(name: str) -> str:
         _clean_fragment((_ROOT / relative).read_text(encoding="utf-8"), command=name)
         for relative in paths
     ]
-    sections = [_HEADER, f"COMMAND_HELP = {COMMAND_HELP[name]!r}", _support_source(name), *fragments]
+    header = _HEADER.replace("__SUMMARY__", _summary_docstring(COMMAND_HELP[name]))
+    sections = [header, f"COMMAND_HELP = {COMMAND_HELP[name]!r}", _support_source(name), *fragments]
     return "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
 
 
