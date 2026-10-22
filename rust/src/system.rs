@@ -333,8 +333,10 @@ pub fn complete(args: &[String]) -> i32 {
     0
 }
 
+// The manifest is stored as Cargo.toml.in: `cargo install --git` scans the
+// repository for packages and would reject the {{command_name}} placeholder.
 const RUST_TEMPLATE: [(&str, &str); 2] = [
-    ("Cargo.toml", include_str!("../assets/command_rust/Cargo.toml")),
+    ("Cargo.toml", include_str!("../assets/command_rust/Cargo.toml.in")),
     ("src/main.rs", include_str!("../assets/command_rust/src/main.rs")),
 ];
 
