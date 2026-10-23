@@ -237,11 +237,18 @@ api_base = "https://api.telegram.org"
 keychain_service = "unlaw.telegram"
 
 [lm]
-base_url = "http://127.0.0.1:1234/v1"
 model = "auto"
+embedding_model = "auto"
+stt_model = "auto"
+tts_model = "auto"
+image_model = "auto"
+video_model = "auto"
+music_model = "auto"
+port = 1234
+idle_minutes = 10
 system_prompt = "You are a concise and practical local assistant."
 temperature = 0.7
-timeout = 120
+max_tokens = 4096
 ```
 
 `command_timeout = 0` отключает лимит. Python environment принимает `auto`, `uv`,
@@ -336,11 +343,12 @@ ul fast hello
 
 ### Встроенные Rust-команды
 
-`ul zip` и `ul game` встроены в ядро. Порядок поиска: системные команды →
+`ul zip`, `ul game` и `ul lm` встроены в ядро. Порядок поиска: системные команды →
 `commands/<name>/` → встроенные, поэтому своя папка `commands/zip` по-прежнему
-перекрывает встроенный `zip`. Нетронутые старые `commands/zip/main.py` и
-`commands/game/main.py` удаляются при обновлении автоматически; изменённые вручную
-остаются и продолжают работать вместо встроенных.
+перекрывает встроенный `zip`. Нетронутые старые `commands/zip/main.py`,
+`commands/game/main.py` и `commands/lm/main.py` (клиент LM Studio из 3.0)
+удаляются при обновлении автоматически; изменённые вручную остаются и продолжают
+работать вместо встроенных.
 
 ## Команды в config
 
@@ -568,24 +576,75 @@ ul tg status
 Bot token никогда не записывается в `config.toml` или Git. Для личного чата
 сначала напишите боту, затем укажите его `chat_id` во время `setup`.
 
-## Локальный чат LM Studio
+## Локальные модели (MLX)
 
-Загрузите модель в LM Studio и включите Local Server. После этого:
+`ul lm` — свой движок локальных моделей на Apple Silicon вместо LM Studio и
+Ollama: скачивает любые модели с Hugging Face и запускает их через MLX —
+чат, зрение, эмбеддинги, распознавание и синтез речи, музыку, картинки и видео,
+в терминале и через API, совместимый с OpenAI (как LM Studio) и Ollama.
 
 ```bash
-ul lm                              # диалог с сохранением контекста сессии
-ul lm "объясни этот код"
-cat error.log | ul lm
-ul lm models
-ul lm open
-ul lm start                         # управление Local Server через LM Studio CLI
-ul lm status
-ul lm stop
+ul lm search qwen3 --mlx                       # поиск на Hugging Face
+ul lm pull prism-ml/Ternary-Bonsai-2-9B-mlx-2bit
+ul lm use Bonsai-2-9B                          # модель по умолчанию для своего типа
+ul lm                                          # диалог: /model /image /clear /save /think
+ul lm "объясни этот код" < main.rs             # разовый ответ потоком
+ul lm -i photo.jpg "что на фото?"              # vision-модели
+ul lm image "бонсай в утреннем свете" --open   # картинки (mflux, Bonsai Image)
+ul lm video "волны на закате" --seconds 2      # видео (mlx-video: Wan 2.x, LTX-2)
+ul lm speak "Привет!" -m Qwen3-TTS --play      # синтез речи (mlx-audio)
+ul lm music "lo-fi piano" --lyrics song.txt    # музыка (MiniMax Music 3)
+ul lm transcribe voice.m4a --srt               # речь в текст; любой формат, даже .mov
+ul lm embed "текст для поиска"                 # эмбеддинги (JSON)
+ul lm convert Qwen/Qwen3-4B --bits 4           # обычная модель → MLX 4-bit
+ul lm list | info <model> | rm <model>
+ul lm serve [--ollama] [--cors]                # API на 127.0.0.1:1234 до Ctrl-C
+ul lm import-lmstudio [--dry-run]              # перенести загрузки LM Studio
+ul lm doctor [--repair]
 ```
 
-Unlaw принимает только loopback-адрес LM Studio (`localhost`, `127.0.0.1` или
-`::1`) и не переключается на облачные модели. Если Local Server выключен,
-`ul lm` попытается запустить его через официальный `lms` CLI и повторит запрос.
+Подключение своих приложений после `ul lm serve`:
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:1234/v1", api_key="local")
+reply = client.chat.completions.create(model="Bonsai-2-9B",
+                                       messages=[{"role": "user", "content": "привет"}])
+image = client.images.generate(model="bonsai-image", prompt="лиса в снегу", size="512x512")
+speech = client.audio.speech.create(model="Qwen3-TTS", voice="serena", input="Привет!")
+```
+
+OpenAI API: `/v1/models`, `/v1/chat/completions` (стриминг, tools, картинки,
+`reasoning_content`), `/v1/completions`, `/v1/embeddings`,
+`/v1/audio/transcriptions` (json, text, srt, verbose_json), `/v1/audio/speech`,
+`/v1/images/generations`, `/v1/videos` (задача; `GET /v1/videos/{id}` и
+`/content`). Ollama API: `/api/tags`, `/api/chat`, `/api/generate`,
+`/api/embed`, `/api/show`, `/api/ps`; `--ollama` дополнительно слушает `:11434`.
+Сервер отвечает только на `127.0.0.1`, отклоняет чужие имена хоста (защита от
+DNS rebinding), не отдаёт CORS без `--cors` и не читает локальные файлы по
+просьбе API. Поле `model` принимает `owner/repo`, имя репозитория или его часть;
+без него используется модель по умолчанию для этого типа (`lm.model`,
+`lm.image_model`, `lm.tts_model`...). Если сервер запущен, `ul lm` в терминале
+работает через него и использует уже загруженные модели.
+
+Модели хранятся в стандартном кеше Hugging Face (`HF_HUB_CACHE`,
+`HF_HOME/hub` или `~/.cache/huggingface/hub`) и видны `hf`, transformers и
+другим инструментам; `ul lm rm` освобождает и общие файлы хранилища. Тип модели
+определяется по карточке и файлам: text, vision, embedding, stt, tts, music,
+image, video. GGUF скачивается, но MLX его не запускает — `ul lm` подсказывает
+MLX-версию; в репозитории с десятком GGUF-файлов `pull` попросит выбрать один.
+Bonsai (1-bit, Ternary, Bonsai-2) работает без их лаунчера; Bonsai Image —
+через библиотеку PrismML mflux в отдельном движке.
+
+Движки ставятся сами при первом использовании в `storage.root/runtime/lm-engine`
+через uv на Python 3.13: основной (около 1.2 ГБ: mlx, mlx-lm, mlx-vlm,
+mlx-embeddings, mlx-audio, mlx-whisper, mlx-video), картинки (mflux) и Bonsai
+Image — по 1.5 ГБ, только когда понадобятся. Чат, вспомогательные модели,
+картинки и видео работают в разных процессах: эмбеддинги не ждут длинного ответа,
+падение одного не задевает остальные. Модель больше 75% RAM отклоняется до
+загрузки; модели выгружаются после `lm.idle_minutes` простоя. Параметры
+сэмплинга по умолчанию берутся из `generation_config.json` модели (рекомендации
+авторов), затем из `lm.temperature`. Облачного запасного варианта нет.
 
 ## Самовосстановление
 
@@ -675,8 +734,9 @@ python3 -m unittest discover -s tests -v   # сам собирает target/debu
 cargo build --release
 ```
 
-Unlaw 3 остаётся local-first: команды не используют shell-строки, LM Studio
-принимает только loopback endpoint, а секрет Telegram хранится в macOS Keychain.
+Unlaw 3 остаётся local-first: команды не используют shell-строки, `ul lm`
+слушает только loopback и не обращается к облачным моделям, а секрет Telegram
+хранится в macOS Keychain.
 Внешние приложения и разрешения остаются явно видимыми через `ul doctor`.
 
 ### Справка команд и скачивание YouTube

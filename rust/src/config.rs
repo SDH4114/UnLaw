@@ -157,6 +157,7 @@ pub fn defaults() -> Value {
 }
 
 /// The validated, defaults-merged configuration.
+#[derive(Clone)]
 pub struct Config {
     pub data: Value,
 }
@@ -289,11 +290,18 @@ const CHECKS: &[(&str, Kind, &[&str])] = &[
     ("telegram.chat_id", Kind::Str, &[]),
     ("telegram.api_base", Kind::Str, &[]),
     ("telegram.keychain_service", Kind::Str, &[]),
-    ("lm.base_url", Kind::Str, &[]),
     ("lm.model", Kind::Str, &[]),
+    ("lm.embedding_model", Kind::Str, &[]),
+    ("lm.stt_model", Kind::Str, &[]),
+    ("lm.tts_model", Kind::Str, &[]),
+    ("lm.image_model", Kind::Str, &[]),
+    ("lm.video_model", Kind::Str, &[]),
+    ("lm.music_model", Kind::Str, &[]),
+    ("lm.port", Kind::Int, &[]),
+    ("lm.idle_minutes", Kind::Int, &[]),
     ("lm.system_prompt", Kind::Str, &[]),
     ("lm.temperature", Kind::Number, &[]),
-    ("lm.timeout", Kind::Int, &[]),
+    ("lm.max_tokens", Kind::Int, &[]),
 ];
 
 fn number(value: Option<&Value>) -> Option<f64> {
@@ -334,7 +342,7 @@ pub fn validate(config: &Value) -> Vec<String> {
             errors.push(format!("Invalid {dotted}: expected one of {}", choices.join(", ")));
         }
     }
-    for dotted in ["core.command_timeout", "mac.timeout", "lm.timeout"] {
+    for dotted in ["core.command_timeout", "mac.timeout", "lm.idle_minutes"] {
         if let Some(Value::Int(number)) = config.lookup(dotted) {
             if *number < 0 {
                 errors.push(format!("Invalid {dotted}: must be zero or greater"));
@@ -346,9 +354,14 @@ pub fn validate(config: &Value) -> Vec<String> {
             errors.push("Invalid lm.temperature: must be between 0 and 2".into());
         }
     }
-    if let Some(Value::Str(url)) = config.lookup("lm.base_url") {
-        if !is_local_http(url) {
-            errors.push("Invalid lm.base_url: LM Studio must use localhost".into());
+    if let Some(Value::Int(port)) = config.lookup("lm.port") {
+        if !(1..=65535).contains(port) {
+            errors.push("Invalid lm.port: must be between 1 and 65535".into());
+        }
+    }
+    if let Some(Value::Int(tokens)) = config.lookup("lm.max_tokens") {
+        if *tokens < 1 {
+            errors.push("Invalid lm.max_tokens: must be greater than zero".into());
         }
     }
     if let Some(delay) = number(config.lookup("apps.spotify_autoplay_delay")) {
@@ -383,24 +396,6 @@ pub fn validate(config: &Value) -> Vec<String> {
         _ => errors.push("Invalid aliases: expected table".into()),
     }
     errors
-}
-
-/// `urllib.parse.urlparse(url)` with an http(s) scheme and a loopback host.
-fn is_local_http(url: &str) -> bool {
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return false;
-    };
-    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
-        return false;
-    }
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host_port = authority.rsplit('@').next().unwrap_or("");
-    let host = if let Some(stripped) = host_port.strip_prefix('[') {
-        stripped.split(']').next().unwrap_or("")
-    } else {
-        host_port.split(':').next().unwrap_or("")
-    };
-    matches!(host.to_ascii_lowercase().as_str(), "127.0.0.1" | "localhost" | "::1")
 }
 
 pub fn write_document(document: &DocumentMut) -> Result<()> {
@@ -475,13 +470,23 @@ fn fill_missing(table: &mut dyn TableLike, defaults: &dyn TableLike) {
     }
 }
 
-/// `ul doctor --fix`: add missing defaults and drop superseded storage keys,
+/// Keys of earlier releases that nothing reads any more: per-feature storage
+/// paths and the LM Studio connection that `ul lm` replaced with its own engine.
+const OBSOLETE_KEYS: [(&str, &str); 5] = [
+    ("capture", "screenshot_dir"),
+    ("capture", "recording_dir"),
+    ("telegram", "download_dir"),
+    ("lm", "base_url"),
+    ("lm", "timeout"),
+];
+
+/// `ul doctor --fix`: add missing defaults and drop superseded keys,
 /// keeping the user's comments and layout.
 pub fn materialize() -> Result<bool> {
     let mut document = read_document()?;
     checked(&document)?;
     let before = document.to_string();
-    for (section, key) in [("capture", "screenshot_dir"), ("capture", "recording_dir"), ("telegram", "download_dir")] {
+    for (section, key) in OBSOLETE_KEYS {
         if let Some(table) = document.get_mut(section).and_then(Item::as_table_like_mut) {
             table.remove(key);
         }
@@ -515,7 +520,7 @@ mod tests {
     #[test]
     fn invalid_values_have_python_messages() {
         let mut data = defaults();
-        let user: DocumentMut = "[core]\ncommand_timeout = \"forever\"\n[games]\ndifficulty = \"brutal\"\n[aliases]\nx = []\n[lm]\nbase_url = \"https://api.example.com/v1\"\n"
+        let user: DocumentMut = "[core]\ncommand_timeout = \"forever\"\n[games]\ndifficulty = \"brutal\"\n[aliases]\nx = []\n[lm]\nport = 70000\n"
             .parse()
             .unwrap();
         data.merge(&Value::from_table(user.as_table()));
@@ -523,16 +528,7 @@ mod tests {
         assert!(errors.contains(&"Invalid core.command_timeout: expected int".to_string()));
         assert!(errors.contains(&"Invalid games.difficulty: expected one of easy, hard, normal".to_string()));
         assert!(errors.contains(&"Invalid aliases.x: expected a non-empty array of strings".to_string()));
-        assert!(errors.contains(&"Invalid lm.base_url: LM Studio must use localhost".to_string()));
-    }
-
-    #[test]
-    fn localhost_detection() {
-        assert!(is_local_http("http://127.0.0.1:1234/v1"));
-        assert!(is_local_http("http://[::1]:1234"));
-        assert!(is_local_http("https://LOCALHOST"));
-        assert!(!is_local_http("http://localhost.evil.com"));
-        assert!(!is_local_http("ftp://localhost"));
+        assert!(errors.contains(&"Invalid lm.port: must be between 1 and 65535".to_string()));
     }
 
     #[test]
@@ -553,12 +549,13 @@ mod tests {
     #[test]
     fn every_numeric_rule_is_checked() {
         let errors = validate(&merged_with(
-            "[core]\ncommand_timeout = -1\n[mac]\ntimeout = -2\n[lm]\ntimeout = -3\ntemperature = 2.5\n[apps]\nspotify_autoplay_delay = -0.5\n[zip]\nlevel = 10\n[projects.cpp]\nstandard = 98\n",
+            "[core]\ncommand_timeout = -1\n[mac]\ntimeout = -2\n[lm]\nidle_minutes = -3\ntemperature = 2.5\nmax_tokens = 0\n[apps]\nspotify_autoplay_delay = -0.5\n[zip]\nlevel = 10\n[projects.cpp]\nstandard = 98\n",
         ));
         for expected in [
             "Invalid core.command_timeout: must be zero or greater",
             "Invalid mac.timeout: must be zero or greater",
-            "Invalid lm.timeout: must be zero or greater",
+            "Invalid lm.idle_minutes: must be zero or greater",
+            "Invalid lm.max_tokens: must be greater than zero",
             "Invalid lm.temperature: must be between 0 and 2",
             "Invalid apps.spotify_autoplay_delay: must be zero or greater",
             "Invalid zip.level: expected 0-9 or store, fastest, fast, normal, max, ultra",

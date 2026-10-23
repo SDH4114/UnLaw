@@ -69,6 +69,8 @@ fn retire_builtin_seeds() -> io::Result<()> {
         }
         fs::remove_file(&script)?;
         let _ = fs::remove_file(directory.join(".DS_Store"));
+        // Bytecode the old seed left behind; regenerated if anything needs it.
+        let _ = fs::remove_dir_all(directory.join("__pycache__"));
         let _ = fs::remove_dir(&directory);
     }
     Ok(())

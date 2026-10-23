@@ -1,0 +1,19 @@
+# Core engine of `ul lm` (chat, vision, embeddings, speech, music, video),
+# installed into storage.root/runtime/lm-engine/venv on uv-managed Python 3.13.
+# Changing this file makes every install rebuild that engine once.
+mlx==0.32.4
+mlx-lm==0.32.2
+mlx-vlm==0.7.10
+mlx-embeddings==0.1.0
+mlx-audio==0.6.1
+mlx-video @ git+https://github.com/Blaizzy/mlx-video.git@87db56a51758fefb748a359b90a5283bb8ba4837
+transformers==5.20.2
+huggingface_hub==2.2.0
+hf_xet==1.7.0
+# Pillow 13 imports numbers._IntegralLike, which only Python 3.14 has.
+pillow==12.3.0
+# mlx-whisper runtime dependencies (it is installed with --no-deps: its torch
+# requirement only serves weight conversion and would add 570 MB).
+numba==0.68.0
+tiktoken==0.14.0
+more-itertools==11.2.1

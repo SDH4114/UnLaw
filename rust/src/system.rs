@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -654,40 +653,6 @@ fn python_check(config: Option<&Config>) -> Check {
     Check { name: "Python", available, required: true, detail }
 }
 
-/// Host and port of an LM Studio base URL; port 1234 and 127.0.0.1 by default.
-fn host_port(base_url: &str) -> (String, u16) {
-    let rest = base_url.split_once("://").map(|(_, rest)| rest).unwrap_or(base_url);
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let authority = authority.rsplit('@').next().unwrap_or("");
-    let (host, port) = if let Some(stripped) = authority.strip_prefix('[') {
-        let (host, tail) = stripped.split_once(']').unwrap_or((stripped, ""));
-        (host.to_string(), tail.strip_prefix(':').and_then(|port| port.parse().ok()))
-    } else {
-        match authority.rsplit_once(':') {
-            Some((host, port)) => (host.to_string(), port.parse().ok()),
-            None => (authority.to_string(), None),
-        }
-    };
-    let host = if host.is_empty() { "127.0.0.1".to_string() } else { host };
-    (host, port.unwrap_or(1234))
-}
-
-fn lm_studio_server(base_url: &str) -> (bool, String) {
-    let (host, port) = host_port(base_url);
-    let addresses: Vec<_> = match (host.as_str(), port).to_socket_addrs() {
-        Ok(addresses) => addresses.collect(),
-        Err(error) => return (false, format!("not listening: {error}")),
-    };
-    let mut last = String::from("no address");
-    for address in addresses {
-        match TcpStream::connect_timeout(&address, Duration::from_millis(150)) {
-            Ok(_) => return (true, format!("listening at {host}:{port}")),
-            Err(error) => last = error.to_string(),
-        }
-    }
-    (false, format!("not listening: {last}"))
-}
-
 fn executable_dir() -> Option<PathBuf> {
     env::current_exe().ok()?.parent().map(Path::to_path_buf)
 }
@@ -776,14 +741,14 @@ fn doctor_checks() -> Vec<Check> {
     let storage = if config_ok { effective.storage_root() } else { config_dir().join("data") };
     let harness = which(&effective.string("mac.executable"));
     let todo_file = crate::util::expand_user(&effective.string("todo.vault_path")).join(effective.string("todo.file"));
-    let base_url = effective.string("lm.base_url");
+    let lm_port = u16::try_from(effective.int("lm.port")).unwrap_or(1234);
     let unlaw_bin = executable_dir();
 
     // The slow probes run in parallel.
     let (python, (permissions, permission_detail), (lm_server, lm_detail)) = thread::scope(|scope| {
         let python = scope.spawn(|| python_check(config.as_ref()));
         let permissions = scope.spawn(|| harness_permissions(harness.as_deref()));
-        let lm = scope.spawn(|| lm_studio_server(&base_url));
+        let lm = scope.spawn(|| crate::builtin::lm::server_status(lm_port));
         (python.join().unwrap(), permissions.join().unwrap(), lm.join().unwrap())
     });
 
@@ -834,8 +799,11 @@ fn doctor_checks() -> Vec<Check> {
             detail: harness.as_ref().map(|path| path.display().to_string()).unwrap_or_else(|| "optional backend".into()),
         },
         Check { name: "macOS permissions", available: permissions, required: false, detail: permission_detail },
-        app("LM Studio", "/Applications/LM Studio.app"),
-        Check { name: "LM Studio local server", available: lm_server, required: false, detail: lm_detail },
+        {
+            let (ready, detail) = crate::builtin::lm::engine_status(&storage);
+            Check { name: "Local model engine", available: ready, required: false, detail }
+        },
+        Check { name: "Local model server", available: lm_server, required: false, detail: lm_detail },
     ]
 }
 
@@ -894,27 +862,6 @@ pub fn run_template_hint(name: &str, args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn lm_studio_addresses_are_parsed_like_urlparse() {
-        assert_eq!(host_port("http://127.0.0.1:1234/v1"), ("127.0.0.1".into(), 1234));
-        assert_eq!(host_port("http://localhost/v1"), ("localhost".into(), 1234));
-        assert_eq!(host_port("http://[::1]:4321"), ("::1".into(), 4321));
-        assert_eq!(host_port("http://user:pw@localhost:9"), ("localhost".into(), 9));
-        assert_eq!(host_port("http:///v1"), ("127.0.0.1".into(), 1234));
-    }
-
-    #[test]
-    fn open_and_closed_ports_are_reported() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let (up, detail) = lm_studio_server(&format!("http://127.0.0.1:{port}/v1"));
-        assert!(up, "{detail}");
-        assert_eq!(detail, format!("listening at 127.0.0.1:{port}"));
-        let (up, detail) = lm_studio_server("http://127.0.0.1:1/v1");
-        assert!(!up);
-        assert!(detail.starts_with("not listening"), "{detail}");
-    }
 
     #[test]
     fn unlaw_bin_must_come_before_usr_bin() {

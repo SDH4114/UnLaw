@@ -6,7 +6,7 @@ System and built-in Rust commands (zip, game) keep their help in rust/src.
 COMMAND_HELP = {
     "app": '''Open a macOS application by name.
 Usage: ul app <application>
-Example: ul app "LM Studio"
+Example: ul app "Visual Studio Code"
 ''',
     "browser": '''Open the configured browser homepage in your default browser.
 Usage: ul browser
@@ -42,17 +42,6 @@ Example: ul git commit "Fix downloader"
     "gpt": '''Open the ChatGPT macOS application.
 Usage: ul gpt
 Example: ul gpt
-''',
-    "lm": '''Use a local model through LM Studio (localhost only).
-Usage: ul lm [prompt|open|start|stop|status|models]
-Actions:
-  no arguments     Interactive chat, or read a prompt from stdin
-  <prompt>         Ask the loaded local model
-  open             Open LM Studio
-  start/stop/status Manage the local server through lms
-  models           List loaded models
-Settings: lm.base_url, model, system_prompt, temperature, timeout.
-Example: ul lm "Explain this Python error"
 ''',
     "lofi": '''Open the configured lofi website in your default browser.
 Usage: ul lofi

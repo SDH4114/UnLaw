@@ -2,11 +2,12 @@
 //! `commands/<name>/` folder still overrides them.
 
 pub mod game;
+pub mod lm;
 pub mod zip;
 
 use crate::config::Config;
 
-pub const BUILTINS: [(&str, &str); 2] = [("game", game::HELP), ("zip", zip::HELP)];
+pub const BUILTINS: [(&str, &str); 3] = [("game", game::HELP), ("lm", lm::HELP), ("zip", zip::HELP)];
 
 pub fn is_builtin(name: &str) -> bool {
     BUILTINS.iter().any(|(builtin, _)| *builtin == name)
@@ -23,6 +24,7 @@ pub fn summary(name: &str) -> &'static str {
 pub fn run(name: &str, args: &[String], config: &Config) -> Option<i32> {
     Some(match name {
         "game" => game::run(args, config),
+        "lm" => lm::run(args, config),
         "zip" => zip::run(args, config),
         _ => return None,
     })

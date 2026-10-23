@@ -1,0 +1,4 @@
+# Image engine of `ul lm` (mflux: FLUX.1/2/3, Qwen-Image, Z-Image, FIBO...),
+# kept apart because mflux needs huggingface_hub 1.x and torch.
+mflux==0.23.0
+pillow==12.3.0

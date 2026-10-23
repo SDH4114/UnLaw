@@ -6,7 +6,6 @@ import os
 import re
 import tempfile
 import tomllib
-import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -56,11 +55,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "keychain_service": "unlaw.telegram",
     },
     "lm": {
-        "base_url": "http://127.0.0.1:1234/v1",
         "model": "auto",
+        "embedding_model": "auto",
+        "stt_model": "auto",
+        "tts_model": "auto",
+        "image_model": "auto",
+        "video_model": "auto",
+        "music_model": "auto",
+        "port": 1234,
+        "idle_minutes": 10,
         "system_prompt": "You are a concise and practical local assistant.",
         "temperature": 0.7,
-        "timeout": 120,
+        "max_tokens": 4096,
     },
 }
 
@@ -72,7 +78,6 @@ DEFAULT_COMMAND_NAMES = (
     "cpp",
     "git",
     "gpt",
-    "lm",
     "lofi",
     "mac",
     "minecraft",
@@ -236,18 +241,25 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ("telegram.chat_id", str, None),
         ("telegram.api_base", str, None),
         ("telegram.keychain_service", str, None),
-        ("lm.base_url", str, None),
         ("lm.model", str, None),
+        ("lm.embedding_model", str, None),
+        ("lm.stt_model", str, None),
+        ("lm.tts_model", str, None),
+        ("lm.image_model", str, None),
+        ("lm.video_model", str, None),
+        ("lm.music_model", str, None),
+        ("lm.port", int, None),
+        ("lm.idle_minutes", int, None),
         ("lm.system_prompt", str, None),
         ("lm.temperature", (int, float), None),
-        ("lm.timeout", int, None),
+        ("lm.max_tokens", int, None),
     )
     for dotted, kind, choices in checks:
         try:
             _expect(config, dotted, kind, choices=choices)
         except ConfigError as error:
             errors.append(str(error))
-    for dotted in ("core.command_timeout", "mac.timeout", "lm.timeout"):
+    for dotted in ("core.command_timeout", "mac.timeout", "lm.idle_minutes"):
         try:
             value = _get_from(config, dotted)
             if isinstance(value, int) and value < 0:
@@ -265,14 +277,16 @@ def validate_config(config: dict[str, Any]) -> list[str]:
     except ConfigError:
         pass
     try:
-        parsed = urllib.parse.urlparse(_get_from(config, "lm.base_url"))
-        if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
-            "127.0.0.1",
-            "localhost",
-            "::1",
-        }:
-            errors.append("Invalid lm.base_url: LM Studio must use localhost")
-    except (ConfigError, TypeError):
+        port = _get_from(config, "lm.port")
+        if isinstance(port, int) and not isinstance(port, bool) and not 1 <= port <= 65535:
+            errors.append("Invalid lm.port: must be between 1 and 65535")
+    except ConfigError:
+        pass
+    try:
+        tokens = _get_from(config, "lm.max_tokens")
+        if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens < 1:
+            errors.append("Invalid lm.max_tokens: must be greater than zero")
+    except ConfigError:
         pass
     try:
         delay = _get_from(config, "apps.spotify_autoplay_delay")
@@ -322,6 +336,8 @@ def materialize_config() -> bool:
     config.get("capture", {}).pop("screenshot_dir", None)
     config.get("capture", {}).pop("recording_dir", None)
     config.get("telegram", {}).pop("download_dir", None)
+    config.get("lm", {}).pop("base_url", None)
+    config.get("lm", {}).pop("timeout", None)
     rendered = serialize_config(config)
     current = config_file().read_text(encoding="utf-8")
     if current == rendered:

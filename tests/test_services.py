@@ -1,4 +1,4 @@
-"""Telegram, LM Studio and macOS Harness against local fake services (no network, no Keychain)."""
+"""Telegram and macOS Harness against local fake services (no network, no Keychain)."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from unlawful import harness, lmstudio, telegram  # noqa: E402
+from unlawful import harness, telegram  # noqa: E402
 from unlawful.built_in_commands.app import main as app_command  # noqa: E402
 from unlawful.built_in_commands.mac import main as mac_command  # noqa: E402
 from unlawful.config import ensure_layout, set_config_value  # noqa: E402
@@ -280,95 +280,6 @@ class TelegramTests(ServiceTestCase):
         self.assertEqual(self.lines(self.open_log), ["-a|Telegram"])
 
 
-class LMStudioTests(ServiceTestCase):
-    def setUp(self) -> None:
-        super().setUp()
-        set_config_value("lm.base_url", f"{self.server.url}/v1")
-        self.server.routes["/v1/models"] = {"data": [{"id": "qwen-local"}, {"id": "other"}]}
-        self.server.routes["/v1/chat/completions"] = {"choices": [{"message": {"content": "local answer"}}]}
-
-    def chat_requests(self) -> list[dict[str, object]]:
-        return [json.loads(r["body"]) for r in self.server.requests if r["path"] == "/v1/chat/completions"]
-
-    def test_prompt_uses_the_first_loaded_model_and_system_prompt(self) -> None:
-        code, out, _ = self.run_main(lmstudio.main, ["explain", "this"])
-        self.assertEqual((code, out), (0, "local answer\n"))
-        request = self.chat_requests()[-1]
-        self.assertEqual(request["model"], "qwen-local")
-        self.assertEqual(request["messages"][0]["role"], "system")
-        self.assertEqual(request["messages"][-1], {"role": "user", "content": "explain this"})
-        self.assertEqual((request["temperature"], request["stream"]), (0.7, False))
-
-    def test_configured_model_and_empty_system_prompt(self) -> None:
-        set_config_value("lm.model", "pinned")
-        set_config_value("lm.system_prompt", "")
-        self.run_main(lmstudio.main, ["hi"])
-        request = self.chat_requests()[-1]
-        self.assertEqual(request["model"], "pinned")
-        self.assertEqual(request["messages"], [{"role": "user", "content": "hi"}])
-        self.assertNotIn("/v1/models", [r["path"] for r in self.server.requests])
-
-    def test_prompt_from_stdin(self) -> None:
-        code, out, _ = self.run_main(lmstudio.main, [], stdin="from a pipe\n")
-        self.assertEqual((code, out), (0, "local answer\n"))
-        self.assertEqual(self.chat_requests()[-1]["messages"][-1]["content"], "from a pipe")
-
-    def test_models_lists_loaded_models(self) -> None:
-        self.assertEqual(self.run_main(lmstudio.main, ["models"])[1], "qwen-local\nother\n")
-
-    def test_no_loaded_model_and_bad_responses_open_lm_studio(self) -> None:
-        self.server.routes["/v1/models"] = {"data": []}
-        code, _, error = self.run_main(lmstudio.main, ["hi"])
-        self.assertEqual(code, 1)
-        self.assertIn("no loaded local model", error)
-        self.assertIn("-a|LM Studio", self.lines(self.open_log))
-        self.server.routes["/v1/models"] = {"data": [{"id": "m"}]}
-        self.server.routes["/v1/chat/completions"] = {"choices": []}
-        self.assertIn("invalid chat response", self.run_main(lmstudio.main, ["hi"])[2])
-
-    def test_server_actions_need_lms(self) -> None:
-        code, _, error = self.run_main(lmstudio.main, ["status"])
-        self.assertEqual(code, 1)
-        self.assertIn("`lms` was not found", error)
-        log = self.tool_log("lms", exit_code=3)
-        self.assertEqual(self.run_main(lmstudio.main, ["stop"])[0], 3)
-        self.assertEqual(self.lines(log), ["server|stop"])
-        self.assertEqual(self.run_main(lmstudio.main, ["open"])[0], 0)
-        self.assertIn("-a|LM Studio", self.lines(self.open_log))
-
-    def test_unreachable_server_is_started_once_then_reported(self) -> None:
-        self.server.close()
-        log = self.tool_log("lms", exit_code=1)
-        code, _, error = self.run_main(lmstudio.main, ["hi"])
-        self.assertEqual(code, 1)
-        self.assertIn("could not be started through `lms`", error)
-        self.assertEqual(self.lines(log), ["server|start"])
-        self.server = FakeServer()  # keep cleanup happy
-
-    def test_interactive_chat_keeps_context_and_clear_resets_it(self) -> None:
-        tty = io.StringIO()
-        tty.isatty = lambda: True  # type: ignore[method-assign]
-        answers = iter(["first", "", "second", "/clear", "third", "/exit"])
-        with patch.object(sys, "stdin", tty), patch("builtins.input", side_effect=lambda prompt: next(answers)):
-            code, out, _ = self.run_main(lmstudio.main, [])
-        self.assertEqual(code, 0)
-        self.assertEqual(out.count("lm> local answer"), 3)
-        self.assertIn("Context cleared.", out)
-        first, second, third = self.chat_requests()
-        self.assertEqual([m["content"] for m in second["messages"] if m["role"] == "user"], ["first", "second"])
-        self.assertEqual([m["content"] for m in third["messages"] if m["role"] == "user"], ["third"])
-
-    def test_interactive_chat_ends_on_eof(self) -> None:
-        tty = io.StringIO()
-        tty.isatty = lambda: True  # type: ignore[method-assign]
-        with patch.object(sys, "stdin", tty), patch("builtins.input", side_effect=EOFError):
-            self.assertEqual(self.run_main(lmstudio.main, [])[0], 0)
-
-    def test_only_localhost_urls_are_accepted(self) -> None:
-        with self.assertRaisesRegex(ValueError, "localhost"):
-            lmstudio._local_base_url("https://api.example.com/v1")
-        self.assertEqual(lmstudio._local_base_url("http://[::1]:1234/v1/"), "http://[::1]:1234/v1")
-
 
 class HarnessTests(ServiceTestCase):
     def setUp(self) -> None:
@@ -435,8 +346,8 @@ class HarnessTests(ServiceTestCase):
 
 class AppTests(ServiceTestCase):
     def test_app_opens_named_application(self) -> None:
-        self.assertEqual(self.run_main(app_command.main, ["LM", "Studio"])[0], 0)
-        self.assertEqual(self.lines(self.open_log), ["-a|LM Studio"])
+        self.assertEqual(self.run_main(app_command.main, ["Visual", "Studio", "Code"])[0], 0)
+        self.assertEqual(self.lines(self.open_log), ["-a|Visual Studio Code"])
         code, _, error = self.run_main(app_command.main, [])
         self.assertEqual(code, 2)
         self.assertIn("Usage: ul app", error)

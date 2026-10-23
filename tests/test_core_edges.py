@@ -276,18 +276,42 @@ class LayoutEdgeTests(CoreTestCase):
         self.assertIn("could not be run", python["detail"])
         self.assertEqual(result.returncode, 1)
 
-    def test_doctor_sees_a_listening_lm_studio(self) -> None:
+    def test_doctor_sees_a_running_lm_server_but_not_other_listeners(self) -> None:
         import socket
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-        with socket.socket() as server:
-            server.bind(("127.0.0.1", 0))
-            server.listen()
-            port = server.getsockname()[1]
-            self.ok("config", "set", "lm.base_url", f"http://127.0.0.1:{port}/v1")
-            records = json.loads(self.ok("doctor", "--json", env={"PATH": str(self.bin)}).stdout)
-        lm = next(r for r in records if r["name"] == "LM Studio local server")
-        self.assertEqual((lm["available"], lm["detail"]), (True, f"listening at 127.0.0.1:{port}"))
+        class UlServer(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                self.send_response(200)
+                self.send_header("X-Unlaw", "lm")
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
 
+            def log_message(self, *args: object) -> None:
+                pass
+
+        def lm_record() -> dict[str, object]:
+            records = json.loads(self.ul("doctor", "--json", env={"PATH": str(self.bin)}).stdout)
+            return next(r for r in records if r["name"] == "Local model server")
+
+        with socket.socket() as other:  # e.g. LM Studio or Ollama on the port
+            other.bind(("127.0.0.1", 0))
+            other.listen()
+            self.ok("config", "set", "lm.port", str(other.getsockname()[1]))
+            self.assertFalse(lm_record()["available"])
+        server = ThreadingHTTPServer(("127.0.0.1", 0), UlServer)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        port = server.server_address[1]
+        self.ok("config", "set", "lm.port", str(port))
+        record = lm_record()
+        self.assertEqual((record["available"], record["detail"]), (True, f"listening at 127.0.0.1:{port}"))
+        records = json.loads(self.ul("doctor", "--json", env={"PATH": str(self.bin)}).stdout)
+        names = [r["name"] for r in records]
+        self.assertIn("Local model engine", names)
+        self.assertFalse(any("LM Studio" in name for name in names))
 
 if __name__ == "__main__":
     unittest.main()

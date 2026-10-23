@@ -53,7 +53,6 @@ class ConfigTests(unittest.TestCase):
             "cpp",
             "git",
             "gpt",
-            "lm",
             "lofi",
             "mac",
             "minecraft",
@@ -104,15 +103,6 @@ class ConfigTests(unittest.TestCase):
                 },
             },
             "cpp": {"projects": {"cpp": {"standard": 20, "initialize_git": False}}},
-            "lm": {
-                "lm": {
-                    "base_url": "http://127.0.0.1:1234/v1",
-                    "model": "auto",
-                    "system_prompt": "You are a concise and practical local assistant.",
-                    "temperature": 0.7,
-                    "timeout": 120,
-                }
-            },
             "lofi": {"apps": {"lofi_url": "https://lofi-engine.vercel.app/"}},
             "mac": {"mac": {"executable": "macos-harness", "timeout": 30}},
             "music": {

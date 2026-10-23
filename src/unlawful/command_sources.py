@@ -133,15 +133,21 @@ for _name, _digest in _PRE_DOCSTRING_SOURCE_HASHES.items():
 
 # Commands now built into the Rust core. Untouched seeds with these hashes are
 # removed so the built-in runs; edited copies stay and override it.
-RETIRED_COMMANDS = ("game", "zip")
+RETIRED_COMMANDS = ("game", "zip", "lm")
 LEGACY_SOURCE_HASHES["game"].add("4eb7ad4f73245d473ae986086fc5943893fb9656d350703018e97f57a7b292e7")
 LEGACY_SOURCE_HASHES["zip"].add("e69649db613965b2d5a2235467e4e5e4d5a2b8cb5f694bcb1c9a0132eecc34e6")
+# The LM Studio client of release 3.0.0; `lm` now runs its own MLX engine.
+LEGACY_SOURCE_HASHES["lm"].add("30c60510d1f33bf3c74b56d1fc1e8fbd05e64b74018ac937d9c5718fb29d0586")
 # Hashes of official sources with blank lines removed: some installs got copies
 # that differ only in blank lines, which are untouched code, not user edits.
 RETIRED_NORMALIZED_HASHES = {
     "game": {
         "2822ae92d02cfa55faa4194920c2e0a85c7359929c7482e54d86c8d59fc4558f",
         "f6e4c0a2fc55f721a471ef773a823be6b4d7f9df8260d443e03f63dc3aaa2cce",
+    },
+    "lm": {
+        "0c843a537004909b8a8bd4559aadef5f0b10991a000f29b7bc360abfc2c84355",
+        "5a7a5ed9d7d76bcb3280bcfff68b364cc344463dd549b9c04b39183f4358e11d",
     },
     "zip": {
         "aa50d2c9ce9231bdbf493456307412bca9fbdaed01b334c64bfbf4a365d195c9",
@@ -166,15 +172,6 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
         },
     },
     "cpp": {"projects": {"cpp": {"standard": 20, "initialize_git": False}}},
-    "lm": {
-        "lm": {
-            "base_url": "http://127.0.0.1:1234/v1",
-            "model": "auto",
-            "system_prompt": "You are a concise and practical local assistant.",
-            "temperature": 0.7,
-            "timeout": 120,
-        }
-    },
     "lofi": {"apps": {"lofi_url": "https://lofi-engine.vercel.app/"}},
     "mac": {"mac": {"executable": "macos-harness", "timeout": 30}},
     "music": {"apps": {"spotify": "Spotify", "spotify_autoplay_delay": 2.0}},
@@ -330,7 +327,6 @@ _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "cpp": ("project_templates.py", "built_in_commands/cpp/main.py"),
     "git": ("built_in_commands/git/main.py",),
     "gpt": ("built_in_commands/gpt/main.py",),
-    "lm": ("lmstudio.py",),
     "lofi": ("built_in_commands/lofi/main.py",),
     "mac": ("harness.py", "built_in_commands/mac/main.py"),
     "minecraft": ("built_in_commands/minecraft/main.py",),

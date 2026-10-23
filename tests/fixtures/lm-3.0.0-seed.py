@@ -1,4 +1,50 @@
+# Unlaw command source. Edit freely: this file has no runtime dependency on Unlaw.
+"""Use a local model through LM Studio (localhost only)."""
 from __future__ import annotations
+
+COMMAND_HELP = 'Use a local model through LM Studio (localhost only).\nUsage: ul lm [prompt|open|start|stop|status|models]\nActions:\n  no arguments     Interactive chat, or read a prompt from stdin\n  <prompt>         Ask the loaded local model\n  open             Open LM Studio\n  start/stop/status Manage the local server through lms\n  models           List loaded models\nSettings: lm.base_url, model, system_prompt, temperature, timeout.\nExample: ul lm "Explain this Python error"\n'
+
+import copy
+import os
+import tomllib
+from pathlib import Path
+
+
+DEFAULT_CONFIG = {'lm': {'base_url': 'http://127.0.0.1:1234/v1',
+        'model': 'auto',
+        'system_prompt': 'You are a concise and practical local assistant.',
+        'temperature': 0.7,
+        'timeout': 120}}
+
+
+class ConfigError(ValueError):
+    pass
+
+
+def config_dir() -> Path:
+    base = Path(os.environ.get("XDG_CONFIG_HOME", "~/.config")).expanduser()
+    return base / "unlaw"
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        result[key] = (
+            _deep_merge(result[key], value)
+            if isinstance(value, dict) and isinstance(result.get(key), dict)
+            else copy.deepcopy(value)
+        )
+    return result
+
+
+def load_config() -> dict:
+    path = config_dir() / "config.toml"
+    try:
+        with path.open("rb") as handle:
+            configured = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise ConfigError(f"Could not read {path}: {error}") from error
+    return _deep_merge(DEFAULT_CONFIG, configured)
 
 import json
 import shutil
@@ -11,8 +57,6 @@ import urllib.request
 from collections.abc import Sequence
 from typing import Any
 
-from unlawful.command_help import COMMAND_HELP
-from .config import ConfigError, load_config
 
 
 def _server_command(action: str) -> int | None:
@@ -144,7 +188,7 @@ def _interactive(settings: dict[str, object]) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] in {"-h", "--help", "help"}:
-        print(COMMAND_HELP['lm'], end="")
+        print(COMMAND_HELP, end="")
         return 0
     try:
         settings = load_config()["lm"]

@@ -123,7 +123,7 @@ class UpdateTests(CoreTestCase):
         cargo_log = self.fake_cargo()
         curl_log = self.fake_curl('[package]\nname = "unlaw"\nversion = "9.0.0"\n')
         result = self.ok("update", "--check")
-        installed = f"3.0.0 ({self.installed_commit})" if self.installed_commit else "3.0.0"
+        installed = f"3.1.0 ({self.installed_commit})" if self.installed_commit else "3.1.0"
         self.assertEqual(result.stdout.splitlines()[:2], [f"Installed: {installed}", "Latest:    9.0.0 (1234567, main)"])
         self.assertIn("Update available: a new version", result.stdout)
         self.assertIn("https://raw.githubusercontent.com/SDH4114/UnLaw/main/Cargo.toml", curl_log.read_text())
@@ -135,7 +135,7 @@ class UpdateTests(CoreTestCase):
     def test_check_compares_commits_when_the_version_is_the_same(self) -> None:
         if not self.installed_commit:
             self.skipTest("this build has no commit")
-        self.fake_curl('[package]\nversion = "3.0.0"\n')
+        self.fake_curl('[package]\nversion = "3.1.0"\n')
         self.fake_git(self.installed_commit + "0" * 33)
         self.assertIn("Up to date.", self.ok("update", "--check").stdout)
         self.fake_git("f" * 40)

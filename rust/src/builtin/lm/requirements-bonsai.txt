@@ -1,0 +1,4 @@
+# Bonsai Image engine of `ul lm`: PrismML's mflux fork with the fused
+# ternary/binary FLUX.2 Klein transformer (MIT, pinned commit).
+mflux @ git+https://github.com/PrismML-Eng/mflux-prism.git@bcd13e83b7fcfd76186c98ef322dd9cf28e996c1
+pillow==12.3.0
