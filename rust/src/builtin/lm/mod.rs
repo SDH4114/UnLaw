@@ -74,7 +74,10 @@ Options
 
 Good to know
   Names: "qwen3-8b" finds mlx-community/Qwen3-8B-4bit. Model types: text, vision,
-  embedding, stt, tts, music, image, video (GGUF downloads, but MLX cannot run it).
+  embedding, stt, tts, music, image, video. MLX models run on MLX; GGUF chat,
+  vision and embedding models on llama.cpp, GGUF speech recognisers (Parakeet,
+  Whisper) on transcribe.cpp. A repo with several GGUF files runs its Q4_K_M
+  (else Q5_K_M, Q6_K, Q8_0); `ul lm info` shows which.
   Models live in the Hugging Face cache (~/.cache/huggingface/hub), shared with hf.
   Too big for memory (over 75% of RAM) is refused before loading; idle models are
   freed after lm.idle_minutes. Everything stays on this Mac: no cloud fallback.
@@ -179,7 +182,7 @@ fn list(config: &Config, args: &[String]) -> i32 {
         let rows: Vec<Value> = models
             .iter()
             .map(|m| {
-                json!({"id": m.id, "type": m.kind.name(), "runnable": m.kind.runnable() && !m.partial,
+                json!({"id": m.id, "type": m.kind.name(), "format": m.format(), "runnable": m.kind.runnable() && !m.partial,
                        "bytes": m.bytes, "path": m.path, "partial": m.partial, "default": defaults.contains(&m.id)})
             })
             .collect();
@@ -197,11 +200,15 @@ fn list(config: &Config, args: &[String]) -> i32 {
         let status = if model.partial {
             "incomplete: run `ul lm pull` again"
         } else if model.kind == Kind::Gguf {
-            "GGUF: MLX cannot run it"
+            "GGUF no bundled engine runs"
         } else if !model.kind.runnable() {
             "not loadable by MLX"
         } else {
             model.kind.describe()
+        };
+        let status = match &model.gguf {
+            Some(gguf) if !model.partial => format!("{status} · GGUF ({})", if gguf.runtime == store::Runtime::Llama { "llama.cpp" } else { "transcribe.cpp" }),
+            _ => status.to_string(),
         };
         println!("{mark} {:width$}  {:9}  {:>9}  {status}", model.id, model.kind.name(), human_size(model.bytes));
     }
@@ -242,6 +249,17 @@ fn info(config: &Config, args: &[String]) -> i32 {
     }
     if let Some(bits) = config_json["quantization"]["bits"].as_u64() {
         println!("Quantized:    {bits}-bit");
+    }
+    if let Some(gguf) = &model.gguf {
+        let runtime = if gguf.runtime == store::Runtime::Llama { "llama.cpp" } else { "transcribe.cpp" };
+        println!("GGUF:         {} ({}, runs on {runtime})", gguf.file.file_name().unwrap_or_default().to_string_lossy(), gguf.architecture);
+        if let Some(mmproj) = &gguf.mmproj {
+            println!("Vision:       {}", mmproj.file_name().unwrap_or_default().to_string_lossy());
+        }
+        println!("Loads:        {}", human_size(model.load_bytes()));
+        if let Some(context) = store::gguf_metadata(&gguf.file).and_then(|m| m.get("context_length").cloned()) {
+            println!("Context:      {context} tokens (ul uses up to {})", Settings::from_config(config).max_tokens.max(8192) * 2);
+        }
     }
     if let Some(context) = text_config["max_position_embeddings"].as_u64() {
         println!("Context:      {context} tokens");
@@ -641,7 +659,7 @@ fn pull(config: &Config, args: &[String]) -> i32 {
     match model.kind {
         Kind::Gguf => {
             let base = base.replace("-GGUF", "").replace("-gguf", "");
-            println!("GGUF files cannot run on MLX. Look for an MLX build: ul lm search {base} --mlx");
+            println!("No bundled engine runs this kind of GGUF. Look for an MLX build: ul lm search {base} --mlx");
         }
         Kind::Other => println!("No MLX-loadable weights; if it has PyTorch weights try `ul lm convert {repo}`."),
         Kind::Embedding => println!("Use it: ul lm embed -m {base} \"text\"   or POST /v1/embeddings"),
@@ -862,7 +880,7 @@ fn doctor(config: &Config, args: &[String]) -> i32 {
             }
         };
         let probe = match engine {
-            Engine::Core => "import mlx.core as mx, mlx_lm, mlx_vlm, mlx_embeddings, mlx_audio, mlx_whisper, mlx_video; print(mx.__version__, 'lm', mlx_lm.__version__, 'vlm', mlx_vlm.__version__, 'metal' if mx.metal.is_available() else 'NO METAL')",
+            Engine::Core => "import mlx.core as mx, mlx_lm, mlx_vlm, mlx_embeddings, mlx_audio, mlx_whisper, mlx_video, transcribe_cpp; print(mx.__version__, 'lm', mlx_lm.__version__, 'vlm', mlx_vlm.__version__, 'metal' if mx.metal.is_available() else 'NO METAL')",
             Engine::Image | Engine::Bonsai => "import mlx.core as mx, mflux; from importlib.metadata import version; print(mx.__version__, 'mflux', version('mflux'), 'metal' if mx.metal.is_available() else 'NO METAL')",
         };
         match std::process::Command::new(&launch.python).args(["-c", probe]).output() {
@@ -879,6 +897,11 @@ fn doctor(config: &Config, args: &[String]) -> i32 {
                 println!("FAIL  {:13} {error}", engine.name());
             }
         }
+    }
+    if engine::llama_ready(&storage) {
+        println!("OK    {:13} build b11829 (GGUF chat, vision, embeddings)", "llama.cpp");
+    } else {
+        println!("INFO  {:13} downloaded when a GGUF model is first used (16 MB)", "llama.cpp");
     }
     let service = Service::new(config, false);
     let models = service.models();

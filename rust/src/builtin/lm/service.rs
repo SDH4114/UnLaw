@@ -197,7 +197,7 @@ impl Service {
             Kind::Gguf => Err(Failure::new(
                 "unsupported_model",
                 format!(
-                    "{} is a GGUF model, which MLX cannot run. Find an MLX build with `ul lm search {} --mlx`",
+                    "{} is a GGUF no bundled engine runs (llama.cpp and transcribe.cpp do not know it). Look for an MLX build with `ul lm search {} --mlx`",
                     model.id,
                     model.id.rsplit('/').next().unwrap_or(&model.id).replace("-GGUF", "").replace("-gguf", "")
                 ),
@@ -267,12 +267,22 @@ impl Service {
     }
 
     pub fn model_spec(&self, model: &Model) -> Value {
-        json!({
+        let mut spec = json!({
             "id": model.id,
             "path": model.path,
             "kind": model.kind.name(),
             "trust_remote_code": self.trust_remote_code,
-        })
+        });
+        if let Some(gguf) = &model.gguf {
+            spec["gguf"] = json!({
+                "file": gguf.file,
+                "mmproj": gguf.mmproj,
+                "architecture": gguf.architecture,
+                "runtime": match gguf.runtime { store::Runtime::Llama => "llama", store::Runtime::Transcribe => "transcribe" },
+                "context": self.settings.max_tokens.max(8192) * 2,
+            });
+        }
+        spec
     }
 
     /// Models loaded in any lane.
@@ -301,8 +311,8 @@ impl Service {
     /// Make room for `model`: models other lanes hold count too, and idle
     /// lanes are stopped (their memory returns at once) when it would not fit.
     fn make_room(&self, model: &Model, target: &Arc<Supervisor>) -> Result<(), Failure> {
-        let needed = model.bytes / 5 * 6;
-        let sizes: HashMap<String, u64> = self.models().into_iter().map(|m| (m.id, m.bytes / 5 * 6)).collect();
+        let needed = model.load_bytes() / 5 * 6;
+        let sizes: HashMap<String, u64> = self.models().into_iter().map(|m| (m.id.clone(), m.load_bytes() / 5 * 6)).collect();
         let lanes: Vec<Arc<Supervisor>> = self.lanes.lock().unwrap_or_else(PoisonError::into_inner).values().cloned().collect();
         let others: Vec<&Arc<Supervisor>> = lanes.iter().filter(|lane| !Arc::ptr_eq(lane, target)).collect();
         let held = || -> u64 {
@@ -335,6 +345,10 @@ impl Service {
         let lane = self.lane(model)?;
         self.make_room(model, &lane)?;
         job["model"] = self.model_spec(model);
+        if model.gguf.as_ref().is_some_and(|gguf| gguf.runtime == store::Runtime::Llama) {
+            let server = engine::ensure_llama(&self.storage).map_err(|message| Failure::new("engine_unavailable", message))?;
+            job["model"]["gguf"]["server"] = json!(server);
+        }
         if job.get("defaults").is_none() {
             job["defaults"] = json!({"temperature": self.settings.temperature, "max_tokens": self.settings.max_tokens});
         }

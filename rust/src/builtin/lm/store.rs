@@ -93,9 +93,46 @@ pub struct Model {
     pub partial: bool,
     /// The hub cache folder (`models--owner--repo`) or the converted folder.
     pub root: PathBuf,
+    /// Set for GGUF models: the file to run and the engine that runs it.
+    pub gguf: Option<Gguf>,
+}
+
+/// Which native engine runs a GGUF file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Runtime {
+    /// llama.cpp's server: chat, vision (with an mmproj file), embeddings.
+    Llama,
+    /// transcribe.cpp: Parakeet, Whisper and other speech recognisers.
+    Transcribe,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Gguf {
+    pub file: PathBuf,
+    /// Vision projector for multimodal llama.cpp models.
+    pub mmproj: Option<PathBuf>,
+    pub architecture: String,
+    pub runtime: Runtime,
 }
 
 impl Model {
+    /// Bytes that must fit in memory: for a GGUF repo only the chosen file
+    /// (a repo may hold several quantizations).
+    pub fn load_bytes(&self) -> u64 {
+        match &self.gguf {
+            Some(gguf) => [Some(&gguf.file), gguf.mmproj.as_ref()].into_iter().flatten().map(|f| fs::metadata(f).map(|m| m.len()).unwrap_or(0)).sum(),
+            None => self.bytes,
+        }
+    }
+
+    pub fn format(&self) -> &'static str {
+        if self.gguf.is_some() {
+            "gguf"
+        } else {
+            "mlx"
+        }
+    }
+
     pub fn engine(&self) -> Engine {
         if self.kind != Kind::Image {
             Engine::Core
@@ -138,21 +175,24 @@ pub fn cache_folder(id: &str) -> String {
     format!("models--{}", id.replace('/', "--"))
 }
 
-/// The snapshot `refs/main` points at, else the most recently changed one.
+/// The snapshot `refs/main` points at, unless it holds no weights while
+/// another one does (fetching only a README of a newer commit moves
+/// `refs/main` to a snapshot without the model); then the largest one.
 fn snapshot(root: &Path) -> Option<PathBuf> {
     let snapshots = root.join("snapshots");
+    let has_model = |path: &Path| has_weights(path) || files_with(path, ".gguf");
     if let Ok(reference) = fs::read_to_string(root.join("refs").join("main")) {
         let candidate = snapshots.join(reference.trim());
-        if candidate.is_dir() {
+        if candidate.is_dir() && has_model(&candidate) {
             return Some(candidate);
         }
     }
-    fs::read_dir(&snapshots)
-        .ok()?
-        .flatten()
-        .filter(|entry| entry.path().is_dir())
-        .max_by_key(|entry| entry.metadata().and_then(|meta| meta.modified()).ok())
-        .map(|entry| entry.path())
+    let all: Vec<PathBuf> = fs::read_dir(&snapshots).ok()?.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
+    all.iter()
+        .filter(|path| has_model(path))
+        .max_by_key(|path| size(path))
+        .or_else(|| all.iter().max_by_key(|path| fs::metadata(path).and_then(|meta| meta.modified()).ok()))
+        .cloned()
 }
 
 /// Total size of the files a snapshot links to (symlinks are followed).
@@ -240,7 +280,11 @@ pub fn classify(directory: &Path, id: &str) -> Kind {
         return Kind::Video;
     }
     if !has_weights(directory) {
-        return if files_with(directory, ".gguf") { Kind::Gguf } else { Kind::Other };
+        return match gguf_info(directory, id) {
+            Some((kind, _)) => kind,
+            None if files_with(directory, ".gguf") => Kind::Gguf,
+            None => Kind::Other,
+        };
     }
     let by_card = match pipeline.as_str() {
         "text-to-image" | "image-to-image" | "unconditional-image-generation" => Some(Kind::Image),
@@ -294,7 +338,151 @@ fn model_at(id: String, root: PathBuf, path: PathBuf) -> Model {
     let kind = classify(&path, &id);
     let bytes = size(&path);
     let partial = has_incomplete(&root);
-    Model { id, path, kind, bytes, partial, root }
+    let gguf = if kind.runnable() && !has_weights(&path) { gguf_info(&path, &id).and_then(|(_, gguf)| gguf) } else { None };
+    Model { id, path, kind, bytes, partial, root, gguf }
+}
+
+/// Keys of a GGUF header (`general.architecture`, `general.type`...): only
+/// the metadata is read, never the tensors.
+pub fn gguf_metadata(file: &Path) -> Option<std::collections::HashMap<String, String>> {
+    use std::io::{BufReader, Read, Seek, SeekFrom};
+    let mut reader = BufReader::new(fs::File::open(file).ok()?);
+    let mut word = [0u8; 4];
+    reader.read_exact(&mut word).ok()?;
+    if &word != b"GGUF" {
+        return None;
+    }
+    let u32_ = |reader: &mut BufReader<fs::File>| -> Option<u32> {
+        let mut b = [0u8; 4];
+        reader.read_exact(&mut b).ok()?;
+        Some(u32::from_le_bytes(b))
+    };
+    let version = u32_(&mut reader)?;
+    if version < 2 {
+        return None;
+    }
+    let u64_ = |reader: &mut BufReader<fs::File>| -> Option<u64> {
+        let mut b = [0u8; 8];
+        reader.read_exact(&mut b).ok()?;
+        Some(u64::from_le_bytes(b))
+    };
+    let _tensors = u64_(&mut reader)?;
+    let pairs = u64_(&mut reader)?;
+    let string = |reader: &mut BufReader<fs::File>| -> Option<String> {
+        let length = u64_(reader)?;
+        if length > 1 << 24 {
+            return None;
+        }
+        let mut bytes = vec![0u8; length as usize];
+        reader.read_exact(&mut bytes).ok()?;
+        Some(String::from_utf8_lossy(&bytes).into_owned())
+    };
+    let width = |kind: u32| -> Option<u64> {
+        Some(match kind {
+            0 | 1 | 7 => 1,
+            2 | 3 => 2,
+            4..=6 => 4,
+            10..=12 => 8,
+            _ => return None,
+        })
+    };
+    let mut found = std::collections::HashMap::new();
+    for _ in 0..pairs.min(100_000) {
+        let key = string(&mut reader)?;
+        let kind = u32_(&mut reader)?;
+        match kind {
+            8 => {
+                let value = string(&mut reader)?;
+                if key.starts_with("general.") {
+                    found.insert(key, value);
+                }
+            }
+            9 => {
+                let element = u32_(&mut reader)?;
+                let count = u64_(&mut reader)?;
+                if element == 8 {
+                    for _ in 0..count {
+                        let length = u64_(&mut reader)?;
+                        reader.seek(SeekFrom::Current(i64::try_from(length).ok()?)).ok()?;
+                    }
+                } else {
+                    reader.seek(SeekFrom::Current(i64::try_from(count.checked_mul(width(element)?)?).ok()?)).ok()?;
+                }
+            }
+            other => {
+                let size = width(other)?;
+                let mut bytes = vec![0u8; size as usize];
+                reader.read_exact(&mut bytes).ok()?;
+                if key.ends_with(".context_length") {
+                    let mut padded = [0u8; 8];
+                    padded[..bytes.len()].copy_from_slice(&bytes);
+                    found.insert("context_length".into(), u64::from_le_bytes(padded).to_string());
+                }
+            }
+        }
+    }
+    Some(found)
+}
+
+fn gguf_files(directory: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = fs::read_dir(directory)
+        .map(|entries| entries.flatten().map(|entry| entry.path()).filter(|path| path.extension().is_some_and(|e| e == "gguf")).collect())
+        .unwrap_or_default();
+    files.sort();
+    files
+}
+
+/// The quantization to run when a repo holds several: a balanced one first.
+fn pick_gguf(files: &[PathBuf]) -> Option<PathBuf> {
+    let name = |path: &PathBuf| path.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    let candidates: Vec<&PathBuf> = files
+        .iter()
+        .filter(|path| !name(path).contains("mmproj"))
+        // Split models start at their first shard.
+        .filter(|path| !name(path).contains("-of-0") || name(path).contains("-00001-of-"))
+        .collect();
+    for preferred in ["q4_k_m", "q5_k_m", "q6_k", "q8_0", "q4_0"] {
+        if let Some(found) = candidates.iter().find(|path| name(path).contains(preferred)) {
+            return Some((*found).clone());
+        }
+    }
+    candidates.first().map(|path| (*path).clone())
+}
+
+const SPEECH_ARCHITECTURES: [&str; 8] = ["parakeet", "whisper", "canary", "moonshine", "sensevoice", "fastconformer", "conformer", "voxtral-asr"];
+const EMBEDDING_ARCHITECTURES: [&str; 10] =
+    ["bert", "nomic-bert", "nomic-bert-moe", "jina-bert-v2", "jina-bert-v3", "neo-bert", "modern-bert", "eurobert", "t5encoder", "gemma-embedding"];
+
+/// What a GGUF repo is and which engine runs it; `None` when there is no
+/// GGUF model file. Kind::Gguf means no bundled engine runs it.
+pub fn gguf_info(directory: &Path, id: &str) -> Option<(Kind, Option<Gguf>)> {
+    let files = gguf_files(directory);
+    let file = pick_gguf(&files)?;
+    // A header that does not parse is not a model anything here can load.
+    let metadata = gguf_metadata(&file)?;
+    let architecture = metadata.get("general.architecture").cloned().unwrap_or_default().to_ascii_lowercase();
+    let (pipeline, library, _) = card(directory);
+    let lowered = id.to_ascii_lowercase();
+    let mmproj = files.iter().find(|path| path.file_name().is_some_and(|n| n.to_string_lossy().to_ascii_lowercase().contains("mmproj"))).cloned();
+    let entry = |runtime| Gguf { file: file.clone(), mmproj: mmproj.clone(), architecture: architecture.clone(), runtime };
+    if library == "transcribe.cpp" || SPEECH_ARCHITECTURES.contains(&architecture.as_str()) || pipeline == "automatic-speech-recognition" {
+        return Some((Kind::Stt, Some(Gguf { mmproj: None, ..entry(Runtime::Transcribe) })));
+    }
+    if architecture == "clip" || metadata.get("general.type").is_some_and(|t| t == "mmproj") {
+        return Some((Kind::Other, None));
+    }
+    // Generators llama.cpp does not run (stable-diffusion.cpp, TTS codecs...).
+    if pipeline.starts_with("text-to-") || pipeline.ends_with("-to-image") || pipeline.ends_with("-to-video") || lowered.contains("tts") {
+        return Some((Kind::Gguf, None));
+    }
+    if EMBEDDING_ARCHITECTURES.contains(&architecture.as_str())
+        || matches!(pipeline.as_str(), "feature-extraction" | "sentence-similarity")
+        || lowered.contains("embed")
+    {
+        return Some((Kind::Embedding, Some(Gguf { mmproj: None, ..entry(Runtime::Llama) })));
+    }
+    let kind = if mmproj.is_some() { Kind::Vision } else { Kind::Text };
+    Some((kind, Some(entry(Runtime::Llama))))
 }
 
 /// Every downloaded or converted model, sorted by id.
@@ -346,6 +534,8 @@ pub fn find(models: &[Model], query: &str, fits: impl Fn(&Model) -> bool) -> Loo
         }
         for narrowed in [
             matches.clone(),
+            // An MLX build wins over its GGUF twin: MLX is the faster path here.
+            matches.iter().copied().filter(|m| fits(m) && m.kind.runnable() && m.gguf.is_none()).collect(),
             matches.iter().copied().filter(|m| fits(m) && m.kind.runnable()).collect(),
             matches.iter().copied().filter(|m| fits(m)).collect(),
             matches.iter().copied().filter(|m| m.kind.runnable()).collect(),
@@ -421,6 +611,26 @@ pub mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
 
+    /// A GGUF v3 header with one key, `general.architecture`.
+    pub fn gguf_header(architecture: &str) -> Vec<u8> {
+        let mut bytes = b"GGUF".to_vec();
+        bytes.extend(3u32.to_le_bytes());
+        bytes.extend(0u64.to_le_bytes());
+        bytes.extend(2u64.to_le_bytes());
+        let key = "general.architecture";
+        bytes.extend((key.len() as u64).to_le_bytes());
+        bytes.extend(key.as_bytes());
+        bytes.extend(8u32.to_le_bytes());
+        bytes.extend((architecture.len() as u64).to_le_bytes());
+        bytes.extend(architecture.as_bytes());
+        let key = "qwen35.context_length";
+        bytes.extend((key.len() as u64).to_le_bytes());
+        bytes.extend(key.as_bytes());
+        bytes.extend(4u32.to_le_bytes());
+        bytes.extend(32768u32.to_le_bytes());
+        bytes
+    }
+
     pub fn scratch(name: &str) -> PathBuf {
         let path = env::temp_dir().join(format!("unlaw-lm-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
@@ -449,6 +659,7 @@ pub mod tests {
         let dir = scratch("kinds");
         let make = |name: &str, files: &[(&str, &str)]| {
             let path = dir.join(name);
+            fs::create_dir_all(&path).unwrap();
             for (file, content) in files {
                 let target = path.join(file);
                 fs::create_dir_all(target.parent().unwrap()).unwrap();
@@ -478,8 +689,24 @@ pub mod tests {
         assert_eq!(classify(&bonsai, "prism-ml/bonsai-image"), Kind::Image);
         let wan = make("w", &[("config.json", "{}"), ("model.safetensors", "w"), ("t5_encoder.safetensors", "w"), ("vae.safetensors", "w")]);
         assert_eq!(classify(&wan, "x/wan"), Kind::Video);
-        let gguf = make("g", &[("model-Q4_K_M.gguf", "g"), ("README.md", &readme("text-generation"))]);
-        assert_eq!(classify(&gguf, "x/gguf"), Kind::Gguf);
+        let gguf = make("g", &[("README.md", &readme("text-generation"))]);
+        fs::write(gguf.join("model-Q8_0.gguf"), gguf_header("qwen35")).unwrap();
+        fs::write(gguf.join("model-Q4_K_M.gguf"), gguf_header("qwen35")).unwrap();
+        fs::write(gguf.join("mmproj-F16.gguf"), gguf_header("clip")).unwrap();
+        assert_eq!(classify(&gguf, "x/gguf"), Kind::Vision);
+        let (_, info) = gguf_info(&gguf, "x/gguf").unwrap();
+        let info = info.unwrap();
+        assert_eq!((info.file.file_name().unwrap().to_str(), info.runtime), (Some("model-Q4_K_M.gguf"), Runtime::Llama));
+        assert_eq!(info.mmproj.unwrap().file_name().unwrap(), "mmproj-F16.gguf");
+        let asr = make("asr", &[]);
+        fs::write(asr.join("nemotron-Q8_0.gguf"), gguf_header("parakeet")).unwrap();
+        assert_eq!(gguf_info(&asr, "x/asr").map(|(kind, g)| (kind, g.map(|g| g.runtime))), Some((Kind::Stt, Some(Runtime::Transcribe))));
+        let embed = make("emb", &[]);
+        fs::write(embed.join("e.gguf"), gguf_header("nomic-bert")).unwrap();
+        assert_eq!(classify(&embed, "x/emb"), Kind::Embedding);
+        let image = make("img", &[("README.md", &readme("text-to-image"))]);
+        fs::write(image.join("flux-Q4.gguf"), gguf_header("flux")).unwrap();
+        assert_eq!(classify(&image, "x/flux-gguf"), Kind::Gguf);
         let bin = make("o", &[("config.json", "{}"), ("pytorch_model.bin", "b")]);
         assert_eq!(classify(&bin, "x/old"), Kind::Other);
         assert_eq!(card(&dir.join("m")).2, ["mlx", "music"]);
@@ -503,6 +730,7 @@ pub mod tests {
         assert_eq!(ids, ["local/mine-mlx-4bit", "mlx-community/Qwen3-0.6B-4bit", "mlx-community/Qwen3-8B-4bit", "unsloth/Qwen3-8B-GGUF"]);
         assert_eq!(models[1].bytes, config.len() as u64 + 4);
         assert!(models[2].partial && !models[1].partial);
+        // A GGUF without a readable header still lists, as a file nobody runs.
         assert_eq!(models[3].kind, Kind::Gguf);
         assert_eq!(models[1].lane(), "core:chat");
 
@@ -526,6 +754,21 @@ pub mod tests {
 
         assert_eq!(remove_local(&models[0]).unwrap(), 0);
         assert!(!storage.join("models").join("mine-mlx-4bit").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_readme_only_newer_snapshot_does_not_hide_the_model() {
+        let dir = scratch("snapshots");
+        let cache = dir.join("hub");
+        let model = fake_repo(&cache, "a/asr-gguf", &[("model-Q8_0.gguf", "GGUF")]);
+        let root = model.parent().unwrap().parent().unwrap().to_path_buf();
+        let newer = root.join("snapshots").join("def456");
+        fs::create_dir_all(&newer).unwrap();
+        fs::write(newer.join("README.md"), "card").unwrap();
+        fs::write(root.join("refs").join("main"), "def456").unwrap();
+        let models = scan_in(&cache, &dir.join("storage"));
+        assert_eq!(models[0].path, model);
         fs::remove_dir_all(dir).unwrap();
     }
 

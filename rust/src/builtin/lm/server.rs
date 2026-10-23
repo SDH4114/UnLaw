@@ -183,6 +183,7 @@ pub fn bind(port: u16) -> Result<TcpListener, String> {
 }
 
 pub fn serve(service: Service, listeners: Vec<TcpListener>) -> i32 {
+    super::worker::end_workers_on_signals();
     let service = Arc::new(service);
     let ports: Vec<u16> = listeners.iter().filter_map(|l| l.local_addr().ok()).map(|a| a.port()).collect();
     let port = ports[0];

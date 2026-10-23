@@ -102,6 +102,14 @@ while True:
 '''
 
 
+def gguf_header(architecture: str) -> bytes:
+    """A GGUF v3 file with only `general.architecture` in its metadata."""
+    key = b"general.architecture"
+    value = architecture.encode()
+    return (b"GGUF" + (3).to_bytes(4, "little") + (0).to_bytes(8, "little") + (1).to_bytes(8, "little")
+            + len(key).to_bytes(8, "little") + key + (8).to_bytes(4, "little") + len(value).to_bytes(8, "little") + value)
+
+
 def free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -119,6 +127,7 @@ class LmTestCase(CoreTestCase):
                 "HF_HUB_CACHE": str(self.cache),
                 "UNLAW_LM_PYTHON": sys.executable,
                 "UNLAW_LM_WORKER": str(worker),
+                "UNLAW_LM_LLAMA_SERVER": "/fake/llama-server",
             }
         )
         self.text = self.repo("mlx-community/Tiny-4bit", {"config.json": '{"model_type":"qwen3","quantization":{"bits":4}}', "model.safetensors": "1234"})
@@ -162,7 +171,7 @@ class LmCliTests(LmTestCase):
     def test_list_info_use_and_rm(self) -> None:
         listing = self.ok("lm", "list").stdout
         self.assertIn("mlx-community/Tiny-4bit", listing)
-        self.assertIn("GGUF: MLX cannot run it", listing)
+        self.assertIn("GGUF no bundled engine runs", listing)
         rows = {row["id"]: row for row in json.loads(self.ok("lm", "list", "--json").stdout)}
         self.assertEqual(rows["mlx-community/Eye-4bit"]["type"], "vision")
         self.assertEqual(rows["mlx-community/whisper-tiny"]["type"], "stt")
@@ -219,7 +228,7 @@ class LmCliTests(LmTestCase):
         self.assertIn("is not downloaded", missing.stderr)
         self.assertIn("download it with `ul lm pull nothing-like-it`", missing.stderr)
         gguf = self.ul("lm", "-m", "big-gguf", "hi")
-        self.assertIn("GGUF model, which MLX cannot run", gguf.stderr)
+        self.assertIn("is a GGUF no bundled engine runs", gguf.stderr)
         self.assertIn("ul lm search Big --mlx", gguf.stderr)
 
     def test_a_crashing_worker_is_reported(self) -> None:
@@ -302,6 +311,28 @@ class LmCliTests(LmTestCase):
         self.assertEqual(generated, str(self.unlaw / "data" / "generated"))
         self.assertTrue(Path(generated).is_dir())
         self.assertIn("No downloaded model matches", self.ul("lm", "where", "nope-nope").stderr)
+
+    def test_gguf_models_run_on_llama_cpp_and_transcribe_cpp(self) -> None:
+        chat = self.cache / "models--someone--Chat-GGUF" / "snapshots" / "r1"
+        chat.mkdir(parents=True)
+        (chat / "model-Q8_0.gguf").write_bytes(gguf_header("qwen35"))
+        (chat / "model-Q4_K_M.gguf").write_bytes(gguf_header("qwen35"))
+        asr = self.cache / "models--someone--Asr-GGUF" / "snapshots" / "r1"
+        asr.mkdir(parents=True)
+        (asr / "parakeet-Q8_0.gguf").write_bytes(gguf_header("parakeet"))
+        rows = {row["id"]: row for row in json.loads(self.ok("lm", "list", "--json").stdout)}
+        self.assertEqual((rows["someone/Chat-GGUF"]["type"], rows["someone/Chat-GGUF"]["format"]), ("text", "gguf"))
+        self.assertEqual(rows["someone/Asr-GGUF"]["type"], "stt")
+        self.assertEqual(rows["someone/Big-GGUF"]["type"], "gguf", "an unreadable GGUF is listed but not runnable")
+        listing = self.ok("lm", "list").stdout
+        self.assertIn("chat · GGUF (llama.cpp)", listing)
+        self.assertIn("speech to text · GGUF (transcribe.cpp)", listing)
+        info = self.ok("lm", "info", "chat-gguf").stdout
+        self.assertIn("model-Q4_K_M.gguf (qwen35, runs on llama.cpp)", info)
+        self.assertEqual(self.ok("lm", "-m", "chat-gguf", "hi").stdout, "echo: hi\n")
+        audio = self.root / "a.wav"
+        audio.write_bytes(b"RIFF")
+        self.assertEqual(self.ok("lm", "transcribe", "-m", "asr-gguf", str(audio)).stdout, "heard wav\n")
 
     def test_media_commands_write_files_and_never_overwrite(self) -> None:
         generated = self.unlaw / "data" / "generated"
@@ -476,6 +507,17 @@ class LmServerTests(LmTestCase):
         self.assertEqual(json.loads(body)["choices"][0]["message"]["reasoning_content"], "hmm")
         status, body = self.call("/ul/job", {"model": "mlx-community/Eye-4bit", "job": {"op": "chat", "messages": [{"role": "user", "content": "x"}]}})
         self.assertIn('"text": "hmm local"'.replace(" ", ""), body.decode().replace(" ", ""))
+
+    def test_gguf_jobs_carry_the_engine(self) -> None:
+        chat = self.cache / "models--someone--Chat-GGUF" / "snapshots" / "r1"
+        chat.mkdir(parents=True)
+        (chat / "model-Q4_K_M.gguf").write_bytes(gguf_header("llama"))
+        time.sleep(2.1)  # the server rescans its model list every 2 s
+        status, body = self.call("/ul/job", {"model": "someone/Chat-GGUF", "job": {"op": "chat", "messages": [{"role": "user", "content": "x"}]}})
+        done = json.loads(body.decode().strip().splitlines()[-1])
+        spec = done["echo"]["model"]["gguf"]
+        self.assertEqual((spec["runtime"], spec["server"], spec["architecture"]), ("llama", "/fake/llama-server", "llama"))
+        self.assertTrue(spec["file"].endswith("model-Q4_K_M.gguf"))
 
     def test_ollama_endpoints(self) -> None:
         status, body = self.call("/api/tags")

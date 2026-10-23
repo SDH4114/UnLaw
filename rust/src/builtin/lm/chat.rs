@@ -27,6 +27,7 @@ extern "C" fn on_sigint(_: libc::c_int) {
         INTERRUPTED.store(true, Ordering::SeqCst);
     } else {
         // At the prompt Ctrl-C leaves, like any shell tool.
+        super::worker::end_all_workers();
         // SAFETY: write and _exit are async-signal-safe.
         unsafe {
             libc::write(2, b"\n".as_ptr().cast(), 1);

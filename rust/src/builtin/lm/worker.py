@@ -281,6 +281,102 @@ def run_child(ident: int, command: list[str], cancelled: set, env: dict | None =
 # Models
 
 
+class LlamaServer:
+    """A llama.cpp server for one GGUF model, private to this worker: it
+    listens on a random loopback port and dies with the worker."""
+
+    def __init__(self, gguf: dict, kind: str) -> None:
+        import socket
+
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            self.port = probe.getsockname()[1]
+        command = [gguf["server"], "-m", gguf["file"], "--host", "127.0.0.1", "--port", str(self.port), "--jinja",
+                   "-ngl", "999", "-np", "1", "-c", str(int(gguf.get("context") or 16384)), "--no-webui"]
+        if gguf.get("mmproj"):
+            command += ["--mmproj", gguf["mmproj"]]
+        if kind == "embedding":
+            command += ["--embeddings"]
+        print("running: " + " ".join(command), file=sys.stderr)
+        self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=sys.stderr.fileno(), stderr=subprocess.STDOUT)
+        deadline = time.time() + 600
+        while True:
+            code = self.process.poll()
+            if code is not None:
+                raise JobError("load_failed", f"llama.cpp could not load {os.path.basename(gguf['file'])} (exit {code}); see worker.log")
+            try:
+                status, _ = self.call("GET", "/health", None, timeout=2)
+                if status == 200:
+                    break
+            except OSError:
+                pass
+            if time.time() > deadline:
+                self.close()
+                raise JobError("load_failed", "llama.cpp did not get ready in 10 minutes")
+            time.sleep(0.25)
+
+    def call(self, method: str, path: str, body: dict | None, timeout: float = 600):
+        import http.client
+
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
+        data = None if body is None else json.dumps(body).encode()
+        connection.request(method, path, body=data, headers={"Content-Type": "application/json"})
+        response = connection.getresponse()
+        return response.status, json.loads(response.read() or b"null")
+
+    def stream(self, path: str, body: dict):
+        """Yield the JSON objects of a server-sent event stream."""
+        import http.client
+
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=600)
+        connection.request("POST", path, body=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+        response = connection.getresponse()
+        if response.status != 200:
+            detail = response.read().decode("utf-8", "replace")
+            try:
+                detail = json.loads(detail)["error"]["message"]
+            except (ValueError, KeyError, TypeError):
+                pass
+            connection.close()
+            raise JobError("invalid_request" if response.status < 500 else "generation_failed", f"llama.cpp: {detail}")
+        try:
+            for raw in response:
+                line = raw.strip()
+                if not line.startswith(b"data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == b"[DONE]":
+                    break
+                yield json.loads(payload)
+        finally:
+            # Closing early (cancel) makes llama.cpp stop generating.
+            connection.close()
+
+    def close(self) -> None:
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+
+
+def _data_url(source: str, allow_paths: bool) -> str:
+    if source.startswith("data:"):
+        return source
+    if source.startswith(("http://", "https://")):
+        raise JobError("bad_image", "Remote image URLs are not fetched; send a data: URL or base64")
+    if source.startswith("file://"):
+        source = source[7:]
+    if allow_paths and os.path.isfile(source):
+        import mimetypes
+
+        kind = mimetypes.guess_type(source)[0] or "image/png"
+        with open(source, "rb") as handle:
+            return f"data:{kind};base64," + base64.b64encode(handle.read()).decode()
+    return "data:image/png;base64," + source
+
+
 class Loaded:
     def __init__(self, ident: str, kind: str, path: str) -> None:
         self.id = ident
@@ -295,6 +391,19 @@ class Loaded:
         self.cache_tokens: list[int] = []
         # Vision models: mlx-vlm keeps its own prefix cache.
         self.vision_cache = None
+        # GGUF models: a llama.cpp server or a transcribe.cpp model.
+        self.server: LlamaServer | None = None
+
+    def close(self) -> None:
+        if self.server is not None:
+            self.server.close()
+            self.server = None
+        closer = getattr(self.model, "close", None)
+        if callable(closer) and self.kind == "stt":
+            try:
+                closer()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def _group(kind: str) -> str:
@@ -320,7 +429,9 @@ class Engine:
         return [slot.id for slot in self.slots.values()]
 
     def _free(self, group: str) -> None:
-        if self.slots.pop(group, None) is not None:
+        current = self.slots.pop(group, None)
+        if current is not None:
+            current.close()
             import gc
 
             import mlx.core as mx
@@ -355,6 +466,17 @@ class Engine:
 
     def _load(self, loaded: Loaded, spec: dict, trust: bool) -> None:
         kind, path = loaded.kind, loaded.path
+        gguf = spec.get("gguf")
+        if gguf:
+            if gguf.get("runtime") == "transcribe":
+                import transcribe_cpp
+
+                loaded.model = transcribe_cpp.Model(gguf["file"])
+            else:
+                if not gguf.get("server"):
+                    raise JobError("engine_unavailable", "llama.cpp is not installed")
+                loaded.server = LlamaServer(gguf, kind)
+            return
         if kind == "text":
             try:
                 from mlx_lm import load
@@ -402,6 +524,8 @@ class Engine:
         # Other image and video models run in a child process per job.
 
     def unload(self) -> None:
+        for loaded in self.slots.values():
+            loaded.close()
         self.slots.clear()
         import mlx.core as mx
 
@@ -495,6 +619,8 @@ class Engine:
         loaded = self.get(job.get("model") or {})
         if loaded.kind not in CHAT_KINDS:
             raise JobError("unsupported_model", f"{loaded.id} is a {loaded.kind} model; it cannot chat")
+        if loaded.server is not None:
+            return self._generate_gguf(loaded, job)
         params = self._params(loaded, job)
         max_tokens = int(params.get("max_tokens") or 4096)
         stops = StopFilter([s for s in (params.get("stop") or []) if isinstance(s, str)])
@@ -596,6 +722,83 @@ class Engine:
                 "stats": {**stats, "seconds": round(time.time() - started, 2)},
             }
         )
+
+    def _generate_gguf(self, loaded: Loaded, job: dict) -> None:
+        """Chat through llama.cpp: unset sampling uses the GGUF's own defaults,
+        then the user's lm.* settings for the answer length."""
+        ident = job["id"]
+        allow_paths = bool(job.get("local"))
+        explicit = {key: value for key, value in (job.get("params") or {}).items() if value not in (None, [])}
+        body: dict = {"stream": True, "stream_options": {"include_usage": True}, "cache_prompt": True}
+        for key in ("temperature", "top_p", "top_k", "min_p", "presence_penalty", "frequency_penalty", "seed", "stop"):
+            if key in explicit:
+                body[key] = explicit[key]
+        if "repetition_penalty" in explicit:
+            body["repeat_penalty"] = explicit["repetition_penalty"]
+        body["max_tokens"] = int(explicit.get("max_tokens") or (job.get("defaults") or {}).get("max_tokens") or 4096)
+        if job.get("think") is not None:
+            body["chat_template_kwargs"] = {"enable_thinking": bool(job["think"])}
+        if job.get("op") == "complete":
+            path = "/v1/completions"
+            body["prompt"] = str(job.get("prompt", ""))
+        else:
+            path = "/v1/chat/completions"
+            messages = []
+            for message in job.get("messages") or []:
+                converted = {key: value for key, value in message.items() if key != "images"}
+                if message.get("images"):
+                    parts = [{"type": "text", "text": message.get("content") or ""}]
+                    parts += [{"type": "image_url", "image_url": {"url": _data_url(src, allow_paths)}} for src in message["images"]]
+                    converted["content"] = parts
+                for call in converted.get("tool_calls") or []:
+                    arguments = call.get("function", {}).get("arguments")
+                    if isinstance(arguments, (dict, list)):
+                        call["function"]["arguments"] = json.dumps(arguments, ensure_ascii=False)
+                messages.append(converted)
+            body["messages"] = messages
+            if job.get("tools"):
+                body["tools"] = job["tools"]
+        started = time.time()
+        text, reasoning, finish = "", "", "stop"
+        calls: dict[int, dict] = {}
+        usage = {"prompt_tokens": 0, "completion_tokens": 0}
+        stats: dict = {}
+        for event in loaded.server.stream(path, body):
+            if ident in self.cancelled:
+                finish = "cancelled"
+                break
+            if event.get("usage"):
+                usage = {"prompt_tokens": event["usage"].get("prompt_tokens", 0), "completion_tokens": event["usage"].get("completion_tokens", 0)}
+            timings = event.get("timings") or {}
+            if timings:
+                stats = {"prompt_tps": round(float(timings.get("prompt_per_second") or 0), 1),
+                         "generation_tps": round(float(timings.get("predicted_per_second") or 0), 1)}
+            for choice in event.get("choices") or []:
+                delta = choice.get("delta") or {}
+                piece = delta.get("content") if path.endswith("chat/completions") else choice.get("text")
+                if delta.get("reasoning_content"):
+                    reasoning += delta["reasoning_content"]
+                    emit({"id": ident, "event": "token", "channel": "reasoning", "text": delta["reasoning_content"]})
+                if piece:
+                    text += piece
+                    emit({"id": ident, "event": "token", "channel": "content", "text": piece})
+                for call in delta.get("tool_calls") or []:
+                    slot = calls.setdefault(int(call.get("index", 0)), {"id": None, "name": "", "arguments": ""})
+                    slot["id"] = call.get("id") or slot["id"]
+                    function = call.get("function") or {}
+                    slot["name"] += function.get("name") or ""
+                    slot["arguments"] += function.get("arguments") or ""
+                if choice.get("finish_reason"):
+                    finish = choice["finish_reason"]
+        tool_calls = [
+            {"id": call["id"] or f"call_{uuid.uuid4().hex[:24]}", "type": "function", "function": {"name": call["name"], "arguments": call["arguments"]}}
+            for _, call in sorted(calls.items())
+        ]
+        if tool_calls and finish == "stop":
+            finish = "tool_calls"
+        self.cancelled.discard(ident)
+        emit({"id": ident, "event": "done", "model": loaded.id, "text": text, "reasoning": reasoning, "tool_calls": tool_calls,
+              "finish_reason": finish, "usage": usage, "stats": {**stats, "seconds": round(time.time() - started, 2)}})
 
     def _text_stream(self, loaded: Loaded, job: dict, params: dict, max_tokens: int):
         from mlx_lm import stream_generate
@@ -706,6 +909,14 @@ class Engine:
         texts = [texts] if isinstance(texts, str) else list(texts or [])
         if not texts or not all(isinstance(text, str) for text in texts):
             raise JobError("invalid_request", "input must be a string or a list of strings")
+        if loaded.server is not None:
+            status, answer = loaded.server.call("POST", "/v1/embeddings", {"input": texts})
+            if status != 200:
+                raise JobError("generation_failed", f"llama.cpp: {answer}")
+            vectors = [row["embedding"] for row in sorted(answer["data"], key=lambda row: row["index"])]
+            emit({"id": job["id"], "event": "done", "model": loaded.id, "embeddings": vectors,
+                  "usage": {"prompt_tokens": (answer.get("usage") or {}).get("prompt_tokens", 0)}})
+            return
         vectors: list[list[float]] = []
         tokens = 0
         for start in range(0, len(texts), 32):
@@ -732,6 +943,19 @@ class Engine:
         # higher temperatures makes small Whisper models hallucinate.
         whisper_options = {"condition_on_previous_text": False, "temperature": 0.0}
         language = job.get("language") or None
+        if type(loaded.model).__module__.startswith("transcribe_cpp"):
+            import numpy as np
+            from mlx_audio.stt.utils import load_audio
+
+            pcm = np.asarray(load_audio(path, 16000), dtype=np.float32)
+            if pcm.ndim > 1:
+                pcm = pcm.mean(axis=1).astype(np.float32)
+            with loaded.model.session() as session:
+                result = session.run(pcm, language=language)
+            timeline = [{"start": round(s.t0_ms / 1000, 2), "end": round(s.t1_ms / 1000, 2), "text": s.text.strip()} for s in result.segments]
+            emit({"id": job["id"], "event": "done", "model": loaded.id, "text": result.text.strip(), "language": result.language or None,
+                  "segments": timeline, "stats": {"seconds": round(time.time() - started, 2)}})
+            return
         try:
             if loaded.model is None:
                 import mlx_whisper
@@ -1095,7 +1319,11 @@ def serve() -> int:
                 else:
                     jobs.append(job)
                 ready.notify()
-        # The core is gone: exit without waiting for a long generation.
+        # The core is gone: exit without waiting for a long generation, and take
+        # helper processes (llama.cpp, generators) along.
+        for loaded in list(engine.slots.values()):
+            if loaded.server is not None:
+                loaded.server.process.kill()
         os._exit(0)
 
     threading.Thread(target=reader, daemon=True).start()

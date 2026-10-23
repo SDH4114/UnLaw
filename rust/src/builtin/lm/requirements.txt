@@ -12,6 +12,9 @@ huggingface_hub==2.2.0
 hf_xet==1.7.0
 # Pillow 13 imports numbers._IntegralLike, which only Python 3.14 has.
 pillow==12.3.0
+# GGUF speech recognisers (Parakeet, Whisper...): transcribe.cpp with Metal.
+transcribe-cpp==0.4.1
+transcribe-cpp-native==0.4.1
 # mlx-whisper runtime dependencies (it is installed with --no-deps: its torch
 # requirement only serves weight conversion and would add 570 MB).
 numba==0.68.0

@@ -10,7 +10,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
@@ -59,6 +59,52 @@ impl std::fmt::Display for Failure {
 }
 
 type Pending = Arc<Mutex<HashMap<u64, Sender<Value>>>>;
+
+/// Process groups of live workers (each leads its own), readable from a
+/// signal handler: stopping `ul` must not leave llama.cpp or a generator
+/// holding gigabytes of memory.
+static GROUPS: [AtomicI32; 32] = [const { AtomicI32::new(0) }; 32];
+
+fn remember_group(group: i32) {
+    for slot in &GROUPS {
+        if slot.compare_exchange(0, group, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            return;
+        }
+    }
+}
+
+fn end_group(group: i32) {
+    // SAFETY: plain signal to a process group this process created.
+    unsafe { libc::killpg(group, libc::SIGKILL) };
+    for slot in &GROUPS {
+        let _ = slot.compare_exchange(group, 0, Ordering::SeqCst, Ordering::SeqCst);
+    }
+}
+
+/// Kill every worker group; async-signal-safe (atomics and killpg only).
+pub fn end_all_workers() {
+    for slot in &GROUPS {
+        let group = slot.swap(0, Ordering::SeqCst);
+        if group > 0 {
+            // SAFETY: killpg is async-signal-safe.
+            unsafe { libc::killpg(group, libc::SIGKILL) };
+        }
+    }
+}
+
+extern "C" fn on_stop_signal(signal: libc::c_int) {
+    end_all_workers();
+    // SAFETY: _exit is async-signal-safe.
+    unsafe { libc::_exit(128 + signal) };
+}
+
+/// Ctrl-C, `kill` and a closed terminal end the workers with this process.
+pub fn end_workers_on_signals() {
+    for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+        // SAFETY: the handler only uses async-signal-safe calls.
+        unsafe { libc::signal(signal, on_stop_signal as *const () as libc::sighandler_t) };
+    }
+}
 
 struct Running {
     child: Child,
@@ -168,6 +214,11 @@ impl Supervisor {
 
     fn stop_locked(state: &mut State) {
         if let Some(mut running) = state.running.take() {
+            // The worker leads its own process group: this also ends what it
+            // started (llama.cpp servers, image and video generators).
+            if let Ok(group) = i32::try_from(running.child.id()) {
+                end_group(group);
+            }
             let _ = running.child.kill();
             let _ = running.child.wait();
         }
@@ -205,6 +256,8 @@ impl Supervisor {
             .map_err(|error| {
                 Failure::new("engine_unavailable", format!("Cannot start the MLX worker {}: {error}", self.launch.python.display()))
             })?;
+        let group = i32::try_from(child.id()).unwrap_or(0);
+        remember_group(group);
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
@@ -233,6 +286,10 @@ impl Supervisor {
                     }
                 }
                 alive.store(false, Ordering::SeqCst);
+                // A crashed worker must not leave its llama.cpp server behind.
+                if group > 0 {
+                    end_group(group);
+                }
                 loaded.lock().unwrap_or_else(PoisonError::into_inner).clear();
                 let tail = log_tail(&log, offset);
                 let message = if tail.is_empty() {
@@ -256,7 +313,7 @@ impl Supervisor {
         if loaded.contains(&model.id) {
             return Ok(());
         }
-        let needed = model.bytes / 5 * 6;
+        let needed = model.load_bytes() / 5 * 6;
         if needed > self.memory_limit {
             return Err(Failure::new(
                 "out_of_memory",
@@ -419,7 +476,7 @@ while True:
     }
 
     fn model(id: &str, bytes: u64) -> Model {
-        Model { id: id.into(), path: "/x".into(), kind: Kind::Text, bytes, partial: false, root: "/x".into() }
+        Model { id: id.into(), path: "/x".into(), kind: Kind::Text, bytes, partial: false, root: "/x".into(), gguf: None }
     }
 
     #[test]

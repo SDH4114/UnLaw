@@ -204,8 +204,69 @@ pub fn ensure(storage: &Path, config: &Config, engine: Engine) -> Result<Launch,
     Ok(Launch { python: venv(storage, engine).join("bin").join("python"), script, log: log_path(storage, engine) })
 }
 
+/// llama.cpp's official macOS build, pinned and verified: it runs GGUF chat,
+/// vision and embedding models.
+const LLAMA_BUILD: &str = "b11829";
+const LLAMA_SHA256: &str = "e006ea32abe757c10a93718d246796b9bb7eafd309398927ff7b69139e4ba27e";
+
+fn llama_dir(storage: &Path) -> PathBuf {
+    engine_dir(storage).join(format!("llama.cpp-{LLAMA_BUILD}"))
+}
+
+pub fn llama_ready(storage: &Path) -> bool {
+    env::var_os("UNLAW_LM_LLAMA_SERVER").is_some() || llama_dir(storage).join("llama-server").is_file()
+}
+
+/// The `llama-server` binary, downloaded and checked on first use.
+pub fn ensure_llama(storage: &Path) -> Result<PathBuf, String> {
+    if let Some(server) = env::var_os("UNLAW_LM_LLAMA_SERVER").filter(|value| !value.is_empty()) {
+        return Ok(server.into());
+    }
+    let target = llama_dir(storage);
+    let server = target.join("llama-server");
+    if server.is_file() {
+        return Ok(server);
+    }
+    let directory = engine_dir(storage);
+    fs::create_dir_all(&directory).map_err(|error| format!("Cannot create {}: {error}", directory.display()))?;
+    let _lock = Lock::take(&directory.join(".lock")).map_err(|error| format!("Cannot lock the engine: {error}"))?;
+    if server.is_file() {
+        return Ok(server);
+    }
+    let url = format!("https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_BUILD}/llama-{LLAMA_BUILD}-bin-macos-arm64.tar.gz");
+    eprintln!("Setting up llama.cpp {LLAMA_BUILD} for GGUF models (one time, 16 MB) in {}", target.display());
+    let archive = directory.join(format!(".llama-{}.tar.gz", std::process::id()));
+    let staging = directory.join(format!(".llama-{}", std::process::id()));
+    let result = (|| {
+        run(Command::new("curl").args(["-fsSL", "--retry", "3", "-o"]).arg(&archive).arg(&url), "Downloading llama.cpp")?;
+        let bytes = fs::read(&archive).map_err(|error| error.to_string())?;
+        let digest: String = Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect();
+        if digest != LLAMA_SHA256 {
+            return Err(format!("llama.cpp download is corrupt (sha256 {digest}); try again"));
+        }
+        fs::create_dir_all(&staging).map_err(|error| error.to_string())?;
+        run(Command::new("tar").arg("-xzf").arg(&archive).arg("-C").arg(&staging), "Unpacking llama.cpp")?;
+        let unpacked = staging.join(format!("llama-{LLAMA_BUILD}"));
+        if !unpacked.join("llama-server").is_file() {
+            return Err("The llama.cpp archive has no llama-server".into());
+        }
+        if target.exists() {
+            let _ = fs::remove_dir_all(&target);
+        }
+        fs::rename(&unpacked, &target).map_err(|error| error.to_string())
+    })();
+    let _ = fs::remove_file(&archive);
+    let _ = fs::remove_dir_all(&staging);
+    result?;
+    eprintln!("llama.cpp is ready.");
+    Ok(server)
+}
+
 /// Delete a venv so the next use rebuilds it (`ul lm doctor --repair`).
 pub fn reset(storage: &Path, engine: Engine) -> io::Result<()> {
+    if engine == Engine::Core && llama_dir(storage).exists() {
+        fs::remove_dir_all(llama_dir(storage))?;
+    }
     let venv = venv(storage, engine);
     if venv.exists() {
         fs::remove_dir_all(venv)?;
