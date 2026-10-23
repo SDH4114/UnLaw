@@ -28,75 +28,73 @@ use service::{Purpose, Service, Settings};
 use store::{human_size, Kind, Lookup};
 
 pub const HELP: &str = r#"Run local AI models on this Mac with MLX: chat, vision, speech, images, video.
-Usage:
-  ul lm                           Chat with the default model (lm.model)
-  ul lm "<prompt>" [options]      Answer once, streamed; piped stdin is appended
-  ul lm chat [model] [options]    Interactive chat (/help inside for commands)
-  ul lm image "<prompt>" [--size 1024x1024] [--steps N] [--seed N] [-i init.png]
-  ul lm video "<prompt>" [--size 832x480] [--seconds 2 | --frames 49] [-i start.png]
-  ul lm speak "<text>" [--voice NAME] [--speed 1.0] [-l ru] [--play]
-  ul lm music "<style>" [--lyrics TEXT|FILE] [--seconds 30]   (no lyrics: instrumental)
-  ul lm transcribe <audio|video> [-l ru] [--srt | --json]
-  ul lm embed "<text>"...         Embedding vectors as JSON lines
-  ul lm pull <repo|url> [--include <glob>]... [--revision <rev>] [--convert [--bits 4]]
-  ul lm convert <model> [--bits 2|3|4|5|6|8|0]   Make an MLX (quantized) copy
-  ul lm search <query> [--mlx] [--task <tag>] [--limit N]
-  ul lm list [--json] | info <model> | use <model> | rm <model> [--yes]
-  ul lm serve [--port N] [--ollama] [--cors] [--trust-remote-code]
-  ul lm ps                        Models loaded by the running server
-  ul lm import-lmstudio [--dry-run] [--from <dir>]
-  ul lm doctor [--repair]         Check (or rebuild) the engines
-Options:
-  -m, --model <name>    owner/repo, repo name or a unique part of it
-  -i, --image <file>    Image to look at (vision chat) or start from (image, video)
-  -s, --system <text>   System prompt; for speak: voice instructions
-  -t, --temperature <n> 0-2 (default: the model's own recommendation, then lm.temperature)
-  -n, --max-tokens <n>  Answer length limit (default: lm.max_tokens)
-  --think / --no-think  Reasoning on or off for models that support it
-  -o, --output <path>   File or folder for results (never overwritten; default
-                        storage.root/generated/<images|videos|speech|music>)
-  --open, --play        Open the image/video or play the audio when done
-  -q, --quantize 4|8    Quantize an image model while loading (saves memory)
-Model types (ul lm list): text, vision (chat), embedding, stt (speech to text),
-tts (text to speech), music, image, video; gguf and other files are kept but MLX
-cannot run them. Any repo can be downloaded. Images run on mflux (FLUX.1/2/3,
-Qwen-Image, Z-Image, FIBO...; Bonsai Image through PrismML's mflux), video on
-mlx-video (Wan 2.x, LTX-2), speech on mlx-audio and mlx-whisper. Recordings in
-any format (m4a, mov, mp4...) are converted with afconvert.
-API (ul lm serve, 127.0.0.1 only):
-  OpenAI:  /v1/models /v1/chat/completions /v1/completions /v1/embeddings
-           /v1/audio/transcriptions /v1/audio/speech /v1/images/generations
-           /v1/videos (job; GET /v1/videos/{id}[/content])
-  Ollama:  /api/tags chat generate embed show ps version (--ollama adds :11434)
-  Browser pages are refused unless --cors; other hostnames are always refused.
-  With a server running, `ul lm` in the terminal shares its loaded models.
-Models live in the Hugging Face cache (HF_HUB_CACHE, HF_HOME/hub or
-~/.cache/huggingface/hub); converted ones in storage.root/models. A model larger
-than 75% of RAM is refused before loading; chat, helper models, images and
-video run in separate processes, are freed after lm.idle_minutes idle, and a
-crash in one never stops the others. There is no cloud fallback.
-Engines are created on first use in storage.root/runtime/lm-engine with uv
-(Python 3.13, about 1.2 GB; images and Bonsai Image add 1.5 GB each), else
-Python 3.11+. Apple Silicon only. Downloads need network; gated repos need
-`hf auth login`.
-Settings: lm.model (auto), lm.embedding_model, lm.stt_model, lm.tts_model,
-lm.image_model, lm.video_model, lm.music_model (auto), lm.port (1234),
-lm.idle_minutes (10), lm.system_prompt, lm.temperature (0.7), lm.max_tokens (4096).
-Examples:
-  ul lm search qwen3 --mlx
+Usage: ul lm [command] [options]
+
+Talk
+  ul lm                          Chat (Ctrl-D leaves, Ctrl-C stops an answer)
+  ul lm "question"               One answer; piped text is added: ul lm "fix" < a.rs
+  ul lm -i photo.jpg "what is it?"   Ask about an image (vision models)
+
+Create
+  ul lm image "a fox in snow"    Picture   (--size 1024x1024 --seed N -i start.png)
+  ul lm video "waves at sunset"  Video     (--seconds 2 --size 832x480 -i start.png)
+  ul lm speak "Привет!"          Speech    (--voice NAME --speed 1.0 -l ru)
+  ul lm music "lo-fi piano"      Song      (--lyrics TEXT|FILE --seconds 30)
+  ul lm transcribe talk.m4a      Speech to text, any audio/video (--srt --json -l ru)
+  ul lm embed "text"...          Embedding vectors for search (JSON lines)
+  Results go to storage.root/generated/; -o FILE|DIR to choose, --open to view/play.
+
+Models
+  ul lm search qwen --mlx        Find on Hugging Face (--task text-to-image)
+  ul lm pull owner/repo          Download (--include '*Q4*' picks files)
+  ul lm list                     What you have; * = default for its type
+  ul lm use NAME                 Make it the default for its type
+  ul lm info NAME                Details: type, size, path, recommended settings
+  ul lm convert owner/repo       Make an MLX copy, 4-bit by default (--bits 8, 0 = 16-bit)
+  ul lm rm [NAME...]             Delete from this Mac (no name: choose from a list)
+  ul lm clean                    Delete unfinished downloads and unused files
+  ul lm open [NAME|models|generated|engine]   Show the folder (where = print path)
+
+Connect your apps
+  ul lm serve                    API at http://127.0.0.1:1234/v1 (OpenAI / LM Studio
+                                 clients) and /api (Ollama); --ollama also :11434,
+                                 --cors for web pages, --port N
+  ul lm ps                       What the server has loaded
+
+Maintenance
+  ul lm doctor [--repair]        Check or rebuild the engines
+  ul lm import-lmstudio [--dry-run]   Move LM Studio downloads here
+
+Options
+  -m NAME        Model: owner/repo, its name or a unique part (default: per type)
+  -s TEXT        System prompt (speak: voice style)
+  -t 0.7         Temperature (default: the model's own recommendation)
+  -n 4096        Max answer length       --think / --no-think   Reasoning on/off
+  -q 4|8         Load an image model quantized to save memory
+
+Good to know
+  Names: "qwen3-8b" finds mlx-community/Qwen3-8B-4bit. Model types: text, vision,
+  embedding, stt, tts, music, image, video (GGUF downloads, but MLX cannot run it).
+  Models live in the Hugging Face cache (~/.cache/huggingface/hub), shared with hf.
+  Too big for memory (over 75% of RAM) is refused before loading; idle models are
+  freed after lm.idle_minutes. Everything stays on this Mac: no cloud fallback.
+  Needs Apple Silicon and uv (or Python 3.11+); engines install themselves on first
+  use (about 1.2 GB, images +1.5 GB). Downloads need internet; gated repos need
+  `hf auth login`.
+  Settings: lm.model, lm.image_model, lm.tts_model, lm.stt_model, lm.video_model,
+  lm.music_model, lm.embedding_model (auto), lm.port (1234), lm.idle_minutes (10),
+  lm.system_prompt, lm.temperature (0.7), lm.max_tokens (4096).
+
+Examples
   ul lm pull prism-ml/Ternary-Bonsai-2-9B-mlx-2bit && ul lm use Bonsai-2-9B
-  ul lm "explain this error" < build.log
-  ul lm -i photo.jpg "what is in the picture?"
-  ul lm image "a bonsai tree in morning light" --open
-  ul lm speak "Привет!" -m Qwen3-TTS --play
-  ul lm transcribe voice.m4a --srt > voice.srt
-  ul lm convert Qwen/Qwen3-4B --bits 4
-  ul lm serve --ollama
+  ul lm image "bonsai tree, morning light" --open
+  ul lm speak "Привет!" -m Qwen3-TTS --open
+  ul lm transcribe meeting.mov --srt > meeting.srt
 "#;
 
-const SUBCOMMANDS: [&str; 20] = [
-    "chat", "pull", "search", "list", "ls", "info", "use", "rm", "serve", "ps", "embed", "transcribe", "import-lmstudio", "doctor", "image",
-    "video", "speak", "music", "convert", "say",
+const SUBCOMMANDS: [&str; 24] = [
+    "chat", "pull", "search", "list", "ls", "info", "use", "rm", "delete", "serve", "ps", "embed", "transcribe", "import-lmstudio", "doctor",
+    "image", "video", "speak", "music", "convert", "say", "open", "clean", "where",
 ];
 
 fn fail(message: impl std::fmt::Display) -> i32 {
@@ -292,30 +290,221 @@ fn confirm(question: &str) -> bool {
     io::stdin().read_line(&mut answer).is_ok() && matches!(answer.trim(), "y" | "Y" | "yes")
 }
 
+/// Ask for numbers like "1 3" or "2,4" from a numbered list.
+fn pick_numbers(count: usize) -> Vec<usize> {
+    eprint!("Numbers (e.g. 1 3), empty to cancel: ");
+    let _ = io::stderr().flush();
+    let mut answer = String::new();
+    if io::stdin().read_line(&mut answer).is_err() {
+        return Vec::new();
+    }
+    let mut picked: Vec<usize> = answer
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter_map(|word| word.parse::<usize>().ok())
+        .filter(|n| (1..=count).contains(n))
+        .map(|n| n - 1)
+        .collect();
+    picked.dedup();
+    picked
+}
+
+/// `ul lm rm`: delete models from this Mac for good, with the shared files
+/// only they used; defaults that named them go back to auto.
 fn remove(config: &Config, args: &[String]) -> i32 {
     let yes = args.iter().any(|arg| arg == "--yes" || arg == "-y");
     let names: Vec<&String> = args.iter().filter(|arg| !arg.starts_with('-')).collect();
-    let [name] = names.as_slice() else { return usage("ul lm rm <model> [--yes]") };
     let service = Service::new(config, false);
-    let model = match find_model(&service, name) {
-        Ok(model) => model,
-        Err(message) => return fail(message),
-    };
+    let all = service.models();
+    let mut chosen: Vec<store::Model> = Vec::new();
+    if names.is_empty() {
+        if !io::stdin().is_terminal() || all.is_empty() {
+            return usage("ul lm rm <model>... [--yes]   (without names: choose from a list)");
+        }
+        for (index, model) in all.iter().enumerate() {
+            eprintln!("  {:>2}) {:9} {:>9}  {}", index + 1, model.kind.name(), human_size(model.bytes), model.id);
+        }
+        chosen = pick_numbers(all.len()).into_iter().map(|index| all[index].clone()).collect();
+        if chosen.is_empty() {
+            println!("Nothing deleted.");
+            return 0;
+        }
+    }
+    for name in names {
+        match find_model(&service, name) {
+            Ok(model) if !chosen.iter().any(|m| m.id == model.id) => chosen.push(model),
+            Ok(_) => {}
+            Err(message) => return fail(message),
+        }
+    }
+    let total: u64 = chosen.iter().map(|m| m.bytes).sum();
     if !yes {
         if !io::stdin().is_terminal() {
-            return fail(format!("Pass --yes to delete {} without a prompt", model.id));
+            return fail("Pass --yes to delete without a prompt");
         }
-        if !confirm(&format!("Delete {} ({}) from {}?", model.id, human_size(model.bytes), model.root.display())) {
+        for model in &chosen {
+            eprintln!("  {}  {}  {}", human_size(model.bytes), model.id, model.root.display());
+        }
+        if !confirm(&format!("Delete {} model(s), {} in total, from this Mac?", chosen.len(), human_size(total))) {
             println!("Kept.");
             return 1;
         }
     }
-    match store::remove(&model) {
-        Ok(freed) => {
-            println!("Deleted {}; {} freed.", model.id, human_size(freed));
-            0
+    let mut freed = 0;
+    let mut failed = false;
+    let hub: Vec<&store::Model> = chosen.iter().filter(|m| !m.id.starts_with("local/")).collect();
+    let mut hub_freed: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    if !hub.is_empty() {
+        // huggingface_hub knows which shared files other repos (and datasets) still use.
+        let launch = match engine_launch(config, Engine::Core) {
+            Ok(launch) => launch,
+            Err(code) => return code,
+        };
+        let repos: Vec<&str> = hub.iter().map(|m| m.id.as_str()).collect();
+        match engine::hub(&launch, "delete", &json!({"cache": store::hub_cache(), "repos": repos})) {
+            Ok(report) => {
+                for row in report.as_array().into_iter().flatten() {
+                    hub_freed.insert(row["repo"].as_str().unwrap_or("").to_string(), row["freed"].as_u64().unwrap_or(0));
+                }
+            }
+            Err(code) => return code,
         }
-        Err(error) => fail(format!("Cannot delete {}: {error}", model.root.display())),
+    }
+    for model in &chosen {
+        let result = if model.id.starts_with("local/") {
+            store::remove_local(model)
+        } else if model.root.exists() {
+            Err(io::Error::other("huggingface_hub left it in place"))
+        } else {
+            Ok(hub_freed.get(&model.id).copied().unwrap_or(0))
+        };
+        match result {
+            Ok(bytes) => {
+                freed += bytes;
+                println!("Deleted {} ({} freed)", model.id, human_size(bytes));
+                for key in std::iter::once("lm.model").chain(Purpose::ALL.iter().filter_map(|p| p.setting())) {
+                    let configured = config.string(key);
+                    let named = !configured.is_empty() && configured != "auto";
+                    if named && matches!(store::find(std::slice::from_ref(model), &configured, |_| true), Lookup::Found(_)) {
+                        let _ = crate::config::set(key, toml_edit::Item::Value("auto".into()));
+                        println!("  {key} was this model; now auto");
+                    }
+                }
+            }
+            Err(error) => {
+                failed = true;
+                eprintln!("unlaw lm: cannot delete {}: {error}", model.root.display());
+            }
+        }
+    }
+    if chosen.len() > 1 {
+        println!("{} freed in total.", human_size(freed));
+    }
+    i32::from(failed)
+}
+
+/// `ul lm clean`: unfinished downloads, files no model or dataset uses any
+/// more, the download chunk cache and temporary files; never a working model.
+fn clean(config: &Config, args: &[String]) -> i32 {
+    let yes = match args {
+        [] => false,
+        [flag] if flag == "--yes" || flag == "-y" => true,
+        _ => return usage("ul lm clean [--yes]"),
+    };
+    let storage = config.storage_root();
+    let cache = store::hub_cache();
+    let launch = match engine_launch(config, Engine::Core) {
+        Ok(launch) => launch,
+        Err(code) => return code,
+    };
+    // `hf cache prune` logic, first as a dry run to show what would go.
+    let prune = |dry_run: bool| engine::hub(&launch, "prune", &json!({"cache": cache, "dry_run": dry_run}));
+    let summary = if cache.exists() {
+        match prune(true) {
+            Ok(summary) => summary,
+            Err(code) => return code,
+        }
+    } else {
+        json!({})
+    };
+    let count = |key: &str| summary[key].as_u64().unwrap_or(0);
+    let mut rows: Vec<(String, u64)> = Vec::new();
+    for (key, bytes, label) in [
+        ("incomplete", "incomplete_bytes", "unfinished downloads"),
+        ("shared", "shared_bytes", "files no model uses any more"),
+        ("revisions", "revision_bytes", "old versions of updated models"),
+    ] {
+        if count(key) > 0 {
+            rows.push((format!("{label} ({})", count(key)), count(bytes)));
+        }
+    }
+    let mut folders: Vec<PathBuf> = Vec::new();
+    for (path, label) in [
+        (store::xet_cache(), "download chunk cache (hf_xet)"),
+        (engine::engine_dir(&storage).join("uploads"), "temporary uploads"),
+        (std::env::temp_dir().join("ul-lm-links"), "name links"),
+    ] {
+        if path.exists() {
+            rows.push((label.to_string(), store::disk_size(&path)));
+            folders.push(path);
+        }
+    }
+    if rows.is_empty() {
+        println!("Nothing to clean.");
+        return 0;
+    }
+    let total: u64 = rows.iter().map(|(_, bytes)| bytes).sum();
+    for (label, bytes) in &rows {
+        println!("  {:>9}  {label}", human_size(*bytes));
+    }
+    if !yes && !(io::stdin().is_terminal() && confirm(&format!("Delete these ({})? Models stay.", human_size(total)))) {
+        println!("Kept. (ul lm clean --yes deletes without asking)");
+        return 1;
+    }
+    if count("incomplete") + count("shared") + count("revisions") > 0 {
+        if let Err(code) = prune(false) {
+            return code;
+        }
+    }
+    for path in folders {
+        if let Err(error) = std::fs::remove_dir_all(&path) {
+            eprintln!("unlaw lm: cannot delete {}: {error}", path.display());
+        }
+    }
+    println!("{} freed.", human_size(total));
+    0
+}
+
+/// `ul lm open [model|models|generated|engine|logs] [--print]`: show a
+/// folder in Finder (or print its path for scripts).
+fn open(config: &Config, args: &[String]) -> i32 {
+    let print = args.iter().any(|arg| arg == "--print" || arg == "-p");
+    let names: Vec<&String> = args.iter().filter(|arg| !arg.starts_with('-')).collect();
+    let storage = config.storage_root();
+    let path = match names.as_slice() {
+        [] | [_] if names.first().is_none_or(|name| ["models", "cache"].contains(&name.as_str())) => store::hub_cache(),
+        [name] if name.as_str() == "generated" => storage.join("generated"),
+        [name] if name.as_str() == "converted" => store::local_models(&storage),
+        [name] if ["engine", "engines"].contains(&name.as_str()) => engine::engine_dir(&storage),
+        [name] if ["logs", "log"].contains(&name.as_str()) => engine::engine_dir(&storage),
+        [name] => match find_model(&Service::new(config, false), name) {
+            // The snapshot holds the model's files under their real names.
+            Ok(model) => model.path,
+            Err(message) => return fail(message),
+        },
+        _ => return usage("ul lm open [model | models | converted | generated | engine | logs] [--print]"),
+    };
+    if !path.exists() {
+        if let Err(error) = std::fs::create_dir_all(&path) {
+            return fail(format!("{} does not exist: {error}", path.display()));
+        }
+    }
+    println!("{}", path.display());
+    if print {
+        return 0;
+    }
+    match std::process::Command::new("open").arg(&path).status() {
+        Ok(status) if status.success() => 0,
+        _ => fail(format!("Cannot open {}", path.display())),
     }
 }
 
@@ -760,7 +949,10 @@ pub fn run(args: &[String], config: &Config) -> i32 {
         "list" | "ls" => return list(config, rest),
         "info" => return info(config, rest),
         "use" => return use_model(config, rest),
-        "rm" => return remove(config, rest),
+        "rm" | "delete" => return remove(config, rest),
+        "clean" => return clean(config, rest),
+        "open" => return open(config, rest),
+        "where" => return open(config, &[rest, &["--print".to_string()]].concat()),
         "pull" => return pull(config, rest),
         "convert" => return convert(config, rest),
         "search" => return search(config, rest),

@@ -39,6 +39,21 @@ if sys.argv[1] == "hub":
         open(os.path.join(root, "refs", "main"), "w").write("rev1")
         open(os.path.join(snap, "model-Q4.gguf"), "w").write("g")
         emit({"result": {"path": snap}})
+    elif action == "delete":
+        import shutil
+        report = []
+        for repo in args["repos"]:
+            root = os.path.join(args["cache"], "models--" + repo.replace("/", "--"))
+            report.append({"repo": repo, "freed": 7, "found": os.path.isdir(root)})
+            shutil.rmtree(root, ignore_errors=True)
+        emit({"result": report})
+    elif action == "prune":
+        import glob
+        unfinished = glob.glob(os.path.join(args["cache"], "models--*", "blobs", "*.incomplete"))
+        if not args["dry_run"]:
+            for path in unfinished:
+                os.unlink(path)
+        emit({"result": {"incomplete": len(unfinished), "incomplete_bytes": 5 * len(unfinished), "shared": 0, "shared_bytes": 0, "revisions": 0}})
     sys.exit(0)
 cancelled = set(); jobs = []; cv = threading.Condition()
 def reader():
@@ -254,6 +269,39 @@ class LmCliTests(LmTestCase):
         self.assertEqual(failed.returncode, 4)
         self.assertIn("was not found", failed.stderr)
         self.assertEqual(self.ul("lm", "pull", "just-a-name").returncode, 2)
+
+    def test_rm_clean_open_and_where(self) -> None:
+        self.ok("lm", "use", "eye")
+        removed = self.ok("lm", "rm", "eye", "big-gguf", "--yes").stdout
+        self.assertIn("Deleted mlx-community/Eye-4bit", removed)
+        self.assertIn("lm.model was this model; now auto", removed)
+        self.assertIn("freed in total", removed)
+        self.assertEqual(self.ok("config", "get", "lm.model").stdout, "auto\n")
+        self.assertFalse((self.cache / "models--someone--Big-GGUF").exists())
+        self.assertIn("without names: choose from a list", self.ul("lm", "rm").stderr)
+        self.assertIn("No downloaded model matches", self.ul("lm", "rm", "nothing-at-all", "--yes").stderr)
+
+        # Leftovers go through huggingface_hub's prune; the chunk cache is ours.
+        (self.cache / "models--mlx-community--Tiny-4bit" / "blobs" / "y.incomplete").write_text("12345")
+        xet = self.root / "xet"
+        (xet / "chunks").mkdir(parents=True)
+        (xet / "chunks" / "c").write_text("x" * 10)
+        env = {"HF_XET_CACHE": str(xet)}
+        self.assertEqual(self.ul("lm", "clean", env=env).returncode, 1, "asks first, so stdin-less runs keep everything")
+        self.assertTrue(xet.exists())
+        cleaned = self.ok("lm", "clean", "--yes", env=env).stdout
+        self.assertIn("unfinished downloads (1)", cleaned)
+        self.assertIn("download chunk cache", cleaned)
+        self.assertFalse(xet.exists() or (self.cache / "models--mlx-community--Tiny-4bit" / "blobs" / "y.incomplete").exists())
+        self.assertTrue((self.cache / "models--mlx-community--Tiny-4bit").exists(), "working models stay")
+        self.assertEqual(self.ok("lm", "clean", "--yes", env=env).stdout, "Nothing to clean.\n")
+
+        self.assertEqual(self.ok("lm", "where").stdout.strip(), str(self.cache))
+        self.assertEqual(self.ok("lm", "where", "tiny").stdout.strip(), str(self.text))
+        generated = self.ok("lm", "open", "generated", "--print").stdout.strip()
+        self.assertEqual(generated, str(self.unlaw / "data" / "generated"))
+        self.assertTrue(Path(generated).is_dir())
+        self.assertIn("No downloaded model matches", self.ul("lm", "where", "nope-nope").stderr)
 
     def test_media_commands_write_files_and_never_overwrite(self) -> None:
         generated = self.unlaw / "data" / "generated"

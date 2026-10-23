@@ -2,7 +2,6 @@
 //! `transformers` and every other tool) plus models converted by `ul lm
 //! convert`, which live in `storage.root/models` because they are not repos.
 
-use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io;
@@ -374,50 +373,32 @@ pub fn find(models: &[Model], query: &str, fits: impl Fn(&Model) -> bool) -> Loo
     Lookup::Missing(models.iter().filter(|m| close.contains(&short(m))).map(|m| m.id.clone()).collect())
 }
 
-/// Files a repo's `blobs/` entries point at in huggingface_hub's shared
-/// store (`hub/blobs/xx/<hash>`, hub 1.0+); older caches keep real files there.
-fn shared_blobs(root: &Path, store: &Path) -> HashSet<PathBuf> {
-    fs::read_dir(root.join("blobs"))
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter_map(|entry| fs::canonicalize(entry.path()).ok())
-                .filter(|target| target.starts_with(store))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Delete a model and, in the shared store, the files no other model uses,
-/// so the disk space really comes back. Returns the bytes freed.
-pub fn remove(model: &Model) -> io::Result<u64> {
-    remove_in(model, &hub_cache())
-}
-
-pub fn remove_in(model: &Model, cache: &Path) -> io::Result<u64> {
-    let store = fs::canonicalize(cache.join("blobs")).unwrap_or_else(|_| cache.join("blobs"));
-    let candidates = shared_blobs(&model.root, &store);
+/// Delete a converted model (its own folder; hub models go through
+/// huggingface_hub, which tracks blobs shared with other repos).
+pub fn remove_local(model: &Model) -> io::Result<u64> {
+    let bytes = disk_size(&model.root);
     fs::remove_dir_all(&model.root)?;
-    if candidates.is_empty() {
-        return Ok(model.bytes);
+    Ok(bytes)
+}
+
+/// Bytes a folder really takes (symlinks are not followed).
+pub fn disk_size(path: &Path) -> u64 {
+    let Ok(meta) = fs::symlink_metadata(path) else { return 0 };
+    if !meta.is_dir() {
+        return if meta.file_type().is_symlink() { 0 } else { meta.len() };
     }
-    let mut used = HashSet::new();
-    if let Ok(entries) = fs::read_dir(cache) {
-        for entry in entries.flatten().filter(|entry| entry.file_name().to_string_lossy().starts_with("models--")) {
-            used.extend(shared_blobs(&entry.path(), &store));
-        }
+    fs::read_dir(path).map(|entries| entries.flatten().map(|entry| disk_size(&entry.path())).sum()).unwrap_or(0)
+}
+
+/// huggingface_hub's download chunk cache (hf_xet); safe to delete.
+pub fn xet_cache() -> PathBuf {
+    if let Some(cache) = env::var_os("HF_XET_CACHE").filter(|value| !value.is_empty()) {
+        return PathBuf::from(cache);
     }
-    let mut freed = 0;
-    for blob in candidates.difference(&used) {
-        let length = fs::metadata(blob).map(|meta| meta.len()).unwrap_or(0);
-        if fs::remove_file(blob).is_ok() {
-            freed += length;
-            if let Some(parent) = blob.parent() {
-                let _ = fs::remove_dir(parent);
-            }
-        }
+    if let Some(hf_home) = env::var_os("HF_HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(hf_home).join("xet");
     }
-    Ok(freed)
+    home().join(".cache").join("huggingface").join("xet")
 }
 
 pub fn human_size(bytes: u64) -> String {
@@ -543,35 +524,8 @@ pub mod tests {
         assert!(matches!(find(&models, "qwen3-0.6b-8bit", |_| true), Lookup::Missing(close) if close.contains(&"mlx-community/Qwen3-0.6B-4bit".to_string())));
         assert!(matches!(find(&models, "zzz", |_| true), Lookup::Missing(close) if close.is_empty()));
 
-        remove_in(&models[1], &cache).unwrap();
-        assert!(!cache.join(cache_folder("mlx-community/Qwen3-0.6B-4bit")).exists());
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn removing_a_model_frees_shared_blobs_nobody_else_uses() {
-        let dir = scratch("shared");
-        let cache = dir.join("hub");
-        // huggingface_hub 1.0+: repo blobs are links into hub/blobs/<xx>/<hash>.
-        let store = cache.join("blobs").join("ab");
-        fs::create_dir_all(&store).unwrap();
-        fs::write(store.join("own"), "0123456789").unwrap();
-        fs::write(store.join("shared"), "xx").unwrap();
-        for (id, blobs) in [("a/one", vec!["own", "shared"]), ("b/two", vec!["shared"])] {
-            let root = cache.join(cache_folder(id));
-            let snapshot = root.join("snapshots").join("r");
-            fs::create_dir_all(root.join("blobs")).unwrap();
-            fs::create_dir_all(&snapshot).unwrap();
-            for blob in blobs {
-                symlink(format!("../../blobs/ab/{blob}"), root.join("blobs").join(blob)).unwrap();
-                symlink(format!("../../blobs/{blob}"), snapshot.join(format!("{blob}.safetensors"))).unwrap();
-            }
-        }
-        let models = scan_in(&cache, &dir.join("storage"));
-        assert_eq!(models[0].bytes, 12);
-        assert_eq!(remove_in(&models[0], &cache).unwrap(), 10);
-        assert!(!store.join("own").exists());
-        assert!(store.join("shared").exists(), "still used by b/two");
+        assert_eq!(remove_local(&models[0]).unwrap(), 0);
+        assert!(!storage.join("models").join("mine-mlx-4bit").exists());
         fs::remove_dir_all(dir).unwrap();
     }
 

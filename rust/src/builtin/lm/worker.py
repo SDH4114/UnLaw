@@ -1384,6 +1384,63 @@ def hub_import(source_root: str, cache: str, local_root: str, dry_run: bool) -> 
     return 0
 
 
+def hub_delete(cache: str, repos: list[str]) -> int:
+    """Delete whole model repos the way `hf cache rm` does: huggingface_hub
+    knows which shared blobs other repos (models or datasets) still use."""
+    from huggingface_hub import scan_cache_dir
+
+    info = scan_cache_dir(cache)
+    report = []
+    for repo_id in repos:
+        repo = next((r for r in info.repos if r.repo_id == repo_id and r.repo_type == "model"), None)
+        if repo is None:
+            report.append({"repo": repo_id, "freed": 0, "found": False})
+            continue
+        strategy = info.delete_revisions(*[revision.commit_hash for revision in repo.revisions])
+        freed = strategy.expected_freed_size
+        strategy.execute()
+        # A repo with no revisions left (or only refs) is removed entirely.
+        if repo.repo_path.exists():
+            import shutil
+
+            shutil.rmtree(repo.repo_path, ignore_errors=True)
+        report.append({"repo": repo_id, "freed": freed, "found": True})
+    _result(report)
+    return 0
+
+
+def hub_prune(cache: str, dry_run: bool) -> int:
+    """`hf cache prune`: detached revisions, unfinished downloads and shared
+    blobs nothing references any more. Unclear bookkeeping is never deleted."""
+    from huggingface_hub import scan_cache_dir
+    from huggingface_hub.utils import _shared_blobs
+
+    info = scan_cache_dir(cache)
+    revisions = sorted(r.commit_hash for repo in info.repos for r in repo.revisions if len(r.refs) == 0)
+    strategy = info.delete_revisions(*revisions)
+    incomplete = list(info.incomplete_files)
+    unreferenced = _shared_blobs.unreferenced_shared_blobs(info.cache_dir) if info.cache_dir is not None else {}
+    summary = {
+        "revisions": len(revisions),
+        "revision_bytes": strategy.expected_freed_size,
+        "incomplete": len(incomplete),
+        "incomplete_bytes": info.incomplete_size_on_disk,
+        "shared": len(unreferenced),
+        "shared_bytes": sum(unreferenced.values()),
+    }
+    if not dry_run:
+        strategy.execute()
+        for item in incomplete:
+            try:
+                item.file_path.unlink()
+            except OSError:
+                pass
+        for store_path in unreferenced:
+            _shared_blobs.sweep_shared_blob(store_path, cache_dir=info.cache_dir)
+    _result(summary)
+    return 0
+
+
 def hub_convert(source: str, ident: str, output: str, bits: int, kind: str, trust: bool) -> int:
     """Convert a downloaded model to MLX, quantized to `bits` (0 keeps 16-bit)."""
     if os.path.exists(output):
@@ -1430,6 +1487,10 @@ def main(argv: list[str]) -> int:
                 return hub_pull(args["repo"], list(args.get("include") or []), args.get("revision"), args["cache"])
             if action == "import":
                 return hub_import(args["source"], args["cache"], args["local"], bool(args.get("dry_run")))
+            if action == "delete":
+                return hub_delete(args["cache"], list(args["repos"]))
+            if action == "prune":
+                return hub_prune(args["cache"], bool(args.get("dry_run")))
             if action == "convert":
                 return hub_convert(args["source"], args["id"], args["output"], int(args.get("bits", 4)), args.get("kind", "text"),
                                    bool(args.get("trust_remote_code")))

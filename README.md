@@ -597,7 +597,11 @@ ul lm music "lo-fi piano" --lyrics song.txt    # музыка (MiniMax Music 3)
 ul lm transcribe voice.m4a --srt               # речь в текст; любой формат, даже .mov
 ul lm embed "текст для поиска"                 # эмбеддинги (JSON)
 ul lm convert Qwen/Qwen3-4B --bits 4           # обычная модель → MLX 4-bit
-ul lm list | info <model> | rm <model>
+ul lm list | info <model> | use <model>
+ul lm rm [<model>...]                          # стереть модели с Mac (без имени — выбор из списка)
+ul lm clean                                    # недокачанное, ничейные файлы, кеш загрузок
+ul lm open [<model>|models|generated|converted|engine|logs]   # показать папку в Finder
+ul lm where <...>                              # то же, но напечатать путь
 ul lm serve [--ollama] [--cors]                # API на 127.0.0.1:1234 до Ctrl-C
 ul lm import-lmstudio [--dry-run]              # перенести загрузки LM Studio
 ul lm doctor [--repair]
@@ -629,7 +633,7 @@ DNS rebinding), не отдаёт CORS без `--cors` и не читает ло
 
 Модели хранятся в стандартном кеше Hugging Face (`HF_HUB_CACHE`,
 `HF_HOME/hub` или `~/.cache/huggingface/hub`) и видны `hf`, transformers и
-другим инструментам; `ul lm rm` освобождает и общие файлы хранилища. Тип модели
+другим инструментам. `ul lm rm` и `ul lm clean` удаляют через сам huggingface_hub (как `hf cache rm` / `prune`), поэтому файлы, общие с другими моделями и датасетами, не пострадают; модель, выбранная по умолчанию, при удалении сбрасывается на auto. Тип модели
 определяется по карточке и файлам: text, vision, embedding, stt, tts, music,
 image, video. GGUF скачивается, но MLX его не запускает — `ul lm` подсказывает
 MLX-версию; в репозитории с десятком GGUF-файлов `pull` попросит выбрать один.
