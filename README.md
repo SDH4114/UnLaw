@@ -1,54 +1,54 @@
 # Unlaw
 
-Unlaw — быстрая персональная CLI-утилита для macOS. Её главный механизм остаётся
-простым: каталог `commands/<name>/main.py` автоматически становится командой
-`ul <name>`.
+Unlaw is a fast personal CLI utility for macOS. Its core mechanism stays simple:
+a `commands/<name>/main.py` folder automatically becomes the `ul <name>` command.
 
-## Установка и обновление
+## Install and update
 
-Установка последней версии из GitHub одной командой:
+Install the latest version from GitHub with one command:
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/SDH4114/UnLaw/main/install.sh | sh
 ```
 
-Ядро Unlaw (dispatcher, конфигурация, системные команды, completion, doctor)
-написано на Rust и собирается через `cargo`; установщик поставит Rust через
-rustup, если его нет. Команды в `commands/` остаются обычными Python-файлами,
-поэтому нужен Python 3.11+ (`brew install python`). Бинарники `ul` и `unlaw`
-ставятся в `~/.local/bin`; старая uv-версия Unlaw удаляется автоматически.
+The Unlaw core (dispatcher, configuration, system commands, completion, doctor)
+is written in Rust and built with `cargo`; the installer sets up Rust through
+rustup if it is missing. Commands in `commands/` remain plain Python files, so
+Python 3.11+ is required (`brew install python`). The `ul` and `unlaw` binaries
+are installed into `~/.local/bin`; the old uv-based Unlaw is removed automatically.
 
-Обновление до последней версии с GitHub:
+Update to the latest version from GitHub:
 
 ```bash
-ul update --check          # сравнить версию и коммит с GitHub, ничего не ставя
-ul update                  # переустановить из main (cargo install --locked --force)
-ul update --tag v2.2.0     # конкретный релиз; --branch <name> — ветка
+ul update --check          # compare version and commit with GitHub without installing
+ul update                  # reinstall from main (cargo install --locked --force)
+ul update --tag v2.2.0     # a specific release; --branch <name> for a branch
 ```
 
-`ul --version` показывает версию и коммит сборки (`Unlaw 3.0.0 (dd061d1)`), поэтому
-обновление видно даже без смены номера версии. `ul update` ставит новый бинарник туда же, где лежит текущий `ul` (по умолчанию
-`~/.local/bin`). Конфигурация, данные и изменённые вручную команды не трогаются;
-неизменённые стандартные команды обновятся при следующем запуске. Нужны `cargo`
-и Python 3.11+, для `--check` — `curl`. `UNLAW_UPDATE_REPOSITORY` задаёт форк.
+`ul --version` shows the version and build commit (`Unlaw 3.0.0 (dd061d1)`), so an
+update is visible even when the version number doesn't change. `ul update` installs
+the new binary where the current `ul` lives (`~/.local/bin` by default).
+Configuration, data and manually edited commands are left untouched; unmodified
+standard commands are updated on the next run. Requires `cargo` and Python 3.11+;
+`--check` also needs `curl`. `UNLAW_UPDATE_REPOSITORY` points to a fork.
 
-Из локального checkout (установка и обновление — одна и та же команда):
+From a local checkout (install and update are the same command):
 
 ```bash
 cargo install --path . --root ~/.local --force
 ```
 
-`unlaw` и `ul` полностью эквивалентны. Сборка из исходников и первый запуск
-автоматически создают пользовательскую структуру:
+`unlaw` and `ul` are fully equivalent. Building from source and the first run
+automatically create the user structure:
 
 ```text
 ~/.config/unlaw/
 ├── config.toml
-├── commands/                   # все несистемные команды
+├── commands/                   # all non-system commands
 │   ├── game/main.py
 │   ├── todo/main.py
 │   └── ...
-├── data/                       # единое хранилище по умолчанию
+├── data/                       # single default storage
 │   ├── captures/
 │   ├── runtime/
 │   └── telegram/
@@ -57,41 +57,41 @@ cargo install --path . --root ~/.local --force
     ├── python/
     ├── rust/
     ├── cpp/
-    └── projects/                  # сохранённые пути и настройки запуска
+    └── projects/                  # saved paths and launch settings
 ```
 
-Существующие конфиги, команды и шаблоны не перезаписываются. Старые официальные
-import-обёртки автоматически заменяются полноценным кодом, а вручную изменённые
-команды сохраняются. К системным относятся управление конфигурацией, диагностикой,
-списками, project templates и shell-интеграцией; остальные команды создаются в
-`commands/<name>/main.py` и доступны для редактирования. Каждый такой файл содержит
-только код своей команды и минимальные необходимые ей настройки — код других
-команд в него не подмешивается.
+Existing configs, commands and templates are never overwritten. Old official
+import wrappers are automatically replaced with full code, while manually edited
+commands are kept. System commands cover configuration, diagnostics, listings,
+project templates and shell integration; all other commands are created in
+`commands/<name>/main.py` and are yours to edit. Each such file contains only its
+own command's code and the minimal settings it needs — code from other commands is
+never mixed in.
 
-## Основные команды
+## Main commands
 
 ```bash
-ul                              # помощь и инициализация
-ul init                         # показать пользовательские пути
-ul commands                     # все команды и алиасы
-ul commands --verbose           # источники и реальные пути
-ul commands --describe          # однострочные описания (без запуска команд)
-ul commands --json              # машинный JSON
-ul templates                    # сохранённые project templates
-ul list                         # сначала templates, затем commands
-ul which git                    # откуда взята команда
-ul create command anime         # новая команда
-ul create template hearme       # сохранить текущий проект
-ul venv                         # создать/активировать .venv в текущем shell
-ul doctor --verbose             # полная диагностика
-ul doctor --fix                 # безопасные автоматические исправления
-ul doctor --json                # диагностика для скриптов
+ul                              # help and initialization
+ul init                         # show user paths
+ul commands                     # all commands and aliases
+ul commands --verbose           # sources and real paths
+ul commands --describe          # one-line descriptions (without running commands)
+ul commands --json              # machine-readable JSON
+ul templates                    # saved project templates
+ul list                         # templates first, then commands
+ul which git                    # where a command comes from
+ul create command anime         # new command
+ul create template hearme       # save the current project
+ul venv                         # create/activate .venv in the current shell
+ul doctor --verbose             # full diagnostics
+ul doctor --fix                 # safe automatic fixes
+ul doctor --json                # diagnostics for scripts
 ul completion zsh               # zsh completion
 ul version
-ul update --check              # есть ли новая версия на GitHub
+ul update --check              # is there a new version on GitHub
 ```
 
-Глобальные опции:
+Global options:
 
 ```bash
 ul --dry-run <command> ...
@@ -100,21 +100,21 @@ ul --no-color <command> ...
 ul --version
 ```
 
-Неизвестная команда получает подсказку по ближайшему имени. `--dry-run` показывает
-точный процесс команды (интерпретатор и путь), не запуская её.
+An unknown command gets a suggestion with the closest name. `--dry-run` shows the
+exact process for a command (interpreter and path) without running it.
 
-## Сохранённые проекты
+## Saved projects
 
-Project template сохраняет существующую папку и настройки её запуска. Файлы
-проекта не копируются.
+A project template saves an existing folder and its launch settings. Project
+files are not copied.
 
 ```bash
 cd ~/giti/HearMe
 ul create template hearme
 ```
 
-Unlaw спросит, открыть проект через `zed` или `obsidian`, затем нужно ли открыть
-ChatGPT. Если имя не передано, оно тоже запрашивается:
+Unlaw asks whether to open the project with `zed` or `obsidian`, then whether to
+open ChatGPT. If no name is given, it is prompted for too:
 
 ```text
 Name of template > hearme
@@ -122,39 +122,39 @@ Open with (zed/obsidian) > zed
 Add AI? (y/n) > y
 ```
 
-После сохранения проект запускается из любой папки:
+Once saved, the project can be launched from any folder:
 
 ```bash
 ul hearme
 ```
 
-Команда меняет папку в текущем Zsh, открывает её в выбранном приложении и при
-необходимости запускает ChatGPT. Новый терминал не создаётся. Список сохранённых
-проектов доступен через `ul templates`, а объединённый список — через `ul list`.
-Manifest хранится в `~/.config/unlaw/templates/projects/<name>.toml` и содержит
-только абсолютный путь, приложение и флаг AI.
+The command changes directory in the current Zsh, opens it in the chosen app and
+launches ChatGPT if requested. No new terminal is created. Saved projects are
+listed by `ul templates`, and the combined list by `ul list`. The manifest is
+stored in `~/.config/unlaw/templates/projects/<name>.toml` and contains only the
+absolute path, the app and the AI flag.
 
-Для смены папки в текущем shell один раз установите интеграцию и перезапустите
-Zsh:
+To change directory in the current shell, install the integration once and
+restart Zsh:
 
 ```bash
 ul doctor --fix
 exec zsh
 ```
 
-## Виртуальное окружение
+## Virtual environment
 
 ```bash
 cd ~/giti/HearMe
 ul venv
 ```
 
-Если `.venv` отсутствует, команда создаёт его через `python -m venv` (интерпретатор из
-`core.python`), а затем
-активирует в текущем Zsh. Существующее корректное `.venv` просто активируется.
-Project templates не сохраняют и не активируют виртуальное окружение.
+If `.venv` is missing, the command creates it with `python -m venv` (interpreter
+from `core.python`) and then activates it in the current Zsh. An existing valid
+`.venv` is simply activated. Project templates neither save nor activate a
+virtual environment.
 
-## Конфигурация
+## Configuration
 
 ```bash
 ul config path
@@ -167,11 +167,11 @@ ul config edit
 ul config reset --yes
 ```
 
-`reset --yes` сначала создаёт timestamped backup. Запись выполняется атомарно.
-`config set` принимает TOML-значения; некавыченный текст сохраняется как строка.
-Комментарии, порядок и неизвестные ключи в `config.toml` при записи сохраняются.
+`reset --yes` creates a timestamped backup first. Writes are atomic.
+`config set` accepts TOML values; unquoted text is stored as a string.
+Comments, ordering and unknown keys in `config.toml` are preserved on write.
 
-Конфигурация по умолчанию:
+Default configuration:
 
 ```toml
 [core]
@@ -220,7 +220,7 @@ difficulty = "normal"
 
 [zip]
 format = "zip"                  # zip, 7z, rar, tar.zst, tar.xz, tar.gz
-level = "max"                   # 0–9 или store, fastest, fast, normal, max, ultra
+level = "max"                   # 0–9 or store, fastest, fast, normal, max, ultra
 keep_junk = false
 
 [apps]
@@ -251,19 +251,19 @@ temperature = 0.7
 max_tokens = 4096
 ```
 
-`command_timeout = 0` отключает лимит. Python environment принимает `auto`, `uv`,
-`venv` или `none`. В режиме `auto` сначала используется uv, затем стандартный
-venv. Относительный `storage.root` считается от `~/.config/unlaw`; абсолютный путь
-или путь с `~` позволяет перенести всё хранилище в другое место:
+`command_timeout = 0` disables the limit. The Python environment accepts `auto`,
+`uv`, `venv` or `none`. In `auto` mode uv is tried first, then the standard venv.
+A relative `storage.root` is resolved against `~/.config/unlaw`; an absolute path
+or a path with `~` moves the whole storage elsewhere:
 
 ```bash
 ul config set storage.root '"~/Documents/UnlawData"'
 ```
 
-## Алиасы
+## Aliases
 
-Алиас — массив аргументов, а не shell-строка. Поэтому он не выполняется через
-`shell=True` и безопасно дополняется пользовательскими аргументами:
+An alias is an array of arguments, not a shell string. It is therefore never run
+with `shell=True` and can safely be extended with user arguments:
 
 ```toml
 [aliases]
@@ -277,37 +277,37 @@ ul gs
 ul newpy experiment --uv --git
 ```
 
-Циклические алиасы диагностируются и не запускаются. Системные команды нельзя
-перекрыть алиасом.
+Cyclic aliases are detected and not run. System commands cannot be overridden by
+an alias.
 
-## Пользовательские команды
+## User commands
 
 ```bash
 ul create command anime
 ```
 
-Создаст `~/.config/unlaw/commands/anime/main.py`. Аргументы находятся в
-`sys.argv[1:]`, а exit code скрипта возвращается shell. Пользовательская команда
-может быть полностью изменена вручную. Автоматическое обновление никогда не
-перезаписывает существующий `main.py`.
+This creates `~/.config/unlaw/commands/anime/main.py`. Arguments are in
+`sys.argv[1:]`, and the script's exit code is returned to the shell. A user
+command can be fully rewritten by hand. Automatic updates never overwrite an
+existing `main.py`.
 
-Команда — это папка с одной точкой входа. Проверяются по порядку:
+A command is a folder with a single entry point. These are checked in order:
 
-| Файл | Чем запускается |
+| File | Run with |
 |---|---|
-| `main.py` | Python 3.11+ из `core.python` (`auto` — самый новый `python3.x` в PATH) |
-| `main.sh` | `/bin/sh`, или напрямую по shebang, если файл исполняемый |
+| `main.py` | Python 3.11+ from `core.python` (`auto` — the newest `python3.x` on PATH) |
+| `main.sh` | `/bin/sh`, or directly via shebang if the file is executable |
 | `main.js` | `node` |
-| `main` | напрямую; любой исполняемый файл, например собранный Rust/C++ бинарник |
+| `main` | directly; any executable, e.g. a compiled Rust/C++ binary |
 
-Никакой SDK не нужен: Unlaw передаёт команде переменные окружения.
+No SDK is needed: Unlaw passes environment variables to the command.
 
-| Переменная | Значение |
+| Variable | Value |
 |---|---|
-| `UNLAW_COMMAND` | имя команды |
-| `UNLAW_COMMAND_DIR` | папка команды |
-| `UNLAW_CONFIG_DIR` | папка конфигурации Unlaw (`config.toml`) |
-| `UNLAW_STORAGE` | итоговый путь `storage.root` для файлов команды |
+| `UNLAW_COMMAND` | command name |
+| `UNLAW_COMMAND_DIR` | command folder |
+| `UNLAW_CONFIG_DIR` | Unlaw config folder (`config.toml`) |
+| `UNLAW_STORAGE` | resolved `storage.root` path for the command's files |
 
 ```sh
 #!/bin/sh
@@ -315,49 +315,49 @@ ul create command anime
 mkdir -p "$UNLAW_STORAGE/notes" && open "$UNLAW_STORAGE/notes"
 ```
 
-Описание для `ul commands --describe` и Zsh completion читается без запуска
-команды: первая строка `help.txt` в папке команды, иначе первая строка docstring
-`main.py`, иначе первый комментарий `#`/`//` у других скриптов. `--help` внутри
-самой команды по-прежнему обязателен.
+The description for `ul commands --describe` and Zsh completion is read without
+running the command: the first line of `help.txt` in the command folder, otherwise
+the first line of the `main.py` docstring, otherwise the first `#`/`//` comment in
+other scripts. `--help` inside the command itself is still required.
 
-Свой шаблон новых команд:
+Your own template for new commands:
 
 ```text
 ~/.config/unlaw/templates/commands/main.py
-~/.config/unlaw/templates/commands/rust/      # Cargo.toml + src/, {{command_name}} заменяется
+~/.config/unlaw/templates/commands/rust/      # Cargo.toml + src/, {{command_name}} is substituted
 ```
 
-### Команды на Rust
+### Rust commands
 
 ```bash
 ul create command fast --lang rust
 ul fast hello
 ```
 
-Создаёт Cargo-проект в `~/.config/unlaw/commands/fast/` и сразу собирает его.
-Правите `src/main.rs` и просто запускаете `ul fast`: Unlaw сам пересобирает
-команду, когда `src/`, `Cargo.toml` или `Cargo.lock` новее бинарника. Описание
-для `ul commands --describe` берётся из `description` в `Cargo.toml`. Нужен
-`cargo`; зависимости добавляются как в любом Rust-проекте (`cargo add` в папке
-команды).
+Creates a Cargo project in `~/.config/unlaw/commands/fast/` and builds it right
+away. Edit `src/main.rs` and just run `ul fast`: Unlaw rebuilds the command itself
+when `src/`, `Cargo.toml` or `Cargo.lock` is newer than the binary. The description
+for `ul commands --describe` comes from `description` in `Cargo.toml`. Requires
+`cargo`; dependencies are added as in any Rust project (`cargo add` in the command
+folder).
 
-### Встроенные Rust-команды
+### Built-in Rust commands
 
-`ul zip`, `ul game` и `ul lm` встроены в ядро. Порядок поиска: системные команды →
-`commands/<name>/` → встроенные, поэтому своя папка `commands/zip` по-прежнему
-перекрывает встроенный `zip`. Нетронутые старые `commands/zip/main.py`,
-`commands/game/main.py` и `commands/lm/main.py` (клиент LM Studio из 3.0)
-удаляются при обновлении автоматически; изменённые вручную остаются и продолжают
-работать вместо встроенных.
+`ul zip`, `ul game` and `ul lm` are built into the core. Lookup order: system
+commands → `commands/<name>/` → built-ins, so your own `commands/zip` folder still
+overrides the built-in `zip`. Untouched old `commands/zip/main.py`,
+`commands/game/main.py` and `commands/lm/main.py` (the LM Studio client from 3.0)
+are removed automatically on update; manually edited ones stay and keep running
+instead of the built-ins.
 
-## Команды в config
+## Commands in config
 
-Все команды ниже имеют вид `~/.config/unlaw/commands/<name>/main.py`. Это полные
-самостоятельные исходники: во время запуска они не импортируют `unlawful` и не
-зависят от внутренней структуры пакета. Системный dispatcher ищет команды только
-в этой папке.
+All commands below live at `~/.config/unlaw/commands/<name>/main.py`. They are
+complete standalone sources: at runtime they don't import `unlawful` and don't
+depend on the package's internal structure. The system dispatcher looks for
+commands only in this folder.
 
-### Приложения
+### Apps
 
 ```bash
 ul app Zed
@@ -368,17 +368,17 @@ ul app "Visual Studio Code"
 
 ```bash
 ul git "fix parser"       # add, commit, push
-ul git                    # add, спросить сообщение в терминале, commit -m, push
+ul git                    # add, ask for a message in the terminal, commit -m, push
 ul git status
 ul git pull
 ul git push
-ul git commit "message"  # add + commit, без push
+ul git commit "message"  # add + commit, no push
 ul git sync "message"    # pull --rebase + add + commit + push
 ```
 
-Без аргумента `ul git` показывает обычный однострочный prompt `Commit message:` в
-текущем терминале и никогда не открывает Git-редактор. Стандартный workflow всегда
-завершается `git push` и останавливается на первой ошибке.
+Without an argument, `ul git` shows a plain one-line `Commit message:` prompt in
+the current terminal and never opens a Git editor. The standard workflow always
+ends with `git push` and stops at the first error.
 
 ### Python
 
@@ -398,8 +398,8 @@ ul rust amber --lib
 ul rust amber --bin --git
 ```
 
-Проект создаётся через Cargo. Без `--git` Cargo получает `--vcs none`, если
-`projects.rust.initialize_git` не включён.
+The project is created with Cargo. Without `--git`, Cargo gets `--vcs none`
+unless `projects.rust.initialize_git` is enabled.
 
 ### C++
 
@@ -409,20 +409,20 @@ ul cpp engine --std 23
 ul cpp engine --git
 ```
 
-Создаётся CMake-проект. Поддерживаются стандарты 11, 14, 17, 20, 23 и 26.
+Creates a CMake project. Standards 11, 14, 17, 20, 23 and 26 are supported.
 
-Существующий каталог ни один генератор не перезаписывает.
+No generator overwrites an existing directory.
 
 ## Obsidian Kanban
 
-`ul todo` работает с существующим `TODO.md` внутри настроенного Obsidian vault и
-сохраняет служебный блок Kanban-плагина. Номера задач отображаются командой без
-аргументов:
+`ul todo` works with an existing `TODO.md` inside the configured Obsidian vault
+and keeps the Kanban plugin's service block intact. Task numbers are shown by the
+command without arguments:
 
 ```bash
 ul todo
-ul todo add "Доделать Unlaw"
-ul todo add "Проверить тесты" --column "For today"
+ul todo add "Finish Unlaw"
+ul todo add "Check tests" --column "For today"
 ul todo search "Unlaw"
 ul todo move 3 "In progress"
 ul todo done 3
@@ -430,232 +430,236 @@ ul todo open
 ul todo path
 ```
 
-Изменения записываются атомарно. Многострочные описания перемещаются вместе с
-задачей.
+Changes are written atomically. Multi-line descriptions move together with the
+task.
 
-## Захват экрана, видео и звука
+## Screen, video and audio capture
 
 ```bash
 ul capture screenshot
 ul capture area
 ul capture window
-ul capture screen                 # фоновая запись экрана и микрофона
-ul capture camera                 # камера + микрофон через ffmpeg
-ul capture audio                  # микрофон через ffmpeg
+ul capture screen                 # background screen + microphone recording
+ul capture camera                 # camera + microphone via ffmpeg
+ul capture audio                  # microphone via ffmpeg
 ul capture screen --duration 30
 ul capture devices
 ul capture stop
 ul capture last
 ```
 
-Первый запуск может запросить системные разрешения Screen Recording, Camera,
-Microphone и Accessibility. `camera_device` и `audio_device` можно подобрать по
-выводу `ul capture devices`. По умолчанию все медиа находятся внутри
-`storage.root/captures`; Telegram сохраняет загрузки в
-`storage.root/telegram/downloads`, а runtime-файлы — в `storage.root/runtime`.
+The first run may ask for Screen Recording, Camera, Microphone and Accessibility
+permissions. `camera_device` and `audio_device` can be picked from the output of
+`ul capture devices`. By default all media goes into `storage.root/captures`;
+Telegram saves downloads to `storage.root/telegram/downloads`, and runtime files
+go to `storage.root/runtime`.
 
-## Быстрые приложения
+## Quick apps
 
 ```bash
-ul lofi                           # открыть Lofi Engine
-ul zed                            # открыть текущую папку в Zed
-ul netflix                        # открыть Netflix
-ul tg                             # открыть Telegram
-ul obsidian                       # открыть Obsidian
-ul gpt                            # открыть ChatGPT
-ul browser                        # открыть настроенную стартовую страницу
-ul steam                          # открыть Steam
-ul minecraft                      # открыть Prism Launcher
+ul lofi                           # open Lofi Engine
+ul zed                            # open the current folder in Zed
+ul netflix                        # open Netflix
+ul tg                             # open Telegram
+ul obsidian                       # open Obsidian
+ul gpt                            # open ChatGPT
+ul browser                        # open the configured start page
+ul steam                          # open Steam
+ul minecraft                      # open Prism Launcher
 ul music
-ul music "Killer Queen"           # поиск и запуск первого результата в Spotify
-ul work                            # Lofi Engine + текущая папка в Zed
-ul yt                              # открыть главную страницу YouTube
-ul yt "omarchy linux"             # поиск YouTube в браузере
-ul yt download "https://youtu.be/VIDEO_ID"                 # скачать MOV
+ul music "Killer Queen"           # search and play the first result in Spotify
+ul work                            # Lofi Engine + current folder in Zed
+ul yt                              # open the YouTube home page
+ul yt "omarchy linux"             # YouTube search in the browser
+ul yt download "https://youtu.be/VIDEO_ID"                 # download MOV
 ul yt download "https://youtu.be/VIDEO_ID" --format mp4    # MP4
-ul yt download "https://youtu.be/VIDEO_ID" --format raw    # исходный контейнер/кодеки
+ul yt download "https://youtu.be/VIDEO_ID" --format raw    # source container/codecs
 ul yt download "https://youtu.be/VIDEO_ID" --audio         # MP3
-ul yt download "https://youtu.be/VIDEO_ID" --quality 1080  # максимум 1080p
+ul yt download "https://youtu.be/VIDEO_ID" --quality 1080  # up to 1080p
 ul yt download "https://youtu.be/VIDEO_ID" --output ~/Downloads
-ul yt --help                      # все варианты и примеры
+ul yt --help                      # all options and examples
 ```
 
-Для автоматического запуска результата Spotify терминалу понадобится разрешение
-Accessibility.
+Auto-playing a Spotify result requires the Accessibility permission for the
+terminal.
 
-Стартовая страница `ul browser` настраивается через config:
+The `ul browser` start page is set in the config:
 
 ```bash
 ul config set apps.browser_url '"https://duckduckgo.com/"'
 ```
 
-## Архивы
+## Archives
 
-`ul zip` сжимает файлы и папки и распаковывает почти любой архив. Без действия
-команда сама понимает, что делать: архивы распаковываются, остальное сжимается.
+`ul zip` compresses files and folders and extracts almost any archive. Without an
+action, the command figures out what to do: archives are extracted, everything
+else is compressed.
 
 ```bash
-ul zip project                     # project.zip рядом с папкой, максимальное сжатие
-ul zip a.png b.png notes/          # несколько путей → ./Archive.zip
-ul zip project -f 7z               # сильнее всего (LZMA2)
-ul zip project -f rar              # RAR5 с recovery record (нужен rar)
-ul zip project -f zst --fast       # tar.zst: быстро и плотно, для бэкапов
-ul zip project -f 7z -9            # уровень 0–9 (или --store … --ultra)
-ul zip project -p -f 7z            # пароль AES-256, имена файлов тоже скрыты
-ul zip project -o ~/Desktop/pack.7z  # формат берётся из расширения
-ul zip project.zip                 # распаковать рядом
-ul zip x backup.rar -o ~/Downloads # распаковать в папку
-ul zip x pack.zip --here           # содержимое прямо в папку назначения
-ul zip ls backup.7z                # содержимое
-ul zip test backup.7z              # проверка целостности
+ul zip project                     # project.zip next to the folder, max compression
+ul zip a.png b.png notes/          # several paths → ./Archive.zip
+ul zip project -f 7z               # strongest (LZMA2)
+ul zip project -f rar              # RAR5 with recovery record (needs rar)
+ul zip project -f zst --fast       # tar.zst: fast and dense, for backups
+ul zip project -f 7z -9            # level 0–9 (or --store … --ultra)
+ul zip project -p -f 7z            # AES-256 password, file names hidden too
+ul zip project -o ~/Desktop/pack.7z  # format taken from the extension
+ul zip project.zip                 # extract next to it
+ul zip x backup.rar -o ~/Downloads # extract into a folder
+ul zip x pack.zip --here           # contents directly into the destination
+ul zip ls backup.7z                # list contents
+ul zip test backup.7z              # integrity check
 ```
 
-Создаёт `zip` (по умолчанию), `7z`, `rar`, `tar.zst`, `tar.xz`, `tar.gz`; читает
-также `rar`, `gz`, `bz2`, `xz`, `zst`, `cab`, `iso`, `cpio`, `xar`. Мусор macOS
-(`.DS_Store`, `._*`, `__MACOSX`) не попадает в архивы; `--keep-junk` оставляет его.
-Архив из одного элемента распаковывается как этот элемент, иначе — в папку с
-именем архива. Ничего не перезаписывается: добавляется суффикс ` 2`. Пароль
-запрашивается в терминале и не передаётся в аргументах процесса.
+Creates `zip` (default), `7z`, `rar`, `tar.zst`, `tar.xz`, `tar.gz`; also reads
+`rar`, `gz`, `bz2`, `xz`, `zst`, `cab`, `iso`, `cpio`, `xar`. macOS junk
+(`.DS_Store`, `._*`, `__MACOSX`) is kept out of archives; `--keep-junk` keeps it.
+A single-item archive extracts as that item, otherwise into a folder named after
+the archive. Nothing is overwritten: a ` 2` suffix is added. The password is
+prompted in the terminal and never passed in process arguments.
 
-Уровни идут по шкале 7-Zip: `0` store, `1` fastest, `3` fast, `5` normal,
-`7` max (по умолчанию), `9` ultra. Каждый уровень переводится в лучшие настройки
-формата (`-mx`, `rar -m0…5`, `xz -0…9`, `zstd -1…19` и `--ultra -22`). Замер на
-68 МБ кода и бинарников: 7z `1/5/7/9` даёт 16.7/14.1/13.8/13.8 МБ, zip — 20.0/19.0/18.7/18.6 МБ,
-Finder — 20.3 МБ. Если уровень не указан и ≥90% входа уже сжатые медиа (jpg,
-heic, mp4, zip…), используется уровень 1: на 236 МБ HEIC уровень 9 давал выигрыш
-0.01% за 37 с вместо 3 с.
+Levels follow the 7-Zip scale: `0` store, `1` fastest, `3` fast, `5` normal,
+`7` max (default), `9` ultra. Each level maps to the format's best settings
+(`-mx`, `rar -m0…5`, `xz -0…9`, `zstd -1…19` and `--ultra -22`). Measured on
+68 MB of code and binaries: 7z `1/5/7/9` gives 16.7/14.1/13.8/13.8 MB, zip —
+20.0/19.0/18.7/18.6 MB, Finder — 20.3 MB. If no level is given and ≥90% of the
+input is already-compressed media (jpg, heic, mp4, zip…), level 1 is used: on
+236 MB of HEIC, level 9 saved 0.01% in 37 s instead of 3 s.
 
-Зависимости: `brew install sevenzip zstd`; для создания `.rar` — `brew install --cask rar`.
-Без 7-Zip `zip` создаётся системным `zip`, а распаковка идёт через `bsdtar`.
+Dependencies: `brew install sevenzip zstd`; to create `.rar` — `brew install --cask rar`.
+Without 7-Zip, `zip` archives are created with the system `zip`, and extraction
+goes through `bsdtar`.
 
 ## Unlaw Arcade
 
 ```bash
-ul game                       # меню (мышь или клавиатура)
+ul game                       # menu (mouse or keyboard)
 ul game tetris
 ul game snake easy
 ul game minesweeper normal
 ul game invaders hard
 ```
 
-Игры встроены в Rust-ядро и рассчитаны на клавиатуру и мышь. Внизу каждого экрана —
-подсказка управления, `P` ставит паузу, `Esc`/`Q` выходит. После конца игры
-Enter или клик — играть заново, Esc — в меню. Лучшие результаты хранятся в
-`storage.root/runtime/arcade.toml` и видны в меню.
+The games are built into the Rust core and support keyboard and mouse. Each screen
+shows a controls hint at the bottom, `P` pauses, `Esc`/`Q` quits. After game over,
+Enter or a click plays again, Esc returns to the menu. Best scores are stored in
+`storage.root/runtime/arcade.toml` and shown in the menu.
 
-| Игра | Как в оригинале | Мышь |
+| Game | Like the original | Mouse |
 |---|---|---|
-| Tetris | мешок из 7 фигур, очередь Next, Hold (`C`), тень, вращение с отскоками от стен (`↑`/`X`, `Z`), задержка фиксации, уровень каждые 10 линий, guideline-гравитация, комбо и back-to-back | фигура следует за курсором, клик — сброс, правый клик — поворот |
-| Snake | клетки шириной 2 символа, буфер поворотов, ускорение с ростом, бонус ★ на время | клик — поворот в сторону клика |
-| Minesweeper | Beginner 9×9/10, Intermediate 16×16/40, Expert 30×16/99, первый клик безопасен, аккорд по цифре, классические цвета, таймер | левый — открыть или аккорд, правый — флажок |
-| Space Invaders | строй 5×11, три вида пришельцев, ускорение по мере потерь, стреляют только нижние, одна ваша пуля на экране, укрытия, НЛО, жизни и волны, бонусная жизнь за 1500 | пушка следует за курсором, клик — выстрел |
+| Tetris | 7-piece bag, Next queue, Hold (`C`), ghost piece, rotation with wall kicks (`↑`/`X`, `Z`), lock delay, level up every 10 lines, guideline gravity, combos and back-to-back | piece follows the cursor, click — hard drop, right click — rotate |
+| Snake | 2-character-wide cells, turn buffer, speeds up as it grows, timed ★ bonus | click — turn toward the click |
+| Minesweeper | Beginner 9×9/10, Intermediate 16×16/40, Expert 30×16/99, safe first click, chording on numbers, classic colors, timer | left — reveal or chord, right — flag |
+| Space Invaders | 5×11 formation, three alien types, speeds up as they fall, only the bottom row shoots, one player bullet on screen, bunkers, UFO, lives and waves, extra life at 1500 | cannon follows the cursor, click — fire |
 
-Сложность: `easy` — медленный старт и подсказки (у Тетриса тень и 3 фигуры в Next,
-змейка проходит сквозь стены, 5 жизней в Invaders); `normal` — классика; `hard` —
-по-настоящему сложно: Тетрис стартует с 12 уровня без тени и Hold, с растущим снизу
-мусором, у змейки препятствия и двойной рост, Сапёр — Expert без гарантированного
-открытия, пришельцы стреляют непрерывно и у вас 2 жизни. По умолчанию:
-`ul config set games.difficulty hard`.
+Difficulty: `easy` — slow start and assists (Tetris has a ghost piece and 3 pieces
+in Next, the snake passes through walls, 5 lives in Invaders); `normal` — classic;
+`hard` — genuinely hard: Tetris starts at level 12 without ghost or Hold, with
+garbage rising from below, the snake gets obstacles and double growth, Minesweeper
+is Expert without a guaranteed opening, aliens fire nonstop and you have 2 lives.
+Set the default with `ul config set games.difficulty hard`.
 
 ## Telegram
 
 ```bash
-ul tg                              # открыть приложение Telegram
-ul tg setup                        # токен скрыто сохраняется в macOS Keychain
-ul tg "Сообщение из терминала"
+ul tg                              # open the Telegram app
+ul tg setup                        # token is stored hidden in macOS Keychain
+ul tg "Message from the terminal"
 ul tg send report.pdf
 ul tg photo screenshot.png
 ul tg video demo.mov
-ul tg capture                       # последний screenshot или recording Unlaw
+ul tg capture                       # latest Unlaw screenshot or recording
 cat notes.txt | ul tg
 ul tg last
 ul tg download
 ul tg status
 ```
 
-Bot token никогда не записывается в `config.toml` или Git. Для личного чата
-сначала напишите боту, затем укажите его `chat_id` во время `setup`.
+The bot token is never written to `config.toml` or Git. For a private chat, first
+message the bot, then enter its `chat_id` during `setup`.
 
-## Локальные модели (MLX)
+## Local models (MLX)
 
-`ul lm` — свой движок локальных моделей на Apple Silicon вместо LM Studio и
-Ollama: скачивает любые модели с Hugging Face и запускает их через MLX —
-чат, зрение, эмбеддинги, распознавание и синтез речи, музыку, картинки и видео,
-в терминале и через API, совместимый с OpenAI (как LM Studio) и Ollama.
+`ul lm` is its own local model engine for Apple Silicon, replacing LM Studio and
+Ollama: it downloads any model from Hugging Face and runs it with MLX — chat,
+vision, embeddings, speech recognition and synthesis, music, images and video, in
+the terminal and through an API compatible with OpenAI (like LM Studio) and Ollama.
 
 ```bash
-ul lm search qwen3 --mlx                       # поиск на Hugging Face
+ul lm search qwen3 --mlx                       # search Hugging Face
 ul lm pull prism-ml/Ternary-Bonsai-2-9B-mlx-2bit
-ul lm use Bonsai-2-9B                          # модель по умолчанию для своего типа
-ul lm                                          # диалог: /model /image /clear /save /think
-ul lm "объясни этот код" < main.rs             # разовый ответ потоком
-ul lm -i photo.jpg "что на фото?"              # vision-модели
-ul lm image "бонсай в утреннем свете" --open   # картинки (mflux, Bonsai Image)
-ul lm video "волны на закате" --seconds 2      # видео (mlx-video: Wan 2.x, LTX-2)
-ul lm speak "Привет!" -m Qwen3-TTS --play      # синтез речи (mlx-audio)
-ul lm music "lo-fi piano" --lyrics song.txt    # музыка (MiniMax Music 3)
-ul lm transcribe voice.m4a --srt               # речь в текст; любой формат, даже .mov
-ul lm embed "текст для поиска"                 # эмбеддинги (JSON)
-ul lm convert Qwen/Qwen3-4B --bits 4           # обычная модель → MLX 4-bit
+ul lm use Bonsai-2-9B                          # default model for its type
+ul lm                                          # chat: /model /image /clear /save /think
+ul lm "explain this code" < main.rs            # one-off streamed answer
+ul lm -i photo.jpg "what's in the photo?"      # vision models
+ul lm image "bonsai in morning light" --open   # images (mflux, Bonsai Image)
+ul lm video "waves at sunset" --seconds 2      # video (mlx-video: Wan 2.x, LTX-2)
+ul lm speak "Hello!" -m Qwen3-TTS --play       # speech synthesis (mlx-audio)
+ul lm music "lo-fi piano" --lyrics song.txt    # music (MiniMax Music 3)
+ul lm transcribe voice.m4a --srt               # speech to text; any format, even .mov
+ul lm embed "text to search"                   # embeddings (JSON)
+ul lm convert Qwen/Qwen3-4B --bits 4           # regular model → MLX 4-bit
 ul lm list | info <model> | use <model>
-ul lm rm [<model>...]                          # стереть модели с Mac (без имени — выбор из списка)
-ul lm clean                                    # недокачанное, ничейные файлы, кеш загрузок
-ul lm open [<model>|models|generated|converted|engine|logs]   # показать папку в Finder
-ul lm where <...>                              # то же, но напечатать путь
-ul lm serve [--ollama] [--cors]                # API на 127.0.0.1:1234 до Ctrl-C
-ul lm import-lmstudio [--dry-run]              # перенести загрузки LM Studio
+ul lm rm [<model>...]                          # delete models from the Mac (no name — pick from a list)
+ul lm clean                                    # partial downloads, orphaned files, download cache
+ul lm open [<model>|models|generated|converted|engine|logs]   # show the folder in Finder
+ul lm where <...>                              # same, but print the path
+ul lm serve [--ollama] [--cors]                # API on 127.0.0.1:1234 until Ctrl-C
+ul lm import-lmstudio [--dry-run]              # move LM Studio downloads over
 ul lm doctor [--repair]
 ```
 
-Подключение своих приложений после `ul lm serve`:
+Connecting your own apps after `ul lm serve`:
 
 ```python
 from openai import OpenAI
 client = OpenAI(base_url="http://127.0.0.1:1234/v1", api_key="local")
 reply = client.chat.completions.create(model="Bonsai-2-9B",
-                                       messages=[{"role": "user", "content": "привет"}])
-image = client.images.generate(model="bonsai-image", prompt="лиса в снегу", size="512x512")
-speech = client.audio.speech.create(model="Qwen3-TTS", voice="serena", input="Привет!")
+                                       messages=[{"role": "user", "content": "hello"}])
+image = client.images.generate(model="bonsai-image", prompt="a fox in the snow", size="512x512")
+speech = client.audio.speech.create(model="Qwen3-TTS", voice="serena", input="Hello!")
 ```
 
-OpenAI API: `/v1/models`, `/v1/chat/completions` (стриминг, tools, картинки,
+OpenAI API: `/v1/models`, `/v1/chat/completions` (streaming, tools, images,
 `reasoning_content`), `/v1/completions`, `/v1/embeddings`,
 `/v1/audio/transcriptions` (json, text, srt, verbose_json), `/v1/audio/speech`,
-`/v1/images/generations`, `/v1/videos` (задача; `GET /v1/videos/{id}` и
+`/v1/images/generations`, `/v1/videos` (a job; `GET /v1/videos/{id}` and
 `/content`). Ollama API: `/api/tags`, `/api/chat`, `/api/generate`,
-`/api/embed`, `/api/show`, `/api/ps`; `--ollama` дополнительно слушает `:11434`.
-Сервер отвечает только на `127.0.0.1`, отклоняет чужие имена хоста (защита от
-DNS rebinding), не отдаёт CORS без `--cors` и не читает локальные файлы по
-просьбе API. Поле `model` принимает `owner/repo`, имя репозитория или его часть;
-без него используется модель по умолчанию для этого типа (`lm.model`,
-`lm.image_model`, `lm.tts_model`...). Если сервер запущен, `ul lm` в терминале
-работает через него и использует уже загруженные модели.
+`/api/embed`, `/api/show`, `/api/ps`; `--ollama` additionally listens on `:11434`.
+The server answers only on `127.0.0.1`, rejects foreign host names (DNS rebinding
+protection), sends no CORS headers without `--cors` and never reads local files on
+an API request. The `model` field accepts `owner/repo`, the repository name or
+part of it; without it, the default model for that type is used (`lm.model`,
+`lm.image_model`, `lm.tts_model`...). If the server is running, `ul lm` in the
+terminal goes through it and reuses already loaded models.
 
-Модели хранятся в стандартном кеше Hugging Face (`HF_HUB_CACHE`,
-`HF_HOME/hub` или `~/.cache/huggingface/hub`) и видны `hf`, transformers и
-другим инструментам. `ul lm rm` и `ul lm clean` удаляют через сам huggingface_hub (как `hf cache rm` / `prune`), поэтому файлы, общие с другими моделями и датасетами, не пострадают; модель, выбранная по умолчанию, при удалении сбрасывается на auto. Тип модели
-определяется по карточке и файлам: text, vision, embedding, stt, tts, music,
-image, video. GGUF тоже запускается: чат, зрение (с файлом `mmproj`) и
-эмбеддинги — через закреплённую официальную сборку llama.cpp (скачивается сама,
-16 МБ, проверяется по sha256), распознавание речи (Parakeet, Whisper GGUF) —
-через transcribe.cpp. Из нескольких квантований берётся Q4_K_M (иначе Q5_K_M,
-Q6_K, Q8_0); `ul lm info` показывает какое. Если есть MLX- и GGUF-версия одной
-модели, по короткому имени выбирается MLX. В репозитории с десятком GGUF-файлов
-`pull` попросит выбрать один.
-Bonsai (1-bit, Ternary, Bonsai-2) работает без их лаунчера; Bonsai Image —
-через библиотеку PrismML mflux в отдельном движке.
+Models are stored in the standard Hugging Face cache (`HF_HUB_CACHE`,
+`HF_HOME/hub` or `~/.cache/huggingface/hub`) and are visible to `hf`, transformers
+and other tools. `ul lm rm` and `ul lm clean` delete through huggingface_hub itself
+(like `hf cache rm` / `prune`), so files shared with other models and datasets are
+not affected; a default model that gets deleted is reset to auto. The model type is
+detected from the model card and files: text, vision, embedding, stt, tts, music,
+image, video. GGUF runs too: chat, vision (with an `mmproj` file) and embeddings
+through a pinned official llama.cpp build (downloaded automatically, 16 MB,
+sha256-verified), speech recognition (Parakeet, Whisper GGUF) through
+transcribe.cpp. Among several quantizations, Q4_K_M is picked (otherwise Q5_K_M,
+Q6_K, Q8_0); `ul lm info` shows which one. If both MLX and GGUF versions of a model
+exist, the short name picks MLX. In a repository with a dozen GGUF files, `pull`
+asks you to choose one.
+Bonsai (1-bit, Ternary, Bonsai-2) runs without its own launcher; Bonsai Image runs
+through PrismML's mflux library in a separate engine.
 
-Движки ставятся сами при первом использовании в `storage.root/runtime/lm-engine`
-через uv на Python 3.13: основной (около 1.2 ГБ: mlx, mlx-lm, mlx-vlm,
-mlx-embeddings, mlx-audio, mlx-whisper, mlx-video), картинки (mflux) и Bonsai
-Image — по 1.5 ГБ, только когда понадобятся. Чат, вспомогательные модели,
-картинки и видео работают в разных процессах: эмбеддинги не ждут длинного ответа,
-падение одного не задевает остальные. Модель больше 75% RAM отклоняется до
-загрузки; модели выгружаются после `lm.idle_minutes` простоя. Параметры
-сэмплинга по умолчанию берутся из `generation_config.json` модели (рекомендации
-авторов), затем из `lm.temperature`. Облачного запасного варианта нет.
+Engines install themselves on first use into `storage.root/runtime/lm-engine`
+via uv on Python 3.13: the core one (about 1.2 GB: mlx, mlx-lm, mlx-vlm,
+mlx-embeddings, mlx-audio, mlx-whisper, mlx-video), images (mflux) and Bonsai
+Image — 1.5 GB each, only when needed. Chat, helper models, images and video run
+in separate processes: embeddings don't wait for a long reply, and one crashing
+doesn't affect the others. A model larger than 75% of RAM is rejected before
+loading; models are unloaded after `lm.idle_minutes` of inactivity. Default
+sampling parameters come from the model's `generation_config.json` (the authors'
+recommendations), then from `lm.temperature`. There is no cloud fallback.
 
-## Самовосстановление
+## Self-repair
 
 ```bash
 ul doctor --verbose
@@ -663,28 +667,29 @@ ul doctor --json
 ul doctor --fix
 ```
 
-`--fix` дописывает недостающие настройки (комментарии в `config.toml` сохраняются), создаёт каталоги внутри `storage.root`,
-переносит старый runtime-log, добавляет папку бинарника `ul` перед `/usr/bin` и
-устанавливает управляемую Zsh-функцию в `~/.zshrc`. Она нужна для `ul <template>`
-и `ul venv`, потому что только функция текущего shell может выполнить постоянный
-`cd` или `source`. После исправления запустите `exec zsh`.
+`--fix` adds missing settings (comments in `config.toml` are preserved), creates
+directories inside `storage.root`, moves the old runtime log, puts the `ul`
+binary's folder before `/usr/bin` and installs a managed Zsh function in
+`~/.zshrc`. It is needed for `ul <template>` and `ul venv`, because only a
+function in the current shell can do a persistent `cd` or `source`. Run
+`exec zsh` after the fix.
 
-## Файловые шаблоны проектов
+## Project file templates
 
-Файлы из `~/.config/unlaw/templates/python`, `rust` и `cpp` накладываются на
-стандартный проект. UTF-8-файлы поддерживают placeholders:
+Files from `~/.config/unlaw/templates/python`, `rust` and `cpp` are layered over
+the standard project. UTF-8 files support placeholders:
 
 ```text
 {{project_name}}
 {{cpp_standard}}
 ```
 
-Бинарные файлы копируются без изменений. Placeholder работает и в имени файла
-или каталога.
+Binary files are copied unchanged. Placeholders also work in file and directory
+names.
 
 ## macOS Harness
 
-Harness остаётся необязательным backend:
+Harness remains an optional backend:
 
 ```bash
 ul mac see Spotify
@@ -693,7 +698,7 @@ ul mac type Telegram "hello"
 ul mac click Spotify 500 300
 ```
 
-Пользовательские команды могут вызывать тот же мост через CLI:
+User commands can call the same bridge through the CLI:
 
 ```python
 import subprocess
@@ -701,8 +706,8 @@ import subprocess
 subprocess.run(["ul", "mac", "key", "Spotify", "cmd+k"], check=False)
 ```
 
-Исполняемый файл и timeout задаются в секции `[mac]`. `doctor` проверяет Harness
-без запроса новых macOS-разрешений.
+The executable and timeout are set in the `[mac]` section. `doctor` checks
+Harness without requesting new macOS permissions.
 
 ## Zsh completion
 
@@ -711,68 +716,69 @@ mkdir -p ~/.zfunc
 ul completion zsh > ~/.zfunc/_ul
 ```
 
-Добавьте до `compinit` в `~/.zshrc`:
+Add before `compinit` in `~/.zshrc`:
 
 ```zsh
 fpath=(~/.zfunc $fpath)
 autoload -Uz compinit && compinit
 ```
 
-Completion показывает команды с описаниями, затем подкоманды `config`, `create`,
-`doctor` и т.д. Его обслуживает Rust-ядро (`ul _complete`), Python при этом не
-запускается.
+Completion shows commands with descriptions, then subcommands of `config`,
+`create`, `doctor` and so on. It is served by the Rust core (`ul _complete`);
+Python is not started.
 
-## Разработка
+## Development
 
 ```text
-Cargo.toml, rust/      Rust-ядро: dispatcher, config, system commands, doctor
-rust/build.rs          встраивает данные из Python через rust/gen_assets.py
-src/unlawful/          исходники seeded-команд, их справка и DEFAULT_CONFIG
-tests/                 Python-тесты команд и black-box тесты бинарника
+Cargo.toml, rust/      Rust core: dispatcher, config, system commands, doctor
+rust/build.rs          embeds data from Python via rust/gen_assets.py
+src/unlawful/          seeded command sources, their help and DEFAULT_CONFIG
+tests/                 Python command tests and black-box binary tests
 ```
 
-Seeded-команды, их справка, legacy-хеши и конфигурация по умолчанию определены
-один раз в `src/unlawful`; `cargo build` экспортирует их в бинарник, поэтому
-сборке нужен Python 3.11+. Версия в `Cargo.toml` обязана совпадать с
-`src/unlawful/__init__.py` — иначе сборка остановится.
+Seeded commands, their help, legacy hashes and the default configuration are
+defined once in `src/unlawful`; `cargo build` exports them into the binary, so the
+build needs Python 3.11+. The version in `Cargo.toml` must match
+`src/unlawful/__init__.py`, otherwise the build stops.
 
 ```bash
 cargo test
 cargo clippy --all-targets
-python3 -m unittest discover -s tests -v   # сам собирает target/debug/ul
+python3 -m unittest discover -s tests -v   # builds target/debug/ul itself
 cargo build --release
 ```
 
-Unlaw 3 остаётся local-first: команды не используют shell-строки, `ul lm`
-слушает только loopback и не обращается к облачным моделям, а секрет Telegram
-хранится в macOS Keychain.
-Внешние приложения и разрешения остаются явно видимыми через `ul doctor`.
+Unlaw 3 stays local-first: commands don't use shell strings, `ul lm` listens only
+on loopback and never calls cloud models, and the Telegram secret is stored in
+macOS Keychain. External apps and permissions stay explicitly visible through
+`ul doctor`.
 
-### Справка команд и скачивание YouTube
+### Command help and YouTube downloads
 
-Все встроенные команды поддерживают `ul <команда> --help`, `-h` и `ul help <команда>`. Справка описывает назначение, действия, параметры и примеры без запуска команды. Новые команды из `ul create command <name>` также имеют обработчик справки; при изменении команды обновляйте его текст.
+All built-in commands support `ul <command> --help`, `-h` and `ul help <command>`. Help describes the purpose, actions, options and examples without running the command. New commands from `ul create command <name>` also get a help handler; update its text when you change the command.
 
-Для скачивания установите внешние инструменты: `brew install yt-dlp ffmpeg deno`. Unlaw остаётся пакетом без Python-зависимостей. Видео по умолчанию сохраняется в MOV со звуком; `--format mp4` выбирает MP4, `--format raw` сохраняет исходный контейнер и кодеки YouTube (в том числе WebM), без перекодирования. Это не камерный RAW. Конвертация в MOV/MP4 использует H.264/AAC, когда формат требуется изменить, и может занять время. `--quality` задаёт верхнюю границу высоты (если такого качества нет, выбирается ниже), `--audio` сохраняет MP3 и не совмещается с `--quality` или `--format`. По умолчанию используется `storage.root/youtube`; `--output` задаёт другую папку. Скачивается одно видео, включая ссылки Shorts и видео из плейлиста; ссылки на целые плейлисты и каналы отклоняются. Существующие файлы не перезаписываются.
+For downloads, install the external tools: `brew install yt-dlp ffmpeg deno`. Unlaw stays a package without Python dependencies. By default video is saved as MOV with audio; `--format mp4` picks MP4, `--format raw` keeps YouTube's source container and codecs (including WebM) without re-encoding. This is not camera RAW. Converting to MOV/MP4 uses H.264/AAC when the format has to change and may take a while. `--quality` sets an upper bound on height (if that quality isn't available, a lower one is picked); `--audio` saves MP3 and can't be combined with `--quality` or `--format`. The default location is `storage.root/youtube`; `--output` sets another folder. A single video is downloaded, including Shorts links and videos from a playlist; links to entire playlists and channels are rejected. Existing files are never overwritten.
 
-### Субтитры YouTube и полный комплект
+### YouTube subtitles and full bundle
 
 ```bash
-ul yt download "https://youtu.be/VIDEO_ID" --sub           # только субтитры .md, язык оригинала
-ul yt download "https://youtu.be/VIDEO_ID" --sub-lang      # то же самое
-ul yt download "https://youtu.be/VIDEO_ID" --sub-lang ru   # выбрать русский
-ul yt download "https://youtu.be/VIDEO_ID" --full          # MOV со звуком + отдельный MP3 + .md
+ul yt download "https://youtu.be/VIDEO_ID" --sub           # subtitles only as .md, original language
+ul yt download "https://youtu.be/VIDEO_ID" --sub-lang      # same thing
+ul yt download "https://youtu.be/VIDEO_ID" --sub-lang ru   # pick Russian
+ul yt download "https://youtu.be/VIDEO_ID" --full          # MOV with audio + separate MP3 + .md
 ul yt download "https://youtu.be/VIDEO_ID" --full --sub-lang en --format mp4 --quality 1080
 ```
 
-`--sub-lang` без значения выбирает оригинал; сам этот флаг включает режим субтитров, кроме случая `--full`. Неизвестный код выводит все доступные языки и завершает команду до скачивания медиа. Авторские субтитры приоритетнее автоматических на выбранном языке. Когда язык оригинала определить невозможно, команда явно сообщает о выбранном доступном языке. `.md` начинается со ссылки на видео, далее идут название, язык, источник субтитров и текст. Время, служебная разметка и перекрывающиеся повторы убираются; текст не пересказывается. Автосубтитры могут содержать ошибки распознавания. Для субтитров достаточно `yt-dlp`, `ffmpeg` не нужен.
+`--sub-lang` without a value picks the original; the flag itself enables subtitle mode, except with `--full`. An unknown code lists all available languages and exits before any media is downloaded. Authored subtitles take priority over automatic ones in the chosen language. When the original language can't be determined, the command says explicitly which available language it chose. The `.md` starts with the video link, followed by the title, language, subtitle source and text. Timestamps, markup and overlapping repeats are removed; the text is not paraphrased. Automatic captions may contain recognition errors. Subtitles need only `yt-dlp`, not `ffmpeg`.
 
-`--full` сохраняет файлы рядом в `storage.root/youtube` или папке `--output`: видео выбранного формата со звуком, отдельный `.mp3`, субтитры `.<язык>.md`. Видео с YouTube скачивается один раз; аудио извлекается локально. Режимы `--sub`, `--audio`, `--full` взаимоисключающие. Если субтитров нет или их загрузка не удалась, `--full` сохраняет медиа, сообщает о неполном результате и возвращает ненулевой код. Существующие файлы сохраняются, временные файлы удаляются.
+`--full` saves files side by side in `storage.root/youtube` or the `--output` folder: the video in the chosen format with audio, a separate `.mp3`, and subtitles as `.<lang>.md`. The video is downloaded from YouTube once; audio is extracted locally. The `--sub`, `--audio` and `--full` modes are mutually exclusive. If there are no subtitles or downloading them fails, `--full` keeps the media, reports an incomplete result and returns a non-zero exit code. Existing files are kept, temporary files are removed.
 
-## Лицензия
+## License
 
 Copyright (C) 2026 Haos
 
-Unlaw — свободная программа: её можно распространять и изменять на условиях
-GNU General Public License версии 3 или (по вашему выбору) любой более поздней
-версии, опубликованной Free Software Foundation (`GPL-3.0-or-later`). Программа
-распространяется без каких-либо гарантий. Полный текст — в файле [LICENSE](LICENSE).
+Unlaw is free software: you can redistribute it and/or modify it under the terms
+of the GNU General Public License as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any later version
+(`GPL-3.0-or-later`). This program is distributed WITHOUT ANY WARRANTY. See
+[LICENSE](LICENSE) for the full text.
