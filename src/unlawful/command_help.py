@@ -4,6 +4,43 @@ System and built-in Rust commands (zip, game) keep their help in rust/src.
 """
 
 COMMAND_HELP = {
+    "agent": '''Talk to a local AI agent that can work with your files, TODO board and schedule.
+Shortcuts: `ula ...` and `unlawagent ...` are the same as `ul agent ...`.
+Usage:
+  ul agent                           Chat in the terminal (/new, /today, /plan, /exit)
+  ul agent "<task>"                  Do one task and exit (or pipe the task on stdin)
+  ul agent today | plan              Today's open tasks and jobs / everything scheduled
+  ul agent schedule <when> <prompt> [--repeat once|daily|weekly|"every 2h"]
+  ul agent unschedule <id>           Cancel a scheduled job
+  ul agent setup                     Pick the local model, connect Telegram, folders, start
+  ul agent start | stop | status     Background agent (Telegram + schedule) via launchd
+  ul agent serve                     Run the Telegram bot and schedule in the foreground
+  ul agent log [n]                   Last n actions from the audit log (default 20)
+when: "in 30m", "18:00", "tomorrow 9:00" or "2026-11-01 09:00".
+The model runs in `ul lm serve` (127.0.0.1, started on demand; agent.model, default
+the lm default). It reads, searches and lists files only inside agent.roots; writing,
+editing, moving, deleting (to the Trash), shell commands and `ul` commands from
+agent.commands need your approval ([y/N] in the terminal, Yes/No buttons in
+Telegram; no answer within agent.confirm_timeout seconds means no). Keys, .env
+files, the keychain and Unlaw's config are always blocked.
+Telegram: needs a bot token (`ul agent setup` or `ul tg setup`, stored in .env next to
+config.toml with mode 600); only telegram.chat_id (you, full access) and
+agent.allowed_ids get answers. Other ids may only chat unless agent.users.<id> is
+"read" or "full"; approvals always go to you. Voice messages are transcribed,
+photos go to a vision model, files are saved to storage.root/telegram/downloads.
+Messages sent while the agent was off are skipped.
+Today: open tasks from `ul todo` plus today's jobs; agent.digest_time (HH:MM) sends
+it to Telegram every morning. Data and audit log: storage.root/agent.
+Settings: agent.model, agent.roots, agent.allowed_ids, agent.users, agent.commands,
+agent.max_steps, agent.confirm_timeout, agent.digest_time, agent.system_prompt.
+Dependencies: ul lm with a downloaded chat model (MLX on Apple silicon); no cloud models.
+Examples:
+  ul agent setup
+  ula "what is in ~/Downloads that is older than a month?"
+  ul agent schedule 9:00 "summarize my TODO board" --repeat daily
+  ul config set agent.allowed_ids \'["123456789"]\'
+  ul agent start
+''',
     "app": '''Open a macOS application by name.
 Usage: ul app <application>
 Example: ul app "Visual Studio Code"
@@ -100,7 +137,8 @@ Usage:
   ul tg status                           Check bot configuration
   ul tg last                             Print recent bot updates
   ul tg download [directory]              Download files from recent updates
-Token: macOS Keychain. Default downloads: storage.root/telegram/downloads.
+Token: .env next to config.toml (mode 600); tokens saved before 3.3 are read from
+the macOS Keychain. Default downloads: storage.root/telegram/downloads.
 Example: ul tg send "Hello"
 ''',
     "todo": '''Read and update the configured Obsidian TODO board.

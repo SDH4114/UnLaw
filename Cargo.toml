@@ -1,6 +1,6 @@
 [package]
 name = "unlaw"
-version = "3.2.0"
+version = "3.3.0"
 edition = "2021"
 rust-version = "1.82"
 description = "A small, extensible macOS command launcher"
@@ -19,6 +19,14 @@ path = "rust/src/bin/ul.rs"
 [[bin]]
 name = "unlaw"
 path = "rust/src/bin/unlaw.rs"
+
+[[bin]]
+name = "ula"
+path = "rust/src/bin/ula.rs"
+
+[[bin]]
+name = "unlawagent"
+path = "rust/src/bin/unlawagent.rs"
 
 [dependencies]
 crossterm = { version = "0.28", default-features = false, features = ["events"] }

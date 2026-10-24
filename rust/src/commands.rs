@@ -200,6 +200,8 @@ pub fn environment(command: &UserCommand, config: &Config) -> Vec<(&'static str,
         ("UNLAW_COMMAND_DIR", command.directory().as_os_str().to_owned()),
         ("UNLAW_CONFIG_DIR", config_dir().into_os_string()),
         ("UNLAW_STORAGE", config.storage_root().into_os_string()),
+        // So commands can call back into the same ul, even when it is not on PATH.
+        ("UNLAW_BIN", env::current_exe().map(PathBuf::into_os_string).unwrap_or_else(|_| "ul".into())),
     ]
 }
 

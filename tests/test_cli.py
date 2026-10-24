@@ -41,7 +41,7 @@ class CliTests(CoreTestCase):
 
     def test_cli_reports_version_3_with_the_build_commit(self) -> None:
         line = self.ok("--version").stdout
-        self.assertRegex(line, r"^Unlaw 3\.2\.0( \([0-9a-f]{7}\))?\n$")
+        self.assertRegex(line, r"^Unlaw 3\.3\.0( \([0-9a-f]{7}\))?\n$")
         self.assertEqual(self.ok("version").stdout, line)
         self.assertIn(line.strip().replace("Unlaw ", "version "), self.ok("doctor", "--verbose", timeout=60).stdout)
 

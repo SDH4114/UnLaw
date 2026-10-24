@@ -21,6 +21,10 @@ pub fn summary(name: &str) -> &'static str {
     BUILTINS.iter().find(|(builtin, _)| *builtin == name).and_then(|(_, help)| help.lines().next()).unwrap_or("")
 }
 
+pub fn help(name: &str) -> &'static str {
+    BUILTINS.iter().find(|(builtin, _)| *builtin == name).map(|(_, help)| *help).unwrap_or("")
+}
+
 pub fn run(name: &str, args: &[String], config: &Config) -> Option<i32> {
     Some(match name {
         "game" => game::run(args, config),

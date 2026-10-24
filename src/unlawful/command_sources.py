@@ -58,6 +58,8 @@ LEGACY_SOURCE_HASHES: dict[str, set[str]] = {
     "tg": {
         "d228c0425aebe27fe3e211415b10e18bbc80bc4f7ab5b4c0b9f55913a6e1a1a3",
         "57fccff311bac90c76557a33cb75d041c570408906e1df32237141a94175aadf",
+        # Release 3.2.0, with the token in the Keychain.
+        "d3c4fa40083e42b6e5faebb550ded46d5f94552462a2d2b9b782c9174408cb8f",
     },
     "todo": {"d74e2f777a824840c8d064c2a9237dcbfd78ed6e28cda1d3054c42f19a64b9d0"},
     "work": {"35b3d9d20deb6d2927a36446d1986439ab18184f14a67b27dc6b47eef4da8e27"},
@@ -161,6 +163,27 @@ from __future__ import annotations
 """
 
 _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
+    "agent": {
+        "storage": {"root": "data"},
+        "telegram": {
+            "chat_id": "",
+            "api_base": "https://api.telegram.org",
+            "keychain_service": "unlaw.telegram",
+        },
+        "lm": {"port": 1234},
+        "todo": {"completed_column": "Completed"},
+        "agent": {
+            "model": "auto",
+            "roots": ["~"],
+            "allowed_ids": [],
+            "commands": ["todo", "capture", "music", "yt", "zip", "tg"],
+            "max_steps": 12,
+            "confirm_timeout": 300,
+            "digest_time": "",
+            "system_prompt": "",
+            "users": {},
+        },
+    },
     "browser": {"apps": {"browser_url": "https://duckduckgo.com/"}},
     "capture": {
         "storage": {"root": "data"},
@@ -321,6 +344,7 @@ def latest_capture() -> Path | None:
 '''
 
 _COMMAND_FILES: dict[str, tuple[str, ...]] = {
+    "agent": ("agent.py",),
     "app": ("built_in_commands/app/main.py",),
     "browser": ("built_in_commands/browser/main.py",),
     "capture": ("capture.py",),
@@ -352,7 +376,7 @@ def _support_source(name: str) -> str:
         parts.append(_CONFIG_SUPPORT.replace("__DEFAULT_CONFIG__", rendered))
     if name in {"cpp", "py", "rust"}:
         parts.append(_TEMPLATES_SUPPORT)
-    if name in {"capture", "tg", "yt"}:
+    if name in {"agent", "capture", "tg", "yt"}:
         parts.append(_STORAGE_SUPPORT)
     if name == "tg":
         parts.extend((_CONFIG_WRITE_SUPPORT, _LATEST_CAPTURE_SUPPORT))

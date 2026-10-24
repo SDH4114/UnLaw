@@ -90,6 +90,31 @@ Example: ul list
 ",
     ),
     (
+        "skills",
+        "Install an Agent Skill that teaches coding agents to use ul.
+Usage:
+  ul skills install [--project|--path <dir>] [--claude]
+  ul skills list                      Show installs and whether they are current
+  ul skills show [command]            Print SKILL.md or one command's reference page
+  ul skills remove [--project|--path <dir>|--all]
+Options:
+  (default)        ~/.agents/skills/unlaw, read by Codex and other agents
+  --project        ./.agents/skills/unlaw in the current directory
+  --path <dir>     <dir>/unlaw
+  --claude         Also link it where Claude Code looks (~/.claude/skills/unlaw,
+                   or ./.claude/skills/unlaw with --project)
+SKILL.md tells agents to discover commands live (`ul commands --describe`,
+`ul <command> --help`), so new commands work without reinstalling. The
+reference/ snapshot is regenerated automatically after `ul update`, new or
+changed commands. Only files the skill created are ever removed; existing
+folders it did not create are never overwritten.
+Examples:
+  ul skills install --claude
+  ul skills install --project
+  ul skills show todo
+",
+    ),
+    (
         "templates",
         "List saved project templates.
 Usage: ul templates

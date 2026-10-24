@@ -24,6 +24,7 @@ def main() -> int:
         RETIRED_NORMALIZED_HASHES,
         command_source,
     )
+    from unlawful.command_help import COMMAND_HELP
     from unlawful.config import DEFAULT_COMMAND_NAMES, DEFAULT_CONFIG, serialize_config
 
     seeds = output / "seeds"
@@ -40,6 +41,12 @@ def main() -> int:
         lines.append(
             f'    ({json.dumps(name)}, include_str!(concat!(env!("OUT_DIR"), "/seeds/{name}.py")), &[{hashes}]),'
         )
+    lines.append("];")
+    lines.append("/// Help of each seeded command as shipped, for `ul skills` reference pages.")
+    lines.append("pub const SEED_HELP: &[(&str, &str)] = &[")
+    for name in DEFAULT_COMMAND_NAMES:
+        (seeds / f"{name}.help.txt").write_text(COMMAND_HELP[name], encoding="utf-8")
+        lines.append(f'    ({json.dumps(name)}, include_str!(concat!(env!("OUT_DIR"), "/seeds/{name}.help.txt"))),')
     lines.append("];")
     lines.append("/// Former seeded commands now built into the core: (name, exact hashes, blank-line-free hashes).")
     lines.append("pub const RETIRED: &[(&str, &[&str], &[&str])] = &[")

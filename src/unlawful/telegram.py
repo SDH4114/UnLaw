@@ -3,6 +3,7 @@ from __future__ import annotations
 import getpass
 import json
 import mimetypes
+import os
 import subprocess
 import sys
 import urllib.error
@@ -14,13 +15,13 @@ from pathlib import Path
 from typing import Any
 
 from unlawful.command_help import COMMAND_HELP
-from .config import ConfigError, load_config, set_config_value, storage_path
+from .config import ConfigError, config_dir, load_config, set_config_value, storage_path
 
 USAGE = """Usage: ul tg                              Open Telegram
        ul tg <message>|send <message-or-file>|photo <file>|video <file>|file <path>|capture
        ul tg setup|status|last|download [directory]
 
-The bot token is stored in macOS Keychain, never in config.toml.
+The bot token is stored in .env next to config.toml (mode 600), never in config.toml.
 """
 
 
@@ -28,29 +29,68 @@ def _settings() -> dict[str, str]:
     return load_config()["telegram"]
 
 
-def read_token() -> str:
-    service = _settings()["keychain_service"]
-    result = subprocess.run(
-        ["security", "find-generic-password", "-a", "unlaw", "-s", service, "-w"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
-        raise RuntimeError("Telegram token is not configured; run `ul tg setup`.")
-    return result.stdout.strip()
+TOKEN_KEY = "TELEGRAM_BOT_TOKEN"
+
+
+def env_file() -> Path:
+    """The bot token lives next to config.toml in .env, readable only by you."""
+    return config_dir() / ".env"
+
+
+def _env_lines() -> list[str]:
+    try:
+        return env_file().read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return []
+
+
+def _keychain_token(service: str) -> str:
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-a", "unlaw", "-s", service, "-w"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def stored_token(keychain_service: str) -> str:
+    """The token in .env; tokens saved before Unlaw 3.3 are still read from the Keychain."""
+    for line in _env_lines():
+        key, _, value = line.partition("=")
+        if key.strip() == TOKEN_KEY and value.strip().strip("'\""):
+            return value.strip().strip("'\"")
+    return _keychain_token(keychain_service)
 
 
 def store_token(token: str) -> None:
-    service = _settings()["keychain_service"]
-    result = subprocess.run(
-        ["security", "add-generic-password", "-a", "unlaw", "-s", service, "-w", token, "-U"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or "could not write macOS Keychain").strip())
+    token = token.strip()
+    if not token or any(character.isspace() for character in token):
+        raise ValueError("the token must be one word without spaces")
+    lines = [line for line in _env_lines() if line.partition("=")[0].strip() != TOKEN_KEY]
+    lines.append(f"{TOKEN_KEY}={token}")
+    path = env_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".env.{os.getpid()}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    path.chmod(0o600)
+
+
+def read_token() -> str:
+    token = stored_token(_settings()["keychain_service"])
+    if not token:
+        raise RuntimeError("Telegram token is not configured; run `ul tg setup`.")
+    return token
 
 
 def classify_file(path: Path) -> tuple[str, str]:
@@ -154,9 +194,9 @@ def _setup() -> int:
     if not token:
         raise ValueError("token cannot be empty")
     chat_id = input("Default chat ID (leave empty to discover): ").strip()
-    store_token(token)
     client = TelegramClient(token, _settings()["api_base"])
     result = client.request("getMe", {})
+    store_token(token)
     chat_id = chat_id or discover_chat_id(client)
     set_config_value("telegram.chat_id", chat_id)
     username = result.get("result", {}).get("username", "unknown")

@@ -12,6 +12,7 @@ mod config_cmd;
 mod help;
 mod layout;
 mod shell;
+mod skills;
 mod system;
 mod update;
 mod util;
@@ -47,6 +48,7 @@ fn system(name: &str, args: &[String]) -> Option<i32> {
         "doctor" => system::doctor(args),
         "init" => system::init(args),
         "list" => system::list_all(args),
+        "skills" => skills::run(args),
         "templates" => system::list_templates(args),
         "update" => update::run(args),
         "venv" => system::venv(args),
@@ -194,7 +196,13 @@ pub fn main_with(argv: Vec<String>) -> i32 {
             return 2;
         }
     };
+    if name != "skills" {
+        skills::refresh_if_stale(&config);
+    }
     if let Some(code) = system(&name, &rest) {
+        if name == "create" && code == 0 {
+            skills::refresh_if_stale(&config);
+        }
         return code;
     }
     let aliases = config.aliases();
@@ -233,6 +241,12 @@ pub fn main_with(argv: Vec<String>) -> i32 {
 
 pub fn run() -> i32 {
     let argv: Vec<String> = env::args_os().skip(1).map(|arg| arg.to_string_lossy().into_owned()).collect();
+    main_with(argv)
+}
+
+/// `ula` and `unlawagent`: shortcuts for `ul agent ...`.
+pub fn run_agent() -> i32 {
+    let argv = std::iter::once("agent".to_string()).chain(env::args_os().skip(1).map(|arg| arg.to_string_lossy().into_owned())).collect();
     main_with(argv)
 }
 

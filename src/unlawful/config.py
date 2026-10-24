@@ -68,10 +68,22 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "temperature": 0.7,
         "max_tokens": 4096,
     },
+    "agent": {
+        "model": "auto",
+        "roots": ["~"],
+        "allowed_ids": [],
+        "commands": ["todo", "capture", "music", "yt", "zip", "tg"],
+        "max_steps": 12,
+        "confirm_timeout": 300,
+        "digest_time": "",
+        "system_prompt": "",
+        "users": {},
+    },
 }
 
 TEMPLATE_NAMES = ("commands", "python", "rust", "cpp", "projects")
 DEFAULT_COMMAND_NAMES = (
+    "agent",
     "app",
     "browser",
     "capture",
@@ -100,6 +112,9 @@ STORAGE_SUBDIRECTORIES = (
     ("runtime",),
 )
 BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
+TELEGRAM_ID = re.compile(r"^-?[0-9]+$")
+CLOCK = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
+AGENT_LEVELS = ("chat", "read", "full")
 
 
 class ConfigError(ValueError):
@@ -205,6 +220,44 @@ def _expect(
         raise ConfigError(f"Invalid {dotted}: expected one of {expected}")
 
 
+def _agent_errors(agent: Any) -> list[str]:
+    """Rules for list and table keys of [agent]; mirrored in rust/src/config.rs."""
+    if not isinstance(agent, dict):
+        return ["Invalid agent: expected table"]
+    errors: list[str] = []
+
+    def strings(key: str, message: str, valid: Any = lambda item: isinstance(item, str) and bool(item)) -> None:
+        items = agent.get(key)
+        if not isinstance(items, list) or not all(valid(item) for item in items):
+            errors.append(f"Invalid agent.{key}: {message}")
+
+    def telegram_id(item: Any) -> bool:
+        if isinstance(item, bool):
+            return False
+        return isinstance(item, int) or (isinstance(item, str) and bool(TELEGRAM_ID.fullmatch(item)))
+
+    strings("roots", "expected an array of non-empty strings")
+    strings("allowed_ids", "expected an array of Telegram ids", telegram_id)
+    strings("commands", "expected an array of command names")
+    steps = agent.get("max_steps")
+    if isinstance(steps, int) and not isinstance(steps, bool) and not 1 <= steps <= 100:
+        errors.append("Invalid agent.max_steps: must be between 1 and 100")
+    timeout = agent.get("confirm_timeout")
+    if isinstance(timeout, int) and not isinstance(timeout, bool) and timeout < 1:
+        errors.append("Invalid agent.confirm_timeout: must be greater than zero")
+    digest = agent.get("digest_time")
+    if isinstance(digest, str) and digest and not CLOCK.fullmatch(digest):
+        errors.append("Invalid agent.digest_time: expected HH:MM or an empty string")
+    users = agent.get("users")
+    if not isinstance(users, dict):
+        errors.append("Invalid agent.users: expected table")
+    else:
+        for user, level in users.items():
+            if not TELEGRAM_ID.fullmatch(user) or level not in AGENT_LEVELS:
+                errors.append(f'Invalid agent.users.{user}: expected "chat", "read" or "full"')
+    return errors
+
+
 def validate_config(config: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     checks = (
@@ -253,6 +306,11 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ("lm.system_prompt", str, None),
         ("lm.temperature", (int, float), None),
         ("lm.max_tokens", int, None),
+        ("agent.model", str, None),
+        ("agent.max_steps", int, None),
+        ("agent.confirm_timeout", int, None),
+        ("agent.digest_time", str, None),
+        ("agent.system_prompt", str, None),
     )
     for dotted, kind, choices in checks:
         try:
@@ -304,6 +362,7 @@ def validate_config(config: dict[str, Any]) -> list[str]:
             errors.append("Invalid zip.level: expected 0-9 or store, fastest, fast, normal, max, ultra")
     except ConfigError as error:
         errors.append(str(error))
+    errors.extend(_agent_errors(config.get("agent")))
     aliases = config.get("aliases")
     if not isinstance(aliases, dict):
         errors.append("Invalid aliases: expected table")

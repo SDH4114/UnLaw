@@ -302,6 +302,11 @@ const CHECKS: &[(&str, Kind, &[&str])] = &[
     ("lm.system_prompt", Kind::Str, &[]),
     ("lm.temperature", Kind::Number, &[]),
     ("lm.max_tokens", Kind::Int, &[]),
+    ("agent.model", Kind::Str, &[]),
+    ("agent.max_steps", Kind::Int, &[]),
+    ("agent.confirm_timeout", Kind::Int, &[]),
+    ("agent.digest_time", Kind::Str, &[]),
+    ("agent.system_prompt", Kind::Str, &[]),
 ];
 
 fn number(value: Option<&Value>) -> Option<f64> {
@@ -314,6 +319,65 @@ fn number(value: Option<&Value>) -> Option<f64> {
 
 fn bare_key(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn telegram_id(text: &str) -> bool {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+}
+
+fn clock(text: &str) -> bool {
+    let Some((hours, minutes)) = text.split_once(':') else {
+        return false;
+    };
+    let two_digits = |part: &str| part.len() == 2 && part.chars().all(|c| c.is_ascii_digit());
+    two_digits(hours) && two_digits(minutes) && hours < "24" && minutes < "60"
+}
+
+/// List and table keys of [agent]; same rules as `unlawful.config._agent_errors`.
+fn agent_errors(agent: Option<&Value>) -> Vec<String> {
+    let Some(agent @ Value::Table(_)) = agent else {
+        return vec!["Invalid agent: expected table".into()];
+    };
+    let mut errors = Vec::new();
+    let non_empty = |item: &Value| matches!(item, Value::Str(text) if !text.is_empty());
+    let id = |item: &Value| matches!(item, Value::Int(_)) || matches!(item, Value::Str(text) if telegram_id(text));
+    for (key, message, valid) in [
+        ("roots", "expected an array of non-empty strings", &non_empty as &dyn Fn(&Value) -> bool),
+        ("allowed_ids", "expected an array of Telegram ids", &id),
+        ("commands", "expected an array of command names", &non_empty),
+    ] {
+        if !matches!(agent.get(key), Some(Value::Array(items)) if items.iter().all(valid)) {
+            errors.push(format!("Invalid agent.{key}: {message}"));
+        }
+    }
+    if let Some(Value::Int(steps)) = agent.get("max_steps") {
+        if !(1..=100).contains(steps) {
+            errors.push("Invalid agent.max_steps: must be between 1 and 100".into());
+        }
+    }
+    if let Some(Value::Int(timeout)) = agent.get("confirm_timeout") {
+        if *timeout < 1 {
+            errors.push("Invalid agent.confirm_timeout: must be greater than zero".into());
+        }
+    }
+    if let Some(Value::Str(digest)) = agent.get("digest_time") {
+        if !digest.is_empty() && !clock(digest) {
+            errors.push("Invalid agent.digest_time: expected HH:MM or an empty string".into());
+        }
+    }
+    match agent.get("users") {
+        Some(Value::Table(users)) => {
+            for (user, level) in users {
+                let ok = telegram_id(user) && matches!(level, Value::Str(text) if ["chat", "read", "full"].contains(&text.as_str()));
+                if !ok {
+                    errors.push(format!("Invalid agent.users.{user}: expected \"chat\", \"read\" or \"full\""));
+                }
+            }
+        }
+        _ => errors.push("Invalid agent.users: expected table".into()),
+    }
+    errors
 }
 
 /// Same rules and messages as `unlawful.config.validate_config`.
@@ -382,6 +446,7 @@ pub fn validate(config: &Value) -> Vec<String> {
             }
         }
     }
+    errors.extend(agent_errors(config.get("agent")));
     match config.get("aliases") {
         Some(Value::Table(entries)) => {
             for (name, tokens) in entries {

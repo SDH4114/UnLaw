@@ -247,7 +247,7 @@ class TelegramTests(ServiceTestCase):
         self.assertEqual(code, 1)
         self.assertIn("no Unlaw captures found", error)
 
-    def test_setup_stores_token_and_discovers_chat(self) -> None:
+    def test_setup_stores_token_in_env_and_discovers_chat(self) -> None:
         self.keychain.unlink()
         new = "999:new"
         self.server.routes[f"/bot{new}/getMe"] = {"ok": True, "result": {"username": "fresh_bot"}}
@@ -256,21 +256,37 @@ class TelegramTests(ServiceTestCase):
             code, out, error = self.run_main(telegram.main, ["setup"])
         self.assertEqual(code, 0, error)
         self.assertEqual(out, "Telegram connected: @fresh_bot\n")
-        self.assertEqual(self.keychain.read_text(), new)
-        from unlawful.config import load_config
+        from unlawful.config import config_dir, load_config
 
+        env = config_dir() / ".env"
+        self.assertEqual(env.read_text(), f"TELEGRAM_BOT_TOKEN={new}\n")
+        self.assertEqual(env.stat().st_mode & 0o777, 0o600)
+        self.assertFalse(self.keychain.exists(), "the Keychain is no longer written")
         self.assertEqual(load_config()["telegram"]["chat_id"], "77")
+        self.assertEqual(telegram.read_token(), new)
 
-    def test_setup_rejects_empty_token_and_keychain_failure(self) -> None:
+    def test_env_token_wins_and_other_env_lines_survive(self) -> None:
+        from unlawful.config import config_dir
+
+        env = config_dir() / ".env"
+        env.write_text("OTHER=1\nTELEGRAM_BOT_TOKEN='555:env'\n")
+        self.assertEqual(telegram.read_token(), "555:env")
+        telegram.store_token("666:next")
+        self.assertEqual(env.read_text(), "OTHER=1\nTELEGRAM_BOT_TOKEN=666:next\n")
+        env.unlink()
+        self.assertEqual(telegram.read_token(), self.TOKEN, "old Keychain tokens still work")
+
+    def test_setup_rejects_empty_and_invalid_tokens(self) -> None:
         with patch.object(telegram.getpass, "getpass", return_value=""):
             code, _, error = self.run_main(telegram.main, ["setup"])
         self.assertEqual(code, 1)
         self.assertIn("token cannot be empty", error)
-        self.tool("security", "import sys\nsys.stderr.write('keychain locked')\nraise SystemExit(1)\n")
-        with patch.object(telegram.getpass, "getpass", return_value="x"), patch("builtins.input", return_value="1"):
+        with patch.object(telegram.getpass, "getpass", return_value="1:bad"), patch("builtins.input", return_value="1"):
             code, _, error = self.run_main(telegram.main, ["setup"])
         self.assertEqual(code, 1)
-        self.assertIn("keychain locked", error)
+        from unlawful.config import config_dir
+
+        self.assertFalse((config_dir() / ".env").exists(), "a token Telegram rejects is not saved")
 
     def test_no_arguments_on_a_terminal_opens_the_app(self) -> None:
         tty = io.StringIO()

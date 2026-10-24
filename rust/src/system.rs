@@ -20,15 +20,15 @@ use crate::workspace;
 
 const COMMAND_TEMPLATE: &str = include_str!("../assets/command_main.py");
 
-struct Record {
-    name: String,
-    source: &'static str,
-    path: Option<PathBuf>,
-    expansion: Option<Vec<String>>,
-    summary: Option<String>,
+pub(crate) struct Record {
+    pub name: String,
+    pub source: &'static str,
+    pub path: Option<PathBuf>,
+    pub expansion: Option<Vec<String>>,
+    pub summary: Option<String>,
 }
 
-fn records(config: &Config, describe: bool) -> Vec<Record> {
+pub(crate) fn records(config: &Config, describe: bool) -> Vec<Record> {
     let discovered = commands::discover();
     let mut by_name: BTreeMap<String, Record> = BTreeMap::new();
     for name in system_names() {
@@ -312,6 +312,22 @@ pub fn complete(args: &[String]) -> i32 {
             candidate("command", "Create commands/<name> (--lang python|rust)"),
             candidate("template", "Save the current project as a template"),
         ],
+        (2, Some("skills")) => [
+            ("install", "Install the agent skill (--project, --path, --claude)"),
+            ("list", "Show installs"),
+            ("show", "Print SKILL.md or a command's reference"),
+            ("remove", "Remove an install (--project, --path, --all)"),
+        ]
+        .iter()
+        .map(|(name, text)| candidate(name, text))
+        .collect(),
+        (3, Some("skills")) if words.get(1).is_some_and(|word| word == "show") => all_commands(),
+        (_, Some("skills")) if words.get(1).is_some_and(|word| word == "install" || word == "remove") => {
+            [("--project", "Current directory"), ("--path", "Another directory"), ("--claude", "Link for Claude Code"), ("--all", "Every install (remove)")]
+                .iter()
+                .map(|(name, text)| candidate(name, text))
+                .collect()
+        }
         (2, Some("completion")) => vec![candidate("zsh", "Zsh completion code")],
         (2, Some("commands")) => ["--verbose", "--describe", "--json"].iter().map(|f| candidate(f, "")).collect(),
         (2, Some("update")) => [("--check", "Compare with GitHub"), ("--branch", "Install a branch"), ("--tag", "Install a tag")]
@@ -775,7 +791,7 @@ fn doctor_checks() -> Vec<Check> {
         tool("7-Zip", "7z", "needed by `ul zip` for 7z, rar reading and AES zip"),
         tool("zstd", "zstd", "needed by `ul zip` for .tar.zst and .zst"),
         tool("RAR", "rar", "optional; needed to create .rar with `ul zip -f rar`"),
-        tool("macOS Keychain", "security", "needed to store the Telegram token"),
+        tool("macOS Keychain", "security", "optional; reads Telegram tokens saved before Unlaw 3.3"),
         Check {
             name: "Unlaw PATH",
             available: unlaw_bin.as_deref().is_some_and(bin_precedes_system),

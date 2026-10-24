@@ -89,7 +89,7 @@ class ConfigTests(unittest.TestCase):
             compile(source, str(script), "exec")
 
     def test_seeded_commands_include_only_their_own_config_defaults(self) -> None:
-        from unlawful.config import ensure_layout
+        from unlawful.config import DEFAULT_CONFIG, ensure_layout
 
         expected = {
             "browser": {"apps": {"browser_url": "https://duckduckgo.com/"}},
@@ -136,6 +136,17 @@ class ConfigTests(unittest.TestCase):
             },
             "yt": {"storage": {"root": "data"}, "apps": {"youtube_url": "https://www.youtube.com/"}},
             "zed": {"apps": {"editor": "Zed"}},
+            "agent": {
+                "storage": {"root": "data"},
+                "telegram": {
+                    "chat_id": "",
+                    "api_base": "https://api.telegram.org",
+                    "keychain_service": "unlaw.telegram",
+                },
+                "lm": {"port": 1234},
+                "todo": {"completed_column": "Completed"},
+                "agent": DEFAULT_CONFIG["agent"],
+            },
         }
         with patch.dict(os.environ, self.env, clear=False):
             root = ensure_layout()

@@ -89,6 +89,8 @@ ul doctor --json                # diagnostics for scripts
 ul completion zsh               # zsh completion
 ul version
 ul update --check              # is there a new version on GitHub
+ul skills install --claude      # teach coding agents to use ul
+ul agent                        # local AI agent: files, TODO, schedule, Telegram
 ```
 
 Global options:
@@ -308,6 +310,7 @@ No SDK is needed: Unlaw passes environment variables to the command.
 | `UNLAW_COMMAND_DIR` | command folder |
 | `UNLAW_CONFIG_DIR` | Unlaw config folder (`config.toml`) |
 | `UNLAW_STORAGE` | resolved `storage.root` path for the command's files |
+| `UNLAW_BIN` | absolute path of the running `ul`, for calling other commands |
 
 ```sh
 #!/bin/sh
@@ -563,7 +566,7 @@ Set the default with `ul config set games.difficulty hard`.
 
 ```bash
 ul tg                              # open the Telegram app
-ul tg setup                        # token is stored hidden in macOS Keychain
+ul tg setup                        # token goes to ~/.config/unlaw/.env (mode 600)
 ul tg "Message from the terminal"
 ul tg send report.pdf
 ul tg photo screenshot.png
@@ -577,6 +580,69 @@ ul tg status
 
 The bot token is never written to `config.toml` or Git. For a private chat, first
 message the bot, then enter its `chat_id` during `setup`.
+
+## Local agent
+
+`ul agent` is a personal agent on the `ul lm` model. You talk to it in the
+terminal or in Telegram; it reads and searches your files, works with the TODO
+board, schedules jobs and, with your approval, changes things on the Mac.
+
+`ula` and `unlawagent` are shortcuts: `ula today` is `ul agent today`.
+The agent only uses local models from `ul lm`; `ul agent setup` lists the downloaded
+ones to choose from.
+
+```bash
+ul agent setup                              # model, Telegram, folders, background
+ul agent                                    # chat in the terminal (/new, /today, /plan)
+ul agent "what is in ~/Downloads?"          # one task
+ul agent today                              # open tasks + today's scheduled jobs
+ul agent schedule 9:00 "summarize my TODO board" --repeat daily
+ul agent plan                               # everything scheduled
+ul agent unschedule <id>
+ul agent start                              # Telegram + schedule in the background (launchd)
+ul agent status
+ul agent stop
+ul agent log                                # what the agent did
+```
+
+- The model runs in `ul lm serve` on 127.0.0.1; the agent starts it when needed.
+- Reading, listing and searching work only inside `agent.roots` (default `~`).
+  SSH keys, `.env` files, the keychain and Unlaw's config are always blocked.
+- Writing, editing, moving, deleting (to the Trash), shell commands and `ul`
+  commands from `agent.commands` need approval: `[y/N]` in the terminal,
+  Yes/No buttons in Telegram. No answer within `agent.confirm_timeout` seconds
+  means no.
+- Telegram needs a bot token (`ul agent setup`). Only `telegram.chat_id` (you, full access) and
+  `agent.allowed_ids` get answers; other ids may only chat unless
+  `agent.users.<id>` is `"read"` or `"full"`. Approvals always come to you.
+- Voice messages are transcribed, photos go to a vision model.
+- `agent.digest_time = "08:30"` sends today's tasks and jobs every morning.
+
+```bash
+ul config set agent.roots '["~/giti", "~/Documents", "~/Downloads"]'
+ul config set agent.allowed_ids '["123456789"]'
+ul config set agent.users.123456789 read
+```
+
+## Agent skills
+
+`ul skills install` writes an Agent Skill (`SKILL.md`) that teaches
+coding agents (Codex, Claude Code and others) to use `ul`.
+
+```bash
+ul skills install               # ~/.agents/skills/unlaw
+ul skills install --claude      # plus a link in ~/.claude/skills
+ul skills install --project     # ./.agents/skills/unlaw in the current project
+ul skills list
+ul skills show todo             # one command's reference page
+ul skills remove
+```
+
+`SKILL.md` tells agents to discover commands live (`ul commands --describe`,
+`ul <command> --help`), so new commands work right away. The `reference/`
+snapshot is regenerated automatically after `ul update` and whenever commands
+are added, changed or removed. Folders the skill did not create are never
+overwritten.
 
 ## Local models (MLX)
 
@@ -749,8 +815,9 @@ cargo build --release
 ```
 
 Unlaw 3 stays local-first: commands don't use shell strings, `ul lm` listens only
-on loopback and never calls cloud models, and the Telegram secret is stored in
-macOS Keychain. External apps and permissions stay explicitly visible through
+on loopback and never calls cloud models, and the Telegram token is kept out of
+`config.toml` in `.env` next to it, readable only by you (tokens saved before 3.3
+are still read from the macOS Keychain). External apps and permissions stay explicitly visible through
 `ul doctor`.
 
 ### Command help and YouTube downloads
