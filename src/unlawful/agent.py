@@ -242,6 +242,22 @@ class Model:
             time.sleep(1)
         raise RuntimeError("`ul lm serve` did not start in time")
 
+    def calls_tools(self) -> bool:
+        """Ask for one trivial tool call; small models often answer in text instead."""
+        probe = {
+            "type": "function",
+            "function": {
+                "name": "list_dir",
+                "description": "List a folder on the user's Mac.",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+            },
+        }
+        messages = [
+            {"role": "system", "content": "You are an agent on the user's Mac. Use tools to act."},
+            {"role": "user", "content": "What is in my home folder ~ ?"},
+        ]
+        return bool(self.chat(messages, [probe]).get("tool_calls"))
+
     def chat(self, messages: list[dict], tools: list[dict]) -> dict:
         payload: dict[str, Any] = {
             "model": self.name,
@@ -1291,6 +1307,18 @@ class Bot:
         self.backlog: list[dict] = []
         self.poll_timeout = 25
 
+    def reload(self) -> None:
+        """Pick up config changes (model, ids, folders) without restarting the bot."""
+        try:
+            config = load_config()
+        except ConfigError as error:
+            print(f"unlaw agent: keeping the previous settings: {error}", file=sys.stderr)
+            return
+        self.config = config
+        self.model.name = str(config["agent"]["model"]) or "auto"
+        self.allowed = {self.owner, *(str(item) for item in config["agent"]["allowed_ids"])}
+        self.levels = {str(key): str(value) for key, value in config["agent"]["users"].items()}
+
     def level(self, chat_id: str) -> str:
         return "full" if chat_id == self.owner else self.levels.get(chat_id, "chat")
 
@@ -1417,6 +1445,7 @@ class Bot:
         self.send(chat_id, answer)
 
     def handle(self, update: dict) -> None:
+        self.reload()
         if "callback_query" in update:
             query = update["callback_query"]
             self.telegram.call(
@@ -1704,6 +1733,22 @@ def _choose_model(config: dict) -> None:
         answer = "auto" if number == 0 else models[number - 1]["id"]
     _set("agent.model", answer)
     print(f"Model: {answer}")
+    model = Model(load_config())
+    print("Checking that it can use tools (loads the model, may take a minute) ...")
+    try:
+        model.ensure()
+        works = model.calls_tools()
+    except RuntimeError as error:
+        print(f"Could not check the model: {error}")
+        return
+    if works:
+        print("It calls tools: files, TODO and schedule will work.")
+        return
+    print(f"{answer} answers in text but never calls tools, so it cannot see or change anything.")
+    print("Small models (2-4B, 2-bit) usually cannot; pick a bigger one (9B or more).")
+    if not _yes("Choose another model?", True):
+        return
+    _choose_model(load_config())
 
 
 def _connect_telegram(config: dict) -> bool:

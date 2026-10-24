@@ -417,6 +417,17 @@ class BotTests(AgentCase):
         self.assertEqual(self.telegram.sent()[-1]["text"], "hello owner")
         self.assertIn("write_file", model.tool_names())
 
+    def test_config_changes_apply_without_restart(self) -> None:
+        bot, model = self.bot([{"content": "a"}, {"content": "b"}])
+        bot.handle(self.telegram.message("42", text="hi"))
+        self.assertEqual(model.requests[0]["model"], "auto")
+        self.ok("config", "set", "agent.model", "Big-27B")
+        self.ok("config", "set", "agent.allowed_ids", '["9"]')
+        bot.handle(self.telegram.message("42", text="again"))
+        self.assertEqual(model.requests[1]["model"], "Big-27B")
+        bot.handle(self.telegram.message("7", text="hi"))
+        self.assertEqual(len(model.requests), 2, "7 was removed from agent.allowed_ids")
+
     def test_levels_limit_tools(self) -> None:
         bot, model = self.bot([{"content": "a"}, {"content": "b"}])
         bot.handle(self.telegram.message("7", text="hi"))
@@ -561,17 +572,25 @@ class SetupTests(AgentCase):
         self.assertFalse((self.unlaw / ".env").exists())
         self.assertEqual(json.loads(self.ok("config", "get", "agent.roots").stdout), ["~/work"])
 
-    def test_model_choice_by_number(self) -> None:
+    def test_model_choice_by_number_and_tool_check(self) -> None:
         from unlawful import agent
 
-        models = [{"id": "Qwen-chat", "type": "text", "runnable": True}, {"id": "Vision-chat", "type": "vision", "runnable": True}]
+        models = [{"id": "Tiny-2B", "type": "text", "runnable": True}, {"id": "Big-27B", "type": "text", "runnable": True}]
         saved: list[tuple[str, object]] = []
         config = {"agent": {"model": "auto"}}
+        probes = iter([False, True])  # the small model answers in text, the big one calls tools
+        output = io.StringIO()
         with patch.object(agent, "_chat_models", return_value=models), patch.object(
             agent, "_set", lambda key, value: saved.append((key, value))
-        ), patch.object(sys, "stdin", io.StringIO("2\n")):
+        ), patch.object(agent, "load_config", return_value={"lm": {"port": 1}, "agent": {"model": "auto"}}), patch.object(
+            agent.Model, "ensure", lambda self: None
+        ), patch.object(agent.Model, "calls_tools", lambda self: next(probes)), patch.object(
+            sys, "stdin", io.StringIO("1\n\n2\n")
+        ), patch.object(sys, "stdout", output):
             agent._choose_model(config)
-        self.assertEqual(saved, [("agent.model", "Vision-chat")])
+        self.assertEqual(saved, [("agent.model", "Tiny-2B"), ("agent.model", "Big-27B")])
+        self.assertIn("never calls tools", output.getvalue())
+        self.assertIn("It calls tools", output.getvalue())
 
     def test_ula_and_unlawagent_are_ul_agent(self) -> None:
         if shutil.which("cargo") is None:
@@ -583,3 +602,17 @@ class SetupTests(AgentCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, "Nothing is scheduled.\n")
+        # Regression: setup through `ula` called `$UNLAW_BIN lm list`, which was `ula`
+        # itself, so it became an agent task and hung.
+        self.env["HF_HUB_CACHE"] = str(self.root / "hf")
+        result = subprocess.run(
+            [str(ROOT / "target" / "debug" / "ula"), "setup"],
+            env=self.env,
+            input="n\n~/work\n",
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("No downloaded chat model yet", result.stdout)

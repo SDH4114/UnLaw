@@ -201,8 +201,18 @@ pub fn environment(command: &UserCommand, config: &Config) -> Vec<(&'static str,
         ("UNLAW_CONFIG_DIR", config_dir().into_os_string()),
         ("UNLAW_STORAGE", config.storage_root().into_os_string()),
         // So commands can call back into the same ul, even when it is not on PATH.
-        ("UNLAW_BIN", env::current_exe().map(PathBuf::into_os_string).unwrap_or_else(|_| "ul".into())),
+        ("UNLAW_BIN", ul_executable(env::current_exe().ok()).into_os_string()),
     ]
+}
+
+/// The `ul` next to the running binary. `ula`/`unlawagent` prepend `agent`,
+/// so handing them out would turn `$UNLAW_BIN lm list` into an agent task.
+fn ul_executable(current: Option<PathBuf>) -> PathBuf {
+    match current {
+        Some(path) if path.file_name().is_some_and(|name| name == "ula" || name == "unlawagent") => path.with_file_name("ul"),
+        Some(path) => path,
+        None => PathBuf::from("ul"),
+    }
 }
 
 pub struct RunOptions {
@@ -390,6 +400,14 @@ pub fn summary(command: &UserCommand) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_shortcuts_hand_out_the_plain_ul() {
+        assert_eq!(ul_executable(Some("/x/bin/ula".into())), PathBuf::from("/x/bin/ul"));
+        assert_eq!(ul_executable(Some("/x/bin/unlawagent".into())), PathBuf::from("/x/bin/ul"));
+        assert_eq!(ul_executable(Some("/x/bin/unlaw".into())), PathBuf::from("/x/bin/unlaw"));
+        assert_eq!(ul_executable(None), PathBuf::from("ul"));
+    }
 
     #[test]
     fn docstrings_after_comments_and_on_many_lines() {
