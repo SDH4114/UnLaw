@@ -1,0 +1,182 @@
+# Built-in themes. A value is a color (fg) or a table:
+#   { fg = "...", bg = "...", modifiers = ["bold", "italic", "underline", "undercurl", "reverse", "dim", "crossed"], underline = "color" }
+# Colors: palette names, "#rrggbb", ANSI names (red, bright_blue, ...), 0-255, or "default".
+# Keys fall back from specific to general: "syntax.keyword.control" -> "syntax.keyword".
+
+# Follows the terminal's own 16 colors, so it matches the Ghostty theme.
+[unlaw]
+"ui.text" = "default"
+"ui.cursorline" = { bg = 236 }
+"ui.selection" = { bg = 239 }
+"ui.linenr" = "bright_black"
+"ui.linenr.current" = { fg = "yellow", modifiers = ["bold"] }
+"ui.statusline" = { fg = "white", bg = 236 }
+"ui.statusline.inactive" = { fg = "bright_black", bg = 235 }
+"ui.mode.normal" = { fg = "black", bg = "blue", modifiers = ["bold"] }
+"ui.mode.insert" = { fg = "black", bg = "green", modifiers = ["bold"] }
+"ui.mode.visual" = { fg = "black", bg = "magenta", modifiers = ["bold"] }
+"ui.mode.command" = { fg = "black", bg = "yellow", modifiers = ["bold"] }
+"ui.mode.replace" = { fg = "black", bg = "red", modifiers = ["bold"] }
+"ui.popup" = { bg = 235 }
+"ui.popup.selected" = { bg = 239, modifiers = ["bold"] }
+"ui.popup.border" = "bright_black"
+"ui.popup.match" = { fg = "yellow", modifiers = ["bold"] }
+"ui.popup.title" = { fg = "cyan", modifiers = ["bold"] }
+"ui.search" = { fg = "black", bg = "yellow" }
+"ui.search.current" = { fg = "black", bg = "bright_yellow", modifiers = ["bold"] }
+"ui.bracket" = { bg = 240, modifiers = ["bold"] }
+"ui.indent_guide" = 237
+"ui.whitespace" = 239
+"ui.ruler" = { bg = 235 }
+"ui.bufferline" = { fg = "bright_black", bg = 235 }
+"ui.bufferline.active" = { fg = "white", bg = 238, modifiers = ["bold"] }
+"ui.separator" = "bright_black"
+"ui.message.error" = { fg = "red", modifiers = ["bold"] }
+"ui.message.warning" = "yellow"
+"ui.message.info" = "cyan"
+"ui.virtual" = "bright_black"
+"ui.dashboard.logo" = { fg = "cyan", modifiers = ["bold"] }
+"ui.dashboard.key" = { fg = "yellow", modifiers = ["bold"] }
+"ui.explorer.dir" = { fg = "blue", modifiers = ["bold"] }
+"ui.hint" = "bright_black"
+"diag.error" = "red"
+"diag.warning" = "yellow"
+"diag.info" = "blue"
+"diag.hint" = "cyan"
+"syntax.comment" = { fg = "bright_black", modifiers = ["italic"] }
+"syntax.keyword" = "magenta"
+"syntax.type" = "yellow"
+"syntax.function" = "blue"
+"syntax.macro" = "cyan"
+"syntax.string" = "green"
+"syntax.escape" = "cyan"
+"syntax.number" = "red"
+"syntax.constant" = "red"
+"syntax.operator" = "white"
+"syntax.punctuation" = "bright_black"
+"syntax.attribute" = "cyan"
+"syntax.property" = "bright_white"
+"syntax.label" = "cyan"
+"syntax.tag" = "red"
+"syntax.heading" = { fg = "blue", modifiers = ["bold"] }
+"syntax.bold" = { modifiers = ["bold"] }
+"syntax.italic" = { modifiers = ["italic"] }
+"syntax.link" = { fg = "cyan", modifiers = ["underline"] }
+"syntax.code" = "green"
+"syntax.list" = "yellow"
+"syntax.quote" = { fg = "bright_black", modifiers = ["italic"] }
+"syntax.diff.plus" = "green"
+"syntax.diff.minus" = "red"
+"syntax.diff.delta" = "yellow"
+
+[onedark]
+palette = { bg = "#282c34", bg1 = "#2c313a", bg2 = "#3e4451", bg3 = "#4b5263", fg = "#abb2bf", gray = "#5c6370", red = "#e06c75", orange = "#d19a66", yellow = "#e5c07b", green = "#98c379", cyan = "#56b6c2", blue = "#61afef", purple = "#c678dd", white = "#dcdfe4" }
+"ui.text" = { fg = "fg", bg = "bg" }
+"ui.cursorline" = { bg = "bg1" }
+"ui.selection" = { bg = "bg2" }
+"ui.linenr" = "bg3"
+"ui.linenr.current" = { fg = "white", modifiers = ["bold"] }
+"ui.statusline" = { fg = "fg", bg = "bg1" }
+"ui.statusline.inactive" = { fg = "gray", bg = "bg" }
+"ui.mode.normal" = { fg = "bg", bg = "blue", modifiers = ["bold"] }
+"ui.mode.insert" = { fg = "bg", bg = "green", modifiers = ["bold"] }
+"ui.mode.visual" = { fg = "bg", bg = "purple", modifiers = ["bold"] }
+"ui.mode.command" = { fg = "bg", bg = "yellow", modifiers = ["bold"] }
+"ui.mode.replace" = { fg = "bg", bg = "red", modifiers = ["bold"] }
+"ui.popup" = { fg = "fg", bg = "bg1" }
+"ui.popup.selected" = { bg = "bg2", modifiers = ["bold"] }
+"ui.popup.border" = "gray"
+"ui.popup.match" = { fg = "blue", modifiers = ["bold"] }
+"ui.popup.title" = { fg = "blue", modifiers = ["bold"] }
+"ui.search" = { fg = "bg", bg = "orange" }
+"ui.search.current" = { fg = "bg", bg = "yellow", modifiers = ["bold"] }
+"ui.bracket" = { bg = "bg3", modifiers = ["bold"] }
+"ui.indent_guide" = "bg2"
+"ui.whitespace" = "bg3"
+"ui.ruler" = { bg = "bg1" }
+"ui.bufferline" = { fg = "gray", bg = "bg1" }
+"ui.bufferline.active" = { fg = "white", bg = "bg2", modifiers = ["bold"] }
+"ui.separator" = "bg3"
+"ui.message.error" = { fg = "red", modifiers = ["bold"] }
+"ui.message.warning" = "yellow"
+"ui.message.info" = "cyan"
+"ui.virtual" = "gray"
+"ui.dashboard.logo" = { fg = "blue", modifiers = ["bold"] }
+"ui.dashboard.key" = { fg = "orange", modifiers = ["bold"] }
+"ui.explorer.dir" = { fg = "blue", modifiers = ["bold"] }
+"ui.hint" = "gray"
+"diag.error" = "red"
+"diag.warning" = "yellow"
+"diag.info" = "blue"
+"diag.hint" = "cyan"
+"syntax.comment" = { fg = "gray", modifiers = ["italic"] }
+"syntax.keyword" = "purple"
+"syntax.type" = "yellow"
+"syntax.function" = "blue"
+"syntax.macro" = "cyan"
+"syntax.string" = "green"
+"syntax.escape" = "cyan"
+"syntax.number" = "orange"
+"syntax.constant" = "orange"
+"syntax.operator" = "cyan"
+"syntax.punctuation" = "fg"
+"syntax.attribute" = "yellow"
+"syntax.property" = "red"
+"syntax.label" = "red"
+"syntax.tag" = "red"
+"syntax.heading" = { fg = "red", modifiers = ["bold"] }
+"syntax.bold" = { fg = "orange", modifiers = ["bold"] }
+"syntax.italic" = { fg = "purple", modifiers = ["italic"] }
+"syntax.link" = { fg = "cyan", modifiers = ["underline"] }
+"syntax.code" = "green"
+"syntax.list" = "red"
+"syntax.quote" = { fg = "gray", modifiers = ["italic"] }
+"syntax.diff.plus" = "green"
+"syntax.diff.minus" = "red"
+"syntax.diff.delta" = "yellow"
+
+[gruvbox]
+inherits = "onedark"
+palette = { bg = "#282828", bg1 = "#32302f", bg2 = "#3c3836", bg3 = "#504945", fg = "#ebdbb2", gray = "#928374", red = "#fb4934", orange = "#fe8019", yellow = "#fabd2f", green = "#b8bb26", cyan = "#8ec07c", blue = "#83a598", purple = "#d3869b", white = "#fbf1c7" }
+"syntax.keyword" = "red"
+"syntax.function" = "green"
+"syntax.string" = "green"
+"syntax.type" = "yellow"
+"syntax.operator" = "fg"
+"syntax.property" = "blue"
+"syntax.macro" = "cyan"
+"syntax.number" = "purple"
+"syntax.constant" = "purple"
+"syntax.attribute" = "cyan"
+"ui.mode.normal" = { fg = "bg", bg = "gray", modifiers = ["bold"] }
+
+[catppuccin]
+inherits = "onedark"
+palette = { bg = "#1e1e2e", bg1 = "#252536", bg2 = "#313244", bg3 = "#45475a", fg = "#cdd6f4", gray = "#6c7086", red = "#f38ba8", orange = "#fab387", yellow = "#f9e2af", green = "#a6e3a1", cyan = "#94e2d5", blue = "#89b4fa", purple = "#cba6f7", white = "#f5e0dc" }
+"syntax.keyword" = "purple"
+"syntax.function" = "blue"
+"syntax.property" = "blue"
+"syntax.operator" = "cyan"
+"syntax.macro" = "red"
+"syntax.attribute" = "yellow"
+"syntax.punctuation" = "gray"
+
+[tokyonight]
+inherits = "onedark"
+palette = { bg = "#1a1b26", bg1 = "#1f2335", bg2 = "#292e42", bg3 = "#3b4261", fg = "#c0caf5", gray = "#565f89", red = "#f7768e", orange = "#ff9e64", yellow = "#e0af68", green = "#9ece6a", cyan = "#7dcfff", blue = "#7aa2f7", purple = "#bb9af7", white = "#c0caf5" }
+"syntax.keyword" = "purple"
+"syntax.function" = "blue"
+"syntax.property" = "green"
+"syntax.type" = "cyan"
+"syntax.operator" = "cyan"
+
+[light]
+palette = { bg = "#ffffff", bg1 = "#f3f4f6", bg2 = "#dbe4f0", bg3 = "#b8c0cc", fg = "#24292f", gray = "#6e7781", red = "#cf222e", orange = "#bc4c00", yellow = "#9a6700", green = "#116329", cyan = "#0a7ea4", blue = "#0550ae", purple = "#8250df", white = "#000000" }
+inherits = "onedark"
+"ui.search" = { fg = "fg", bg = "#fff8c5" }
+"ui.search.current" = { fg = "fg", bg = "#ffd33d", modifiers = ["bold"] }
+"ui.mode.normal" = { fg = "#ffffff", bg = "blue", modifiers = ["bold"] }
+"ui.mode.insert" = { fg = "#ffffff", bg = "green", modifiers = ["bold"] }
+"ui.mode.visual" = { fg = "#ffffff", bg = "purple", modifiers = ["bold"] }
+"ui.mode.command" = { fg = "#ffffff", bg = "orange", modifiers = ["bold"] }
+"ui.mode.replace" = { fg = "#ffffff", bg = "red", modifiers = ["bold"] }

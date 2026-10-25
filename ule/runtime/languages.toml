@@ -1,0 +1,413 @@
+# Built-in languages. Any key can be overridden, and new languages added, in
+# ule.toml under [languages.<name>].
+#
+# extensions / filenames / shebangs  detection
+# comment, block_comment             what `gc` toggles; also highlighting
+# keywords, types, constants, builtins  highlighted words
+# strings, multiline_strings         string delimiters (single line unless listed as multiline)
+# lsp = [["server", "args"], ...]    first one found on PATH is started
+# roots                              files that mark the project root for the LSP
+# formatter = ["cmd", "args"]        reads stdin, writes stdout; {file} is the path
+# formatter_configs                  with format_on_save = "auto", format only when one exists in the project
+# run                                `<space>r` / :run; {file}, {dir}, {stem} are filled in
+# indent                             one indent unit ("    " or "\t"); tab_width and wrap may be set too
+
+[rust]
+extensions = ["rs"]
+comment = "//"
+block_comment = ["/*", "*/"]
+nested_comments = true
+keywords = ["as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait", "type", "union", "unsafe", "use", "where", "while", "yield", "macro_rules"]
+types = ["bool", "char", "str", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "f32", "f64", "String", "Vec", "Option", "Result", "Box", "Rc", "Arc", "HashMap", "HashSet", "BTreeMap", "BTreeSet", "VecDeque"]
+constants = ["true", "false", "None", "Some", "Ok", "Err"]
+strings = ['"']
+multiline_strings = ['"']
+raw_strings = true
+lifetimes = true
+macros = true
+attributes = "#["
+capitalized_types = true
+indent = "    "
+lsp = [["rust-analyzer"]]
+roots = ["Cargo.toml"]
+formatter = ["rustfmt", "--edition", "2021", "--emit", "stdout"]
+formatter_configs = ["rustfmt.toml", ".rustfmt.toml"]
+run = "cargo run"
+
+[python]
+extensions = ["py", "pyi", "pyw"]
+shebangs = ["python", "python3"]
+filenames = ["SConstruct"]
+comment = "#"
+keywords = ["and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "match", "case", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield", "self", "cls"]
+types = ["int", "float", "str", "bytes", "bool", "list", "dict", "set", "tuple", "object", "type", "complex", "frozenset", "bytearray"]
+constants = ["True", "False", "None", "NotImplemented", "Ellipsis", "__name__", "__file__"]
+builtins = ["print", "len", "range", "open", "enumerate", "zip", "map", "filter", "sorted", "reversed", "isinstance", "issubclass", "getattr", "setattr", "hasattr", "super", "min", "max", "sum", "abs", "any", "all", "repr", "input", "iter", "next", "id", "hash", "round", "vars", "dir", "help", "format", "chr", "ord"]
+strings = ['"', "'"]
+multiline_strings = ['"""', "'''"]
+string_prefixes = "rbfuRBFU"
+decorators = true
+capitalized_types = true
+indent = "    "
+indent_after = [":"]
+lsp = [["basedpyright-langserver", "--stdio"], ["pyright-langserver", "--stdio"], ["pylsp"], ["jedi-language-server"], ["ruff", "server"]]
+roots = ["pyproject.toml", "setup.py", "requirements.txt"]
+formatter = ["ruff", "format", "--stdin-filename", "{file}", "-"]
+formatter_configs = ["ruff.toml", ".ruff.toml"]
+run = "python3 {file}"
+
+[c]
+extensions = ["c", "h"]
+comment = "//"
+block_comment = ["/*", "*/"]
+keywords = ["auto", "break", "case", "const", "continue", "default", "do", "else", "enum", "extern", "for", "goto", "if", "inline", "register", "restrict", "return", "sizeof", "static", "struct", "switch", "typedef", "union", "volatile", "while", "_Generic", "_Static_assert"]
+types = ["char", "double", "float", "int", "long", "short", "signed", "unsigned", "void", "bool", "size_t", "ssize_t", "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t", "FILE"]
+constants = ["NULL", "true", "false", "EOF"]
+strings = ['"']
+char_quote = "'"
+preprocessor = "#"
+indent = "    "
+lsp = [["clangd"]]
+roots = ["compile_commands.json", "CMakeLists.txt", "Makefile"]
+formatter = ["clang-format", "--assume-filename={file}"]
+formatter_configs = [".clang-format", "_clang-format"]
+run = "cc {file} -o /tmp/{stem} && /tmp/{stem}"
+
+[cpp]
+extensions = ["cpp", "cc", "cxx", "hpp", "hh", "hxx", "ipp", "tpp", "cppm"]
+comment = "//"
+block_comment = ["/*", "*/"]
+keywords = ["alignas", "alignof", "auto", "break", "case", "catch", "class", "const", "consteval", "constexpr", "constinit", "const_cast", "continue", "co_await", "co_return", "co_yield", "decltype", "default", "delete", "do", "dynamic_cast", "else", "enum", "explicit", "export", "extern", "final", "for", "friend", "goto", "if", "import", "inline", "module", "mutable", "namespace", "new", "noexcept", "operator", "override", "private", "protected", "public", "reinterpret_cast", "requires", "return", "sizeof", "static", "static_assert", "static_cast", "struct", "switch", "template", "this", "throw", "try", "typedef", "typeid", "typename", "union", "using", "virtual", "volatile", "while", "concept"]
+types = ["bool", "char", "char8_t", "char16_t", "char32_t", "double", "float", "int", "long", "short", "signed", "unsigned", "void", "wchar_t", "size_t", "string", "string_view", "vector", "map", "unordered_map", "set", "unique_ptr", "shared_ptr", "optional", "variant", "array", "span", "int32_t", "int64_t", "uint8_t", "uint32_t", "uint64_t"]
+constants = ["nullptr", "true", "false", "NULL"]
+strings = ['"']
+char_quote = "'"
+preprocessor = "#"
+capitalized_types = true
+indent = "    "
+lsp = [["clangd"]]
+roots = ["compile_commands.json", "CMakeLists.txt", "Makefile"]
+formatter = ["clang-format", "--assume-filename={file}"]
+formatter_configs = [".clang-format", "_clang-format"]
+run = "c++ -std=c++23 {file} -o /tmp/{stem} && /tmp/{stem}"
+
+[javascript]
+extensions = ["js", "mjs", "cjs", "jsx"]
+shebangs = ["node"]
+comment = "//"
+block_comment = ["/*", "*/"]
+keywords = ["async", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "export", "extends", "finally", "for", "from", "function", "get", "if", "import", "in", "instanceof", "let", "new", "of", "return", "set", "static", "super", "switch", "this", "throw", "try", "typeof", "var", "void", "while", "with", "yield"]
+constants = ["true", "false", "null", "undefined", "NaN", "Infinity"]
+builtins = ["console", "window", "document", "require", "module", "process", "JSON", "Math", "Promise", "Array", "Object", "String", "Number", "Map", "Set"]
+strings = ['"', "'", "`"]
+multiline_strings = ["`"]
+capitalized_types = true
+indent = "  "
+lsp = [["typescript-language-server", "--stdio"]]
+roots = ["package.json", "jsconfig.json"]
+formatter = ["prettier", "--stdin-filepath", "{file}"]
+formatter_configs = [".prettierrc", ".prettierrc.json", "prettier.config.js", ".prettierrc.js"]
+run = "node {file}"
+
+[typescript]
+extensions = ["ts", "tsx", "mts", "cts"]
+inherits = "javascript"
+keywords = ["abstract", "as", "async", "await", "break", "case", "catch", "class", "const", "continue", "declare", "default", "delete", "do", "else", "enum", "export", "extends", "finally", "for", "from", "function", "get", "if", "implements", "import", "in", "infer", "instanceof", "interface", "keyof", "let", "namespace", "new", "of", "private", "protected", "public", "readonly", "return", "satisfies", "set", "static", "super", "switch", "this", "throw", "try", "type", "typeof", "var", "void", "while", "yield"]
+types = ["string", "number", "boolean", "any", "unknown", "never", "object", "void", "bigint", "symbol", "Record", "Partial", "Readonly", "Promise", "Array"]
+roots = ["package.json", "tsconfig.json"]
+run = "npx tsx {file}"
+
+[json]
+extensions = ["json", "jsonc", "json5", "geojson", "webmanifest"]
+filenames = [".prettierrc", ".eslintrc", "flake.lock"]
+comment = "//"
+block_comment = ["/*", "*/"]
+constants = ["true", "false", "null"]
+strings = ['"']
+json_keys = true
+indent = "  "
+lsp = [["vscode-json-language-server", "--stdio"]]
+formatter = ["prettier", "--stdin-filepath", "{file}"]
+formatter_configs = [".prettierrc", ".prettierrc.json"]
+
+[toml]
+extensions = ["toml"]
+filenames = ["Cargo.lock", "Pipfile", "uv.lock"]
+comment = "#"
+constants = ["true", "false", "inf", "nan"]
+strings = ['"', "'"]
+multiline_strings = ['"""', "'''"]
+toml_keys = true
+indent = "  "
+lsp = [["taplo", "lsp", "stdio"]]
+formatter = ["taplo", "fmt", "-"]
+formatter_configs = ["taplo.toml", ".taplo.toml"]
+
+[yaml]
+extensions = ["yaml", "yml"]
+filenames = [".clang-format", "_clang-format", ".clangd"]
+comment = "#"
+constants = ["true", "false", "null", "yes", "no", "on", "off", "~"]
+strings = ['"', "'"]
+yaml_keys = true
+indent = "  "
+lsp = [["yaml-language-server", "--stdio"]]
+formatter = ["prettier", "--stdin-filepath", "{file}"]
+formatter_configs = [".prettierrc"]
+
+[markdown]
+extensions = ["md", "markdown", "mdx", "mkd"]
+filenames = ["README", "CHANGELOG"]
+kind = "markdown"
+block_comment = ["<!--", "-->"]
+indent = "  "
+wrap = true
+lsp = [["marksman", "server"]]
+
+[shell]
+extensions = ["sh", "bash", "zsh", "ksh", "fish", "envrc"]
+filenames = [".bashrc", ".zshrc", ".zshenv", ".zprofile", ".bash_profile", ".profile", "PKGBUILD", ".env"]
+shebangs = ["sh", "bash", "zsh", "ksh", "dash"]
+comment = "#"
+keywords = ["if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case", "esac", "in", "function", "return", "local", "export", "readonly", "declare", "typeset", "unset", "break", "continue", "exit", "source", "alias", "set", "shift", "trap", "eval", "exec"]
+builtins = ["echo", "printf", "cd", "pwd", "test", "read", "cat", "grep", "sed", "awk", "mkdir", "rm", "cp", "mv", "ls", "chmod", "command", "which", "true", "false"]
+strings = ['"', "'"]
+multiline_strings = ['"', "'"]
+shell_variables = true
+indent = "    "
+lsp = [["bash-language-server", "start"]]
+formatter = ["shfmt"]
+formatter_configs = [".editorconfig"]
+run = "sh {file}"
+
+[lua]
+extensions = ["lua"]
+shebangs = ["lua", "luajit"]
+comment = "--"
+block_comment = ["--[[", "]]"]
+keywords = ["and", "break", "do", "else", "elseif", "end", "for", "function", "goto", "if", "in", "local", "not", "or", "repeat", "return", "then", "until", "while", "self"]
+constants = ["true", "false", "nil"]
+builtins = ["print", "pairs", "ipairs", "require", "type", "tostring", "tonumber", "table", "string", "math", "os", "io", "vim", "error", "pcall", "setmetatable", "getmetatable"]
+strings = ['"', "'"]
+multiline_strings = ["[["]
+indent = "  "
+lsp = [["lua-language-server"]]
+formatter = ["stylua", "-"]
+formatter_configs = ["stylua.toml", ".stylua.toml"]
+run = "lua {file}"
+
+[go]
+extensions = ["go"]
+comment = "//"
+block_comment = ["/*", "*/"]
+keywords = ["break", "case", "chan", "const", "continue", "default", "defer", "else", "fallthrough", "for", "func", "go", "goto", "if", "import", "interface", "map", "package", "range", "return", "select", "struct", "switch", "type", "var"]
+types = ["bool", "byte", "complex64", "complex128", "error", "float32", "float64", "int", "int8", "int16", "int32", "int64", "rune", "string", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "any"]
+constants = ["true", "false", "nil", "iota"]
+builtins = ["append", "cap", "close", "copy", "delete", "len", "make", "new", "panic", "print", "println", "recover", "min", "max"]
+strings = ['"', "'", "`"]
+multiline_strings = ["`"]
+capitalized_types = false
+indent = "\t"
+lsp = [["gopls"]]
+roots = ["go.mod"]
+formatter = ["gofmt"]
+run = "go run {file}"
+
+[java]
+extensions = ["java"]
+comment = "//"
+block_comment = ["/*", "*/"]
+keywords = ["abstract", "assert", "break", "case", "catch", "class", "const", "continue", "default", "do", "else", "enum", "extends", "final", "finally", "for", "goto", "if", "implements", "import", "instanceof", "interface", "native", "new", "package", "private", "protected", "public", "record", "return", "sealed", "static", "strictfp", "super", "switch", "synchronized", "this", "throw", "throws", "transient", "try", "var", "volatile", "while", "yield"]
+types = ["boolean", "byte", "char", "double", "float", "int", "long", "short", "void", "String", "Object", "Integer", "List", "Map"]
+constants = ["true", "false", "null"]
+strings = ['"']
+multiline_strings = ['"""']
+char_quote = "'"
+decorators = true
+capitalized_types = true
+indent = "    "
+lsp = [["jdtls"]]
+roots = ["pom.xml", "build.gradle", "build.gradle.kts"]
+run = "java {file}"
+
+[kotlin]
+extensions = ["kt", "kts"]
+comment = "//"
+block_comment = ["/*", "*/"]
+keywords = ["as", "break", "class", "continue", "do", "else", "for", "fun", "if", "in", "interface", "is", "object", "package", "return", "super", "this", "throw", "try", "typealias", "val", "var", "when", "while", "import", "private", "public", "internal", "protected", "data", "sealed", "override", "open", "suspend", "companion", "lateinit", "enum"]
+constants = ["true", "false", "null"]
+strings = ['"']
+multiline_strings = ['"""']
+char_quote = "'"
+decorators = true
+capitalized_types = true
+indent = "    "
+lsp = [["kotlin-language-server"]]
+
+[swift]
+extensions = ["swift"]
+comment = "//"
+block_comment = ["/*", "*/"]
+nested_comments = true
+keywords = ["actor", "as", "associatedtype", "async", "await", "break", "case", "catch", "class", "continue", "default", "defer", "deinit", "do", "else", "enum", "extension", "fallthrough", "fileprivate", "for", "func", "guard", "if", "import", "in", "init", "inout", "internal", "is", "let", "open", "operator", "private", "protocol", "public", "repeat", "rethrows", "return", "self", "Self", "some", "static", "struct", "subscript", "super", "switch", "throw", "throws", "try", "typealias", "var", "where", "while"]
+types = ["Int", "Double", "Float", "String", "Bool", "Character", "Array", "Dictionary", "Set", "Optional", "Void", "Any"]
+constants = ["true", "false", "nil"]
+strings = ['"']
+multiline_strings = ['"""']
+decorators = true
+capitalized_types = true
+indent = "    "
+lsp = [["sourcekit-lsp"]]
+roots = ["Package.swift"]
+formatter = ["swift-format"]
+run = "swift {file}"
+
+[zig]
+extensions = ["zig", "zon"]
+comment = "//"
+keywords = ["addrspace", "align", "allowzero", "and", "anyframe", "anytype", "asm", "async", "await", "break", "callconv", "catch", "comptime", "const", "continue", "defer", "else", "enum", "errdefer", "error", "export", "extern", "fn", "for", "if", "inline", "noalias", "noinline", "nosuspend", "opaque", "or", "orelse", "packed", "pub", "resume", "return", "linksection", "struct", "suspend", "switch", "test", "threadlocal", "try", "union", "unreachable", "usingnamespace", "var", "volatile", "while"]
+types = ["bool", "void", "noreturn", "type", "anyerror", "u8", "u16", "u32", "u64", "usize", "i8", "i16", "i32", "i64", "isize", "f16", "f32", "f64", "comptime_int"]
+constants = ["true", "false", "null", "undefined"]
+strings = ['"']
+char_quote = "'"
+indent = "    "
+lsp = [["zls"]]
+roots = ["build.zig"]
+formatter = ["zig", "fmt", "--stdin"]
+run = "zig run {file}"
+
+[ruby]
+extensions = ["rb", "rake", "gemspec"]
+filenames = ["Gemfile", "Rakefile"]
+shebangs = ["ruby"]
+comment = "#"
+keywords = ["alias", "and", "begin", "break", "case", "class", "def", "defined?", "do", "else", "elsif", "end", "ensure", "for", "if", "in", "module", "next", "not", "or", "redo", "rescue", "retry", "return", "self", "super", "then", "undef", "unless", "until", "when", "while", "yield", "require", "attr_reader", "attr_accessor"]
+constants = ["true", "false", "nil"]
+strings = ['"', "'"]
+capitalized_types = true
+indent = "  "
+lsp = [["ruby-lsp"], ["solargraph", "stdio"]]
+run = "ruby {file}"
+
+[csharp]
+extensions = ["cs"]
+comment = "//"
+block_comment = ["/*", "*/"]
+keywords = ["abstract", "as", "async", "await", "base", "break", "case", "catch", "class", "const", "continue", "default", "delegate", "do", "else", "enum", "event", "explicit", "extern", "finally", "fixed", "for", "foreach", "get", "if", "implicit", "in", "interface", "internal", "is", "lock", "namespace", "new", "operator", "out", "override", "params", "private", "protected", "public", "readonly", "record", "ref", "return", "sealed", "set", "static", "struct", "switch", "this", "throw", "try", "typeof", "using", "var", "virtual", "void", "while", "yield"]
+types = ["bool", "byte", "char", "decimal", "double", "float", "int", "long", "object", "sbyte", "short", "string", "uint", "ulong", "ushort"]
+constants = ["true", "false", "null"]
+strings = ['"']
+char_quote = "'"
+preprocessor = "#"
+capitalized_types = true
+indent = "    "
+lsp = [["csharp-ls"], ["OmniSharp", "-lsp"]]
+
+[php]
+extensions = ["php"]
+comment = "//"
+block_comment = ["/*", "*/"]
+keywords = ["abstract", "and", "as", "break", "case", "catch", "class", "clone", "const", "continue", "declare", "default", "do", "echo", "else", "elseif", "enum", "extends", "final", "finally", "fn", "for", "foreach", "function", "global", "if", "implements", "include", "instanceof", "interface", "match", "namespace", "new", "or", "private", "protected", "public", "readonly", "require", "return", "static", "switch", "throw", "trait", "try", "use", "var", "while", "yield"]
+constants = ["true", "false", "null", "TRUE", "FALSE", "NULL"]
+strings = ['"', "'"]
+shell_variables = true
+indent = "    "
+lsp = [["intelephense", "--stdio"], ["phpactor", "language-server"]]
+run = "php {file}"
+
+[html]
+extensions = ["html", "htm", "xhtml", "xml", "svg", "plist", "vue", "svelte"]
+kind = "markup"
+block_comment = ["<!--", "-->"]
+strings = ['"', "'"]
+indent = "  "
+lsp = [["vscode-html-language-server", "--stdio"]]
+formatter = ["prettier", "--stdin-filepath", "{file}"]
+formatter_configs = [".prettierrc"]
+
+[css]
+extensions = ["css", "scss", "sass", "less"]
+comment = "//"
+block_comment = ["/*", "*/"]
+strings = ['"', "'"]
+css = true
+indent = "  "
+lsp = [["vscode-css-language-server", "--stdio"]]
+formatter = ["prettier", "--stdin-filepath", "{file}"]
+formatter_configs = [".prettierrc"]
+
+[sql]
+extensions = ["sql"]
+comment = "--"
+block_comment = ["/*", "*/"]
+keywords = ["select", "from", "where", "and", "or", "not", "insert", "into", "values", "update", "set", "delete", "create", "table", "drop", "alter", "add", "index", "view", "join", "left", "right", "inner", "outer", "full", "on", "as", "group", "by", "order", "having", "limit", "offset", "union", "all", "distinct", "case", "when", "then", "else", "end", "in", "is", "null", "like", "between", "exists", "primary", "key", "foreign", "references", "default", "with", "returning", "begin", "commit", "rollback", "if", "asc", "desc", "count", "sum", "avg", "min", "max"]
+types = ["int", "integer", "bigint", "smallint", "text", "varchar", "char", "boolean", "real", "float", "double", "numeric", "decimal", "date", "time", "timestamp", "blob", "json", "jsonb", "uuid", "serial"]
+constants = ["true", "false", "null"]
+strings = ["'", '"']
+case_insensitive = true
+indent = "  "
+lsp = [["sqls"]]
+
+[make]
+filenames = ["Makefile", "makefile", "GNUmakefile", "justfile", "Justfile"]
+extensions = ["mk", "make", "just"]
+comment = "#"
+keywords = ["ifeq", "ifneq", "ifdef", "ifndef", "else", "endif", "include", "define", "endef", "export", "override", ".PHONY"]
+strings = ['"', "'"]
+shell_variables = true
+indent = "\t"
+
+[dockerfile]
+filenames = ["Dockerfile", "Containerfile"]
+extensions = ["dockerfile"]
+comment = "#"
+keywords = ["FROM", "RUN", "CMD", "LABEL", "EXPOSE", "ENV", "ADD", "COPY", "ENTRYPOINT", "VOLUME", "USER", "WORKDIR", "ARG", "ONBUILD", "STOPSIGNAL", "HEALTHCHECK", "SHELL", "AS"]
+strings = ['"', "'"]
+shell_variables = true
+indent = "  "
+
+[cmake]
+filenames = ["CMakeLists.txt"]
+extensions = ["cmake"]
+comment = "#"
+keywords = ["if", "elseif", "else", "endif", "foreach", "endforeach", "while", "endwhile", "function", "endfunction", "macro", "endmacro", "set", "project", "add_executable", "add_library", "target_link_libraries", "target_include_directories", "find_package", "cmake_minimum_required", "include", "option", "message"]
+strings = ['"']
+shell_variables = true
+case_insensitive = true
+indent = "  "
+lsp = [["neocmakelsp", "--stdio"]]
+
+[haskell]
+extensions = ["hs", "lhs"]
+comment = "--"
+block_comment = ["{-", "-}"]
+nested_comments = true
+keywords = ["case", "class", "data", "default", "deriving", "do", "else", "foreign", "if", "import", "in", "infix", "infixl", "infixr", "instance", "let", "module", "newtype", "of", "then", "type", "where", "qualified", "as", "hiding"]
+constants = ["True", "False", "Nothing", "Just"]
+strings = ['"']
+capitalized_types = true
+indent = "  "
+lsp = [["haskell-language-server-wrapper", "--lsp"]]
+
+[diff]
+extensions = ["diff", "patch", "rej"]
+kind = "diff"
+
+[gitcommit]
+filenames = ["COMMIT_EDITMSG", "MERGE_MSG", "TAG_EDITMSG", "git-rebase-todo"]
+comment = "#"
+kind = "gitcommit"
+wrap = true
+
+[ini]
+extensions = ["ini", "cfg", "conf", "properties", "desktop", "service", "editorconfig"]
+filenames = [".gitconfig", ".npmrc", ".editorconfig", ".gitattributes", ".gitignore", ".dockerignore"]
+comment = "#"
+strings = ['"']
+toml_keys = true
+indent = "  "
+
+[text]
+extensions = ["txt", "text", "log"]
+kind = "text"
+wrap = true
