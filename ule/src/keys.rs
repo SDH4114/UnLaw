@@ -169,8 +169,12 @@ pub fn parse(text: &str, leader: &[Key]) -> Result<Vec<Key>, String> {
         if c == '<' {
             if let Some(close) = rest.find('>') {
                 let inner = &rest[1..close];
-                // `<<` or `< b>` are literal `<` keys, not names.
-                if !inner.is_empty() && !inner.contains(['<', ' ']) {
+                // Only things shaped like key names are names: `<C-s>`, `<leader>`, `<C-/>`.
+                // Anything else (`<<`, `<a b>`) starts with a literal `<`.
+                let last = inner.rsplit('-').next().unwrap_or("");
+                let shaped = inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                    || (inner.contains('-') && last.chars().count() == 1 && !inner.contains(['<', ' ']));
+                if !inner.is_empty() && shaped {
                     if inner.eq_ignore_ascii_case("leader") {
                         keys.extend_from_slice(leader);
                     } else {
@@ -240,6 +244,8 @@ mod tests {
         assert!(parse("<nope>", &leader).is_err());
         assert_eq!(parse("<<b", &leader).unwrap(), vec![Key::char('<'), Key::char('<'), Key::char('b')]);
         assert_eq!(parse("<<b<tab>", &leader).unwrap()[3], Key::plain(Code::Tab));
+        assert_eq!(parse("<x(y>", &leader).unwrap().len(), 5);
+        assert_eq!(parse("<C-/>", &leader).unwrap(), vec![Key::ctrl('/')]);
     }
 
     #[test]
