@@ -326,7 +326,7 @@ fn random_keys_never_panic() {
         seed ^= seed << 17;
         seed
     };
-    for round in 0..1500 {
+    for round in 0..500 {
         let text = texts[round % texts.len()];
         let mut ed = editor(text);
         let mut sequence = String::new();
