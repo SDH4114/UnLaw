@@ -35,15 +35,17 @@ impl Source {
 #[derive(Debug, PartialEq, Eq)]
 struct Options {
     check: bool,
+    force: bool,
     source: Source,
 }
 
 fn parse(args: &[String]) -> Result<Options, ()> {
-    let mut options = Options { check: false, source: Source::Default };
+    let mut options = Options { check: false, force: false, source: Source::Default };
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--check" if !options.check => options.check = true,
+            "--force" if !options.force => options.force = true,
             "--branch" | "--tag" if options.source == Source::Default => {
                 let name = rest.next().filter(|name| !name.is_empty() && !name.starts_with('-')).ok_or(())?;
                 options.source = if arg == "--branch" { Source::Branch(name.clone()) } else { Source::Tag(name.clone()) };
@@ -167,7 +169,7 @@ pub fn run(args: &[String]) -> i32 {
         return 0;
     }
     let Ok(options) = parse(args) else {
-        eprintln!("Usage: ul update [--check] [--branch <name>|--tag <name>]");
+        eprintln!("Usage: ul update [--check] [--force] [--branch <name>|--tag <name>]");
         return 2;
     };
     if options.check {
@@ -182,6 +184,15 @@ pub fn run(args: &[String]) -> i32 {
     let config = config::load().ok();
     let python = commands::python(config.as_ref());
     let root = install_root();
+    // Nothing to do when this build is the published commit and ule is installed too.
+    if !options.force && !COMMIT.is_empty() && root.join("bin").join("ule").is_file() {
+        if let Some(latest) = remote_commit(&repository(), &options.source) {
+            if latest == COMMIT {
+                println!("Unlaw {VERSION} ({COMMIT}) is up to date. `ul update --force` reinstalls anyway.");
+                return 0;
+            }
+        }
+    }
     let mut command = vec![
         cargo.to_string_lossy().into_owned(),
         "install".into(),
@@ -200,6 +211,12 @@ pub fn run(args: &[String]) -> i32 {
     println!("Updating Unlaw {VERSION}: {}", shell_join(&command));
     let mut process = Command::new(&command[0]);
     process.args(&command[1..]);
+    // One build folder for both packages and every update: shared dependencies
+    // compile once, and later updates rebuild only what changed.
+    if env::var_os("CARGO_TARGET_DIR").is_none() {
+        let cache = home().join("Library").join("Caches").join("unlaw").join("cargo-target");
+        process.env("CARGO_TARGET_DIR", &cache);
+    }
     if let Some(python) = &python {
         process.env("UNLAW_PYTHON", python);
     }
@@ -237,10 +254,10 @@ mod tests {
 
     #[test]
     fn options_parse_strictly() {
-        assert_eq!(parse(&[]), Ok(Options { check: false, source: Source::Default }));
+        assert_eq!(parse(&[]), Ok(Options { check: false, force: false, source: Source::Default }));
         assert_eq!(
             parse(&words(&["--check", "--tag", "v3.0.0"])),
-            Ok(Options { check: true, source: Source::Tag("v3.0.0".into()) })
+            Ok(Options { check: true, force: false, source: Source::Tag("v3.0.0".into()) })
         );
         assert_eq!(parse(&words(&["--branch", "dev"])).unwrap().source, Source::Branch("dev".into()));
         for bad in [&["--branch"][..], &["--branch", "--check"], &["--tag", "a", "--branch", "b"], &["--check", "--check"], &["now"]] {

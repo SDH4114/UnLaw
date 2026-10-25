@@ -136,14 +136,17 @@ Example: ul templates
     (
         "update",
         "Download and install the newest Unlaw from GitHub.
-Usage: ul update [--check] [--branch <name>|--tag <name>]
+Usage: ul update [--check] [--force] [--branch <name>|--tag <name>]
 Options:
   --check            Compare the installed version and commit with GitHub; installs nothing
+  --force            Reinstall even when the installed commit is the newest
   --branch <name>    Install from a branch instead of main
   --tag <name>       Install a tagged release
-Runs `cargo install --locked --force --git https://github.com/SDH4114/UnLaw.git`
-into the directory that holds the current ul (default ~/.local/bin).
-Dependencies: cargo (Rust), Python 3.11+ for the build, curl and git for --check.
+Runs `cargo install --locked --force --git https://github.com/SDH4114/UnLaw.git
+unlaw ule` (ul, ula and the ule editor) into the directory that holds the current
+ul (default ~/.local/bin), unless that commit is already installed. Builds share
+~/Library/Caches/unlaw/cargo-target, so later updates only rebuild what changed.
+Dependencies: cargo (Rust), Python 3.11+ for the build, git (and curl for --check).
 Your config, edited commands and data are never touched; unchanged default
 commands are upgraded on the next run. UNLAW_UPDATE_REPOSITORY selects a fork.
 Examples:

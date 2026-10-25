@@ -1,6 +1,6 @@
 [package]
 name = "unlaw"
-version = "3.6.1"
+version = "3.6.2"
 edition = "2021"
 rust-version = "1.82"
 description = "A small, extensible macOS command launcher"
@@ -32,7 +32,7 @@ name = "unlawagent"
 path = "rust/src/bin/unlawagent.rs"
 
 [dependencies]
-crossterm = { version = "0.28", default-features = false, features = ["events"] }
+crossterm = { version = "0.28", default-features = false, features = ["events", "bracketed-paste"] }
 libc = "0.2"
 serde_json = "1"
 sha2 = "0.10"

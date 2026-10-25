@@ -22,13 +22,16 @@ Update to the latest version from GitHub:
 
 ```bash
 ul update --check          # compare version and commit with GitHub without installing
-ul update                  # reinstall from main (cargo install --locked --force)
+ul update                  # install the newest main (skips when already up to date)
+ul update --force          # reinstall even when up to date
 ul update --tag v2.2.0     # a specific release; --branch <name> for a branch
 ```
 
 `ul --version` shows the version and build commit (`Unlaw 3.0.0 (dd061d1)`), so an
 update is visible even when the version number doesn't change. `ul update` installs
-the new binary where the current `ul` lives (`~/.local/bin` by default).
+the new binaries (`ul`, `ula`, `ule`) where the current `ul` lives (`~/.local/bin`
+by default) and does nothing when that commit is already installed. Builds share
+`~/Library/Caches/unlaw/cargo-target`, so later updates only rebuild what changed.
 Configuration, data and manually edited commands are left untouched; unmodified
 standard commands are updated on the next run. Requires `cargo` and Python 3.11+;
 `--check` also needs `curl`. `UNLAW_UPDATE_REPOSITORY` points to a fork.

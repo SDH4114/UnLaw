@@ -17,6 +17,7 @@ class UpdateTests(CoreTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.env["PATH"] = f"{self.bin}:/usr/bin:/bin"
+        self.env.pop("CARGO_TARGET_DIR", None)
         self.fake_git("1234567890abcdef1234567890abcdef12345678")
         version = self.ok("--version").stdout.split()
         self.installed_commit = version[2].strip("()") if len(version) > 2 else ""
@@ -40,6 +41,7 @@ class UpdateTests(CoreTestCase):
             "cargo",
             f"#!{sys.executable}\nimport os, pathlib, sys\n"
             f"pathlib.Path({str(log)!r}).write_text('\\n'.join([os.environ.get('UNLAW_PYTHON', ''), *sys.argv[1:]]))\n"
+            f"pathlib.Path({str(self.root / 'target.log')!r}).write_text(os.environ.get('CARGO_TARGET_DIR', ''))\n"
             f"if {exit_code}: raise SystemExit({exit_code})\n"
             "root = pathlib.Path(sys.argv[sys.argv.index('--root') + 1]) / 'bin'\n"
             "root.mkdir(parents=True, exist_ok=True)\n"
@@ -78,6 +80,33 @@ class UpdateTests(CoreTestCase):
         )
         self.assertIn("Updated to Unlaw 9.9.9", result.stdout)
         self.assertIn("edited ones are kept", result.stdout)
+
+    def test_up_to_date_is_not_rebuilt_unless_forced(self) -> None:
+        if not self.installed_commit:
+            self.skipTest("this build has no commit")
+        self.fake_git(self.installed_commit + "0" * 33)
+        ule = self.home / ".local" / "bin" / "ule"
+        ule.parent.mkdir(parents=True)
+        ule.write_text("#!/bin/sh\n")
+        ule.chmod(0o755)
+        log = self.fake_cargo()
+        result = self.ok("update")
+        self.assertIn("is up to date", result.stdout)
+        self.assertFalse(log.exists())
+        self.ok("update", "--force")
+        self.assertTrue(log.exists())
+        # Without ule installed, the same commit is installed to add it.
+        log.unlink()
+        ule.unlink()
+        self.ok("update")
+        self.assertTrue(log.exists())
+
+    def test_builds_share_a_cache_folder(self) -> None:
+        self.fake_cargo()
+        self.ok("update")
+        self.assertEqual((self.root / "target.log").read_text(), str(self.home / "Library" / "Caches" / "unlaw" / "cargo-target"))
+        self.ok("update", env={"CARGO_TARGET_DIR": str(self.root / "mine")})
+        self.assertEqual((self.root / "target.log").read_text(), str(self.root / "mine"))
 
     def test_branch_tag_and_fork_are_passed_to_cargo(self) -> None:
         log = self.fake_cargo()
@@ -123,7 +152,7 @@ class UpdateTests(CoreTestCase):
         cargo_log = self.fake_cargo()
         curl_log = self.fake_curl('[package]\nname = "unlaw"\nversion = "9.0.0"\n')
         result = self.ok("update", "--check")
-        installed = f"3.6.1 ({self.installed_commit})" if self.installed_commit else "3.6.1"
+        installed = f"3.6.2 ({self.installed_commit})" if self.installed_commit else "3.6.2"
         self.assertEqual(result.stdout.splitlines()[:2], [f"Installed: {installed}", "Latest:    9.0.0 (1234567, main)"])
         self.assertIn("Update available: a new version", result.stdout)
         self.assertIn("https://raw.githubusercontent.com/SDH4114/UnLaw/main/Cargo.toml", curl_log.read_text())
@@ -135,7 +164,7 @@ class UpdateTests(CoreTestCase):
     def test_check_compares_commits_when_the_version_is_the_same(self) -> None:
         if not self.installed_commit:
             self.skipTest("this build has no commit")
-        self.fake_curl('[package]\nversion = "3.6.1"\n')
+        self.fake_curl('[package]\nversion = "3.6.2"\n')
         self.fake_git(self.installed_commit + "0" * 33)
         self.assertIn("Up to date.", self.ok("update", "--check").stdout)
         self.fake_git("f" * 40)
