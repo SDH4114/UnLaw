@@ -791,7 +791,7 @@ fn doctor_checks() -> Vec<Check> {
         tool("7-Zip", "7z", "needed by `ul zip` for 7z, rar reading and AES zip"),
         tool("zstd", "zstd", "needed by `ul zip` for .tar.zst and .zst"),
         tool("RAR", "rar", "optional; needed to create .rar with `ul zip -f rar`"),
-        tool("macOS Keychain", "security", "optional; reads Telegram tokens saved before Unlaw 3.3"),
+        tool("macOS Keychain", "security", "needed to store the Telegram token"),
         Check {
             name: "Unlaw PATH",
             available: unlaw_bin.as_deref().is_some_and(bin_precedes_system),

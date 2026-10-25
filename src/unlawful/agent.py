@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+import atexit
 import base64
 import datetime as dt
 import difflib
 import getpass
+import html
+import http.client
 import json
 import mimetypes
 import os
 import plistlib
+import queue
 import re
+import select
 import shutil
+import socket
 import subprocess
 import sys
+import termios
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -19,7 +27,7 @@ import urllib.request
 import uuid
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from unlawful.command_help import COMMAND_HELP
 from .config import ConfigError, config_dir, load_config, storage_path
@@ -30,6 +38,7 @@ HISTORY_LIMIT = 40
 RESULT_LIMIT = 12_000
 READ_LIMIT = 200_000
 TELEGRAM_LIMIT = 4000
+OLD_RESULT_LIMIT = 1500
 # Never readable or writable, whatever agent.roots says.
 DENIED_NAMES = {".ssh", ".gnupg", ".aws", ".netrc", ".git-credentials", ".pgpass"}
 SKIP_DIRS = {
@@ -115,8 +124,14 @@ def roots(config: dict) -> list[Path]:
     return [Path(str(root)).expanduser().resolve() for root in config["agent"]["roots"]]
 
 
-def denied(path: Path) -> str | None:
+def protected() -> tuple[Path, Path]:
+    """Unlaw's config file and the agent's own records (reading config costs a parse)."""
+    return (config_dir() / "config.toml").resolve(), agent_dir().resolve()
+
+
+def denied(path: Path, guard: tuple[Path, Path] | None = None) -> str | None:
     home = Path.home().resolve()
+    config_file, agent_data = guard or protected()
     if DENIED_NAMES.intersection(path.parts):
         return "keys and credentials are never accessible"
     if path.name.startswith(".env"):
@@ -126,9 +141,8 @@ def denied(path: Path) -> str | None:
         or (home / "Library" / "Keychains") in path.parents
     ):
         return "the keychain is never accessible"
-    if path == (config_dir() / "config.toml").resolve():
+    if path == config_file:
         return "Unlaw's configuration is changed with `ul config`, not by the agent"
-    agent_data = agent_dir().resolve()
     if path == agent_data or agent_data in path.parents:
         return "the agent's own records (audit log, schedule) are off limits"
     return None
@@ -172,6 +186,21 @@ def _multipart(
     return b"".join(parts), f"multipart/form-data; boundary={boundary}"
 
 
+def _model_error(body: bytes, fallback: str) -> str:
+    try:
+        return "local model: " + json.loads(body.decode("utf-8"))["error"]["message"]
+    except (ValueError, KeyError, TypeError):
+        return f"local model: {fallback}"
+
+
+class Aborted(Exception):
+    """The user pressed Esc or Ctrl+C while the model was answering."""
+
+    def __init__(self, partial: str = "") -> None:
+        super().__init__("stopped by the user")
+        self.partial = partial
+
+
 class Model:
     """OpenAI-compatible client for `ul lm serve`, started on demand."""
 
@@ -181,6 +210,7 @@ class Model:
         self.base = (explicit or f"http://127.0.0.1:{self.port}").rstrip("/")
         self.autostart = not explicit
         self.name = str(config["agent"]["model"]) or "auto"
+        self.usage: dict = {}
 
     def _request(
         self, path: str, data: bytes | None, content_type: str, timeout: float
@@ -194,11 +224,7 @@ class Model:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return json.loads(response.read().decode("utf-8") or "null")
         except urllib.error.HTTPError as error:
-            try:
-                message = json.loads(error.read().decode("utf-8"))["error"]["message"]
-            except (ValueError, KeyError, TypeError):
-                message = str(error)
-            raise RuntimeError(f"local model: {message}") from error
+            raise RuntimeError(_model_error(error.read(), str(error))) from error
 
     def _alive(self) -> bool:
         try:
@@ -272,6 +298,106 @@ class Model:
             return response["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as error:
             raise RuntimeError("local model: malformed response") from error
+
+    def stream(self, messages: list[dict], tools: list[dict], ui: Any) -> dict:
+        """Like chat(), but text arrives through ui.on_text while it is generated.
+
+        The response is read on a thread so the main thread can watch the
+        keyboard; stopping shuts the socket, which makes `ul lm` stop too.
+        """
+        payload: dict[str, Any] = {
+            "model": self.name,
+            "messages": messages,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if tools:
+            payload["tools"] = tools
+        address = urllib.parse.urlsplit(self.base)
+        connection = http.client.HTTPConnection(address.hostname or "127.0.0.1", address.port or 80, timeout=900)
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        try:
+            connection.request("POST", address.path + "/v1/chat/completions", body, {"Content-Type": "application/json"})
+        except OSError as error:
+            raise RuntimeError(f"local model: {error}") from error
+        events: queue.Queue[tuple[str, Any]] = queue.Queue()
+
+        def read() -> None:
+            try:
+                response = connection.getresponse()
+                if response.status != 200:
+                    events.put(("error", _model_error(response.read(), f"HTTP {response.status}")))
+                    return
+                for line in response:
+                    events.put(("line", line))
+                events.put(("end", None))
+            except (OSError, http.client.HTTPException) as error:
+                events.put(("error", f"local model: {error}"))
+
+        threading.Thread(target=read, daemon=True).start()
+        text: list[str] = []
+        calls: dict[int, dict] = {}
+
+        def stop() -> None:
+            try:
+                if connection.sock is not None:
+                    connection.sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            connection.close()
+
+        try:
+            while True:
+                try:
+                    kind, value = events.get(timeout=0.1)
+                except queue.Empty:
+                    if ui.stop_requested():
+                        stop()
+                        raise Aborted("".join(text)) from None
+                    ui.tick()
+                    continue
+                if kind == "error":
+                    raise RuntimeError(value)
+                if kind == "end":
+                    break
+                line = value.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                chunk = json.loads(data)
+                if "error" in chunk:
+                    raise RuntimeError("local model: " + str(chunk["error"].get("message", chunk["error"])))
+                if chunk.get("usage"):
+                    self.usage = chunk["usage"]
+                for choice in chunk.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    if delta.get("reasoning_content"):
+                        ui.on_reasoning(delta["reasoning_content"])
+                    if delta.get("content"):
+                        text.append(delta["content"])
+                        ui.on_text(delta["content"])
+                    for part in delta.get("tool_calls") or []:
+                        call = calls.setdefault(int(part.get("index", len(calls))), {"type": "function", "function": {"name": "", "arguments": ""}})
+                        if part.get("id"):
+                            call["id"] = part["id"]
+                        function = part.get("function") or {}
+                        call["function"]["name"] += function.get("name") or ""
+                        arguments = function.get("arguments")
+                        if isinstance(arguments, dict):
+                            call["function"]["arguments"] = json.dumps(arguments, ensure_ascii=False)
+                        elif arguments:
+                            call["function"]["arguments"] += arguments
+        except KeyboardInterrupt:
+            stop()
+            raise Aborted("".join(text)) from None
+        finally:
+            connection.close()
+        message: dict[str, Any] = {"role": "assistant", "content": "".join(text)}
+        if calls:
+            message["tool_calls"] = [calls[index] for index in sorted(calls)]
+        return message
 
     def transcribe(self, path: Path) -> str:
         data, content_type = _multipart({}, "file", path.name, path.read_bytes())
@@ -793,6 +919,7 @@ class Tools:
         if not needle:
             raise ToolError("query is empty")
         found: list[str] = []
+        guard = protected()
         deadline = time.monotonic() + 20
         for directory, folders, files in os.walk(folder):
             folders[:] = [
@@ -802,12 +929,14 @@ class Tools:
             ]
             for name in files:
                 candidate = Path(directory) / name
-                if denied(candidate):
+                if denied(candidate, guard):
                     continue
                 if not content and needle in name.casefold():
                     found.append(str(candidate))
-                elif content and candidate.stat().st_size < 1_000_000:
+                elif content:
                     try:
+                        if candidate.stat().st_size >= 1_000_000:
+                            continue
                         text = candidate.read_text(encoding="utf-8")
                     except (OSError, UnicodeDecodeError):
                         continue
@@ -1021,6 +1150,13 @@ class Session:
         # Never start with a tool result or assistant reply whose request was cut off.
         while history and history[0].get("role") != "user":
             history = history[1:]
+        # Earlier tool output (whole files, listings) would fill a local model's
+        # context; only the latest turn keeps it in full.
+        last_turn = max((index for index, message in enumerate(history) if message.get("role") == "user"), default=0)
+        for index, message in enumerate(history[:last_turn]):
+            content = message.get("content")
+            if message.get("role") == "tool" and isinstance(content, str) and len(content) > OLD_RESULT_LIMIT:
+                history[index] = {**message, "content": _clip(content, OLD_RESULT_LIMIT)}
         self.messages = history
         _write_atomic(self.path, json.dumps(history, ensure_ascii=False) + "\n")
 
@@ -1040,22 +1176,46 @@ def _arguments(call: dict) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
-def respond(
-    config: dict,
-    model: Model,
-    tools: Tools,
-    session: Session,
-    content: Any,
-    channel: str,
-    on_tool: Callable[[str, dict], None] | None = None,
-) -> str:
-    """One user turn: call the model, run its tool calls, repeat until it answers."""
+def _close_open_calls(messages: list[dict]) -> None:
+    """A stop between a tool call and its result would leave history the model cannot read."""
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.get("role") == "user":
+            return
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            answered = {later.get("tool_call_id") for later in messages[index + 1 :] if later.get("role") == "tool"}
+            for number, call in enumerate(message["tool_calls"]):
+                call_id = call.get("id") or f"call_{number}"
+                if call_id not in answered:
+                    messages.append({"role": "tool", "tool_call_id": call_id, "content": "Not run: the user stopped the agent."})
+            return
+
+
+def respond(config: dict, model: Model, tools: Tools, session: Session, content: Any, channel: str, ui: Any = None) -> str:
+    """One user turn: call the model, run its tool calls, repeat until it answers.
+
+    `ui` may stream text (`streaming`, `on_text`, `stop_requested`, ...) and
+    show tool calls (`on_tool`, `on_result`); Telegram and print mode pass
+    simpler objects.
+    """
     session.messages.append({"role": "user", "content": content})
     specs = tools.specs()
     system = {"role": "system", "content": system_prompt(config, tools.level, channel)}
+    streaming = bool(getattr(ui, "streaming", False))
+    on_tool = getattr(ui, "on_tool", None)
+    on_result = getattr(ui, "on_result", None)
     try:
         for _ in range(int(config["agent"]["max_steps"])):
-            message = model.chat([system, *session.messages], specs)
+            if streaming:
+                try:
+                    message = model.stream([system, *session.messages], specs, ui)
+                except Aborted as stopped:
+                    session.messages.append({"role": "assistant", "content": (stopped.partial + " [stopped by the user]").strip()})
+                    raise
+                finally:
+                    ui.end_message()
+            else:
+                message = model.chat([system, *session.messages], specs)
             calls = message.get("tool_calls") or []
             text = (message.get("content") or "").strip()
             reply: dict[str, Any] = {"role": "assistant", "content": text}
@@ -1070,24 +1230,536 @@ def respond(
                 if on_tool:
                     on_tool(name, arguments)
                 result = tools.call(name, arguments)
-                session.messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.get("id") or f"call_{index}",
-                        "content": result,
-                    }
-                )
+                if on_result:
+                    on_result(name, result)
+                session.messages.append({"role": "tool", "tool_call_id": call.get("id") or f"call_{index}", "content": result})
         return f"Stopped after {config['agent']['max_steps']} steps (agent.max_steps) without a final answer."
     finally:
+        _close_open_calls(session.messages)
         session.messages = [_storable(message) for message in session.messages]
         session.save()
 
 
-# --- Terminal ------------------------------------------------------------------
+# --- Console (pi-style) -------------------------------------------------------
+
+SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+BOLD, DIM, ITALIC, RED, GREEN, YELLOW, CYAN = 1, 2, 3, 31, 32, 33, 36
+SLASH_COMMANDS = {
+    "/help": "commands and keys",
+    "/new": "start a new conversation",
+    "/model": "list models; /model <number|name> switches",
+    "/today": "today's open tasks and scheduled jobs",
+    "/plan": "everything scheduled",
+    "/unschedule": "/unschedule <id> cancels a job",
+    "/status": "model, Telegram, folders, background server",
+    "/log": "/log [n] shows the agent's last actions",
+    "/thinking": "show or hide the model's reasoning",
+    "/copy": "copy the last answer",
+    "/exit": "quit (also Ctrl+D)",
+}
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+# Control characters from files or the model (a stray \r, escape codes) would garble the screen.
+CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
-class Terminal:
+def printable(text: str) -> str:
+    return CONTROL.sub("?", text)
+
+
+class Paint:
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = enabled
+
+    def __call__(self, text: str, *codes: int) -> str:
+        if not self.enabled or not codes:
+            return text
+        return f"\x1b[{';'.join(map(str, codes))}m{text}\x1b[0m"
+
+
+def colors(config: dict, stream: Any) -> bool:
+    enabled = config.get("core", {}).get("color", True)
+    return bool(enabled) and stream.isatty() and not os.environ.get("NO_COLOR")
+
+
+def short_path(path: Path | str) -> str:
+    text, home = str(path), str(Path.home())
+    return "~" + text[len(home) :] if text == home or text.startswith(home + "/") else text
+
+
+def short_model(name: str) -> str:
+    return name.rsplit("/", 1)[-1]
+
+
+def tokens(count: int) -> str:
+    return f"{count / 1000:.1f}k" if count >= 1000 else str(count)
+
+
+def tool_label(name: str, arguments: dict) -> str:
+    key = next((key for key in ("path", "query", "command", "source", "prompt", "text", "id", "args") if key in arguments), None)
+    if key is None:
+        return name
+    value = arguments[key]
+    value = " ".join(map(str, value)) if isinstance(value, list) else str(value)
+    if key == "source" and "destination" in arguments:
+        value = f"{value} → {arguments['destination']}"
+    if key == "prompt" and "when" in arguments:
+        value = f"{arguments['when']}: {value}"
+    value = value.replace("\n", " ")
+    return f"{name} {value[:70] + '…' if len(value) > 70 else value}"
+
+
+class Keys:
+    """The keyboard while the agent works: no echo, keys arrive at once, so Esc can stop it."""
+
+    def __init__(self) -> None:
+        self.fd = sys.stdin.fileno() if sys.stdin.isatty() else None
+        self.saved: list | None = None
+
+    def __enter__(self) -> Self:
+        if self.fd is not None:
+            self.saved = termios.tcgetattr(self.fd)
+            mode = termios.tcgetattr(self.fd)
+            mode[3] &= ~(termios.ICANON | termios.ECHO)
+            mode[6][termios.VMIN], mode[6][termios.VTIME] = 1, 0
+            termios.tcsetattr(self.fd, termios.TCSANOW, mode)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self.fd is not None and self.saved is not None:
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.saved)
+            termios.tcflush(self.fd, termios.TCIFLUSH)
+
+    def escape(self) -> bool:
+        """A lone Esc; arrow keys and other sequences that start with Esc are ignored."""
+        if self.fd is None or not select.select([self.fd], [], [], 0)[0]:
+            return False
+        return os.read(self.fd, 64) == b"\x1b"
+
+    def key(self) -> str:
+        if self.fd is None:
+            return sys.stdin.readline()
+        return os.read(self.fd, 8).decode("utf-8", errors="replace")
+
+
+def attach(text: str, cwd: Path) -> Any:
+    """`@path` adds a text file's content or an image to the message."""
+    notes: list[str] = []
+    images: list[dict] = []
+
+    def replace(match: re.Match) -> str:
+        token = match.group(1).rstrip(".,;:!?)")
+        path = Path(token).expanduser()
+        path = (path if path.is_absolute() else cwd / path).resolve()
+        if not path.is_file():
+            return match.group(0)
+        reason = denied(path)
+        if reason:
+            notes.append(f"[{path} was not attached: {reason}]")
+            return str(path)
+        if path.suffix.casefold() in IMAGE_SUFFIXES:
+            mime = mimetypes.guess_type(path.name)[0] or "image/png"
+            encoded = base64.b64encode(path.read_bytes()).decode()
+            images.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}})
+            return str(path)
+        data = path.read_bytes()[:READ_LIMIT]
+        if b"\0" in data[:8192]:
+            notes.append(f"[{path} is binary and was not attached]")
+        else:
+            notes.append(f"File {path}:\n```\n{data.decode('utf-8', errors='replace')}\n```")
+        return str(path)
+
+    message = re.sub(r"(?<!\S)@(\S+)", replace, text)
+    if notes:
+        message += "\n\n" + "\n\n".join(notes)
+    return [{"type": "text", "text": message}, *images] if images else message
+
+
+def run_shell(command: str, cwd: Path, paint: Paint) -> str:
+    """`!command` in the console; returns what the model gets to see."""
+    shell = "/bin/zsh" if Path("/bin/zsh").exists() else "/bin/sh"
+    try:
+        result = subprocess.run([shell, "-c", command], cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=600, check=False)
+        output, code = (result.stdout + result.stderr).rstrip(), result.returncode
+    except subprocess.TimeoutExpired:
+        output, code = "(stopped after 10 minutes)", 124
+    print(output if output else paint("(no output)", DIM))
+    print(paint(f"exit {code}", GREEN if code == 0 else RED))
+    return f"I ran `{command}` in {cwd} (exit {code}):\n```\n{_clip(output, 8000)}\n```"
+
+
+def status_text(config: dict) -> str:
+    owner = str(config["telegram"]["chat_id"]).strip()
+    others = [str(item) for item in config["agent"]["allowed_ids"] if str(item) != owner]
+    token = stored_token(config["telegram"]["keychain_service"])
+    jobs = Schedule().jobs()
+    lines = [
+        f"model       {config['agent']['model']} (ul lm, port {config['lm']['port']})",
+        f"folders     {', '.join(short_path(root) for root in roots(config))}",
+        f"telegram    {'bot token saved' if token else 'no bot token'}; owner {owner or 'not set'}",
+        f"allowed     {', '.join(others) if others else 'only the owner'}",
+        f"server      {'running in the background' if running() else 'not in the background (`ula server` runs it here)'}",
+        f"schedule    {len(jobs)} job(s)" + (f"; next {describe_job(jobs[0])}" if jobs else ""),
+    ]
+    return "\n".join(lines)
+
+
+def log_text(count: int = 20) -> str:
+    path = agent_dir("audit.log")
+    lines = path.read_text(encoding="utf-8").splitlines()[-count:] if path.exists() else []
+    rows = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        rows.append(f"{record['time']}  {record['who']:<10} {record['action']:<12} {record['outcome']:<9} {record['detail']}")
+    return "\n".join(rows) or "No agent actions yet."
+
+
+class Console:
+    """The interactive console: streamed answers, tool calls, approvals, footer."""
+
     can_send_files = False
+    streaming = True
+
+    def __init__(self, config: dict, model: Model, paint: Paint) -> None:
+        self.config, self.model, self.paint = config, model, paint
+        self.keys: Keys | None = None
+        self.show_thinking = False
+        self.frame = 0
+        self.spinning = False
+        self.line_open = False
+        self.thinking_open = False
+        self.streamed = False
+        self.last_answer = ""
+        self.sent_tokens = 0
+        self.received_tokens = 0
+
+    def write(self, text: str) -> None:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+    def width(self) -> int:
+        return max(20, min(shutil.get_terminal_size().columns, 120))
+
+    def clear_spinner(self) -> None:
+        if self.spinning:
+            self.write("\r\x1b[K")
+            self.spinning = False
+
+    # Hooks for Model.stream and respond.
+    def tick(self) -> None:
+        if self.line_open or not sys.stdout.isatty():
+            return
+        self.frame += 1
+        mark = SPINNER[self.frame % len(SPINNER)]
+        self.write("\r\x1b[K" + self.paint(f"{mark} working · Esc stops", DIM))
+        self.spinning = True
+
+    def stop_requested(self) -> bool:
+        return self.keys is not None and self.keys.escape()
+
+    def on_reasoning(self, delta: str) -> None:
+        if not self.show_thinking:
+            return
+        self.clear_spinner()
+        self.thinking_open = True
+        self.line_open = True
+        self.write(self.paint(printable(delta), DIM, ITALIC))
+
+    def on_text(self, delta: str) -> None:
+        self.clear_spinner()
+        if self.thinking_open:
+            self.write("\n\n")
+            self.thinking_open = False
+        if not self.line_open:
+            delta = delta.lstrip("\n")
+        self.line_open = True
+        self.streamed = True
+        self.write(printable(delta))
+
+    def end_message(self) -> None:
+        self.clear_spinner()
+        if self.line_open:
+            self.write("\n")
+        self.line_open = self.thinking_open = False
+        usage = self.model.usage
+        if usage:
+            self.sent_tokens += int(usage.get("prompt_tokens", 0))
+            self.received_tokens += int(usage.get("completion_tokens", 0))
+
+    def on_tool(self, name: str, arguments: dict) -> None:
+        self.write(self.paint("● ", CYAN) + self.paint(tool_label(name, arguments), BOLD) + "\n")
+
+    def on_result(self, name: str, result: str) -> None:
+        lines = result.splitlines() or [""]
+        if lines[0].startswith("Error"):
+            color = RED
+        elif lines[0].startswith(("The user declined", "Not run")):
+            color = YELLOW
+        else:
+            color = DIM
+        room = self.width() - 6
+        for index, line in enumerate(lines[:4]):
+            self.write(self.paint(("  ⎿ " if index == 0 else "    ") + printable(line[:room]), color) + "\n")
+        if len(lines) > 4:
+            self.write(self.paint(f"    … +{len(lines) - 4} lines", DIM) + "\n")
+
+    # The channel Tools uses for approvals.
+    def confirm(self, title: str, detail: str, who: str) -> bool:
+        self.clear_spinner()
+        bar = self.paint("│ ", YELLOW)
+        self.write(self.paint("╭─ ", YELLOW) + self.paint(title, BOLD) + "\n")
+        lines = detail.splitlines()
+        for line in lines[:60]:
+            if line.startswith("+") and not line.startswith("+++"):
+                color = GREEN
+            elif line.startswith("-") and not line.startswith("---"):
+                color = RED
+            else:
+                color = DIM
+            self.write(bar + self.paint(printable(line), color) + "\n")
+        if len(lines) > 60:
+            self.write(bar + self.paint(f"… +{len(lines) - 60} lines", DIM) + "\n")
+        self.write(self.paint("╰─ ", YELLOW) + "Allow? " + self.paint("[y/N] ", DIM))
+        answer = self.keys.key() if self.keys else sys.stdin.readline()
+        allowed = answer.strip().casefold()[:1] in {"y", "д"}
+        self.write(self.paint("yes", GREEN) + "\n" if allowed else self.paint("no", RED) + "\n")
+        return allowed
+
+    # Screen parts.
+    def header(self, resumed: int) -> None:
+        paint = self.paint
+        print(paint(" ula ", BOLD, CYAN) + paint(" unlaw agent", DIM))
+        print(f" {paint('model', DIM)}    {self.model.name}")
+        print(f" {paint('folders', DIM)}  {', '.join(short_path(root) for root in roots(self.config))}")
+        if resumed:
+            print(f" {paint('session', DIM)}  continuing, {resumed} messages")
+        print(paint(" Esc stops · /help commands · !cmd shell · @file attaches · Ctrl+D quits", DIM))
+
+    def footer(self, session: Session) -> None:
+        parts = [short_path(Path.cwd()), short_model(self.model.name)]
+        if self.model.usage:
+            parts.append(f"ctx {tokens(int(self.model.usage.get('prompt_tokens', 0)))}")
+        if self.sent_tokens or self.received_tokens:
+            parts.append(f"↑{tokens(self.sent_tokens)} ↓{tokens(self.received_tokens)}")
+        parts.append(f"{len(session.messages)} msgs")
+        print(self.paint("─" * self.width(), DIM))
+        print(self.paint(" " + " · ".join(parts), DIM))
+
+    def read(self) -> str:
+        lines, prompt = [], "› "
+        while True:
+            line = input(prompt)
+            if line.endswith("\\"):
+                lines.append(line[:-1])
+                prompt = "  "
+                continue
+            lines.append(line)
+            return "\n".join(lines)
+
+    def command(self, line: str, session: Session) -> bool:
+        """Run a /command; False means quit."""
+        name, _, rest = line.partition(" ")
+        rest = rest.strip()
+        paint = self.paint
+        if name in {"/exit", "/quit"}:
+            return False
+        if name == "/help":
+            for command, text in SLASH_COMMANDS.items():
+                print(f"  {paint(command, CYAN):<22} {text}" if paint.enabled else f"  {command:<12} {text}")
+            print(paint("  Enter sends · end a line with \\ to continue · Esc or Ctrl+C stops the agent", DIM))
+            print(paint("  !cmd runs a shell command and shares the output · !!cmd keeps it to you", DIM))
+            print(paint("  @path attaches a file or image · Tab completes /commands and @paths", DIM))
+        elif name == "/new":
+            session.reset()
+            print(paint("New conversation.", DIM))
+        elif name == "/model":
+            self.switch_model(rest)
+        elif name == "/today":
+            print(today_text(self.config))
+        elif name == "/plan":
+            print(plan_text())
+        elif name == "/unschedule":
+            if not rest:
+                print(paint("Usage: /unschedule <id> (see /plan)", YELLOW))
+            else:
+                try:
+                    print(f"Cancelled {describe_job(Schedule().remove(rest))}")
+                except ValueError as error:
+                    print(paint(str(error), RED))
+        elif name == "/status":
+            print(status_text(self.config))
+        elif name == "/log":
+            print(log_text(int(rest) if rest.isdigit() else 20))
+        elif name == "/thinking":
+            self.show_thinking = not self.show_thinking
+            print(paint(f"Reasoning is {'shown' if self.show_thinking else 'hidden'}.", DIM))
+        elif name == "/copy":
+            if self.last_answer and shutil.which("pbcopy"):
+                subprocess.run(["pbcopy"], input=self.last_answer, text=True, check=False)
+                print(paint("Copied the last answer.", DIM))
+            else:
+                print(paint("Nothing to copy.", DIM))
+        else:
+            print(paint(f"Unknown command {name}; /help lists them.", YELLOW))
+        return True
+
+    def switch_model(self, choice: str) -> None:
+        models = _chat_models()
+        if not choice:
+            for index, model in enumerate(models, 1):
+                mark = self.paint("●", GREEN) if model["id"] == self.model.name else " "
+                print(f" {mark} {index}. {model['id']}  {self.paint(model['type'], DIM)}")
+            if not models:
+                print(self.paint("No downloaded chat models; see `ul lm search` and `ul lm pull`.", YELLOW))
+            else:
+                print(self.paint("/model <number|name> switches and remembers it.", DIM))
+            return
+        if choice.isdigit() and 1 <= int(choice) <= len(models):
+            choice = models[int(choice) - 1]["id"]
+        known = {model["id"] for model in models}
+        if choice not in known and choice != "auto":
+            print(self.paint(f"No downloaded model {choice!r}; /model lists them.", RED))
+            return
+        _set("agent.model", choice)
+        self.model.name = choice
+        self.config["agent"]["model"] = choice
+        print(self.paint(f"Model: {choice}. Checking that it calls tools ...", DIM))
+        try:
+            works = self.model.calls_tools()
+        except RuntimeError as error:
+            print(self.paint(f"Could not check it: {error}", YELLOW))
+            return
+        if works:
+            print(self.paint("It calls tools.", GREEN))
+        else:
+            print(self.paint("It answers in text only, so it cannot see or change anything; pick a bigger model.", YELLOW))
+
+
+def _completions(text: str) -> list[str]:
+    """Tab: /commands, and @paths relative to the current folder (or ~/ and /)."""
+    if text.startswith("/"):
+        return [command for command in SLASH_COMMANDS if command.startswith(text)]
+    if not text.startswith("@"):
+        return []
+    folder, slash, start = text[1:].rpartition("/")
+    base, prefix = (Path(folder or "/").expanduser(), f"@{folder}/") if slash else (Path("."), "@")
+    try:
+        entries = sorted(base.iterdir())
+    except OSError:
+        return []
+    hidden = start.startswith(".")
+    return [
+        prefix + entry.name + ("/" if entry.is_dir() else "")
+        for entry in entries
+        if entry.name.startswith(start) and (hidden or not entry.name.startswith("."))
+    ]
+
+
+def _complete(text: str, state: int) -> str | None:
+    options = _completions(text)
+    return options[state] if state < len(options) else None
+
+
+def _readline(history: Path) -> None:
+    try:
+        import readline
+    except ImportError:
+        return
+    history.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        readline.read_history_file(history)
+    except OSError:
+        pass
+    readline.set_history_length(1000)
+    atexit.register(lambda: _save_history(readline, history))
+    readline.set_completer_delims(" \t\n")
+    readline.set_completer(_complete)
+    # macOS Python often links libedit, which has its own syntax for the same binding.
+    readline.parse_and_bind("bind ^I rl_complete" if "libedit" in (readline.__doc__ or "") else "tab: complete")
+
+
+def _save_history(readline: Any, history: Path) -> None:
+    try:
+        readline.write_history_file(history)
+    except OSError:
+        pass
+
+
+def console(config: dict, model: Model, first: str | None, resume: bool) -> int:
+    paint = Paint(colors(config, sys.stdout))
+    ui = Console(config, model, paint)
+    session = Session("terminal")
+    if not resume:
+        session.messages = []
+    tools = Tools(config, ui, "terminal", "full", Path.cwd())
+    _readline(agent_dir("history"))
+    ui.header(len(session.messages))
+    model.ensure()
+    shared: list[str] = []
+    pending = first
+    while True:
+        if pending is None:
+            print()
+            ui.footer(session)
+            try:
+                line = ui.read()
+            except EOFError:
+                print()
+                return 0
+            except KeyboardInterrupt:
+                print()
+                continue
+        else:
+            line, pending = pending, None
+            print(paint("› ", DIM) + line)
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("/"):
+            if not ui.command(line, session):
+                return 0
+            continue
+        if line.startswith("!!"):
+            run_shell(line[2:].strip(), Path.cwd(), paint)
+            continue
+        if line.startswith("!"):
+            shared.append(run_shell(line[1:].strip(), Path.cwd(), paint))
+            continue
+        content = attach(line, Path.cwd())
+        if shared:
+            prefix = "\n\n".join(shared) + "\n\n"
+            content = prefix + content if isinstance(content, str) else [{"type": "text", "text": prefix + content[0]["text"]}, *content[1:]]
+            shared = []
+        ui.streamed = False
+        with Keys() as keys:
+            ui.keys = keys
+            try:
+                answer = respond(config, model, tools, session, content, "terminal", ui)
+            except (Aborted, KeyboardInterrupt):
+                ui.end_message()
+                print(paint("■ stopped", YELLOW))
+            except RuntimeError as error:
+                ui.end_message()
+                print(paint(f"✗ {error}", RED))
+            else:
+                ui.last_answer = answer
+                if not ui.streamed:
+                    print(answer)
+            finally:
+                ui.keys = None
+
+
+class Printer:
+    """Print mode (`-p`, or input/output redirected): only the answer goes to stdout."""
+
+    can_send_files = False
+    streaming = False
+
+    def on_tool(self, name: str, arguments: dict) -> None:
+        if sys.stderr.isatty():
+            print(f"  ● {tool_label(name, arguments)}", file=sys.stderr)
 
     def confirm(self, title: str, detail: str, who: str) -> bool:
         print(f"\n{title}", file=sys.stderr)
@@ -1095,49 +1767,18 @@ class Terminal:
             print(detail, file=sys.stderr)
         print("Allow? [y/N] ", end="", file=sys.stderr, flush=True)
         answer = input() if sys.stdin.isatty() else sys.stdin.readline()
-        allowed = answer.strip().casefold() in {"y", "yes", "д", "да"}
+        allowed = answer.strip().casefold()[:1] in {"y", "д"}
         if not allowed:
             print("Declined.", file=sys.stderr)
         return allowed
 
 
-def _show_tool(name: str, arguments: dict) -> None:
-    shown = ", ".join(f"{key}={str(value)[:60]!r}" for key, value in arguments.items())
-    print(f"  · {name}({shown})", file=sys.stderr)
-
-
-def terminal(config: dict, task: str | None) -> int:
-    model = Model(config)
+def print_mode(config: dict, model: Model, message: str) -> int:
     model.ensure()
-    tools = Tools(config, Terminal(), "terminal", "full", Path.cwd())
-    if task is not None:
-        print(
-            respond(config, model, tools, Session(None), task, "terminal", _show_tool)
-        )
-        return 0
-    session = Session("terminal")
-    print("Unlaw agent. /new starts over, /today, /plan, /exit quits.")
-    while True:
-        try:
-            line = input("› ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return 0
-        if not line:
-            continue
-        if line in {"/exit", "/quit"}:
-            return 0
-        if line == "/new":
-            session.reset()
-            print("Started a new conversation.")
-            continue
-        if line in {"/today", "/plan"}:
-            print(today_text(config) if line == "/today" else plan_text())
-            continue
-        try:
-            print(respond(config, model, tools, session, line, "terminal", _show_tool))
-        except RuntimeError as error:
-            print(f"unlaw agent: {error}", file=sys.stderr)
+    printer = Printer()
+    tools = Tools(config, printer, "terminal", "full", Path.cwd())
+    print(respond(config, model, tools, Session(None), attach(message, Path.cwd()), "terminal", printer))
+    return 0
 
 
 # --- Telegram ------------------------------------------------------------------
@@ -1147,15 +1788,20 @@ TOKEN_KEY = "TELEGRAM_BOT_TOKEN"
 
 
 def env_file() -> Path:
-    """The bot token lives next to config.toml in .env, readable only by you."""
     return config_dir() / ".env"
 
 
-def _env_lines() -> list[str]:
+def _env_token() -> str:
+    """Optional: a `TELEGRAM_BOT_TOKEN=` line in .env next to config.toml, for those who prefer a file."""
     try:
-        return env_file().read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        return []
+        lines = env_file().read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        key, _, value = line.partition("=")
+        if key.strip() == TOKEN_KEY and value.strip().strip("'\""):
+            return value.strip().strip("'\"")
+    return ""
 
 
 def _keychain_token(service: str) -> str:
@@ -1172,38 +1818,41 @@ def _keychain_token(service: str) -> str:
 
 
 def stored_token(keychain_service: str) -> str:
-    """The token in .env; tokens saved before Unlaw 3.3 are still read from the Keychain."""
-    for line in _env_lines():
-        key, _, value = line.partition("=")
-        if key.strip() == TOKEN_KEY and value.strip().strip("'\""):
-            return value.strip().strip("'\"")
-    return _keychain_token(keychain_service)
+    """The macOS Keychain first; .env only when the Keychain has no token."""
+    return _keychain_token(keychain_service) or _env_token()
 
 
-def store_token(token: str) -> None:
+def store_token(token: str, keychain_service: str) -> None:
+    """Save to the Keychain and drop a .env copy, so only one token is ever in use."""
     token = token.strip()
     if not token or any(character.isspace() for character in token):
         raise ValueError("the token must be one word without spaces")
-    lines = [line for line in _env_lines() if line.partition("=")[0].strip() != TOKEN_KEY]
-    lines.append(f"{TOKEN_KEY}={token}")
+    result = subprocess.run(
+        ["security", "add-generic-password", "-a", "unlaw", "-s", keychain_service, "-w", token, "-U"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or "could not write the macOS Keychain").strip())
     path = env_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".env.{os.getpid()}.tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write("\n".join(lines) + "\n")
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-    path.chmod(0o600)
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    kept = [line for line in lines if line.partition("=")[0].strip() != TOKEN_KEY]
+    if len(kept) == len(lines):
+        return
+    if any(line.strip() for line in kept):
+        path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    else:
+        path.unlink()
 
 
 def read_token(config: dict) -> str:
     token = stored_token(config["telegram"]["keychain_service"])
     if not token:
-        raise RuntimeError("the Telegram bot is not configured; run `ul agent setup`")
+        raise RuntimeError("the Telegram bot is not configured; run `ula setup`")
     return token
 
 
@@ -1257,6 +1906,26 @@ class Telegram:
         return destination
 
 
+def telegram_html(text: str) -> str:
+    """The model writes Markdown; Telegram shows it raw unless it is sent as HTML."""
+    parts = []
+    for piece in re.split(r"(```[\s\S]*?```)", text):
+        if piece.startswith("```") and piece.endswith("```") and len(piece) >= 6:
+            body = piece[3:-3]
+            first, newline, rest = body.partition("\n")
+            if newline and re.fullmatch(r"[\w+#.-]*", first.strip()):
+                body = rest
+            parts.append(f"<pre>{html.escape(body.strip(chr(10)), quote=False)}</pre>")
+            continue
+        piece = html.escape(piece, quote=False)
+        piece = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", piece)
+        piece = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", piece)
+        piece = re.sub(r"(?m)^#{1,6}\s+(.+)$", r"<b>\1</b>", piece)
+        piece = re.sub(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)", r'<a href="\2">\1</a>', piece)
+        parts.append(piece)
+    return "".join(parts)
+
+
 def chunks(text: str, limit: int = TELEGRAM_LIMIT) -> list[str]:
     parts: list[str] = []
     while len(text) > limit:
@@ -1272,8 +1941,13 @@ class Chat:
 
     can_send_files = True
 
+    streaming = False
+
     def __init__(self, bot: Bot, chat_id: str) -> None:
         self.bot, self.chat_id = bot, chat_id
+
+    def on_tool(self, name: str, arguments: dict) -> None:
+        self.bot.log(f"  ● {tool_label(name, arguments)}")
 
     def confirm(self, title: str, detail: str, who: str) -> bool:
         return self.bot.ask_owner(title, detail, who)
@@ -1294,7 +1968,7 @@ class Bot:
         self.config, self.telegram, self.model = config, telegram, model
         self.owner = str(config["telegram"]["chat_id"]).strip()
         if not self.owner:
-            raise RuntimeError("telegram.chat_id is empty; run `ul tg setup`")
+            raise RuntimeError("telegram.chat_id is empty; run `ula setup`")
         self.allowed = {
             self.owner,
             *(str(item) for item in config["agent"]["allowed_ids"]),
@@ -1306,6 +1980,7 @@ class Bot:
         self.state: dict[str, Any] = _read_json(self.state_path, {})
         self.backlog: list[dict] = []
         self.poll_timeout = 25
+        self.log: Callable[[str], None] = lambda line: None
 
     def reload(self) -> None:
         """Pick up config changes (model, ids, folders) without restarting the bot."""
@@ -1348,9 +2023,13 @@ class Bot:
     def send(self, chat_id: str, text: str, **extra: Any) -> Any:
         result = None
         for part in chunks(text):
-            result = self.telegram.call(
-                "sendMessage", {"chat_id": chat_id, "text": part, **extra}
-            )
+            try:
+                result = self.telegram.call("sendMessage", {"chat_id": chat_id, "text": telegram_html(part), "parse_mode": "HTML", **extra})
+            except RuntimeError as error:
+                # Markdown the converter got wrong: send the text as it is.
+                if "parse" not in str(error).casefold():
+                    raise
+                result = self.telegram.call("sendMessage", {"chat_id": chat_id, "text": part, **extra})
         return result
 
     def send_file(self, chat_id: str, path: Path) -> None:
@@ -1427,21 +2106,14 @@ class Bot:
 
     def reply(self, chat_id: str, content: Any) -> None:
         level = self.level(chat_id)
-        tools = Tools(self.config, Chat(self, chat_id), chat_id, level)
+        chat = Chat(self, chat_id)
+        tools = Tools(self.config, chat, chat_id, level)
         try:
-            self.telegram.call(
-                "sendChatAction", {"chat_id": chat_id, "action": "typing"}
-            )
-            answer = respond(
-                self.config,
-                self.model,
-                tools,
-                Session(f"tg-{chat_id}"),
-                content,
-                "Telegram",
-            )
+            self.telegram.call("sendChatAction", {"chat_id": chat_id, "action": "typing"})
+            answer = respond(self.config, self.model, tools, Session(f"tg-{chat_id}"), content, "Telegram", chat)
         except RuntimeError as error:
             answer = f"Error: {error}"
+        self.log(f"  → {answer[:100].replace(chr(10), ' ')}")
         self.send(chat_id, answer)
 
     def handle(self, update: dict) -> None:
@@ -1463,6 +2135,8 @@ class Bot:
                 audit(chat_id, "message", "", "ignored: not in agent.allowed_ids")
             return
         text = (message.get("text") or message.get("caption") or "").strip()
+        kind = next((field for field in ("voice", "audio", "photo", "document") if message.get(field)), "")
+        self.log(f"{chat_id} › {text[:100].replace(chr(10), ' ')}" + (f" [{kind}]" if kind else ""))
         command = text.split()[0].split("@")[0] if text.startswith("/") else ""
         if command in {"/start", "/help"}:
             self.send(chat_id, BOT_HELP)
@@ -1529,23 +2203,19 @@ class Bot:
     def tick(self) -> None:
         """Run due scheduled jobs and the daily digest."""
         moment = now()
-        for job in Schedule().take_due(moment):
+        due = Schedule().take_due(moment)
+        if due:
+            self.reload()
+        for job in due:
+            self.log(f"scheduled #{job['id']} › {job['prompt'][:100]}")
             chat_id = str(job.get("by") or self.owner)
             if chat_id not in self.allowed or chat_id == "terminal":
                 chat_id = self.owner
             self.send(chat_id, f"Scheduled task #{job['id']}: {job['prompt']}")
-            tools = Tools(
-                self.config, Chat(self, chat_id), chat_id, self.level(chat_id)
-            )
+            chat = Chat(self, chat_id)
+            tools = Tools(self.config, chat, chat_id, self.level(chat_id))
             try:
-                answer = respond(
-                    self.config,
-                    self.model,
-                    tools,
-                    Session(None),
-                    f"Scheduled task: {job['prompt']}",
-                    "Telegram",
-                )
+                answer = respond(self.config, self.model, tools, Session(None), f"Scheduled task: {job['prompt']}", "Telegram", chat)
             except RuntimeError as error:
                 answer = f"Error: {error}"
             self.send(chat_id, answer)
@@ -1571,7 +2241,10 @@ class Bot:
             try:
                 updates = self.fetch(self.poll_timeout)
             except (RuntimeError, OSError, urllib.error.URLError) as error:
-                print(f"unlaw agent: {error}", file=sys.stderr)
+                if "conflict" in str(error).casefold():
+                    self.log("another `ula server` reads this bot (the background one or another terminal); stop it")
+                else:
+                    self.log(f"Telegram: {error}")
                 time.sleep(5)
                 continue
             for update in updates:
@@ -1579,16 +2252,34 @@ class Bot:
         return 0
 
 
-def serve(config: dict) -> int:
+def server(config: dict) -> int:
+    """`ula server`: the Telegram bot and the schedule, in this terminal."""
+    paint = Paint(colors(config, sys.stderr))
+    if running() and not os.environ.get("UNLAW_AGENT_SERVICE"):
+        print(f"The Telegram server already runs in the background (log: {agent_dir('daemon.log')}).", file=sys.stderr)
+        print("Two servers cannot read one bot; `ula setup` turns background mode off.", file=sys.stderr)
+        return 1
     model = Model(config)
     telegram = Telegram(read_token(config), config["telegram"]["api_base"])
     bot = Bot(config, telegram, model)
+    username = telegram.call("getMe", {}).get("username", "?")
+
+    def log(line: str) -> None:
+        print(paint(now().strftime("%H:%M"), DIM) + "  " + line, file=sys.stderr, flush=True)
+
+    bot.log = log
+    others = len(bot.allowed) - 1
+    print(paint(" ula server ", BOLD, CYAN) + paint(f" Telegram @{username}", DIM), file=sys.stderr)
+    print(f" {paint('model', DIM)}    {model.name}", file=sys.stderr)
+    print(f" {paint('owner', DIM)}    {bot.owner}" + (f" + {others} allowed" if others else ""), file=sys.stderr)
+    print(f" {paint('folders', DIM)}  {', '.join(short_path(root) for root in roots(config))}", file=sys.stderr)
+    print(paint(" Ctrl+C stops", DIM), file=sys.stderr, flush=True)
     model.ensure()
-    print(
-        f"Unlaw agent is listening in Telegram (owner {bot.owner}, {len(bot.allowed) - 1} more allowed).",
-        file=sys.stderr,
-    )
-    return bot.run()
+    try:
+        return bot.run()
+    except KeyboardInterrupt:
+        print(paint("\nstopped", DIM), file=sys.stderr)
+        return 0
 
 
 # --- Background service (launchd) ----------------------------------------------
@@ -1618,7 +2309,7 @@ def running() -> bool:
 def start(config: dict) -> int:
     read_token(config)
     if not str(config["telegram"]["chat_id"]).strip():
-        raise RuntimeError("telegram.chat_id is empty; run `ul tg setup`")
+        raise RuntimeError("telegram.chat_id is empty; run `ula setup`")
     log = agent_dir("daemon.log")
     log.parent.mkdir(parents=True, exist_ok=True)
     environment = {
@@ -1628,8 +2319,8 @@ def start(config: dict) -> int:
     }
     plist = {
         "Label": LABEL,
-        "ProgramArguments": [str(Path(ul_binary()).resolve()), "agent", "serve"],
-        "EnvironmentVariables": environment,
+        "ProgramArguments": [str(Path(ul_binary()).resolve()), "agent", "server"],
+        "EnvironmentVariables": {**environment, "UNLAW_AGENT_SERVICE": "1"},
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
         "ThrottleInterval": 30,
@@ -1645,36 +2336,17 @@ def start(config: dict) -> int:
         raise RuntimeError(
             f"launchctl bootstrap failed: {(result.stderr or result.stdout).strip()}"
         )
-    print(
-        f"Agent started: Telegram and the schedule now run in the background, also after login.\nLog: {log}"
-    )
+    print(f"The Telegram server runs in the background now and after login (log: {log}).")
     return 0
 
 
 def stop() -> int:
     path = _plist_path()
     if not path.exists():
-        print("The agent is not running.")
         return 0
     _launchctl("bootout", f"{_domain()}/{LABEL}")
     path.unlink()
-    print("Agent stopped.")
-    return 0
-
-
-def status(config: dict) -> int:
-    print(f"Background agent: {'running' if running() else 'stopped'}")
-    print(f"Model: {config['agent']['model']} via ul lm (port {config['lm']['port']})")
-    owner = str(config["telegram"]["chat_id"]).strip() or "not set (run `ul tg setup`)"
-    print(
-        f"Telegram owner: {owner}; other allowed ids: {len(config['agent']['allowed_ids'])}"
-    )
-    print(f"Folders: {', '.join(str(root) for root in roots(config))}")
-    jobs = Schedule().jobs()
-    print(
-        f"Scheduled jobs: {len(jobs)}"
-        + (f"; next {describe_job(jobs[0])}" if jobs else "")
-    )
+    print("Background mode is off; `ula server` runs the Telegram server in a terminal.")
     return 0
 
 
@@ -1697,7 +2369,10 @@ def _yes(prompt: str, default: bool) -> bool:
     return default if not answer else answer in {"y", "yes", "д", "да"}
 
 
-def _set(key: str, value: object) -> None:
+def _set(key: str, value: object, current: object = None) -> None:
+    """`ul config set`, skipped when nothing changes (keeps config.toml untouched)."""
+    if current is not None and current == value:
+        return
     result = run_ul("config", "set", key, json.dumps(value, ensure_ascii=False), timeout=60)
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout).strip())
@@ -1718,7 +2393,7 @@ def _choose_model(config: dict) -> None:
     current = str(config["agent"]["model"])
     if not models:
         print("No downloaded chat model yet. Find one with `ul lm search <name> --mlx`,")
-        print("download it with `ul lm pull <owner/repo>`, then run `ul agent setup` again.")
+        print("download it with `ul lm pull <owner/repo>`, then run `ula setup` again.")
         print("Pick a model that supports tool calling, or the agent can only talk.")
         return
     for index, model in enumerate(models, 1):
@@ -1731,7 +2406,7 @@ def _choose_model(config: dict) -> None:
         if not 0 <= number <= len(models):
             raise ValueError(f"no model number {number}")
         answer = "auto" if number == 0 else models[number - 1]["id"]
-    _set("agent.model", answer)
+    _set("agent.model", answer, current)
     print(f"Model: {answer}")
     model = Model(load_config())
     print("Checking that it can use tools (loads the model, may take a minute) ...")
@@ -1751,8 +2426,28 @@ def _choose_model(config: dict) -> None:
     _choose_model(load_config())
 
 
+def edit_ids(current: list[str], answer: str) -> list[str]:
+    """`123, 456` adds, `-123` removes one, a lone `-` clears; nothing is dropped by accident."""
+    ids = list(dict.fromkeys(current))
+    answer = answer.strip()
+    if answer == "-":
+        return []
+    for item in (part.strip() for part in answer.replace(" ", ",").split(",")):
+        if not item:
+            continue
+        removing = item.startswith("-") and len(item) > 1 and item[1:].isdigit()
+        value = item[1:] if removing else item
+        if not re.fullmatch(r"-?\d+", value):
+            raise ValueError(f"{item!r} is not a Telegram id (digits, e.g. 123456789)")
+        if removing:
+            ids = [known for known in ids if known != value]
+        elif value not in ids:
+            ids.append(value)
+    return ids
+
+
 def _connect_telegram(config: dict) -> bool:
-    print("\n2. Telegram (talk to the agent from your phone)")
+    print("\n2. Telegram (talk to the agent from your phone with `ula server`)")
     if not _yes("Use Telegram?", True):
         return False
     api_base = config["telegram"]["api_base"]
@@ -1765,9 +2460,13 @@ def _connect_telegram(config: dict) -> bool:
         raise ValueError("a bot token is needed for Telegram")
     telegram = Telegram(token, api_base)
     bot = telegram.call("getMe", {})
-    store_token(token)
-    print(f"Bot: @{bot.get('username', '?')} (token saved to {env_file()}, readable only by you)")
-    owner = str(config["telegram"]["chat_id"]).strip()
+    if entered:
+        store_token(token, config["telegram"]["keychain_service"])
+        print(f"Bot: @{bot.get('username', '?')} (token saved in the macOS Keychain)")
+    else:
+        print(f"Bot: @{bot.get('username', '?')}")
+    saved_owner = str(config["telegram"]["chat_id"]).strip()
+    owner = saved_owner
     if not owner:
         _ask(f"Send any message to @{bot.get('username', 'your bot')} in Telegram, then press Enter")
         for update in reversed(telegram.call("getUpdates", {"timeout": 0}) or []):
@@ -1780,16 +2479,21 @@ def _connect_telegram(config: dict) -> bool:
             raise ValueError("no message reached the bot; send it one and run setup again")
     else:
         owner = _ask("Your Telegram chat id (full access)", owner)
-    _set("telegram.chat_id", owner)
-    others = ", ".join(str(item) for item in config["agent"]["allowed_ids"]) or "-"
-    answer = _ask("Other Telegram ids that may talk to it, comma-separated, - for none", others)
-    ids = [] if answer == "-" else [item.strip() for item in answer.split(",") if item.strip()]
-    _set("agent.allowed_ids", ids)
-    if ids:
-        print("They may only chat. Give one more: ul config set agent.users.<id> read|full")
-    digest = str(config["agent"]["digest_time"]) or "-"
-    answer = _ask("Morning summary to Telegram at HH:MM, - for none", digest)
-    _set("agent.digest_time", "" if answer == "-" else answer)
+    _set("telegram.chat_id", owner, saved_owner)
+    saved_ids = [str(item) for item in config["agent"]["allowed_ids"]]
+    current = [item for item in saved_ids if item != owner]
+    print(f"Also allowed to talk to it: {', '.join(current) if current else 'nobody else'}")
+    answer = _ask("Add ids (comma-separated), -id removes one, - removes all, Enter keeps")
+    ids = edit_ids(current, answer) if answer else current
+    _set("agent.allowed_ids", ids, saved_ids)
+    if ids != current:
+        print(f"Allowed: {', '.join(ids) if ids else 'only you'}")
+    levels = {str(key): str(value) for key, value in config["agent"]["users"].items()}
+    if any(levels.get(item, "chat") == "chat" for item in ids):
+        print("They may only chat; give someone more with `ul config set agent.users.<id> read` (or full).")
+    digest = str(config["agent"]["digest_time"])
+    answer = _ask("Morning summary to Telegram at HH:MM, - for none", digest or "-")
+    _set("agent.digest_time", "" if answer == "-" else answer, digest)
     return True
 
 
@@ -1798,106 +2502,71 @@ def setup(config: dict) -> int:
     _choose_model(config)
     telegram = _connect_telegram(config)
     print("\n3. Folders the agent may read (changes always need your approval)")
-    folders = ", ".join(str(root) for root in config["agent"]["roots"])
-    answer = _ask("Folders, comma-separated", folders)
-    _set("agent.roots", [item.strip() for item in answer.split(",") if item.strip()])
+    saved = [str(root) for root in config["agent"]["roots"]]
+    answer = _ask("Folders, comma-separated", ", ".join(saved))
+    _set("agent.roots", [item.strip() for item in answer.split(",") if item.strip()], saved)
     if telegram:
         print("\n4. Background")
-        if _yes("Run the agent in the background now and after login?", True):
-            return start(load_config())
-        print("Start it later with `ul agent start`.")
-    print("\nDone. Talk to it with `ula` (or `ul agent`).")
+        if _yes("Keep the Telegram server running in the background, also after login?", running()):
+            start(load_config())
+        else:
+            stop()
+    print("\nDone. `ula` opens the console, `ula server` the Telegram server.")
     return 0
 
 
-def _schedule_command(args: list[str]) -> int:
-    repeat = "once"
-    if "--repeat" in args:
-        index = args.index("--repeat")
-        if index + 1 >= len(args):
-            raise ValueError("--repeat needs a value")
-        repeat = args[index + 1]
-        args = args[:index] + args[index + 2 :]
-    if len(args) < 2:
-        raise ValueError(
-            'usage: ul agent schedule <when> <prompt> [--repeat daily|weekly|"every 2h"]'
-        )
-    job = Schedule().add(
-        " ".join(args[1:]), parse_when(args[0], now()), parse_repeat(repeat), "terminal"
-    )
-    print(f"Scheduled {describe_job(job)}")
-    if not running():
-        print(
-            "The background agent is not running; start it with `ul agent start` so the job runs."
-        )
-    return 0
-
-
-def _log(args: list[str]) -> int:
-    count = int(args[0]) if args else 20
-    path = agent_dir("audit.log")
-    lines = (
-        path.read_text(encoding="utf-8").splitlines()[-count:] if path.exists() else []
-    )
-    for line in lines:
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        print(
-            f"{record['time']}  {record['who']:<10} {record['action']:<12} {record['outcome']:<9} {record['detail']}"
-        )
-    if not lines:
-        print("No agent actions yet.")
-    return 0
+def parse_cli(args: list[str]) -> dict:
+    options: dict[str, Any] = {"print": False, "resume": False, "model": None, "words": []}
+    iterator = iter(args)
+    for arg in iterator:
+        if options["words"] or arg == "--":
+            options["words"].extend([] if arg == "--" else [arg])
+            options["words"].extend(iterator)
+            break
+        if arg in {"-p", "--print"}:
+            options["print"] = True
+        elif arg in {"-c", "--continue"}:
+            options["resume"] = True
+        elif arg in {"-m", "--model"}:
+            options["model"] = next(iterator, None)
+            if not options["model"]:
+                raise ValueError(f"{arg} needs a model name")
+        elif arg.startswith("-") and len(arg) > 1:
+            raise ValueError(f"unknown option {arg}; see `ula --help`")
+        else:
+            options["words"].append(arg)
+    return options
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if args and args[0] in {"-h", "--help", "help"}:
+    if args[:1] in (["-h"], ["--help"], ["help"]):
         print(COMMAND_HELP["agent"], end="")
         return 0
     try:
         config = load_config()
-        action, rest = (args[0], args[1:]) if args else ("", [])
-        if action in {"serve", "tg"} and not rest:
-            return serve(config)
-        if action == "setup" and not rest:
+        # `serve` is what 3.3.0 wrote into the launchd job.
+        if args in (["server"], ["serve"]):
+            return server(config)
+        if args == ["setup"]:
             return setup(config)
-        if action == "start" and not rest:
-            return start(config)
-        if action == "stop" and not rest:
-            return stop()
-        if action == "status" and not rest:
-            return status(config)
-        if action == "today" and not rest:
-            print(today_text(config))
-            return 0
-        if action == "plan" and not rest:
-            print(plan_text())
-            return 0
-        if action == "schedule":
-            return _schedule_command(rest)
-        if action == "unschedule" and len(rest) == 1:
-            print(f"Cancelled {describe_job(Schedule().remove(rest[0]))}")
-            return 0
-        if action == "log" and len(rest) <= 1:
-            return _log(rest)
-        if not args and not sys.stdin.isatty():
-            task = sys.stdin.read().strip()
-            if not task:
-                raise ValueError("no task given")
-            return terminal(config, task)
-        return terminal(config, " ".join(args) if args else None)
+        options = parse_cli(args)
+        model = Model(config)
+        if options["model"]:
+            model.name = options["model"]
+        message = " ".join(options["words"]).strip()
+        if not sys.stdin.isatty() and not message:
+            message = sys.stdin.read().strip()
+            if not message:
+                raise ValueError("nothing to do: give a message, e.g. ula -p \"what is in ~/Downloads?\"")
+        if options["print"] or not (sys.stdin.isatty() and sys.stdout.isatty()):
+            if not message:
+                raise ValueError("print mode needs a message, e.g. ula -p \"what is in ~/Downloads?\"")
+            return print_mode(config, model, message)
+        return console(config, model, message or None, options["resume"])
     except KeyboardInterrupt:
         return 130
-    except (
-        ConfigError,
-        RuntimeError,
-        ValueError,
-        OSError,
-        urllib.error.URLError,
-    ) as error:
+    except (ConfigError, RuntimeError, ValueError, OSError, urllib.error.URLError) as error:
         print(f"unlaw agent: {error}", file=sys.stderr)
         return 1
 

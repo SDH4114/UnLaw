@@ -130,6 +130,8 @@ class LmTestCase(CoreTestCase):
                 "UNLAW_LM_LLAMA_SERVER": "/fake/llama-server",
             }
         )
+        # Never talk to a real `ul lm serve` that may be running on the default port.
+        self.ok("config", "set", "lm.port", str(free_port()))
         self.text = self.repo("mlx-community/Tiny-4bit", {"config.json": '{"model_type":"qwen3","quantization":{"bits":4}}', "model.safetensors": "1234"})
         self.repo("mlx-community/Eye-4bit", {"config.json": '{"model_type":"smolvlm","vision_config":{}}', "model.safetensors": "12"})
         self.repo("mlx-community/all-MiniLM-L6-v2-4bit", {"config.json": '{"model_type":"bert","architectures":["BertModel"]}', "model.safetensors": "1"})

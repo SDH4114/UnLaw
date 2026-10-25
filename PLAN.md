@@ -1,6 +1,6 @@
 # Unlaw: план развития
 
-Текущая версия: 3.3.0. `ul re` убран из плана.
+Текущая версия: 3.4.0. `ul re` убран из плана.
 
 ## Порядок
 
@@ -35,14 +35,12 @@ Skills первыми: дёшево, и их реестр команд стан�
 
 **Устройство:** seeded Python-команда `agent` (stdlib). Python, потому что Telegram/HTTPS уже есть на Python, а в Rust нет TLS. Модель — OpenAI API `ul lm serve` на 127.0.0.1 (tool calling уже поддерживается). Если сервер не запущен, агент поднимает его сам.
 
-**Запуск:** `ula` и `unlawagent` = `ul agent`. `ul agent setup` — мастер: локальная модель, Telegram (токен в `~/.config/unlaw/.env`, mode 600), id, сводка, папки, фоновый запуск.
+**Запуск (3.4.0):** три команды. `ula` — консоль в стиле pi (стрим, вызовы инструментов, Esc, /команды, `!cmd`, `@file`, `-p/-c/-m`), `ula server` — Telegram и расписание, `ula setup` — мастер (модель с проверкой инструментов, токен в `~/.config/unlaw/.env`, id: добавить/`-id`/Enter, сводка, папки, фоновый режим вкл/выкл).
 
 **Режимы:**
-- `ul agent` — чат в терминале; `ul agent "<задача>"` — одна задача.
-- `ul agent tg` — Telegram (long polling).
-- `ul agent start|stop|status` — фоновый демон через launchd: Telegram + планировщик + утренняя сводка.
-- `ul agent today` — дела на сегодня + задачи по расписанию на сегодня.
-- `ul agent plan` — всё запланированное; `ul agent schedule ...` / `unschedule <id>`.
+- `ula` — консоль; `ula -p "задача"` — один ответ; `ula -c` — продолжить разговор.
+- `ula server` — Telegram и расписание в этом терминале; фоновый режим включается в `ula setup` (launchd).
+- Дела и план — словами в чате или `/today`, `/plan`, `/unschedule <id>` в консоли.
 
 **Tools:**
 - без подтверждения: `list_dir`, `read_file`, `search`, `stat` — только внутри `agent.roots`;
@@ -55,7 +53,7 @@ Skills первыми: дёшево, и их реестр команд стан�
 
 **Расписание:** `storage.root/agent/schedule.json`: `once`, `daily`, `weekly`, `every <N>m|h|d`. Демон в срок запускает промпт и шлёт результат в Telegram.
 
-**Дела:** `ul agent today` = открытые пункты `ul todo` + задачи расписания на сегодня. Утренняя сводка в Telegram во время `agent.digest_time` (пусто = выключено).
+**Дела:** `/today` (и инструмент `today`) = открытые пункты `ul todo` + задачи расписания на сегодня. Утренняя сводка в Telegram во время `agent.digest_time` (пусто = выключено).
 
 **Доступ и безопасность:**
 - `agent.allowed_ids` — только им бот отвечает, остальным молчит.

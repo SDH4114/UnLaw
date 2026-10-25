@@ -90,7 +90,7 @@ ul completion zsh               # zsh completion
 ul version
 ul update --check              # is there a new version on GitHub
 ul skills install --claude      # teach coding agents to use ul
-ul agent                        # local AI agent: files, TODO, schedule, Telegram
+ula                             # local AI agent: files, TODO, schedule, Telegram
 ```
 
 Global options:
@@ -566,7 +566,7 @@ Set the default with `ul config set games.difficulty hard`.
 
 ```bash
 ul tg                              # open the Telegram app
-ul tg setup                        # token goes to ~/.config/unlaw/.env (mode 600)
+ul tg setup                        # token is stored in the macOS Keychain
 ul tg "Message from the terminal"
 ul tg send report.pdf
 ul tg photo screenshot.png
@@ -583,44 +583,53 @@ message the bot, then enter its `chat_id` during `setup`.
 
 ## Local agent
 
-`ul agent` is a personal agent on the `ul lm` model. You talk to it in the
-terminal or in Telegram; it reads and searches your files, works with the TODO
-board, schedules jobs and, with your approval, changes things on the Mac.
-
-`ula` and `unlawagent` are shortcuts: `ula today` is `ul agent today`.
-The agent only uses local models from `ul lm`; `ul agent setup` lists the downloaded
-ones to choose from.
+`ula` (also `unlawagent` and `ul agent`) is a personal agent on a local `ul lm`
+model. It reads and searches your files, works with the TODO board, schedules
+jobs and, with your approval, changes things on the Mac. Three commands:
 
 ```bash
-ul agent setup                              # model, Telegram, folders, background
-ul agent                                    # chat in the terminal (/new, /today, /plan)
-ul agent "what is in ~/Downloads?"          # one task
-ul agent today                              # open tasks + today's scheduled jobs
-ul agent schedule 9:00 "summarize my TODO board" --repeat daily
-ul agent plan                               # everything scheduled
-ul agent unschedule <id>
-ul agent start                              # Telegram + schedule in the background (launchd)
-ul agent status
-ul agent stop
-ul agent log                                # what the agent did
+ula                     # console: streamed answers, tool calls, approvals
+ula server              # Telegram bot + schedule in this terminal (Ctrl+C stops)
+ula setup               # model, Telegram, allowed ids, folders, background mode
 ```
 
-- The model runs in `ul lm serve` on 127.0.0.1; the agent starts it when needed.
+The console works like [pi](https://github.com/badlogic/pi-mono): Enter sends,
+Esc stops the agent, Ctrl+D quits, Tab completes `/commands` and `@paths`.
+
+```text
+/help /new /model /today /plan /unschedule <id> /status /log /thinking /copy /exit
+!git status      run a shell command and share its output (!! keeps it to you)
+@notes.md        attach a file or an image to the message
+```
+
+```bash
+ula -p "what is in ~/Downloads that is older than a month?"   # answer once, print it
+git diff | ula -p "review this change"                         # piped stdin is the message
+ula -c                                                         # continue the last conversation
+ula -m prism-ml/Ternary-Bonsai-2-27B-mlx-2bit                 # another model for this run
+```
+
+- Only local models: `ul lm serve` on 127.0.0.1, started when needed. Small
+  models (2-4B, 2-bit) often answer without calling tools; `ula setup` and
+  `/model` check whether a model calls them.
 - Reading, listing and searching work only inside `agent.roots` (default `~`).
   SSH keys, `.env` files, the keychain and Unlaw's config are always blocked.
 - Writing, editing, moving, deleting (to the Trash), shell commands and `ul`
-  commands from `agent.commands` need approval: `[y/N]` in the terminal,
-  Yes/No buttons in Telegram. No answer within `agent.confirm_timeout` seconds
-  means no.
-- Telegram needs a bot token (`ul agent setup`). Only `telegram.chat_id` (you, full access) and
-  `agent.allowed_ids` get answers; other ids may only chat unless
-  `agent.users.<id>` is `"read"` or `"full"`. Approvals always come to you.
-- Voice messages are transcribed, photos go to a vision model.
-- `agent.digest_time = "08:30"` sends today's tasks and jobs every morning.
+  commands from `agent.commands` need approval: `[y/N]` in the console, Yes/No
+  buttons in Telegram. No answer within `agent.confirm_timeout` seconds means no.
+- Telegram: only `telegram.chat_id` (you, full access) and `agent.allowed_ids`
+  get answers; others may only chat unless `agent.users.<id>` is `"read"` or
+  `"full"`. In `ula setup`, typing ids adds them, `-id` removes one, Enter keeps
+  the list. Voice messages are transcribed, photos go to a vision model, Markdown
+  answers arrive formatted.
+- Background mode (asked in `ula setup`) keeps `ula server` running through
+  launchd, also after login; a second server for the same bot is refused.
+- Schedule and today's list: ask in plain words ("remind me at 9:00 to …");
+  jobs run while a server runs. `agent.digest_time = "08:30"` sends today's list
+  every morning.
 
 ```bash
 ul config set agent.roots '["~/giti", "~/Documents", "~/Downloads"]'
-ul config set agent.allowed_ids '["123456789"]'
 ul config set agent.users.123456789 read
 ```
 
@@ -815,10 +824,10 @@ cargo build --release
 ```
 
 Unlaw 3 stays local-first: commands don't use shell strings, `ul lm` listens only
-on loopback and never calls cloud models, and the Telegram token is kept out of
-`config.toml` in `.env` next to it, readable only by you (tokens saved before 3.3
-are still read from the macOS Keychain). External apps and permissions stay explicitly visible through
-`ul doctor`.
+on loopback and never calls cloud models, and the Telegram token is stored in the
+macOS Keychain (a `TELEGRAM_BOT_TOKEN=` line in `.env` next to `config.toml` is read
+only when the Keychain has none). External apps and permissions stay explicitly
+visible through `ul doctor`.
 
 ### Command help and YouTube downloads
 

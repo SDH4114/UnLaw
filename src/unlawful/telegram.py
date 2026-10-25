@@ -3,7 +3,6 @@ from __future__ import annotations
 import getpass
 import json
 import mimetypes
-import os
 import subprocess
 import sys
 import urllib.error
@@ -21,7 +20,7 @@ USAGE = """Usage: ul tg                              Open Telegram
        ul tg <message>|send <message-or-file>|photo <file>|video <file>|file <path>|capture
        ul tg setup|status|last|download [directory]
 
-The bot token is stored in .env next to config.toml (mode 600), never in config.toml.
+The bot token is stored in the macOS Keychain (a .env next to config.toml also works), never in config.toml.
 """
 
 
@@ -33,15 +32,20 @@ TOKEN_KEY = "TELEGRAM_BOT_TOKEN"
 
 
 def env_file() -> Path:
-    """The bot token lives next to config.toml in .env, readable only by you."""
     return config_dir() / ".env"
 
 
-def _env_lines() -> list[str]:
+def _env_token() -> str:
+    """Optional: a `TELEGRAM_BOT_TOKEN=` line in .env next to config.toml, for those who prefer a file."""
     try:
-        return env_file().read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        return []
+        lines = env_file().read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        key, _, value = line.partition("=")
+        if key.strip() == TOKEN_KEY and value.strip().strip("'\""):
+            return value.strip().strip("'\"")
+    return ""
 
 
 def _keychain_token(service: str) -> str:
@@ -58,32 +62,35 @@ def _keychain_token(service: str) -> str:
 
 
 def stored_token(keychain_service: str) -> str:
-    """The token in .env; tokens saved before Unlaw 3.3 are still read from the Keychain."""
-    for line in _env_lines():
-        key, _, value = line.partition("=")
-        if key.strip() == TOKEN_KEY and value.strip().strip("'\""):
-            return value.strip().strip("'\"")
-    return _keychain_token(keychain_service)
+    """The macOS Keychain first; .env only when the Keychain has no token."""
+    return _keychain_token(keychain_service) or _env_token()
 
 
-def store_token(token: str) -> None:
+def store_token(token: str, keychain_service: str) -> None:
+    """Save to the Keychain and drop a .env copy, so only one token is ever in use."""
     token = token.strip()
     if not token or any(character.isspace() for character in token):
         raise ValueError("the token must be one word without spaces")
-    lines = [line for line in _env_lines() if line.partition("=")[0].strip() != TOKEN_KEY]
-    lines.append(f"{TOKEN_KEY}={token}")
+    result = subprocess.run(
+        ["security", "add-generic-password", "-a", "unlaw", "-s", keychain_service, "-w", token, "-U"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or "could not write the macOS Keychain").strip())
     path = env_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".env.{os.getpid()}.tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write("\n".join(lines) + "\n")
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-    path.chmod(0o600)
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    kept = [line for line in lines if line.partition("=")[0].strip() != TOKEN_KEY]
+    if len(kept) == len(lines):
+        return
+    if any(line.strip() for line in kept):
+        path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    else:
+        path.unlink()
 
 
 def read_token() -> str:
@@ -196,7 +203,7 @@ def _setup() -> int:
     chat_id = input("Default chat ID (leave empty to discover): ").strip()
     client = TelegramClient(token, _settings()["api_base"])
     result = client.request("getMe", {})
-    store_token(token)
+    store_token(token, _settings()["keychain_service"])
     chat_id = chat_id or discover_chat_id(client)
     set_config_value("telegram.chat_id", chat_id)
     username = result.get("result", {}).get("username", "unknown")
