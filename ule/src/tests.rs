@@ -367,7 +367,7 @@ fn standard_keys_undo_copy_paste() {
     assert_eq!(content(&run("a\nb\nc", "j<C-x>")), "a\nc");
     assert_eq!(content(&run("a\nb\nc", "<C-c>jj<C-v>")), "a\nb\na\nc");
     // A shift-selection copies exactly what is highlighted.
-    assert_eq!(content(&run("hello world", "i<S-right><S-right><C-c><esc>$<C-v>")), "hello worldhe");
+    assert_eq!(content(&run("hello world", "i<S-right><S-right><C-c><esc><esc>$<C-v>")), "hello worldhe", "Esc clears the selection, a second Esc leaves insert");
     assert_eq!(content(&run("hello world", "i<S-end><C-x>")), "");
     // Vim's visual selection works with Ctrl-C too.
     assert_eq!(content(&run("one two", "viw<C-c>$<C-v>")), "one twoone");
@@ -391,7 +391,7 @@ fn standard_keys_delete_by_word_and_line() {
     assert_eq!(content(&run("", "ione two three<C-bs>")), "one two ");
     assert_eq!(content(&run("", "ione two<A-bs>")), "one ");
     assert_eq!(content(&run("one two three", "i<C-del>")), " two three");
-    assert_eq!(content(&run("one two three", "w<A-d>")), "one  three");
+    assert_eq!(content(&run("one two three", "wi<A-d>")), "one  three");
     assert_eq!(content(&run("one two three", "wi<C-k>")), "one ");
     assert_eq!(content(&run("a\nb\nc", "ji<C-S-k>")), "a\nc");
     assert_eq!(content(&run("one two", "A<C-u>")), "");
