@@ -602,6 +602,7 @@ calls as they run.
              /model and /unschedule open a second menu with models or jobs
 @            file menu; the picked file or image is attached to the message
 !git status  run a shell command and share its output (!! keeps it to you)
+/schedule    /schedule in 10m tea · /schedule завтра 9:00 позвонить (a reminder, no model)
 Enter        send · Alt+Enter or Ctrl+J: new line · ↑↓: history
 Esc          stop the agent · Ctrl+C: clear the input (twice: quit) · Ctrl+D: quit
 ```
@@ -631,8 +632,9 @@ ula -m prism-ml/Ternary-Bonsai-2-27B-mlx-2bit                 # another model fo
   answers arrive formatted.
 - Background mode (asked in `ula setup`) keeps `ula server` running through
   launchd, also after login; a second server for the same bot is refused.
-- Schedule and today's list: ask in plain words ("remind me at 9:00 to …");
-  jobs run while a server runs. `agent.digest_time = "08:30"` sends today's list
+- Schedule and today's list: `/schedule`, or ask in plain words ("remind me at
+  9:00 to …"). Reminders arrive in Telegram as they are, tasks are run by the
+  agent; both need a running server. Done/Completed columns count as finished. `agent.digest_time = "08:30"` sends today's list
   every morning.
 
 ```bash

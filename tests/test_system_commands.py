@@ -171,6 +171,18 @@ class DoctorTests(CoreTestCase):
         self.assertIn("✓", lines["macOS Harness"])
         self.assertIn("○", lines["macOS permissions"])
 
+    def test_doctor_summarizes_harness_json_and_the_telegram_token(self) -> None:
+        report = '{"permissions": {"accessibility": true, "screen_recording": false, "automation": "per-target"}}'
+        self.tool("macos-harness", f"#!/bin/sh\nprintf '%s\\n' '{report}'\n")
+        records = self.records()
+        permissions = records["macOS permissions"]
+        self.assertFalse(permissions["available"])
+        self.assertIn("missing: screen recording", permissions["detail"])
+        self.assertEqual(records["Telegram token"]["available"], False)
+        self.assertIn("ula setup", records["Telegram token"]["detail"])
+        self.tool("security", "#!/bin/sh\nexit 0\n")
+        self.assertIn("Keychain", self.records()["Telegram token"]["detail"])
+
     def test_doctor_verbose_includes_config_path(self) -> None:
         self.assertIn(str(self.unlaw / "config.toml"), self.doctor("--verbose").stdout)
 

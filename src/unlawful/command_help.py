@@ -22,7 +22,9 @@ Console:
   browse history. Esc stops the agent; Ctrl+C clears the input, twice quits;
   Ctrl+D quits. Approvals: left/right and Enter, or y (yes), a (yes for this kind
   of action until you quit), n (no).
-  /help /new /model /today /plan /unschedule /status /log /thinking /copy /exit
+  /help /new /model /today /plan /schedule /unschedule /status /log /thinking /copy /exit
+  /schedule <when> <text> sets a reminder without the model: /schedule in 10m tea,
+  /schedule завтра 9:00 позвонить, /schedule 18:00 run --repeat daily.
   !cmd runs a shell command and shares its output; !!cmd keeps the output to you.
   @path attaches a file or an image to the message.
 What it may do: read, list and search files inside agent.roots without asking;
@@ -30,18 +32,22 @@ writing, editing, moving, deleting (to the Trash), shell commands and `ul`
 commands from agent.commands need your approval (a picker in the console, Yes/No
 buttons in Telegram; no answer within agent.confirm_timeout seconds means no).
 Keys, .env files, the keychain and Unlaw's config are always blocked.
-Schedule and today: ask in plain words ("remind me at 9:00 to ...", "what is on
-today?"); jobs run while `ula server` runs. /today and /plan show them.
-Telegram: the bot token lives in the macOS Keychain (`ula setup` saves it there; a
-TELEGRAM_BOT_TOKEN= line in .env next to config.toml is read only if the Keychain
-has none). Only
-telegram.chat_id (you, full access) and agent.allowed_ids get answers; others
+Schedule and today: /schedule, or ask in plain words ("remind me at 9:00 to ...",
+"напомни через 10 мин ..."). Reminders arrive in Telegram as they are; tasks are
+run by the agent at that time. Both need `ula server` (or background mode).
+/today and /plan show them; columns named Done/Completed/Готово count as finished.
+Telegram: the bot token lives in the macOS Keychain (`ula setup` saves it there;
+a TELEGRAM_BOT_TOKEN= line in .env next to config.toml is read only if the
+Keychain has none). Only telegram.chat_id (you, full access) and
+agent.allowed_ids get answers; others
 may only chat unless agent.users.<id> is "read" or "full"; approvals always come
 to you. Voice messages are transcribed, photos go to a vision model, files are
 saved to storage.root/telegram/downloads. Messages sent while no server ran are
 skipped. agent.digest_time (HH:MM) sends today's list every morning.
 Models: only local ones from `ul lm` (started on demand). Small models (2-4B,
-2-bit) often answer without calling tools; `ula setup` and /model check this.
+2-bit) often answer without calling tools: /model and `ula setup` check this and
+keep the old model unless you insist, `ula server` warns at start, and an answer
+that claims a change without any tool call gets a warning.
 Settings: agent.model, agent.roots, agent.allowed_ids, agent.users, agent.commands,
 agent.max_steps, agent.confirm_timeout, agent.digest_time, agent.system_prompt.
 Data and audit log: storage.root/agent.

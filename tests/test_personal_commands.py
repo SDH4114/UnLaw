@@ -104,6 +104,16 @@ class TodoCommandTests(ConfiguredTestCase):
         self.assertNotIn("- [ ] Second task", text)
         self.assertRegex(text, r"- \[x\] Second task  \[completion:: \d{4}-\d{2}-\d{2}\]")
 
+    def test_done_uses_the_boards_done_column_when_completed_is_missing(self) -> None:
+        from unlawful.todo import main
+
+        board = (self.vault / "TODO.md").read_text(encoding="utf-8").replace("## Completed", "## Done")
+        (self.vault / "TODO.md").write_text(board, encoding="utf-8")
+        with patch.dict(os.environ, self.env, clear=False), redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["done", "1"]), 0)
+        text = (self.vault / "TODO.md").read_text(encoding="utf-8")
+        self.assertRegex(text, r"## Done\n\n- \[x\] Old task\n- \[x\] First task")
+
     def test_search_is_case_insensitive_and_does_not_edit(self) -> None:
         from unlawful.todo import main
 

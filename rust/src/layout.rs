@@ -34,13 +34,41 @@ pub fn is_replaceable(source: &str, name: &str, hashes: &[&str]) -> bool {
     is_legacy_wrapper(source, name) || hashes.contains(&sha256_hex(source).as_str())
 }
 
+fn is_docstring(line: &str) -> bool {
+    let text = line.trim();
+    text.len() >= 6 && text.starts_with("\"\"\"") && text.ends_with("\"\"\"") && !text[3..text.len() - 3].contains("\"\"\"")
+}
+
+/// The code without blank lines and without the summary docstring near the top;
+/// same as `normalized_source` in src/unlawful/command_sources.py.
+pub fn normalized_source(source: &str) -> String {
+    let lines: Vec<&str> = source.lines().filter(|line| !line.trim().is_empty()).collect();
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(index, line)| !(*index < 3 && is_docstring(line)))
+        .map(|(_, line)| *line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A seed that differs from an official source only in blank lines or the
+/// summary docstring is untouched too; some installs got such copies.
+fn is_untouched_seed(existing: &str, name: &str, seed: &str, hashes: &[&str], normalized: &[&str]) -> bool {
+    if is_replaceable(existing, name, hashes) {
+        return true;
+    }
+    let code = normalized_source(existing);
+    normalized.contains(&sha256_hex(&code).as_str()) || code == normalized_source(seed)
+}
+
 fn seed_default_commands() -> io::Result<()> {
     let root = commands_dir();
-    for (name, source, hashes) in SEEDS {
+    for (name, source, hashes, normalized) in SEEDS {
         let directory = root.join(name);
         let destination = directory.join("main.py");
         match fs::read_to_string(&destination) {
-            Ok(existing) if existing == *source || !is_replaceable(&existing, name, hashes) => continue,
+            Ok(existing) if existing == *source || !is_untouched_seed(&existing, name, source, hashes, normalized) => continue,
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 // A command rewritten as main.sh, main.js or main stays the user's.
@@ -119,8 +147,18 @@ mod tests {
     }
 
     #[test]
+    fn copies_without_blank_lines_or_docstring_are_untouched() {
+        let seed = "# header\n\"\"\"Say \\\"hi\\\".\"\"\"\nimport os\n\nprint(1)\n";
+        let copy = "# header\nimport os\nprint(1)\n\n";
+        assert!(is_untouched_seed(copy, "x", seed, &[], &[]));
+        assert!(is_untouched_seed(copy, "x", "print(2)\n", &[], &[&sha256_hex(&normalized_source(copy))]));
+        assert!(!is_untouched_seed("# header\nimport os\nprint(2)\n", "x", seed, &[], &[]), "a real edit is kept");
+        assert_eq!(normalized_source(seed), "# header\nimport os\nprint(1)");
+    }
+
+    #[test]
     fn every_seed_has_a_summary_docstring() {
-        for (name, source, _) in SEEDS {
+        for (name, source, _, _) in SEEDS {
             assert!(source.lines().nth(1).unwrap_or("").starts_with("\"\"\""), "{name}");
         }
     }

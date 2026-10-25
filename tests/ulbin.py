@@ -51,6 +51,8 @@ class CoreTestCase(unittest.TestCase):
         }
         for key in ("VISUAL", "EDITOR"):
             self.env.pop(key, None)
+        # The real Keychain is never queried; tests that need a token add their own.
+        self.tool("security", "#!/bin/sh\nexit 44\n")
 
     def ul(
         self,

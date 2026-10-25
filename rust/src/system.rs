@@ -635,10 +635,34 @@ fn harness_permissions(executable: Option<&Path>) -> (bool, String) {
         Err(error) if error == "timed out" => (false, "permission check timed out".into()),
         Err(error) => (false, error),
         Ok((ok, stdout, stderr)) => {
+            if let Some(summary) = permission_summary(&stdout) {
+                return (ok && summary.0, summary.1);
+            }
             let text = if stdout.trim().is_empty() { stderr } else { stdout };
             let detail = text.trim().lines().last().unwrap_or("no details").to_string();
             (ok, detail)
         }
+    }
+}
+
+/// `macos-harness doctor` prints JSON; its last line is just `}`. Summarize the
+/// boolean permissions instead: all granted, or which ones are missing.
+fn permission_summary(stdout: &str) -> Option<(bool, String)> {
+    let report: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+    let permissions = report.get("permissions")?.as_object()?;
+    let (mut granted, mut missing) = (Vec::new(), Vec::new());
+    for (name, value) in permissions {
+        let label = name.replace('_', " ");
+        match value.as_bool() {
+            Some(true) => granted.push(label),
+            Some(false) => missing.push(label),
+            None => {}
+        }
+    }
+    if missing.is_empty() {
+        Some((true, format!("granted: {}", granted.join(", "))))
+    } else {
+        Some((false, format!("missing: {} (System Settings > Privacy & Security)", missing.join(", "))))
     }
 }
 
@@ -746,6 +770,24 @@ fn apply_fixes() -> Result<Vec<String>, String> {
     Ok(changes)
 }
 
+/// Where the Telegram bot token is, without ever reading it: the Keychain item
+/// exists (no `-w`, so the secret is not printed), or `.env` has the line.
+fn telegram_token(config: Option<&Config>) -> Check {
+    let service = config.map(|config| config.string("telegram.keychain_service")).unwrap_or_else(|| "unlaw.telegram".into());
+    let in_keychain = which("security").is_some_and(|security| {
+        run_with_timeout(&security, &["find-generic-password", "-a", "unlaw", "-s", &service], Duration::from_secs(5))
+            .is_ok_and(|(ok, _, _)| ok)
+    });
+    let in_env = fs::read_to_string(config_dir().join(".env"))
+        .is_ok_and(|text| text.lines().any(|line| line.split_once('=').is_some_and(|(key, value)| key.trim() == "TELEGRAM_BOT_TOKEN" && !value.trim().is_empty())));
+    let detail = match (in_keychain, in_env) {
+        (true, _) => "saved in the macOS Keychain".to_string(),
+        (false, true) => format!("read from {}", config_dir().join(".env").display()),
+        (false, false) => "not set; `ula setup` or `ul tg setup` (needed for `ul tg` and `ula server`)".to_string(),
+    };
+    Check { name: "Telegram token", available: in_keychain || in_env, required: false, detail }
+}
+
 fn doctor_checks() -> Vec<Check> {
     let root = ensure_layout().unwrap_or_else(|_| config_dir());
     let (config, config_ok, config_detail) = match config::load() {
@@ -792,14 +834,20 @@ fn doctor_checks() -> Vec<Check> {
         tool("zstd", "zstd", "needed by `ul zip` for .tar.zst and .zst"),
         tool("RAR", "rar", "optional; needed to create .rar with `ul zip -f rar`"),
         tool("macOS Keychain", "security", "needed to store the Telegram token"),
-        Check {
-            name: "Unlaw PATH",
-            available: unlaw_bin.as_deref().is_some_and(bin_precedes_system),
-            required: false,
-            detail: format!(
-                "{} must precede /usr/bin because macOS also ships `ul`",
-                unlaw_bin.as_deref().map(display_home).unwrap_or_else(|| "the Unlaw binary directory".into())
-            ),
+        telegram_token(config.as_ref()),
+        {
+            let precedes = unlaw_bin.as_deref().is_some_and(bin_precedes_system);
+            let directory = unlaw_bin.as_deref().map(display_home).unwrap_or_else(|| "the Unlaw binary directory".into());
+            Check {
+                name: "Unlaw PATH",
+                available: precedes,
+                required: false,
+                detail: if precedes {
+                    format!("{directory} comes before /usr/bin (macOS also ships a `ul`)")
+                } else {
+                    format!("{directory} must precede /usr/bin because macOS also ships `ul`")
+                },
+            }
         },
         Check {
             name: "Obsidian TODO",

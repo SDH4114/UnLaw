@@ -212,8 +212,14 @@ class TelegramTests(ServiceTestCase):
         code, out, error = self.run_main(telegram.main, ["download", str(target)])
         self.assertEqual(code, 0, error)
         self.assertEqual(len(out.splitlines()), 3)
-        self.assertEqual((target / "file_1.pdf").read_bytes(), b"PDF BYTES")
+        # The sender's name is kept; files without one get Telegram's, never overwriting.
+        self.assertEqual(sorted(path.name for path in target.iterdir()), ["a.pdf", "file_1 2.pdf", "file_1.pdf"])
+        self.assertEqual((target / "a.pdf").read_bytes(), b"PDF BYTES")
         self.assertEqual([self.server.form(i)["file_id"] for i, r in enumerate(self.server.requests) if "getFile" in str(r["path"])], ["D", "P", "V"])
+        self.server.routes[f"{self.api}/getFile"] = {"ok": True, "result": {"file_path": "documents/file_1.pdf", "file_size": 9}}
+        code, out, error = self.run_main(telegram.main, ["download", str(target)])
+        self.assertEqual(code, 0, error)
+        self.assertEqual(out, "Already downloaded: 3 file(s).\n", "files already there are not fetched again")
 
     def test_empty_updates(self) -> None:
         self.server.routes[f"{self.api}/getUpdates"] = {"ok": True, "result": []}

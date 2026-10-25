@@ -270,7 +270,7 @@ def _download(args: list[str]) -> int:
     try:
         options = parser.parse_args(args)
     except SystemExit as error:
-        return int(error.code)
+        return error.code if isinstance(error.code, int) else 2
     try:
         parsed = urlparse(options.url)
         host = (parsed.hostname or "").lower()

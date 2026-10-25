@@ -22,6 +22,10 @@ LEGACY_SOURCE_HASHES: dict[str, set[str]] = {
         "40757483756ea7dc2ac77cb7411c5151b58a3aeac029f10ad6118e4fec7b8f62",
         # Release 3.4.0 (commit 4ccf001), before the input box with menus.
         "9e5b840842a52f2e40bbe47690c23f15111ba11b154df2d028e5cbf5fc7d1f46",
+        # Release 3.5.0 (commit 5a085ab).
+        "4ea1a19e3a22411932d4e2f98c59f83849c413896c471fa39d20305d8c2c93b4",
+        # A 3.5.1 development build installed locally before release.
+        "6495c04017e66caf6c5eb8141cdb0fb760a041fb05f869ef6ebe8acffcc6c8ba",
         # A 3.5.0 development build installed locally before release.
         "970ac84e34c6a6fc835adb3965470c0051d81d111ad6e5508bac743f4ab013ae",
     },
@@ -146,6 +150,129 @@ _PRE_DOCSTRING_SOURCE_HASHES = {
 }
 for _name, _digest in _PRE_DOCSTRING_SOURCE_HASHES.items():
     LEGACY_SOURCE_HASHES.setdefault(_name, set()).add(_digest)
+
+# Hashes of official sources with blank lines and the summary docstring removed
+# (`normalized_source`). Some installs got copies that differ only in those,
+# from every release since 2.1; they are untouched and may be upgraded.
+LEGACY_NORMALIZED_HASHES: dict[str, set[str]] = {
+    "agent": {
+        "0869bb6ef10eac6eec8e375225eed6f4691824876fddfe2bdac29df52004f6a9",
+        "1bf899690f6f4f15d6eea43632dd81fee95d3f7185a636fac9d70116c572b6d8",
+        "30a5ca341bdb48a562d6e8251642cc30cc5c0f34c7d6e43c4a43c1f4dea62a96",
+        "7ab5e55f6b7c0536ffd7ceff8266dbfb36212b7a01c49d0f37302bfe73464953",
+    },
+    "app": {
+        "181e657d412afa5d5f39858100184208258f709350d2191bcf8635614258ae63",
+        "9b8bc21176bbe97c571f6bde04f3613351b217c4104781fdb81294c22bfcbcb5",
+        "c638c95dc60c2b7a1f6d1ab7b5fe2b2ebd5bc9b3f08b07caca71f199a0e9e1ca",
+        "e9f05860e8a51f992c310385c18b820ae8546225d2991ad51a3009449e03d0ad",
+    },
+    "browser": {
+        "0ed5ca7e2bc0c00b02d2bf2021d34099da533ed34759effb0738f4dde1133f0e",
+        "9aaebacf5f6b5f0f88f8330c3a923aca967dd8005f4bb79e068367aaedd2df00",
+        "c41abf5e6772c30202e0462faefc728180bde086604a973d29e6295cb424b549",
+        "ddb3b6b1a15cefaded70b910a1123c90343e8a5eafec57fd7cb5170b466a007f",
+    },
+    "capture": {
+        "442c9c234c1b26eff0a1acc1eecd29e814020434dbd83a96b9f04112ec5f1fa1",
+        "44630896e8a2f8b704956015e5820d639ee9b77545f48515b9cd4b113b99cbf6",
+        "d8ee7c4a787b48b5a76b460337a796bbcafe50d7bb072c0fcb608d93241eafc9",
+    },
+    "cpp": {
+        "0e6a057873f7be40d0206c3a26b4059b0a10535243fc9d95d3ac89b203e222c9",
+        "5cea7c535d03896ca08064fdcc218c7b35d0ff390b0acf3678017d1b84afebaa",
+        "91653e68b4d76bac2307f6a8448bfbbd71d7a37a652c602ca1568ccc4f7bdf89",
+    },
+    "git": {
+        "19328b4cdc768de925dfa84d5ab0d86485e3072d42ca582598d7d9c6795b57eb",
+        "2c3771f3cae07cbb7e2b4f221ff8cfe87ae975b6667377e27dd75350abb88106",
+        "94bbb4239ab2b779e1cbeeaab9bff7e2a003c40aea4da92573a5ddb9830612e1",
+    },
+    "gpt": {
+        "1f941f4970198d5e9daf1ec549ff454189a5c84c6f43ea575f82e5a54bca8a53",
+        "6d009b37be2d144588f2892425fe51ea55d77de29d84ab08a8db523c93123992",
+        "73744ac9d3be1ff1a0552b39c73c919da31297b05e8687cf5ac23db62cb6dc73",
+        "f64ab6d11b915834b4b14f76d38a39fb6956e9c6dd599dc23c002d41b8993a3b",
+    },
+    "lofi": {
+        "0bf5b9a3d609cf5466fe766fb55423b4037463a576c998557dfdd04ae6dfd238",
+        "96226c21e7a2fa3bd8f8b3d0eefb0e740cdd4d49d98d6069ad1f27a441abd2b0",
+        "98a0b4168b4f3179f7901bd9af923a02432592512d60b34c4a96e16d3da5cbff",
+        "b5bb57e8573932178acab7bef9e5d94c88a99efb80b4c569136f0e0d56602b10",
+    },
+    "mac": {
+        "0e33d0d97be7e572910afc4f1316ee1dbadef6374da90c8d6f52d1b583aa72d2",
+        "29165f003560dbc11ccae8d45696dc43fa68ed7845c336ae1f0ad11f3e0521ad",
+        "8762cd0ae033e2e916e1e4383abf5c9a87eeafb4060593024b50444251460a3a",
+    },
+    "minecraft": {
+        "2e87defd5e756c938f481943dcf64f19bbea1d73f1a34f44fc7b3d661014f680",
+        "a8fd6e4c6d589c0d881d16669a901eaade774cf9f4c0c6a28583cfdd6ef103b5",
+        "aec7dcebfa5dcc5d9346cdf9f27bafe4c55582b118d2c027693e4c2b47fbb08c",
+        "bced0d82e4d65f90b637279a7e65d09e22b8263c971b486bace74532f9de9c46",
+    },
+    "music": {
+        "81210d577c72b545f1acdadf031d5acddc906ecdb8e110c045e71e6bcc1062f3",
+        "e5f9204ae9ce1cbce8d62caf6687928610ad9328a4e0a4bf458f3780617e736c",
+        "eefa6f2a52d6da7cdff3105f9f9adf5953faedb4314841dff5ae8fc375e42e67",
+    },
+    "netflix": {
+        "0a8feed12193e0e613f2662e6b56faecc26a6ee6af480b1bd77879e92098175a",
+        "0d671107a4289b16721a41cd447dfc3dc0241c11eaf5d0181ab167506f835687",
+        "2b3962f025da4d772e77c141364e2cd3475d3202a7442a3e4a2bf457ad4f7843",
+        "82d57ba851f3845cf84746f27a00577e5bbca25b4a8fe5d2b30b32c2b2e87264",
+    },
+    "obsidian": {
+        "210453cc6163c809d794d285e5ff019546e7474e6d49ead4a359fbc5562961b9",
+        "33f1f11bacff55d11979aff699561aef781ba80f13847945fa6970addd653ecc",
+        "8b679ba0e818fa4fb80702d2a9a9122d8553e2eaf332ad3a4c171390c2d5aafc",
+        "bc0d5db4062fb26164680c8b42122f5de8ef83e40e6b3de507d140a70a28bf78",
+    },
+    "py": {
+        "4fb93a25c88f4b8e3a3e99168d3027a6205353271b736b772548f027625c3872",
+        "a4af0a389cb8d5edfec2d9975cba4b976ba06e7f04bff6e2da59e4fc182793f8",
+        "ee2d430775f5da0af7736ce6b8d1688931873b5ce1a7ef41ad8315e16c9cecb4",
+    },
+    "rust": {
+        "30167780e27efe231ea80a2c150152777c81da7c0c0be3d8b997adf38af50452",
+        "5a7925f2ade159c3029e155f6d6bb48fc64f8f8c5b862d89dc49ed4f40bdb654",
+        "d54e3774e451e0381565306265ac8776471c9d8dfc447ec6a684f010065712cc",
+    },
+    "steam": {
+        "0eb9c7b706f86ea97d620c8f4f75255d4fdfcf7e2f40fb71d0008e8e8461fc0c",
+        "1cf5c30453bfe294d3d2805e319d9895b6fd1ef33b9dd07ff95751b2bbdedd7f",
+        "6400d54ff81e79bf32c7fdcf6c5b553b7d400a0b4eb64b07e7031a1141fd86e3",
+        "b0370e89c27ba3487ef3af0f6d104fa2b3db29dd51e677d3f92d04eaf98427f9",
+    },
+    "tg": {
+        "317b55590b72f4f83926fae52bfecd1eaafdbbed8261f2680882a6dc902a8fb5",
+        "3f91f7a1e1cf6a0b263863b8207dc3851a7758ef7e3959534e01f4bbd4354313",
+        "5693ca827ddfbf68c99c837e6766d7c3efa323fc73d5af099150ecf6b471d47b",
+        "79a18f63a301833993856018cea68aba5fdf8fe603018362693d8a403f5c280f",
+        "d890f471f964cfab60a98ab953c71d746c44410de7c82d9acd8c52844cb2472b",
+    },
+    "todo": {
+        "64798e6a229b6270eae8e28d5e32313ea15be81f63a5c8127f83874db93bb317",
+        "baad25a60e557e42189f33fd04647804adb952ef3cd08a85dace040c82c3dc4e",
+        "ebc06bd13d49938517513e63d27d7210d10450b5b3fb7beea57c7addc335f3c4",
+    },
+    "work": {
+        "06cb1fd7d0c846328d505114e78fe8f06801ea6714a7e586004ce1de7f2c8667",
+        "1f5766accbb28e10f74de6cc7bc974212618f26440e6c41808d926d01cc9535e",
+        "975f7e0d97db9bb46d90841dc9b5f1f8ac9ff835d2d3f01fb153cafc1cdc4b32",
+    },
+    "yt": {
+        "14ee5019403f8ec6b7a3114617b8d8d2c08c3538562fdaae373af097a4ee0afb",
+        "9595fdee81ea1798facb2702c67168c31d699ecceec19482d9000e88ac9e49fe",
+        "fadf583e9c7da5de0cf73ebffe8c53bc06a2ef40c333a69d08602045993b14df",
+    },
+    "zed": {
+        "216719a6c7040471dae1c66265d31b480f097ef0f8c9484532e35293582dfc70",
+        "2a8d0dd69f90cb0e021bebf2d5bbc027ce6a5b53917d84aae950b3318cb1430a",
+        "b76c3662679da5d2930354555648318d1a850477334606657f24b1da9d627633",
+        "f15eaf936fcd831a691a273c72921070425c162bfc6ca8765294abc79b8fd5ab",
+    },
+}
 
 # Commands now built into the Rust core. Untouched seeds with these hashes are
 # removed so the built-in runs; edited copies stay and override it.
@@ -462,6 +589,27 @@ def is_legacy_wrapper(source: str, name: str) -> bool:
     )
 
 
+def _is_docstring(line: str) -> bool:
+    text = line.strip()
+    return len(text) >= 6 and text.startswith('"""') and text.endswith('"""') and '"""' not in text[3:-3]
+
+
+def normalized_source(source: str) -> str:
+    """The code without blank lines and without the summary docstring near the top.
+
+    Mirrored by `normalized_source` in rust/src/layout.rs.
+    """
+    lines = [line for line in source.splitlines() if line.strip()]
+    return "\n".join(line for index, line in enumerate(lines) if not (index < 3 and _is_docstring(line)))
+
+
 def is_replaceable_command_source(source: str, name: str) -> bool:
+    """Untouched official sources: exact earlier releases, or the same code with only
+    blank lines or the summary docstring different (current or earlier releases)."""
     digest = hashlib.sha256(source.encode()).hexdigest()
-    return is_legacy_wrapper(source, name) or digest in LEGACY_SOURCE_HASHES.get(name, set())
+    if is_legacy_wrapper(source, name) or digest in LEGACY_SOURCE_HASHES.get(name, set()):
+        return True
+    normalized = normalized_source(source)
+    if hashlib.sha256(normalized.encode()).hexdigest() in LEGACY_NORMALIZED_HASHES.get(name, set()):
+        return True
+    return name in _COMMAND_FILES and normalized == normalized_source(command_source(name))

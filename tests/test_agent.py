@@ -37,6 +37,10 @@ kanban-plugin: board
 \tdue Friday
 - [x] Old finished thing
 
+## Done
+
+- [ ] Sitting in Done unchecked
+
 ## Completed
 
 - [x] Done long ago
@@ -389,6 +393,7 @@ class AgentCommandTests(AgentCase):
         self.assertIn("due Friday", today)
         self.assertNotIn("Old finished thing", today)
         self.assertNotIn("Done long ago", today)
+        self.assertNotIn("Sitting in Done", today, "a Done column counts as finished too")
         self.assertIn("stretch (daily)", today)
         self.assertNotIn("far away", today)
         self.assertIn("far away", plan)
@@ -396,6 +401,14 @@ class AgentCommandTests(AgentCase):
         model = self.model([call("unschedule", id=job), call("list_schedule"), {"content": "ok"}])
         self.ok("agent", "-p", "cancel it")
         self.assertNotIn("far away", model.tool_results()[-1])
+
+    def test_claims_without_a_tool_call_get_a_warning(self) -> None:
+        self.model([{"content": "Created /tmp/test.md with the text test."}])
+        result = self.ok("agent", "-p", "create test.md")
+        self.assertIn("No tool was called", result.stdout)
+        self.model([call("list_dir", path=str(self.files)), {"content": "Created nothing, just looked."}])
+        result = self.ok("agent", "-p", "look")
+        self.assertNotIn("No tool was called", result.stdout, "a turn that used tools is trusted")
 
     def test_todo_tools(self) -> None:
         self.model([call("todo_add", text="Buy milk"), {"content": "ok"}])
@@ -640,10 +653,37 @@ class BotTests(AgentCase):
         bot.tick()
         self.assertEqual(len(self.telegram.sent()), 2, "a job runs once per due time")
 
+    def test_damaged_jobs_never_stop_the_server(self) -> None:
+        from unlawful import agent
+
+        bot, _ = self.bot([])
+        past = (agent.now() - dt.timedelta(minutes=1)).isoformat()
+        agent.Schedule()._save(
+            [
+                {"id": "bad1", "prompt": "x", "next": "not a date"},
+                {"id": "bad2", "prompt": "x", "next": past, "repeat": "every 0m"},
+                {"prompt": "no id", "next": past},
+                {"id": "ok", "prompt": "fine", "next": past, "kind": "reminder", "by": "42"},
+            ]
+        )
+        bot.tick()
+        self.assertEqual([fields["text"] for fields in self.telegram.sent()], ["⏰ fine"])
+
+    def test_reminders_are_sent_as_they_are(self) -> None:
+        from unlawful import agent
+
+        bot, model = self.bot([])
+        past = agent.now() - dt.timedelta(minutes=1)
+        agent.Schedule()._save([{"id": "r1", "prompt": "выйти на улицу", "next": past.isoformat(), "repeat": "once", "kind": "reminder", "by": "42"}])
+        bot.tick()
+        self.assertEqual([fields["text"] for fields in self.telegram.sent()], ["⏰ выйти на улицу"])
+        self.assertEqual(model.requests, [], "a reminder never goes through the model")
+        self.assertEqual(agent.Schedule().jobs(), [])
+
     def test_voice_messages_are_transcribed(self) -> None:
         from unlawful import agent
 
-        bot, model = self.bot([{"content": "Reminder set."}])
+        bot, model = self.bot([{"content": "Okay."}])
         with patch.object(
             agent.Telegram,
             "download",
@@ -655,7 +695,7 @@ class BotTests(AgentCase):
         ):
             bot.handle(self.telegram.message("42", voice={"file_id": "v1"}))
         texts = [fields["text"] for fields in self.telegram.sent()]
-        self.assertEqual(texts, ["Heard: remind me to stretch", "Reminder set."])
+        self.assertEqual(texts, ["Heard: remind me to stretch", "Okay."])
         self.assertEqual(
             model.requests[0]["messages"][-1]["content"], "remind me to stretch"
         )
@@ -685,6 +725,10 @@ class ScheduleParsingTests(CoreTestCase):
         for bad in ("2020-01-01 09:00", "25:00", "soon", "in 0m"):
             with self.assertRaises(ValueError, msg=bad):
                 parse_when(bad, base)
+        self.assertEqual(parse_when("через 10 мин", base), dt.datetime(2026, 10, 24, 12, 10))
+        self.assertEqual(parse_when("через 2 часа", base), dt.datetime(2026, 10, 24, 14, 0))
+        self.assertEqual(parse_when("в 18:30", base), dt.datetime(2026, 10, 24, 18, 30))
+        self.assertEqual(parse_when("завтра в 9:00", base), dt.datetime(2026, 10, 25, 9, 0))
         self.assertEqual(parse_repeat(None), "once")
         self.assertEqual(parse_repeat("every 2h"), "every 120m")
         with self.assertRaises(ValueError):
@@ -789,6 +833,32 @@ class SetupTests(AgentCase):
         self.assertIn("never calls tools", output.getvalue())
         self.assertIn("It calls tools", output.getvalue())
 
+    def test_model_switch_keeps_a_model_that_works(self) -> None:
+        from unlawful import agent
+
+        # In-process code must see this test's config, never the real ~/.config/unlaw.
+        isolated = patch.dict(os.environ, {key: self.env[key] for key in ("HOME", "XDG_CONFIG_HOME", "PATH")})
+        isolated.start()
+        self.addCleanup(isolated.stop)
+        config = agent.load_config()
+        model = agent.Model(config)
+        model.name = "Big-27B"
+        console = agent.Console(config, model, agent.Paint(False))
+        saved: list[tuple] = []
+        models = [{"id": "Tiny-2B", "type": "text", "runnable": True}, {"id": "Big-27B", "type": "text", "runnable": True}]
+        output = io.StringIO()
+        with patch.object(agent, "_chat_models", return_value=models), patch.object(agent, "_set", lambda *args: saved.append(args)), patch.object(
+            agent.Model, "calls_tools", lambda self: self.name != "Tiny-2B"
+        ), patch("builtins.input", return_value=""), patch.object(sys, "stdout", output):
+            console.switch_model("1")
+            self.assertEqual(model.name, "Big-27B")
+            self.assertEqual(saved, [])
+            self.assertIn("Kept Big-27B", output.getvalue())
+            with patch("builtins.input", return_value="y"):
+                console.switch_model("Tiny-2B")
+        self.assertEqual(model.name, "Tiny-2B", "chat only, because the user insisted")
+        self.assertEqual(saved[0][:2], ("agent.model", "Tiny-2B"))
+
     def test_ula_and_unlawagent_are_ul_agent(self) -> None:
         if shutil.which("cargo") is None:
             self.skipTest("cargo is required")
@@ -886,6 +956,20 @@ class ConsoleTests(AgentCase):
         terminal.send("\x03")
         self.assertEqual(terminal.finish(), 0)
         self.assertEqual(len(model.requests), 2, "the cleared draft was never sent")
+
+    def test_schedule_command_sets_a_reminder(self) -> None:
+        terminal, model = self.console([])
+        terminal.send("/sch")
+        terminal.expect("remind me")
+        terminal.send("\r")
+        time.sleep(0.2)
+        terminal.send("через 10 мин выпить кофе\r")
+        terminal.expect("⏰")
+        terminal.expect("выпить кофе")
+        jobs = json.loads((self.unlaw / "data" / "agent" / "schedule.json").read_text(encoding="utf-8"))["jobs"]
+        self.assertEqual([(job["prompt"], job["kind"]) for job in jobs], [("выпить кофе", "reminder")])
+        self.assertEqual(model.requests, [])
+        self.assertEqual(terminal.quit("выпить кофе"), 0)
 
     def test_tool_calls_and_approvals(self) -> None:
         first, second = self.files / "one.txt", self.files / "two.txt"

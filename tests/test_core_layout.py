@@ -131,3 +131,35 @@ class HelpTests(CoreTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SeedUpgradeTests(CoreTestCase):
+    """Copies that differ from an official source only in blank lines or the summary
+    docstring are untouched and get upgraded; real edits are kept."""
+
+    def test_copies_without_docstring_are_upgraded_and_edits_kept(self) -> None:
+        self.ok("version")
+        seed = (self.unlaw / "commands" / "tg" / "main.py").read_text(encoding="utf-8")
+        lines = seed.splitlines()
+        self.assertTrue(lines[1].startswith('"""'))
+        mangled = "\n".join(lines[:1] + lines[2:]).replace("\n\n\n", "\n\n\n\n") + "\n"
+        (self.unlaw / "commands" / "tg" / "main.py").write_text(mangled, encoding="utf-8")
+        edited = seed + "\nprint('mine')\n"
+        (self.unlaw / "commands" / "todo" / "main.py").write_text(edited, encoding="utf-8")
+        self.ok("version")
+        self.assertEqual((self.unlaw / "commands" / "tg" / "main.py").read_text(encoding="utf-8"), seed)
+        self.assertEqual((self.unlaw / "commands" / "todo" / "main.py").read_text(encoding="utf-8"), edited)
+        self.assertIn("Open Telegram", self.ok("commands", "--describe").stdout)
+
+    def test_python_and_rust_normalize_alike(self) -> None:
+        import sys
+        from pathlib import Path
+
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        from unlawful.command_sources import command_source, is_replaceable_command_source, normalized_source
+
+        source = command_source("todo")
+        self.assertFalse(normalized_source(source).startswith('"""'))
+        stripped = "\n".join(line for line in source.splitlines() if not line.startswith('"""Read'))
+        self.assertTrue(is_replaceable_command_source(stripped, "todo"))
+        self.assertFalse(is_replaceable_command_source(source + "\nprint('mine')\n", "todo"))

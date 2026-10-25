@@ -101,6 +101,20 @@ class KanbanBoard:
         return "\n".join(lines).rstrip() + "\n"
 
 
+DONE_COLUMNS = {"done", "completed", "finished", "готово", "сделано", "выполнено"}
+
+
+def completed_section(board: KanbanBoard, configured: str) -> Section:
+    """todo.completed_column, or the board's own Done-like column when that one is missing."""
+    try:
+        return board.section(configured)
+    except ValueError:
+        for section in board.sections:
+            if section.name.casefold() in DONE_COLUMNS:
+                return section
+        raise
+
+
 def _trim_blank(lines: list[str]) -> list[str]:
     start, end = 0, len(lines)
     while start < end and not lines[start].strip():
@@ -234,8 +248,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if "[completion::" not in title:
                 title += f"  [completion:: {datetime.now().astimezone().date().isoformat()}]"
             task[0] = f"- [x] {title}"
-            completed = load_config()["todo"]["completed_column"]
-            board.section(completed).tasks.append(task)
+            completed_section(board, load_config()["todo"]["completed_column"]).tasks.append(task)
             _write(path, board)
             print(f"Completed #{number}: {match.group(2)}")
             return 0

@@ -243,6 +243,15 @@ def _file_descriptors(message: dict[str, Any]) -> list[tuple[str, str]]:
     return result
 
 
+def _unique(path: Path) -> Path:
+    """`name 2.ext`, `name 3.ext`, ... so an existing file is never replaced."""
+    candidate, number = path, 2
+    while candidate.exists():
+        candidate = path.with_name(f"{path.stem} {number}{path.suffix}")
+        number += 1
+    return candidate
+
+
 def _last(client: TelegramClient) -> int:
     updates = client.request("getUpdates", {"limit": "10", "timeout": "0"}).get("result", [])
     if not updates:
@@ -258,16 +267,26 @@ def _last(client: TelegramClient) -> int:
 
 def _download(client: TelegramClient, destination: Path) -> int:
     updates = client.request("getUpdates", {"limit": "25", "timeout": "0"}).get("result", [])
-    downloaded = 0
+    downloaded = skipped = 0
     for update in updates:
         message = update.get("message") or update.get("channel_post") or {}
         for filename, file_id in _file_descriptors(message):
-            info = client.request("getFile", {"file_id": file_id})["result"]["file_path"]
-            target = destination / Path(info).name
+            result = client.request("getFile", {"file_id": file_id})["result"]
+            info = result["file_path"]
+            # The sender's file name, not Telegram's internal one (file_12.jpg).
+            name = Path(filename).name if filename not in {"document", "photo.jpg", "video.mp4", "audio.mp3", "voice.ogg"} else Path(info).name
+            target = destination / (name or Path(info).name)
+            size = result.get("file_size")
+            if target.exists() and size is not None and target.stat().st_size == size:
+                skipped += 1
+                continue
+            target = _unique(target)
             client.download(info, target)
             print(target)
             downloaded += 1
-    if not downloaded:
+    if skipped:
+        print(f"Already downloaded: {skipped} file(s).")
+    if not downloaded and not skipped:
         print("No downloadable files in recent messages.")
     return 0
 

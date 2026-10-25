@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import datetime as dt
 import difflib
+import fcntl
 import getpass
 import html
 import http.client
@@ -411,18 +413,14 @@ class Model:
 # --- Schedule ------------------------------------------------------------------
 
 _UNITS = {
-    "m": 1,
-    "min": 1,
-    "minute": 1,
-    "minutes": 1,
-    "h": 60,
-    "hour": 60,
-    "hours": 60,
-    "d": 1440,
-    "day": 1440,
-    "days": 1440,
-}
-_SPAN = re.compile(r"^(\d+)\s*([a-z]+)$")
+    "m": 1, "min": 1, "mins": 1, "minute": 1, "minutes": 1,
+    "h": 60, "hr": 60, "hour": 60, "hours": 60,
+    "d": 1440, "day": 1440, "days": 1440,
+    "м": 1, "мин": 1, "минута": 1, "минуту": 1, "минуты": 1, "минут": 1,
+    "ч": 60, "час": 60, "часа": 60, "часов": 60,
+    "д": 1440, "дн": 1440, "день": 1440, "дня": 1440, "дней": 1440,
+}  # fmt: skip
+_SPAN = re.compile(r"^(\d+)\s*([a-zа-яё]+)\.?$")
 
 
 def _minutes(text: str) -> int:
@@ -434,10 +432,13 @@ def _minutes(text: str) -> int:
 
 def parse_when(text: str, base: dt.datetime) -> dt.datetime:
     """`in 30m`, `HH:MM` (today, or tomorrow once passed), `tomorrow HH:MM`, `YYYY-MM-DD HH:MM`."""
-    value = text.strip().lower()
-    if value.startswith("in "):
-        return base + dt.timedelta(minutes=_minutes(value[3:]))
-    clock = re.fullmatch(r"(tomorrow\s+)?(\d{1,2}):(\d{2})", value)
+    value = re.sub(r"\s+", " ", text.strip().lower())
+    value = re.sub(r"^(at|в|во) ", "", value)
+    for prefix in ("in ", "через "):
+        if value.startswith(prefix):
+            return base + dt.timedelta(minutes=_minutes(value[len(prefix) :]))
+    value = re.sub(r"^завтра( в)? ", "tomorrow ", value)
+    clock = re.fullmatch(r"(tomorrow\s+)?(\d{1,2})[:.](\d{2})", value)
     if clock:
         hour, minute = int(clock.group(2)), int(clock.group(3))
         if hour > 23 or minute > 59:
@@ -452,7 +453,7 @@ def parse_when(text: str, base: dt.datetime) -> dt.datetime:
         )
     except ValueError:
         raise ValueError(
-            f"unknown time {text!r}; use 'in 30m', '18:00', 'tomorrow 9:00' or '2026-11-01 09:00'"
+            f"unknown time {text!r}; use 'in 30m' ('через 30 мин'), '18:00', 'tomorrow 9:00' ('завтра 9:00') or '2026-11-01 09:00'"
         ) from None
     if moment.tzinfo is not None:
         moment = moment.astimezone().replace(tzinfo=None)
@@ -480,60 +481,89 @@ def _step(repeat: str) -> dt.timedelta | None:
     return None
 
 
+def _valid_job(job: Any) -> bool:
+    if not isinstance(job, dict) or not isinstance(job.get("id"), str) or not isinstance(job.get("prompt"), str):
+        return False
+    try:
+        dt.datetime.fromisoformat(str(job.get("next")))
+        step = _step(str(job.get("repeat", "once")))
+    except ValueError:
+        return False
+    # A zero or negative step would loop forever while finding the next time.
+    return step is None or step > dt.timedelta(0)
+
+
 class Schedule:
     def __init__(self) -> None:
         self.path = agent_dir("schedule.json")
 
     def jobs(self) -> list[dict]:
-        jobs = _read_json(self.path, {}).get("jobs", [])
-        return sorted(
-            (job for job in jobs if isinstance(job, dict) and "next" in job),
-            key=lambda job: job["next"],
-        )
+        stored = _read_json(self.path, {})
+        jobs = stored.get("jobs", []) if isinstance(stored, dict) else []
+        # A hand-edited or damaged entry must never stop the server's tick.
+        return sorted((job for job in jobs if _valid_job(job)), key=lambda job: job["next"])
+
+    @contextlib.contextmanager
+    def locked(self):
+        """One writer at a time: the server's tick and the console may change the schedule together."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.with_name("schedule.lock").open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
     def _save(self, jobs: list[dict]) -> None:
         _write_atomic(
             self.path, json.dumps({"jobs": jobs}, ensure_ascii=False, indent=2) + "\n"
         )
 
-    def add(self, prompt: str, when: dt.datetime, repeat: str, by: str) -> dict:
+    def add(self, prompt: str, when: dt.datetime, repeat: str, by: str, kind: str = "reminder") -> dict:
+        """A reminder sends its text as is; a task is run by the agent at that time."""
         if not prompt.strip():
-            raise ValueError("the scheduled prompt is empty")
+            raise ValueError("the scheduled text is empty")
+        if kind not in {"reminder", "task"}:
+            raise ValueError("kind is 'reminder' or 'task'")
         job = {
             "id": uuid.uuid4().hex[:6],
             "prompt": prompt.strip(),
             "next": when.isoformat(),
             "repeat": repeat,
+            "kind": kind,
             "by": by,
             "created": now().isoformat(),
         }
-        self._save([*self.jobs(), job])
+        with self.locked():
+            self._save([*self.jobs(), job])
         return job
 
     def remove(self, job_id: str) -> dict:
-        jobs = self.jobs()
-        match = next((job for job in jobs if job["id"] == job_id.lstrip("#")), None)
-        if match is None:
-            raise ValueError(f"no scheduled job #{job_id.lstrip('#')}")
-        self._save([job for job in jobs if job is not match])
+        with self.locked():
+            jobs = self.jobs()
+            match = next((job for job in jobs if job["id"] == job_id.lstrip("#")), None)
+            if match is None:
+                raise ValueError(f"no scheduled job #{job_id.lstrip('#')}")
+            self._save([job for job in jobs if job is not match])
         return match
 
     def take_due(self, moment: dt.datetime) -> list[dict]:
         """Due jobs; repeating ones move to their next time first, so a crash never re-runs them."""
         due, keep = [], []
-        for job in self.jobs():
-            when = dt.datetime.fromisoformat(job["next"])
-            if when > moment:
-                keep.append(job)
-                continue
-            due.append(dict(job))
-            step = _step(job.get("repeat", "once"))
-            if step:
-                while when <= moment:
-                    when += step
-                keep.append({**job, "next": when.isoformat()})
-        if due:
-            self._save(keep)
+        with self.locked():
+            for job in self.jobs():
+                when = dt.datetime.fromisoformat(job["next"])
+                if when > moment:
+                    keep.append(job)
+                    continue
+                due.append(dict(job))
+                step = _step(job.get("repeat", "once"))
+                if step:
+                    while when <= moment:
+                        when += step
+                    keep.append({**job, "next": when.isoformat()})
+            if due:
+                self._save(keep)
         return due
 
 
@@ -541,7 +571,8 @@ def describe_job(job: dict, with_date: bool = True) -> str:
     when = dt.datetime.fromisoformat(job["next"])
     stamp = when.strftime("%Y-%m-%d %H:%M" if with_date else "%H:%M")
     repeat = "" if job.get("repeat", "once") == "once" else f" ({job['repeat']})"
-    return f"{stamp}  #{job['id']}  {job['prompt']}{repeat}"
+    kind = "task: " if job.get("kind") == "task" else ""
+    return f"{stamp}  #{job['id']}  {kind}{job['prompt']}{repeat}"
 
 
 # --- Today ---------------------------------------------------------------------
@@ -558,6 +589,7 @@ def run_ul(*args: str, timeout: float = 600) -> subprocess.CompletedProcess[str]
     )
 
 
+DONE_COLUMNS = {"done", "completed", "finished", "archive", "готово", "сделано", "выполнено", "архив"}
 TASK_LINE = re.compile(r"^\s+\d+\. \[([ xX])\]")
 
 
@@ -566,7 +598,8 @@ def open_tasks(config: dict) -> str:
     result = run_ul("todo", timeout=60)
     if result.returncode != 0:
         raise ToolError((result.stderr or result.stdout).strip() or "ul todo failed")
-    completed = str(config["todo"]["completed_column"]).casefold()
+    # Boards name their last column differently; none of them holds open work.
+    completed = {str(config["todo"]["completed_column"]).casefold(), *DONE_COLUMNS}
     sections: list[tuple[str, list[str]]] = []
     keep = False
     for line in result.stdout.splitlines():
@@ -579,7 +612,7 @@ def open_tasks(config: dict) -> str:
         if task:
             keep = task.group(1) == " "
         # Detail lines follow their task.
-        if keep and sections and sections[-1][0].casefold() != completed:
+        if keep and sections and sections[-1][0].casefold() not in completed:
             sections[-1][1].append(line)
     text = "\n".join(f"{name}\n" + "\n".join(lines) for name, lines in sections if lines)
     return text or "No open tasks."
@@ -788,9 +821,10 @@ TOOLS: list[tuple[str, str, dict]] = [
         "schedule",
         _spec(
             "schedule",
-            "Run `prompt` later as a new request to you; the answer goes to the user in Telegram. "
+            "Remind the user, or do something later. kind 'reminder' (default) sends `prompt` to the user "
+            "as is (use it for 'remind me ...'); kind 'task' runs `prompt` as a new request to you then. "
             "when: 'in 30m', '18:00', 'tomorrow 9:00' or '2026-11-01 09:00'. repeat: once (default), daily, weekly or 'every 2h'.",
-            {"prompt": _S, "when": _S, "repeat": _S},
+            {"prompt": _S, "when": _S, "repeat": _S, "kind": {"type": "string", "enum": ["reminder", "task"]}},
             ["prompt", "when"],
         ),
     ),
@@ -1074,10 +1108,8 @@ class Tools:
         result = run_ul("todo", "done", str(int(id)), timeout=60)
         return (result.stdout + result.stderr).strip()
 
-    def _schedule(self, prompt: str, when: str, repeat: str = "once") -> str:
-        job = Schedule().add(
-            prompt, parse_when(when, now()), parse_repeat(repeat), self.who
-        )
+    def _schedule(self, prompt: str, when: str, repeat: str = "once", kind: str = "reminder") -> str:
+        job = Schedule().add(prompt, parse_when(when, now()), parse_repeat(repeat), self.who, kind or "reminder")
         return f"Scheduled {describe_job(job)}."
 
     def _unschedule(self, id: str) -> str:
@@ -1193,6 +1225,17 @@ def _close_open_calls(messages: list[dict]) -> None:
             return
 
 
+CLAIMS = re.compile(
+    r"\b(created|wrote|written|saved|deleted|removed|moved|renamed|scheduled|added|reminder set)\b"
+    r"|созда|записал|сохранил|удалил|перемест|переименов|запланир|добавил|напомню|поставил напомин",
+    re.IGNORECASE,
+)
+NO_TOOL_NOTE = (
+    "⚠ No tool was called, so nothing on the Mac was changed or checked. "
+    "This model may be too small to use tools; switch with /model or `ula setup`."
+)
+
+
 def respond(config: dict, model: Model, tools: Tools, session: Session, content: Any, channel: str, ui: Any = None) -> str:
     """One user turn: call the model, run its tool calls, repeat until it answers.
 
@@ -1204,6 +1247,7 @@ def respond(config: dict, model: Model, tools: Tools, session: Session, content:
     specs = tools.specs()
     system = {"role": "system", "content": system_prompt(config, tools.level, channel)}
     streaming = bool(getattr(ui, "streaming", False))
+    called = False
     on_tool = getattr(ui, "on_tool", None)
     on_result = getattr(ui, "on_result", None)
     try:
@@ -1225,7 +1269,15 @@ def respond(config: dict, model: Model, tools: Tools, session: Session, content:
                 reply["tool_calls"] = calls
             session.messages.append(reply)
             if not calls:
-                return text or "(no answer)"
+                answer = text or "(no answer)"
+                if not called and tools.level != "chat" and CLAIMS.search(answer):
+                    warn = getattr(ui, "warn", None)
+                    if warn:
+                        warn(NO_TOOL_NOTE)
+                    else:
+                        answer += "\n\n" + NO_TOOL_NOTE
+                return answer
+            called = True
             for index, call in enumerate(calls):
                 name = call.get("function", {}).get("name", "")
                 arguments = _arguments(call)
@@ -1251,6 +1303,7 @@ SLASH_COMMANDS = {
     "/model": "switch the local model",
     "/today": "today's open tasks and scheduled jobs",
     "/plan": "everything scheduled",
+    "/schedule": "remind me: /schedule <when> <text>, e.g. in 10m, 18:00",
     "/unschedule": "cancel a scheduled job",
     "/status": "model, Telegram, folders, background server",
     "/log": "the agent's last actions",
@@ -1258,8 +1311,9 @@ SLASH_COMMANDS = {
     "/copy": "copy the last answer",
     "/exit": "quit (also Ctrl+D)",
 }
-# Commands whose argument is picked from a second menu.
+# Commands whose argument is picked from a second menu, or typed after them.
 ARGUMENT_MENUS = {"/model", "/unschedule"}
+TYPED_ARGUMENTS = {"/schedule"}
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 # Control characters from files or the model (a stray \r, escape codes) would garble the screen.
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
@@ -1490,6 +1544,9 @@ class Console:
             self.sent_tokens += int(usage.get("prompt_tokens", 0))
             self.received_tokens += int(usage.get("completion_tokens", 0))
 
+    def warn(self, text: str) -> None:
+        self.write(self.paint(text, YELLOW) + "\n")
+
     def on_tool(self, name: str, arguments: dict) -> None:
         self.write(self.paint("● ", CYAN) + self.paint(tool_label(name, arguments), BOLD) + "\n")
 
@@ -1578,7 +1635,12 @@ class Console:
                 if found == [name]:
                     found = []
                 return [
-                    Item(command, SLASH_COMMANDS[command], command + (" " if command in ARGUMENT_MENUS else ""), command not in ARGUMENT_MENUS)
+                    Item(
+                        command,
+                        SLASH_COMMANDS[command],
+                        command + (" " if command in ARGUMENT_MENUS | TYPED_ARGUMENTS else ""),
+                        command not in ARGUMENT_MENUS | TYPED_ARGUMENTS,
+                    )
                     for command in found
                 ], 0, len(text)
             return self.argument_items(name, argument), len(name) + 1, len(text)
@@ -1626,6 +1688,8 @@ class Console:
             print(today_text(self.config))
         elif name == "/plan":
             print(plan_text())
+        elif name == "/schedule":
+            self.schedule(rest)
         elif name == "/unschedule":
             if not rest:
                 print(paint("Usage: /unschedule <id> (see /plan)", YELLOW))
@@ -1651,8 +1715,35 @@ class Console:
             print(paint(f"Unknown command {name}; /help lists them.", YELLOW))
         return True
 
+    def schedule(self, rest: str) -> None:
+        """`/schedule <when> <text>`: a reminder without asking the model."""
+        repeat = "once"
+        found = re.search(r"\s--repeat\s+(.+)$", rest)
+        if found:
+            repeat, rest = found.group(1), rest[: found.start()]
+        words = rest.split()
+        for count in (3, 2, 1):
+            if len(words) <= count:
+                continue
+            try:
+                when = parse_when(" ".join(words[:count]), now())
+            except ValueError:
+                continue
+            try:
+                job = Schedule().add(" ".join(words[count:]), when, parse_repeat(repeat), "terminal")
+            except ValueError as error:
+                print(self.paint(str(error), RED))
+                return
+            print(self.paint("⏰ ", CYAN) + describe_job(job))
+            if not running():
+                print(self.paint("It arrives in Telegram while `ula server` runs (or background mode from `ula setup`).", DIM))
+            return
+        print(self.paint("Usage: /schedule <when> <text> [--repeat daily|weekly|\"every 2h\"]", YELLOW))
+        print(self.paint("when: in 10m · через 10 мин · 18:00 · tomorrow 9:00 · завтра 9:00 · 2026-11-01 09:00", DIM))
+
     def switch_model(self, choice: str) -> None:
         models = _chat_models()
+        self.models = models
         if not choice:
             for index, model in enumerate(models, 1):
                 mark = self.paint("●", GREEN) if model["id"] == self.model.name else " "
@@ -1668,19 +1759,28 @@ class Console:
         if choice not in known and choice != "auto":
             print(self.paint(f"No downloaded model {choice!r}; /model lists them.", RED))
             return
-        _set("agent.model", choice)
+        previous = self.model.name
         self.model.name = choice
-        self.config["agent"]["model"] = choice
-        print(self.paint(f"Model: {choice}. Checking that it calls tools ...", DIM))
+        print(self.paint(f"Checking that {short_model(choice)} calls tools (it loads first) ...", DIM))
         try:
             works = self.model.calls_tools()
         except RuntimeError as error:
-            print(self.paint(f"Could not check it: {error}", YELLOW))
+            self.model.name = previous
+            print(self.paint(f"Could not load it, keeping {short_model(previous)}: {error}", RED))
             return
-        if works:
-            print(self.paint("It calls tools.", GREEN))
-        else:
-            print(self.paint("It answers in text only, so it cannot see or change anything; pick a bigger model.", YELLOW))
+        if not works:
+            print(self.paint(f"{short_model(choice)} answers in text only: it cannot read, create or change anything.", YELLOW))
+            try:
+                keep = input("Use it anyway, just to chat? [y/N] ").strip().casefold()[:1] in {"y", "д"}
+            except EOFError:
+                keep = False
+            if not keep:
+                self.model.name = previous
+                print(self.paint(f"Kept {short_model(previous)}.", DIM))
+                return
+        _set("agent.model", choice, self.config["agent"]["model"])
+        self.config["agent"]["model"] = choice
+        print(self.paint(f"Model: {choice}" + (" · calls tools" if works else " · chat only"), GREEN if works else YELLOW))
 
 
 def console(config: dict, model: Model, first: str | None, resume: bool) -> int:
@@ -2200,6 +2300,10 @@ class Bot:
             self.reload()
         for job in due:
             self.log(f"scheduled #{job['id']} › {job['prompt'][:100]}")
+            if job.get("kind", "task") == "reminder":
+                chat_id = str(job.get("by") or self.owner)
+                self.send(chat_id if chat_id in self.allowed else self.owner, f"⏰ {job['prompt']}")
+                continue
             chat_id = str(job.get("by") or self.owner)
             if chat_id not in self.allowed or chat_id == "terminal":
                 chat_id = self.owner
@@ -2267,6 +2371,11 @@ def server(config: dict) -> int:
     print(f" {paint('folders', DIM)}  {', '.join(short_path(root) for root in roots(config))}", file=sys.stderr)
     print(paint(" Ctrl+C stops", DIM), file=sys.stderr, flush=True)
     model.ensure()
+    try:
+        if not model.calls_tools():
+            log(paint(f"⚠ {model.name} answers in text only: it cannot read files or schedule. Pick another with `ula setup`.", YELLOW))
+    except RuntimeError as error:
+        log(paint(f"⚠ could not check the model: {error}", YELLOW))
     try:
         return bot.run()
     except KeyboardInterrupt:
@@ -2400,11 +2509,11 @@ def _choose_model(config: dict) -> None:
         answer = "auto" if number == 0 else models[number - 1]["id"]
     _set("agent.model", answer, current)
     print(f"Model: {answer}")
-    model = Model(load_config())
+    probe = Model(load_config())
     print("Checking that it can use tools (loads the model, may take a minute) ...")
     try:
-        model.ensure()
-        works = model.calls_tools()
+        probe.ensure()
+        works = probe.calls_tools()
     except RuntimeError as error:
         print(f"Could not check the model: {error}")
         return
