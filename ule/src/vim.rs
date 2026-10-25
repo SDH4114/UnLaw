@@ -492,6 +492,7 @@ pub fn handle_key(ed: &mut Editor, key: Key) {
         }
     }
     if crate::standard::enabled(ed) && crate::standard::handle(ed, key) {
+        ed.clamp_all_views();
         let focus = ed.focus;
         ed.scroll_to_cursor(focus);
         return;
@@ -506,6 +507,7 @@ pub fn handle_key(ed: &mut Editor, key: Key) {
     if !matches!(ed.mode, Mode::Insert | Mode::Replace) {
         ed.completion = None;
     }
+    ed.clamp_all_views();
     let focus = ed.focus;
     ed.scroll_to_cursor(focus);
 }

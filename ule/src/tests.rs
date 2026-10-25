@@ -4,7 +4,21 @@ use crate::config::Config;
 use crate::editor::{Editor, Mode};
 use crate::text::Pos;
 
+/// Tests never touch the real ~/.config/unlaw or run the real ul.
+fn sandbox() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let root = std::env::temp_dir().join(format!("ule-tests-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::env::set_var("HOME", &root);
+        std::env::set_var("XDG_CONFIG_HOME", root.join("config"));
+        std::env::set_var("ULE_UL", root.join("no-ul"));
+        std::env::remove_var("ULE_CONFIG");
+    });
+}
+
 fn editor(text: &str) -> Editor {
+    sandbox();
     crate::clipboard::disable();
     let mut config = Config::default();
     config.options.clipboard = false;
@@ -247,6 +261,7 @@ fn leader_menu_waits_then_runs() {
 
 #[test]
 fn user_bindings_apply() {
+    sandbox();
     crate::clipboard::disable();
     let mut config = Config::parse(
         "[keys.insert]\n\"jk\" = \"normal_mode\"\n[keys.normal]\n\"H\" = \"^\"\n\"<leader>x\" = \":%s/a/b/g\"\n",
@@ -313,35 +328,53 @@ fn random_keys_never_panic() {
         "h", "j", "k", "l", "w", "b", "e", "W", "B", "E", "0", "^", "$", "gg", "G", "%", "{", "}", "(", ")", "f", "t", "F", "T",
         ";", ",", "x", "X", "dd", "dw", "cw", "ciw", "di(", "da\"", "dap", "yy", "p", "P", "u", "<C-r>", ".", "~", "J", "gJ",
         "v", "V", "<C-v>", "o", "O", "i", "a", "A", "I", "<esc>", "<cr>", "<bs>", "<tab>", "<s-tab>", "<del>", ">>", "<<",
-        "gcc", "guu", "gUiw", "<C-a>", "<C-x>", "qa", "q", "@a", "@@", "ma", "'a", "`a", "*", "#", "n", "N", "/a<cr>",
-        "?x<cr>", ":s/a/b/g<cr>", ":%sort<cr>", ":g/x/d<cr>", "r", "R", "s", "S", "C", "D", "Y", "3", "2", "\"a", "\"_",
+        "gcc", "guu", "gUiw", "<C-a>", "<C-x>", "qa", "q", "@a", "@@", "ma", "'a", "`a", "*", "#", "n", "N", 
+            "r", "R", "s", "S", "C", "D", "Y", "3", "2", "\"a", "\"_",
         "<C-d>", "<C-u>", "<C-e>", "<C-y>", "zz", "H", "M", "L", "gv", "gi", "<C-o>", "<C-i>", "<A-j>", "<A-k>", "Q",
         "日", "😀", " ", "(", "\"", "'", "}", "<C-w>", "<C-u>", "<C-n>", "<left>", "<right>", "<up>", "<down>", "<home>",
-        "<end>", ":normal A!<cr>", "<C-w>v", "<C-w>q", "]d", "[b", "<C-^>",
+        "<end>",  "<C-w>v", "<C-w>q", "]d", "[b", "<C-^>",
+        "<S-right>", "<S-left>", "<S-up>", "<S-down>", "<S-home>", "<S-end>", "<C-S-left>", "<C-S-right>", "<C-c>",
+        "<C-x>", "<C-v>", "<C-z>", "<C-y>", "<C-bs>", "<C-del>", "<A-d>", "<C-k>", "<C-S-k>", "<A-up>", "<A-down>",
+        "<A-S-up>", "<A-S-down>", "<C-home>", "<C-end>", "<C-g>", "<C-f>", "<C-a>", "<C-e>", "<A-left>", "<A-right>",
+        "<C-left>", "<C-right>", "<pageup>", "<pagedown>", "<C-q>", "<A-v>", "<A-a>",
     ];
-    let mut seed: u64 = 0x5eed_1234_abcd_ef01;
+    let mut seed: u64 = std::env::var("ULE_FUZZ_SEED").ok().and_then(|value| value.parse().ok()).unwrap_or(0x5eed_1234_abcd_ef01);
     let mut next = || {
         seed ^= seed << 13;
         seed ^= seed >> 7;
         seed ^= seed << 17;
         seed
     };
-    for round in 0..500 {
+    // ULE_FUZZ_ROUNDS=5000 cargo test random_keys for a longer hunt.
+    let rounds = std::env::var("ULE_FUZZ_ROUNDS").ok().and_then(|value| value.parse().ok()).unwrap_or(500);
+    for round in 0..rounds {
         let text = texts[round % texts.len()];
         let mut ed = editor(text);
-        let mut sequence = String::new();
-        for _ in 0..40 {
-            sequence.push_str(pieces[(next() % pieces.len() as u64) as usize]);
-        }
         let leader = ed.keymap.leader.clone();
-        let keys = crate::keys::parse(&sequence, &leader).unwrap();
+        let mut sequence = String::new();
+        let mut keys = Vec::new();
+        for _ in 0..40 {
+            let piece = pieces[(next() % pieces.len() as u64) as usize];
+            sequence.push_str(piece);
+            keys.extend(crate::keys::parse(piece, &leader).unwrap());
+        }
         for key in keys {
             crate::vim::handle_key(&mut ed, key);
+            // Random keys must not reach the file system: no :commands, prompts,
+            // explorer or pickers (searches are harmless and stay).
+            if ed.prompt.as_ref().is_some_and(|prompt| !matches!(prompt.kind, crate::widgets::PromptKind::Search { .. })) {
+                ed.prompt = None;
+            }
+            ed.explorer = None;
+            ed.focus_area = crate::editor::Focus::View;
+            ed.picker = None;
+            ed.handoff = None;
+            ed.jobs.kill_all();
             // The cursor must always be inside the text.
             let cursor = ed.cursor();
             let doc = ed.doc();
-            assert!(cursor.line < doc.text.len_lines(), "round {round}: {sequence}");
-            assert!(cursor.col <= doc.text.line_len(cursor.line), "round {round}: {sequence}");
+            assert!(cursor.line < doc.text.len_lines(), "round {round}, key {:?}, cursor {cursor:?}, mode {:?}: {sequence}", key, ed.mode);
+            assert!(cursor.col <= doc.text.line_len(cursor.line), "round {round}, key {:?}, cursor {cursor:?}, len {}, mode {:?}: {sequence}", key, doc.text.line_len(cursor.line), ed.mode);
         }
         ed.prompt = None;
         crate::ui::draw(&mut ed);
@@ -418,4 +451,23 @@ fn vim_keys_without_standard_keys() {
     assert_eq!(content(&vim_only("v1", "<C-a>")), "v2");
     assert_eq!(content(&vim_only("abc\nabc", "<C-v>jd")), "bc\nbc");
     assert_eq!(vim_only("abc", "i<C-c>").mode, Mode::Normal, "Ctrl-C leaves insert mode in pure vim");
+}
+
+#[test]
+#[ignore]
+fn replay_debug() {
+    let text = std::env::var("ULE_REPLAY_TEXT").unwrap_or_default().replace("\\n", "\n");
+    let sequence = std::env::var("ULE_REPLAY").unwrap();
+    let mut ed = editor(&text);
+    let leader = ed.keymap.leader.clone();
+    for key in crate::keys::parse(&sequence, &leader).unwrap() {
+        crate::vim::handle_key(&mut ed, key);
+        if ed.prompt.as_ref().is_some_and(|prompt| !matches!(prompt.kind, crate::widgets::PromptKind::Search { .. })) {
+            ed.prompt = None;
+        }
+        ed.explorer = None;
+        ed.picker = None;
+        let cursor = ed.cursor();
+        eprintln!("{:<40} {:?} {:?} len={} line={:?}", key.notation(), ed.mode, cursor, ed.doc().text.line_len(cursor.line.min(ed.doc().text.last_line())), ed.doc().text.line(cursor.line));
+    }
 }

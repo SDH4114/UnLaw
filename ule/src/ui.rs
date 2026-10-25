@@ -29,6 +29,7 @@ fn line_number_width(doc: &Document, numbers: LineNumbers) -> u16 {
 
 /// Sets every view's text area and keeps cursors visible; call before drawing.
 pub fn layout(ed: &mut Editor) {
+    ed.clamp_all_views();
     let (areas, _) = ed.view_areas();
     for (id, rect) in areas {
         let Some(view) = ed.views.get(&id) else {

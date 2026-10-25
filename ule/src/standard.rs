@@ -355,6 +355,20 @@ fn undo(ed: &mut Editor, redo: bool) {
 
 /// Handles a standard-editor key; returns false to let vim have it.
 pub fn handle(ed: &mut Editor, key: Key) -> bool {
+    let handled = handle_key(ed, key);
+    if handled {
+        // Moved or re-indented lines must not leave the selection outside the text.
+        ed.anchor = ed.doc().text.clamp(ed.anchor);
+        let cursor = ed.doc().text.clamp(ed.cursor());
+        ed.view_mut().cursor = cursor;
+        if !matches!(ed.mode, Mode::Insert | Mode::Replace) {
+            ed.clamp_cursor();
+        }
+    }
+    handled
+}
+
+fn handle_key(ed: &mut Editor, key: Key) -> bool {
     let mode = match ed.mode {
         Mode::Visual(_) => KeyMode::Visual,
         Mode::Insert | Mode::Replace => KeyMode::Insert,

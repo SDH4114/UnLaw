@@ -728,6 +728,24 @@ impl Editor {
         view.cursor = cursor;
     }
 
+    /// Edits in one window can shorten text another window's cursor is in.
+    pub fn clamp_all_views(&mut self) {
+        for view in self.views.values_mut() {
+            if let Some(doc) = self.docs.get(&view.doc) {
+                view.cursor = doc.text.clamp(view.cursor);
+                view.scroll = view.scroll.min(doc.text.last_line());
+                if view.id != self.focus {
+                    let len = doc.text.line_len(view.cursor.line);
+                    if len > 0 && view.cursor.col >= len {
+                        view.cursor.col = len - 1;
+                    }
+                }
+            }
+        }
+        self.anchor = self.doc().text.clamp(self.anchor);
+        self.clamp_cursor();
+    }
+
     pub fn set_cursor(&mut self, pos: Pos) {
         self.view_mut().cursor = pos;
         self.view_mut().want_col = None;

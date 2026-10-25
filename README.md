@@ -614,6 +614,14 @@ The first five minutes:
   `:ul! game` hands over the terminal, `space gc` commits and pushes with `ul git`.
 - Local AI through `ul lm` (nothing leaves the Mac): `space aa` ask, visual +
   `space ae` rewrite the selection (one undo step), `space ax` explain.
+- Keys of ordinary editors work next to vim (`standard_keys = true`, `:help standard`):
+  `Ctrl-Z`/`Ctrl-Y` undo/redo, `Ctrl-C`/`Ctrl-X`/`Ctrl-V` copy/cut/paste (the whole line
+  when nothing is selected), Shift+arrows select and typing replaces the selection,
+  `Ctrl`/`Option+Backspace` delete a word, `Cmd+Backspace` to the line start, `Ctrl-K`
+  to the line end, `Ctrl-Shift-K` the line, `Option`/`Ctrl+arrows` move by word,
+  `Option+Up/Down` move lines (with Shift: duplicate), `Ctrl-F` find, `Ctrl-G` go to line,
+  `Ctrl-/` comment. Vim's keys they replace moved: block visual `Ctrl-Q`, increment
+  `Alt-A`/`Alt-X`, suspend `space z`; `standard_keys = false` gives pure vim back.
 
 Settings live in `~/.config/unlaw/ule.toml` (`space fc` creates it with every option
 commented). Example:

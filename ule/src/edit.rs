@@ -411,6 +411,10 @@ pub fn put_over_selection(ed: &mut Editor, register: Option<char>, keep_register
 
 /// Inserts typed text at the cursor in insert mode, with auto-pairs and smart dedent.
 pub fn type_char(ed: &mut Editor, c: char) {
+    if c == '\n' || c == '\r' {
+        newline(ed);
+        return;
+    }
     let cursor = ed.cursor();
     let line = ed.doc().text.line(cursor.line).to_string();
     let chars: Vec<char> = line.chars().collect();
@@ -639,7 +643,7 @@ pub fn increment(ed: &mut Editor, delta: i64) {
     let chars: Vec<char> = ed.doc().text.line(cursor.line).chars().collect();
     let mut start = cursor.col.min(chars.len());
     // Back up to the start of a number the cursor is inside.
-    while start > 0 && chars[start - 1].is_ascii_hexdigit() && chars[start].is_ascii_hexdigit() {
+    while start > 0 && chars[start - 1].is_ascii_hexdigit() && chars.get(start).is_some_and(char::is_ascii_hexdigit) {
         start -= 1;
     }
     let Some(first_digit) = (start..chars.len()).find(|index| chars[*index].is_ascii_digit()) else {

@@ -187,7 +187,12 @@ pub fn parse(text: &str, leader: &[Key]) -> Result<Vec<Key>, String> {
                 }
             }
         }
-        keys.push(Key::char(c));
+        // Text of a register played as a macro may hold real line breaks and tabs.
+        keys.push(match c {
+            '\n' | '\r' => Key::plain(Code::Enter),
+            '\t' => Key::plain(Code::Tab),
+            _ => Key::char(c),
+        });
         rest = &rest[c.len_utf8()..];
     }
     if keys.is_empty() {

@@ -97,9 +97,12 @@ class CoreTestCase(unittest.TestCase):
         if not alone.exists():
             alone.parent.mkdir(exist_ok=True)
             shutil.copy2(binary(), alone)
-        return subprocess.run(
-            [str(alone), *args], env={**self.env, **(env or {})}, cwd=self.root, input="", capture_output=True, text=True, timeout=60
+        merged = {**self.env, **(env or {})}
+        # An installed ule (~/.local/bin) must not be found through PATH either.
+        merged["PATH"] = os.pathsep.join(
+            entry for entry in merged.get("PATH", "").split(os.pathsep) if entry and not (Path(entry) / "ule").exists()
         )
+        return subprocess.run([str(alone), *args], env=merged, cwd=self.root, input="", capture_output=True, text=True, timeout=60)
 
     def recording_tool(self, name: str, *, exit_code: int = 0) -> Path:
         """A fake executable that appends its argv as one line to <name>.log."""
