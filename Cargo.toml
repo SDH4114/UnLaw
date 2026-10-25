@@ -1,6 +1,6 @@
 [package]
 name = "unlaw"
-version = "3.5.1"
+version = "3.6.0"
 edition = "2021"
 rust-version = "1.82"
 description = "A small, extensible macOS command launcher"
@@ -8,6 +8,9 @@ license = "GPL-3.0-or-later"
 authors = ["Haos"]
 build = "rust/build.rs"
 publish = false
+
+[workspace]
+members = ["ule"]
 
 [lib]
 path = "rust/src/lib.rs"

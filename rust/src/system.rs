@@ -788,6 +788,19 @@ fn telegram_token(config: Option<&Config>) -> Check {
     Check { name: "Telegram token", available: in_keychain || in_env, required: false, detail }
 }
 
+/// Which editor `ul edit` and `ul config edit` open, and whether ule is installed.
+fn editor_check(config: Option<&Config>) -> Check {
+    let (words, source) = crate::editor::resolve(config);
+    let ule = crate::editor::ule_path();
+    let detail = match (&ule, source) {
+        (Some(path), "ule") => format!("ule ({})", path.display()),
+        (_, "core.editor") => format!("{} (core.editor)", words.join(" ")),
+        (None, source) => format!("{} ({source}); ule is not installed: `ul update` installs it", words.join(" ")),
+        (Some(_), source) => format!("{} ({source})", words.join(" ")),
+    };
+    Check { name: "Editor", available: ule.is_some() || source == "core.editor", required: false, detail }
+}
+
 fn doctor_checks() -> Vec<Check> {
     let root = ensure_layout().unwrap_or_else(|_| config_dir());
     let (config, config_ok, config_detail) = match config::load() {
@@ -835,6 +848,7 @@ fn doctor_checks() -> Vec<Check> {
         tool("RAR", "rar", "optional; needed to create .rar with `ul zip -f rar`"),
         tool("macOS Keychain", "security", "needed to store the Telegram token"),
         telegram_token(config.as_ref()),
+        editor_check(config.as_ref()),
         {
             let precedes = unlaw_bin.as_deref().is_some_and(bin_precedes_system);
             let directory = unlaw_bin.as_deref().map(display_home).unwrap_or_else(|| "the Unlaw binary directory".into());

@@ -1,8 +1,6 @@
 //! `ul config path|show|get|set|edit|check|reset`.
 
-use std::env;
 use std::fs;
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::{self, config_file, ConfigError};
@@ -12,16 +10,19 @@ const USAGE: &str = "Usage: ul config path|show|get|set|edit|check|reset";
 
 fn edit() -> i32 {
     let path = config_file();
-    let editor = env::var("VISUAL").ok().filter(|v| !v.is_empty()).or_else(|| env::var("EDITOR").ok().filter(|v| !v.is_empty()));
-    let mut words: Vec<String> = match editor {
-        Some(editor) => editor.split_whitespace().map(str::to_string).collect(),
-        None => vec!["open".into(), "-t".into()],
-    };
-    words.push(path.to_string_lossy().into_owned());
-    match Command::new(&words[0]).args(&words[1..]).status() {
-        Ok(status) => status.code().unwrap_or(1),
+    let config = config::load().ok();
+    let code = crate::editor::open(&[path], config.as_ref());
+    if code != 0 {
+        return code;
+    }
+    // Report problems right away instead of on the next command.
+    match config::load() {
+        Ok(_) => {
+            println!("config.toml is valid.");
+            0
+        }
         Err(error) => {
-            eprintln!("unlaw config: Could not open editor: {error}");
+            eprintln!("unlaw config: {error}");
             1
         }
     }

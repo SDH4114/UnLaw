@@ -14,8 +14,9 @@ curl -LsSf https://raw.githubusercontent.com/SDH4114/UnLaw/main/install.sh | sh
 The Unlaw core (dispatcher, configuration, system commands, completion, doctor)
 is written in Rust and built with `cargo`; the installer sets up Rust through
 rustup if it is missing. Commands in `commands/` remain plain Python files, so
-Python 3.11+ is required (`brew install python`). The `ul` and `unlaw` binaries
-are installed into `~/.local/bin`; the old uv-based Unlaw is removed automatically.
+Python 3.11+ is required (`brew install python`). The `ul`, `unlaw`, `ula` binaries
+and the `ule` editor are installed into `~/.local/bin`; the old uv-based Unlaw is
+removed automatically.
 
 Update to the latest version from GitHub:
 
@@ -32,10 +33,11 @@ Configuration, data and manually edited commands are left untouched; unmodified
 standard commands are updated on the next run. Requires `cargo` and Python 3.11+;
 `--check` also needs `curl`. `UNLAW_UPDATE_REPOSITORY` points to a fork.
 
-From a local checkout (install and update are the same command):
+From a local checkout (install and update are the same commands):
 
 ```bash
-cargo install --path . --root ~/.local --force
+cargo install --path . --root ~/.local --force       # ul, unlaw, ula
+cargo install --path ule --root ~/.local --force     # the ule editor
 ```
 
 `unlaw` and `ul` are fully equivalent. Building from source and the first run
@@ -581,6 +583,66 @@ ul tg status
 The bot token is never written to `config.toml` or Git. For a private chat, first
 message the bot, then enter its `chat_id` during `setup`.
 
+## Editor (ule)
+
+`ule` is Unlaw's own terminal code editor: vim keys, a `space` menu for everything
+else, language servers, fuzzy pickers, and ul built in. `ul edit <file>` and
+`ul config edit` open it (`core.editor = "auto"`: ule, then `$VISUAL`/`$EDITOR`,
+then `open -t`; set `core.editor` to `nvim` or `zed --wait` to use another one).
+
+```bash
+ule                       # start screen: recent files, find, explorer
+ule src/main.rs:42        # open at a line (also: ule +42 file)
+ule .                     # a folder opens the file explorer
+git diff | ule -          # edit text from stdin
+ule --health              # language servers, formatters and tools found
+```
+
+The first five minutes:
+
+- `i` types, `Esc` stops, `:w` saves (`Ctrl-s` too), `:q` quits; `:help` explains the rest.
+- `space` opens a menu showing what comes next: `space space` find a file, `space /`
+  search the project, `space ,` open buffers, `space e` explorer, `space r` run the
+  file (output in the panel, `space o`), `space ?` every key binding, `space :` every command.
+- Code: `gd` definition, `K` docs, `gr` references, `space ca` fixes, `space cr` rename,
+  `space cf` format, `]d` next diagnostic. Completion pops up while typing (Tab/Enter).
+- Vim: operators and motions with counts, text objects (`ci(`, `daw`, `dap`, `cit`),
+  visual/line/block modes with block insert, `.` repeat, macros (`qa…q`, `@a`, `Q`),
+  registers (`"+` is the clipboard), marks, jumps, `:s`, `:g`, `:sort`, `:normal`,
+  `:%!filter`, splits (`Ctrl-w v/s/h/j/k/l`).
+- ul: `space uu` picks a ul command, `:ul todo add milk` runs one into the panel,
+  `:ul! game` hands over the terminal, `space gc` commits and pushes with `ul git`.
+- Local AI through `ul lm` (nothing leaves the Mac): `space aa` ask, visual +
+  `space ae` rewrite the selection (one undo step), `space ax` explain.
+
+Settings live in `~/.config/unlaw/ule.toml` (`space fc` creates it with every option
+commented). Example:
+
+```toml
+theme = "onedark"          # unlaw (terminal colors), onedark, gruvbox, catppuccin, tokyonight, light
+
+[editor]
+tab_width = 4
+rulers = [100]
+format_on_save = "auto"    # format only when the project has rustfmt.toml, .prettierrc, ruff config...
+
+[keys.normal]
+"<leader>t" = ":run cargo test"
+"H" = "^"
+
+[keys.insert]
+"jk" = "normal_mode"
+
+[languages.python]
+run = "uv run {file}"
+```
+
+Language servers start automatically when installed (rust-analyzer, basedpyright or
+pyright, ruff, clangd, typescript-language-server, gopls, …); `ule --health` lists
+what is missing. Files changed on disk by other programs (or agents) are reloaded
+when they have no unsaved edits. History, cursor positions and recent files are kept
+in `storage.root/ule`.
+
 ## Local agent
 
 `ula` (also `unlawagent` and `ul agent`) is a personal agent on a local `ul lm`
@@ -816,6 +878,7 @@ Python is not started.
 ```text
 Cargo.toml, rust/      Rust core: dispatcher, config, system commands, doctor
 rust/build.rs          embeds data from Python via rust/gen_assets.py
+ule/                   the ule editor (separate crate in the same workspace)
 src/unlawful/          seeded command sources, their help and DEFAULT_CONFIG
 tests/                 Python command tests and black-box binary tests
 ```
@@ -826,10 +889,10 @@ build needs Python 3.11+. The version in `Cargo.toml` must match
 `src/unlawful/__init__.py`, otherwise the build stops.
 
 ```bash
-cargo test
-cargo clippy --all-targets
+cargo test --workspace
+cargo clippy --workspace --all-targets
 python3 -m unittest discover -s tests -v   # builds target/debug/ul itself
-cargo build --release
+cargo build --release --workspace
 ```
 
 Unlaw 3 stays local-first: commands don't use shell strings, `ul lm` listens only

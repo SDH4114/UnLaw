@@ -76,6 +76,18 @@ Example: ul doctor --verbose
 ",
     ),
     (
+        "edit",
+        "Open files in the editor: ule (Unlaw's editor), or core.editor.
+Usage: ul edit [file[:line[:col]]]...
+Editor: core.editor (default \"auto\": ule when installed, then $VISUAL,
+$EDITOR, then `open -t`). Set it to \"nvim\", \"zed --wait\" or \"ule\".
+ul config edit uses the same editor and checks config.toml afterwards.
+Examples:
+  ul edit src/main.rs:42
+  ul config set core.editor nvim
+",
+    ),
+    (
         "init",
         "Initialize the Unlaw configuration and editable command sources.
 Usage: ul init

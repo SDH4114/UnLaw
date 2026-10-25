@@ -156,6 +156,7 @@ class CurlInstallerTests(unittest.TestCase):
                 "--root",
                 str(root / "home" / ".local"),
                 "unlaw",
+                "ule",
             ],
         )
         self.assertFalse((root / "uv.txt").exists())

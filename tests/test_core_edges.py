@@ -59,21 +59,22 @@ class UsageErrorTests(CoreTestCase):
 
 class ConfigEdgeTests(CoreTestCase):
     def test_edit_uses_visual_then_editor_then_open(self) -> None:
+        # Without ule installed (core.editor = "auto"): $VISUAL, then $EDITOR, then `open -t`.
         log = self.recording_tool("fake-editor", exit_code=4)
-        result = self.ul("config", "edit", env={"EDITOR": "fake-editor --wait"})
+        result = self.ul_without_ule("config", "edit", env={"EDITOR": "fake-editor --wait"})
         self.assertEqual(result.returncode, 4)
         self.assertEqual(self.calls(log), [["--wait", str(self.unlaw / "config.toml")]])
         visual = self.recording_tool("fake-visual")
-        self.ok("config", "edit", env={"VISUAL": "fake-visual", "EDITOR": "fake-editor"})
+        self.assertEqual(self.ul_without_ule("config", "edit", env={"VISUAL": "fake-visual", "EDITOR": "fake-editor"}).returncode, 0)
         self.assertEqual(len(self.calls(visual)), 1)
         open_log = self.recording_tool("open")
-        self.ok("config", "edit")
+        self.assertEqual(self.ul_without_ule("config", "edit").returncode, 0)
         self.assertEqual(self.calls(open_log), [["-t", str(self.unlaw / "config.toml")]])
 
     def test_missing_editor_is_reported(self) -> None:
-        result = self.ul("config", "edit", env={"EDITOR": "no-such-editor-xyz"})
+        result = self.ul_without_ule("config", "edit", env={"EDITOR": "no-such-editor-xyz"})
         self.assertEqual(result.returncode, 1)
-        self.assertIn("Could not open editor", result.stderr)
+        self.assertIn("could not start no-such-editor-xyz", result.stderr)
 
     def test_show_check_and_new_keys(self) -> None:
         self.ok("config", "set", "custom.nested.answer", "42")

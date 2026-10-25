@@ -262,6 +262,7 @@ const CHECKS: &[(&str, Kind, &[&str])] = &[
     ("core.command_timeout", Kind::Int, &[]),
     ("core.show_timing", Kind::Bool, &[]),
     ("core.python", Kind::Str, &[]),
+    ("core.editor", Kind::Str, &[]),
     ("storage.root", Kind::Str, &[]),
     ("git.auto_push", Kind::Bool, &[]),
     ("projects.python.environment", Kind::Str, &["auto", "none", "uv", "venv"]),

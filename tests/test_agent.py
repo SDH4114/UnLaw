@@ -123,9 +123,11 @@ class FakeModel:
     (seconds) holds the stream back before the first chunk.
     """
 
-    def __init__(self, script: list[dict]) -> None:
+    def __init__(self, script: list[dict], calls_tools: bool = True) -> None:
         self.script = list(script)
         self.requests: list[dict] = []
+        self.calls_tools = calls_tools
+        self.probes = 0
         self.server = FakeServer(self.route)
         self.url = self.server.url
 
@@ -133,6 +135,13 @@ class FakeModel:
         if path == "/v1/audio/transcriptions":
             return 200, {"text": "remind me to stretch"}
         request = json.loads(body)
+        if request.get("messages", [{}])[-1].get("content") == "What is in my home folder ~ ?":
+            # The tool-calling probe (`Model.calls_tools`) is answered apart from the script.
+            self.probes += 1
+            message = {"role": "assistant", "content": "It has Documents."}
+            if self.calls_tools:
+                message["tool_calls"] = call("list_dir", path="~")["tool_calls"]
+            return 200, {"choices": [{"index": 0, "message": message, "finish_reason": "stop"}]}
         self.requests.append(request)
         step = self.script.pop(0) if self.script else {"content": "done"}
         content = step.get("content", "")
@@ -251,8 +260,8 @@ class AgentCase(CoreTestCase):
             "raise SystemExit(44)\n",
         )
 
-    def model(self, script: list[dict]) -> FakeModel:
-        model = FakeModel(script)
+    def model(self, script: list[dict], calls_tools: bool = True) -> FakeModel:
+        model = FakeModel(script, calls_tools)
         self.addCleanup(model.server.close)
         self.env["UNLAW_AGENT_LM_URL"] = model.url
         return model
@@ -403,12 +412,33 @@ class AgentCommandTests(AgentCase):
         self.assertNotIn("far away", model.tool_results()[-1])
 
     def test_claims_without_a_tool_call_get_a_warning(self) -> None:
-        self.model([{"content": "Created /tmp/test.md with the text test."}])
+        model = self.model([{"content": "Created /tmp/test.md with the text test."}, {"content": "Создала файл test.md."}])
         result = self.ok("agent", "-p", "create test.md")
         self.assertIn("No tool was called", result.stdout)
+        self.assertIn("Создала", result.stdout, "the answer after the one reminder is what the user gets")
+        self.assertIn("[unlaw] You answered without calling any tool", json.dumps(model.requests[1]["messages"]))
         self.model([call("list_dir", path=str(self.files)), {"content": "Created nothing, just looked."}])
         result = self.ok("agent", "-p", "look")
         self.assertNotIn("No tool was called", result.stdout, "a turn that used tools is trusted")
+
+    def test_a_described_call_gets_one_reminder(self) -> None:
+        target = self.files / "test.md"
+        fake = "```\ntodo_list\n[ ] Create test.md\n```\n\nfile: " + str(target) + "\ncontent: hello"
+        model = self.model([{"content": fake}, call("write_file", path=str(target), content="hello"), {"content": "ok"}])
+        result = self.ok("agent", "create test.md", input="y\n")
+        self.assertEqual(target.read_text(encoding="utf-8"), "hello")
+        self.assertNotIn("No tool was called", result.stdout)
+        self.assertEqual(len(model.requests), 3)
+
+    def test_tool_calls_written_as_text_still_run(self) -> None:
+        xml = "<tool_call>\n<function=list_dir>\n<parameter=path>\n" + str(self.files) + "\n</parameter>\n</function>\n</tool_call>"
+        model = self.model([{"content": xml}, {"content": "listed"}])
+        self.assertIn("listed", self.ok("agent", "-p", "what is here").stdout)
+        self.assertEqual(model.requests[1]["messages"][-1]["role"], "tool")
+        as_json = '```json\n{"name": "read_file", "arguments": {"path": "' + str(self.files / "nope.txt") + '", "start_line": "1"}}\n```'
+        model = self.model([{"content": as_json}, {"content": "read"}])
+        self.ok("agent", "-p", "read it")
+        self.assertEqual(model.requests[1]["messages"][-1]["role"], "tool")
 
     def test_todo_tools(self) -> None:
         self.model([call("todo_add", text="Buy milk"), {"content": "ok"}])
@@ -895,6 +925,21 @@ class ConsoleTests(AgentCase):
         self.addCleanup(lambda: terminal.process.poll() is None and terminal.process.kill())
         terminal.prompt()
         return terminal, model
+
+    def test_warns_at_start_when_the_model_cannot_call_tools(self) -> None:
+        model = self.model([], calls_tools=False)
+        self.ok("config", "set", "agent.model", "Tiny-2B")
+        terminal = Terminal([str(binary()), "agent"], {**self.env, "NO_COLOR": "1", "COLUMNS": "100"}, self.files)
+        self.addCleanup(lambda: terminal.process.poll() is None and terminal.process.kill())
+        terminal.prompt()
+        self.assertIn("answers in text only", terminal.output)
+        self.assertEqual(terminal.quit(), 0)
+        terminal = Terminal([str(binary()), "agent"], {**self.env, "NO_COLOR": "1", "COLUMNS": "100"}, self.files)
+        self.addCleanup(lambda: terminal.process.poll() is None and terminal.process.kill())
+        terminal.prompt()
+        self.assertIn("answers in text only", terminal.output, "the probe result is remembered")
+        self.assertEqual(model.probes, 1)
+        self.assertEqual(terminal.quit(), 0)
 
     def test_streams_answers_and_the_status_line(self) -> None:
         terminal, model = self.console([{"content": "Hi there, I am local."}])

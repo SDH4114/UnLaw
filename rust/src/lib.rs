@@ -9,6 +9,7 @@ mod builtin;
 mod commands;
 mod config;
 mod config_cmd;
+mod editor;
 mod help;
 mod layout;
 mod shell;
@@ -37,7 +38,7 @@ pub fn version_line() -> String {
     }
 }
 
-const RAW_SYSTEM_COMMANDS: [&str; 6] = ["completion", "config", "doctor", "init", "update", "version"];
+const RAW_SYSTEM_COMMANDS: [&str; 7] = ["completion", "config", "doctor", "edit", "init", "update", "version"];
 
 fn system(name: &str, args: &[String]) -> Option<i32> {
     Some(match name {
@@ -46,6 +47,7 @@ fn system(name: &str, args: &[String]) -> Option<i32> {
         "config" => config_cmd::run(args),
         "create" => system::create(args),
         "doctor" => system::doctor(args),
+        "edit" => editor::run(args),
         "init" => system::init(args),
         "list" => system::list_all(args),
         "skills" => skills::run(args),

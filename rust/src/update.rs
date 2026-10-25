@@ -195,7 +195,8 @@ pub fn run(args: &[String]) -> i32 {
         Source::Branch(name) => command.extend(["--branch".into(), name.clone()]),
         Source::Tag(name) => command.extend(["--tag".into(), name.clone()]),
     }
-    command.extend(["--root".into(), root.to_string_lossy().into_owned(), "unlaw".into()]);
+    // Both packages of the workspace: ul/unlaw/ula and the editor ule.
+    command.extend(["--root".into(), root.to_string_lossy().into_owned(), "unlaw".into(), "ule".into()]);
     println!("Updating Unlaw {VERSION}: {}", shell_join(&command));
     let mut process = Command::new(&command[0]);
     process.args(&command[1..]);

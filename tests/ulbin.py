@@ -91,6 +91,16 @@ class CoreTestCase(unittest.TestCase):
         script.chmod(0o755)
         return script
 
+    def ul_without_ule(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        """Runs a copy of ul with no ule editor beside it (the editor fallbacks apply)."""
+        alone = self.root / "alone" / "ul"
+        if not alone.exists():
+            alone.parent.mkdir(exist_ok=True)
+            shutil.copy2(binary(), alone)
+        return subprocess.run(
+            [str(alone), *args], env={**self.env, **(env or {})}, cwd=self.root, input="", capture_output=True, text=True, timeout=60
+        )
+
     def recording_tool(self, name: str, *, exit_code: int = 0) -> Path:
         """A fake executable that appends its argv as one line to <name>.log."""
         log = self.root / f"{name}.log"

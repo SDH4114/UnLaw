@@ -34,5 +34,5 @@ if command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^unlaw '
     uv tool uninstall unlaw
 fi
 
-UNLAW_PYTHON="$python" cargo install --locked --force --git "$repository" --root "$root" unlaw
-echo "Installed ul and unlaw into $root/bin. Run: ul doctor --fix"
+UNLAW_PYTHON="$python" cargo install --locked --force --git "$repository" --root "$root" unlaw ule
+echo "Installed ul, unlaw, ula and the ule editor into $root/bin. Run: ul doctor --fix"

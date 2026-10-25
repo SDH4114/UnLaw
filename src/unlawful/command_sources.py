@@ -28,6 +28,8 @@ LEGACY_SOURCE_HASHES: dict[str, set[str]] = {
         "6495c04017e66caf6c5eb8141cdb0fb760a041fb05f869ef6ebe8acffcc6c8ba",
         # A 3.5.0 development build installed locally before release.
         "970ac84e34c6a6fc835adb3965470c0051d81d111ad6e5508bac743f4ab013ae",
+        # Release 3.5.1 (commit 7caf579).
+        "cc054aaf3622b91ab1d6566c8f54c41361395a4630bb11b38c64d6b67280c685",
     },
     "app": {"fb335c5b8bd7d3038b911e4c207a0425b4467cc98ff35c7329dc626aa65673ab"},
     "browser": {
@@ -158,6 +160,7 @@ LEGACY_NORMALIZED_HASHES: dict[str, set[str]] = {
     "agent": {
         "0869bb6ef10eac6eec8e375225eed6f4691824876fddfe2bdac29df52004f6a9",
         "1bf899690f6f4f15d6eea43632dd81fee95d3f7185a636fac9d70116c572b6d8",
+        "277d25da67842adacfe0883bf2b843c126973d445472225687937e77b5dcb63e",
         "30a5ca341bdb48a562d6e8251642cc30cc5c0f34c7d6e43c4a43c1f4dea62a96",
         "7ab5e55f6b7c0536ffd7ceff8266dbfb36212b7a01c49d0f37302bfe73464953",
     },

@@ -72,6 +72,37 @@ def agent_dir(*parts: str) -> Path:
     return storage_path("agent", *parts)
 
 
+def tool_support(name: str) -> bool | None:
+    """The last tool-calling probe of a model, so the console can warn without probing again."""
+    try:
+        value = json.loads(agent_dir("models.json").read_text(encoding="utf-8")).get(name)
+    except (OSError, ValueError, AttributeError):
+        return None
+    return value if isinstance(value, bool) else None
+
+
+def remember_tool_support(name: str, works: bool) -> None:
+    # "auto" resolves to whatever `ul lm` picks, so its answer can change.
+    if name == "auto":
+        return
+    path = agent_dir("models.json")
+    try:
+        known = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        known = {}
+    if not isinstance(known, dict):
+        known = {}
+    known[name] = works
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(known, ensure_ascii=False, indent=1), encoding="utf-8")
+        temporary.replace(path)
+    except OSError as error:
+        # Only a cache: the next start probes again.
+        print(f"unlaw agent: could not save {path}: {error}", file=sys.stderr)
+
+
 def ul_binary() -> str:
     found = os.environ.get("UNLAW_BIN") or shutil.which("ul") or shutil.which("unlaw")
     if not found:
@@ -284,7 +315,9 @@ class Model:
             {"role": "system", "content": "You are an agent on the user's Mac. Use tools to act."},
             {"role": "user", "content": "What is in my home folder ~ ?"},
         ]
-        return bool(self.chat(messages, [probe]).get("tool_calls"))
+        works = bool(self.chat(messages, [probe]).get("tool_calls"))
+        remember_tool_support(self.name, works)
+        return works
 
     def chat(self, messages: list[dict], tools: list[dict]) -> dict:
         payload: dict[str, Any] = {
@@ -1226,14 +1259,75 @@ def _close_open_calls(messages: list[dict]) -> None:
 
 
 CLAIMS = re.compile(
-    r"\b(created|wrote|written|saved|deleted|removed|moved|renamed|scheduled|added|reminder set)\b"
-    r"|созда|записал|сохранил|удалил|перемест|переименов|запланир|добавил|напомню|поставил напомин",
+    r"\b(created|creating|wrote|written|writing|saved|saving|deleted|removed|moved|renamed|scheduled|added|reminder set)\b"
+    r"|созда(л|ла|ли|н|на|ю)\b|записа(л|ла)|записываю|сохрани(л|ла)|удали(л|ла)|перемести(л|ла)|переименова(л|ла)"
+    r"|запланирова(л|ла)|добави(л|ла)|вписа(л|ла)|напомню|поставил[аи]? напомин",
     re.IGNORECASE,
 )
+# A tool call written as text: `<tool_call>`, or `file:`/`content:` lines like a call's arguments.
+FAKE_CALL = re.compile(r"<tool_call>|<function=|^\s*(path|file|content|arguments)\s*:", re.IGNORECASE | re.MULTILINE)
 NO_TOOL_NOTE = (
     "⚠ No tool was called, so nothing on the Mac was changed or checked. "
     "This model may be too small to use tools; switch with /model or `ula setup`."
 )
+RETRY_NOTE = "↻ The model described an action without calling a tool; asking it once more."
+NUDGE = (
+    "[unlaw] You answered without calling any tool, so nothing was done and nothing was checked. "
+    "If my request needs an action or a look at files, call the matching tool now through tool calls, "
+    "not as text. If it needs none, answer again without claiming any action."
+)
+TEXT_CALL = re.compile(r"<tool_call>\s*(.*?)\s*(?:</tool_call>|\Z)", re.DOTALL)
+JSON_CALL = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+XML_FUNCTION = re.compile(r"<function=([\w.-]+)>(.*?)(?:</function>|\Z)", re.DOTALL)
+XML_PARAMETER = re.compile(r"<parameter=([\w.-]+)>\n?(.*?)\n?</parameter>", re.DOTALL)
+
+
+def text_tool_calls(text: str, specs: list[dict]) -> list[dict]:
+    """Tool calls a model wrote into its answer (`<tool_call>` XML or JSON) instead of real calls.
+
+    Some models do this when their chat template or `ul lm`'s parser does not
+    match; running them is the same as a real call, approvals included.
+    """
+    schemas = {spec["function"]["name"]: spec["function"]["parameters"].get("properties", {}) for spec in specs}
+    calls = []
+    for block in TEXT_CALL.findall(text) or JSON_CALL.findall(text):
+        function = XML_FUNCTION.search(block)
+        if function:
+            name = function.group(1)
+            arguments: Any = {}
+            for key, value in XML_PARAMETER.findall(function.group(2)):
+                if schemas.get(name, {}).get(key, {}).get("type", "string") != "string":
+                    with contextlib.suppress(ValueError):
+                        value = json.loads(value)
+                arguments[key] = value
+        else:
+            try:
+                data = json.loads(block)
+            except ValueError:
+                continue
+            if not isinstance(data, dict):
+                continue
+            name = data.get("name")
+            arguments = data.get("arguments", data.get("parameters", {}))
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments or "{}")
+                except ValueError:
+                    continue
+        if name in schemas and isinstance(arguments, dict):
+            calls.append({
+                "id": f"call_{uuid.uuid4().hex[:24]}",
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(arguments, ensure_ascii=False)},
+            })
+    return calls
+
+
+def pretends(text: str, names: set[str]) -> bool:
+    """The answer claims or imitates an action (a tool name as a code block or a line of its own)."""
+    if CLAIMS.search(text) or FAKE_CALL.search(text):
+        return True
+    return any(re.search(rf"^\s*(```)?\s*{re.escape(name)}\s*(\(|:|$)", text, re.MULTILINE) for name in names)
 
 
 def respond(config: dict, model: Model, tools: Tools, session: Session, content: Any, channel: str, ui: Any = None) -> str:
@@ -1247,7 +1341,8 @@ def respond(config: dict, model: Model, tools: Tools, session: Session, content:
     specs = tools.specs()
     system = {"role": "system", "content": system_prompt(config, tools.level, channel)}
     streaming = bool(getattr(ui, "streaming", False))
-    called = False
+    names = {spec["function"]["name"] for spec in specs}
+    called = nudged = False
     on_tool = getattr(ui, "on_tool", None)
     on_result = getattr(ui, "on_result", None)
     try:
@@ -1264,14 +1359,23 @@ def respond(config: dict, model: Model, tools: Tools, session: Session, content:
                 message = model.chat([system, *session.messages], specs)
             calls = message.get("tool_calls") or []
             text = (message.get("content") or "").strip()
+            if not calls and specs:
+                calls = text_tool_calls(text, specs)
             reply: dict[str, Any] = {"role": "assistant", "content": text}
             if calls:
                 reply["tool_calls"] = calls
             session.messages.append(reply)
             if not calls:
                 answer = text or "(no answer)"
-                if not called and tools.level != "chat" and CLAIMS.search(answer):
+                if not called and specs and pretends(answer, names):
                     warn = getattr(ui, "warn", None)
+                    if not nudged:
+                        # Small models often describe a call instead of making it; one reminder fixes some of them.
+                        nudged = True
+                        if warn:
+                            warn(RETRY_NOTE)
+                        session.messages.append({"role": "user", "content": NUDGE})
+                        continue
                     if warn:
                         warn(NO_TOOL_NOTE)
                     else:
@@ -1793,6 +1897,14 @@ def console(config: dict, model: Model, first: str | None, resume: bool) -> int:
     editor = Editor(paint, agent_dir("history.txt"), ui.complete)
     ui.header(len(session.messages))
     model.ensure()
+    works = tool_support(model.name)
+    if works is None and model.name != "auto":
+        try:
+            works = model.calls_tools()
+        except RuntimeError as error:
+            print(paint(f" could not check whether the model calls tools: {error}", DIM))
+    if works is False:
+        print(paint(f" ⚠ {short_model(model.name)} answers in text only: it cannot read, create or change files. /model switches.", YELLOW))
     shared: list[str] = []
     pending = first
     while True:
