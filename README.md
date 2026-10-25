@@ -593,14 +593,21 @@ ula server              # Telegram bot + schedule in this terminal (Ctrl+C stops
 ula setup               # model, Telegram, allowed ids, folders, background mode
 ```
 
-The console works like [pi](https://github.com/badlogic/pi-mono): Enter sends,
-Esc stops the agent, Ctrl+D quits, Tab completes `/commands` and `@paths`.
+The console works like [pi](https://github.com/badlogic/pi-mono) and other CLI
+agents: an input box with a status line, streamed answers with Markdown, tool
+calls as they run.
 
 ```text
-/help /new /model /today /plan /unschedule <id> /status /log /thinking /copy /exit
-!git status      run a shell command and share its output (!! keeps it to you)
-@notes.md        attach a file or an image to the message
+/            command menu (↑↓ choose, Enter or Tab picks, Esc closes);
+             /model and /unschedule open a second menu with models or jobs
+@            file menu; the picked file or image is attached to the message
+!git status  run a shell command and share its output (!! keeps it to you)
+Enter        send · Alt+Enter or Ctrl+J: new line · ↑↓: history
+Esc          stop the agent · Ctrl+C: clear the input (twice: quit) · Ctrl+D: quit
 ```
+
+Approvals are a picker: Yes, Yes for this kind of action until you quit, or No
+(←→ and Enter, or `y` / `a` / `n`).
 
 ```bash
 ula -p "what is in ~/Downloads that is older than a month?"   # answer once, print it
@@ -615,7 +622,7 @@ ula -m prism-ml/Ternary-Bonsai-2-27B-mlx-2bit                 # another model fo
 - Reading, listing and searching work only inside `agent.roots` (default `~`).
   SSH keys, `.env` files, the keychain and Unlaw's config are always blocked.
 - Writing, editing, moving, deleting (to the Trash), shell commands and `ul`
-  commands from `agent.commands` need approval: `[y/N]` in the console, Yes/No
+  commands from `agent.commands` need approval: a picker in the console, Yes/No
   buttons in Telegram. No answer within `agent.confirm_timeout` seconds means no.
 - Telegram: only `telegram.chat_id` (you, full access) and `agent.allowed_ids`
   get answers; others may only chat unless `agent.users.<id>` is `"read"` or

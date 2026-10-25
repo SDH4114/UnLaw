@@ -20,6 +20,10 @@ LEGACY_SOURCE_HASHES: dict[str, set[str]] = {
         # 3.4.0 development builds installed locally before release.
         "05c69c2afde65ac17d269246125d518ab095828ca3ba7c5f646dd3e26bd45ea3",
         "40757483756ea7dc2ac77cb7411c5151b58a3aeac029f10ad6118e4fec7b8f62",
+        # Release 3.4.0 (commit 4ccf001), before the input box with menus.
+        "9e5b840842a52f2e40bbe47690c23f15111ba11b154df2d028e5cbf5fc7d1f46",
+        # A 3.5.0 development build installed locally before release.
+        "970ac84e34c6a6fc835adb3965470c0051d81d111ad6e5508bac743f4ab013ae",
     },
     "app": {"fb335c5b8bd7d3038b911e4c207a0425b4467cc98ff35c7329dc626aa65673ab"},
     "browser": {
@@ -354,7 +358,7 @@ def latest_capture() -> Path | None:
 '''
 
 _COMMAND_FILES: dict[str, tuple[str, ...]] = {
-    "agent": ("agent.py",),
+    "agent": ("agent_ui.py", "agent.py"),
     "app": ("built_in_commands/app/main.py",),
     "browser": ("built_in_commands/browser/main.py",),
     "capture": ("capture.py",),
@@ -402,8 +406,19 @@ def _clean_fragment(source: str, *, command: str) -> str:
         "from unlawful.project_templates import ",
         "from unlawful import harness",
         "from .capture import latest_capture",
+        "from .agent_ui import ",
     )
-    lines = [line for line in source.splitlines() if not line.lstrip().startswith(removed_prefixes)]
+    lines: list[str] = []
+    skipping = False
+    for line in source.splitlines():
+        if skipping:
+            # The rest of a removed import that the formatter split over lines.
+            skipping = ")" not in line
+            continue
+        if line.lstrip().startswith(removed_prefixes):
+            skipping = line.rstrip().endswith("(")
+            continue
+        lines.append(line)
     text = "\n".join(lines).strip() + "\n"
     text = text.replace(f"COMMAND_HELP[{command!r}]", "COMMAND_HELP").replace(
         f'COMMAND_HELP["{command}"]', "COMMAND_HELP"

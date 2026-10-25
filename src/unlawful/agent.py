@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import atexit
 import base64
 import datetime as dt
 import difflib
@@ -30,6 +29,7 @@ from pathlib import Path
 from typing import Any, Self
 
 from unlawful.command_help import COMMAND_HELP
+from .agent_ui import BOLD, CYAN, DIM, GREEN, ITALIC, RED, YELLOW, Editor, Item, MarkdownStream, Paint, choose, path_items
 from .config import ConfigError, config_dir, load_config, storage_path
 
 LABEL = "com.unlaw.agent"
@@ -829,6 +829,7 @@ class Tools:
     ) -> None:
         self.config, self.channel, self.who, self.level = config, channel, who, level
         self.cwd = cwd or Path.home()
+        self.current = ""
 
     def specs(self) -> list[dict]:
         allowed = {"chat": set(), "read": {"read"}, "full": {"read", "full"}}[
@@ -845,6 +846,7 @@ class Tools:
         if name not in {spec["function"]["name"] for spec in self.specs()}:
             return f"Error: the tool {name!r} is not available to this user."
         detail = json.dumps(arguments, ensure_ascii=False)
+        self.current = name
         try:
             result = getattr(self, f"_{name}")(**arguments)
         except TypeError as error:
@@ -871,7 +873,7 @@ class Tools:
         return resolve(text, self.config, self.cwd)
 
     def _approve(self, title: str, detail: str = "") -> None:
-        if not self.channel.confirm(title, detail, self.who):
+        if not self.channel.confirm(title, detail, self.who, kind=self.current):
             raise Declined(title)
 
     def _list_dir(self, path: str) -> str:
@@ -1243,20 +1245,21 @@ def respond(config: dict, model: Model, tools: Tools, session: Session, content:
 # --- Console (pi-style) -------------------------------------------------------
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-BOLD, DIM, ITALIC, RED, GREEN, YELLOW, CYAN = 1, 2, 3, 31, 32, 33, 36
 SLASH_COMMANDS = {
     "/help": "commands and keys",
     "/new": "start a new conversation",
-    "/model": "list models; /model <number|name> switches",
+    "/model": "switch the local model",
     "/today": "today's open tasks and scheduled jobs",
     "/plan": "everything scheduled",
-    "/unschedule": "/unschedule <id> cancels a job",
+    "/unschedule": "cancel a scheduled job",
     "/status": "model, Telegram, folders, background server",
-    "/log": "/log [n] shows the agent's last actions",
+    "/log": "the agent's last actions",
     "/thinking": "show or hide the model's reasoning",
     "/copy": "copy the last answer",
     "/exit": "quit (also Ctrl+D)",
 }
+# Commands whose argument is picked from a second menu.
+ARGUMENT_MENUS = {"/model", "/unschedule"}
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 # Control characters from files or the model (a stray \r, escape codes) would garble the screen.
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
@@ -1264,16 +1267,6 @@ CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 def printable(text: str) -> str:
     return CONTROL.sub("?", text)
-
-
-class Paint:
-    def __init__(self, enabled: bool) -> None:
-        self.enabled = enabled
-
-    def __call__(self, text: str, *codes: int) -> str:
-        if not self.enabled or not codes:
-            return text
-        return f"\x1b[{';'.join(map(str, codes))}m{text}\x1b[0m"
 
 
 def colors(config: dict, stream: Any) -> bool:
@@ -1417,7 +1410,7 @@ def log_text(count: int = 20) -> str:
 
 
 class Console:
-    """The interactive console: streamed answers, tool calls, approvals, footer."""
+    """The interactive console: input box, streamed answers, tool calls, approvals."""
 
     can_send_files = False
     streaming = True
@@ -1427,6 +1420,7 @@ class Console:
         self.keys: Keys | None = None
         self.show_thinking = False
         self.frame = 0
+        self.started = time.monotonic()
         self.spinning = False
         self.line_open = False
         self.thinking_open = False
@@ -1434,6 +1428,10 @@ class Console:
         self.last_answer = ""
         self.sent_tokens = 0
         self.received_tokens = 0
+        self.always: set[str] = set()
+        self.counted: dict | None = None
+        self.models: list[dict] | None = None
+        self.markdown = MarkdownStream(paint, self.write)
 
     def write(self, text: str) -> None:
         sys.stdout.write(text)
@@ -1453,7 +1451,8 @@ class Console:
             return
         self.frame += 1
         mark = SPINNER[self.frame % len(SPINNER)]
-        self.write("\r\x1b[K" + self.paint(f"{mark} working · Esc stops", DIM))
+        seconds = int(time.monotonic() - self.started)
+        self.write("\r\x1b[K" + self.paint(mark, CYAN) + self.paint(f" working {seconds}s · Esc stops", DIM))
         self.spinning = True
 
     def stop_requested(self) -> bool:
@@ -1476,15 +1475,18 @@ class Console:
             delta = delta.lstrip("\n")
         self.line_open = True
         self.streamed = True
-        self.write(printable(delta))
+        self.markdown.feed(printable(delta))
 
     def end_message(self) -> None:
         self.clear_spinner()
+        self.markdown.close()
         if self.line_open:
             self.write("\n")
         self.line_open = self.thinking_open = False
         usage = self.model.usage
-        if usage:
+        # end_message runs after every model call and again after a stop; count each answer once.
+        if usage and usage is not self.counted:
+            self.counted = usage
             self.sent_tokens += int(usage.get("prompt_tokens", 0))
             self.received_tokens += int(usage.get("completion_tokens", 0))
 
@@ -1506,10 +1508,13 @@ class Console:
             self.write(self.paint(f"    … +{len(lines) - 4} lines", DIM) + "\n")
 
     # The channel Tools uses for approvals.
-    def confirm(self, title: str, detail: str, who: str) -> bool:
+    def confirm(self, title: str, detail: str, who: str, kind: str = "") -> bool:
         self.clear_spinner()
+        if kind and kind in self.always:
+            self.write(self.paint(f"  ✓ {title} (allowed for this session)", DIM) + "\n")
+            return True
         bar = self.paint("│ ", YELLOW)
-        self.write(self.paint("╭─ ", YELLOW) + self.paint(title, BOLD) + "\n")
+        self.write(self.paint("╭─ ", YELLOW) + self.paint(printable(title), BOLD) + "\n")
         lines = detail.splitlines()
         for line in lines[:60]:
             if line.startswith("+") and not line.startswith("+++"):
@@ -1521,11 +1526,18 @@ class Console:
             self.write(bar + self.paint(printable(line), color) + "\n")
         if len(lines) > 60:
             self.write(bar + self.paint(f"… +{len(lines) - 60} lines", DIM) + "\n")
-        self.write(self.paint("╰─ ", YELLOW) + "Allow? " + self.paint("[y/N] ", DIM))
-        answer = self.keys.key() if self.keys else sys.stdin.readline()
-        allowed = answer.strip().casefold()[:1] in {"y", "д"}
-        self.write(self.paint("yes", GREEN) + "\n" if allowed else self.paint("no", RED) + "\n")
-        return allowed
+        self.write(self.paint("╰─ ", YELLOW))
+        if self.keys is None or self.keys.fd is None:
+            self.write("Allow? " + self.paint("[y/N] ", DIM))
+            allowed = sys.stdin.readline().strip().casefold()[:1] in {"y", "д"}
+            self.write(("yes" if allowed else "no") + "\n")
+            return allowed
+        options = ["Yes", f"Yes, and don't ask again for {kind.replace('_', ' ')} this session" if kind else "Yes, always", "No"]
+        shortcuts = {"y": 0, "д": 0, "a": 1, "ф": 1, "n": 2, "т": 2}
+        picked = choose(options, self.keys.key, self.write, self.paint, shortcuts)
+        if picked == 1 and kind:
+            self.always.add(kind)
+        return picked in {0, 1}
 
     # Screen parts.
     def header(self, resumed: int) -> None:
@@ -1535,28 +1547,61 @@ class Console:
         print(f" {paint('folders', DIM)}  {', '.join(short_path(root) for root in roots(self.config))}")
         if resumed:
             print(f" {paint('session', DIM)}  continuing, {resumed} messages")
-        print(paint(" Esc stops · /help commands · !cmd shell · @file attaches · Ctrl+D quits", DIM))
+        print(paint(" / commands · @ files · !cmd shell · Esc stops · Ctrl+D quits", DIM))
 
-    def footer(self, session: Session) -> None:
+    def status(self, session: Session) -> str:
         parts = [short_path(Path.cwd()), short_model(self.model.name)]
         if self.model.usage:
             parts.append(f"ctx {tokens(int(self.model.usage.get('prompt_tokens', 0)))}")
         if self.sent_tokens or self.received_tokens:
             parts.append(f"↑{tokens(self.sent_tokens)} ↓{tokens(self.received_tokens)}")
         parts.append(f"{len(session.messages)} msgs")
-        print(self.paint("─" * self.width(), DIM))
-        print(self.paint(" " + " · ".join(parts), DIM))
+        return " · ".join(parts)
 
-    def read(self) -> str:
-        lines, prompt = [], "› "
-        while True:
-            line = input(prompt)
-            if line.endswith("\\"):
-                lines.append(line[:-1])
-                prompt = "  "
-                continue
-            lines.append(line)
-            return "\n".join(lines)
+    def echo(self, text: str) -> None:
+        """The sent message stays in the transcript."""
+        lines = text.split("\n")
+        print(self.paint("› ", CYAN, BOLD) + self.paint(lines[0], BOLD))
+        for line in lines[1:]:
+            print("  " + self.paint(line, BOLD))
+
+    def complete(self, text: str, cursor: int) -> tuple[list[Item], int, int]:
+        """The / and @ menus for the input box."""
+        if text.startswith("/") and "\n" not in text:
+            name, space, argument = text.partition(" ")
+            if not space:
+                if cursor != len(text):
+                    return [], 0, 0
+                wanted = name.casefold()
+                found = [command for command in SLASH_COMMANDS if command.startswith(wanted)]
+                found += [command for command in SLASH_COMMANDS if wanted[1:] in command and command not in found]
+                if found == [name]:
+                    found = []
+                return [
+                    Item(command, SLASH_COMMANDS[command], command + (" " if command in ARGUMENT_MENUS else ""), command not in ARGUMENT_MENUS)
+                    for command in found
+                ], 0, len(text)
+            return self.argument_items(name, argument), len(name) + 1, len(text)
+        start = max(text.rfind(" ", 0, cursor), text.rfind("\n", 0, cursor)) + 1
+        token = text[start:cursor]
+        if token.startswith("@"):
+            return path_items(token, Path.cwd()), start, cursor
+        return [], 0, 0
+
+    def argument_items(self, name: str, argument: str) -> list[Item]:
+        wanted = argument.strip().casefold()
+        if name == "/model":
+            if self.models is None:
+                self.models = _chat_models()
+            items = [
+                Item(short_model(model["id"]), ("● current · " if model["id"] == self.model.name else "") + model["type"], model["id"], True)
+                for model in self.models
+            ]
+        elif name == "/unschedule":
+            items = [Item(f"#{job['id']}", describe_job(job), job["id"], True) for job in Schedule().jobs()]
+        else:
+            return []
+        return [item for item in items if wanted in item.label.casefold() or wanted in item.insert.casefold()]
 
     def command(self, line: str, session: Session) -> bool:
         """Run a /command; False means quit."""
@@ -1568,9 +1613,10 @@ class Console:
         if name == "/help":
             for command, text in SLASH_COMMANDS.items():
                 print(f"  {paint(command, CYAN):<22} {text}" if paint.enabled else f"  {command:<12} {text}")
-            print(paint("  Enter sends · end a line with \\ to continue · Esc or Ctrl+C stops the agent", DIM))
+            print(paint("  Enter sends · Alt+Enter or Ctrl+J new line · ↑↓ history · Tab/Enter picks from a menu", DIM))
+            print(paint("  Esc stops the agent · Ctrl+C clears the input, twice quits · Ctrl+D quits", DIM))
             print(paint("  !cmd runs a shell command and shares the output · !!cmd keeps it to you", DIM))
-            print(paint("  @path attaches a file or image · Tab completes /commands and @paths", DIM))
+            print(paint("  @path attaches a file or image", DIM))
         elif name == "/new":
             session.reset()
             print(paint("New conversation.", DIM))
@@ -1637,56 +1683,6 @@ class Console:
             print(self.paint("It answers in text only, so it cannot see or change anything; pick a bigger model.", YELLOW))
 
 
-def _completions(text: str) -> list[str]:
-    """Tab: /commands, and @paths relative to the current folder (or ~/ and /)."""
-    if text.startswith("/"):
-        return [command for command in SLASH_COMMANDS if command.startswith(text)]
-    if not text.startswith("@"):
-        return []
-    folder, slash, start = text[1:].rpartition("/")
-    base, prefix = (Path(folder or "/").expanduser(), f"@{folder}/") if slash else (Path("."), "@")
-    try:
-        entries = sorted(base.iterdir())
-    except OSError:
-        return []
-    hidden = start.startswith(".")
-    return [
-        prefix + entry.name + ("/" if entry.is_dir() else "")
-        for entry in entries
-        if entry.name.startswith(start) and (hidden or not entry.name.startswith("."))
-    ]
-
-
-def _complete(text: str, state: int) -> str | None:
-    options = _completions(text)
-    return options[state] if state < len(options) else None
-
-
-def _readline(history: Path) -> None:
-    try:
-        import readline
-    except ImportError:
-        return
-    history.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        readline.read_history_file(history)
-    except OSError:
-        pass
-    readline.set_history_length(1000)
-    atexit.register(lambda: _save_history(readline, history))
-    readline.set_completer_delims(" \t\n")
-    readline.set_completer(_complete)
-    # macOS Python often links libedit, which has its own syntax for the same binding.
-    readline.parse_and_bind("bind ^I rl_complete" if "libedit" in (readline.__doc__ or "") else "tab: complete")
-
-
-def _save_history(readline: Any, history: Path) -> None:
-    try:
-        readline.write_history_file(history)
-    except OSError:
-        pass
-
-
 def console(config: dict, model: Model, first: str | None, resume: bool) -> int:
     paint = Paint(colors(config, sys.stdout))
     ui = Console(config, model, paint)
@@ -1694,29 +1690,24 @@ def console(config: dict, model: Model, first: str | None, resume: bool) -> int:
     if not resume:
         session.messages = []
     tools = Tools(config, ui, "terminal", "full", Path.cwd())
-    _readline(agent_dir("history"))
+    editor = Editor(paint, agent_dir("history.txt"), ui.complete)
     ui.header(len(session.messages))
     model.ensure()
     shared: list[str] = []
     pending = first
     while True:
+        print()
         if pending is None:
-            print()
-            ui.footer(session)
             try:
-                line = ui.read()
+                line = editor.read(ui.status(session))
             except EOFError:
-                print()
                 return 0
-            except KeyboardInterrupt:
-                print()
-                continue
         else:
             line, pending = pending, None
-            print(paint("› ", DIM) + line)
         line = line.strip()
         if not line:
             continue
+        ui.echo(line)
         if line.startswith("/"):
             if not ui.command(line, session):
                 return 0
@@ -1733,6 +1724,7 @@ def console(config: dict, model: Model, first: str | None, resume: bool) -> int:
             content = prefix + content if isinstance(content, str) else [{"type": "text", "text": prefix + content[0]["text"]}, *content[1:]]
             shared = []
         ui.streamed = False
+        ui.started = time.monotonic()
         with Keys() as keys:
             ui.keys = keys
             try:
@@ -1761,7 +1753,7 @@ class Printer:
         if sys.stderr.isatty():
             print(f"  ● {tool_label(name, arguments)}", file=sys.stderr)
 
-    def confirm(self, title: str, detail: str, who: str) -> bool:
+    def confirm(self, title: str, detail: str, who: str, kind: str = "") -> bool:
         print(f"\n{title}", file=sys.stderr)
         if detail:
             print(detail, file=sys.stderr)
@@ -1949,7 +1941,7 @@ class Chat:
     def on_tool(self, name: str, arguments: dict) -> None:
         self.bot.log(f"  ● {tool_label(name, arguments)}")
 
-    def confirm(self, title: str, detail: str, who: str) -> bool:
+    def confirm(self, title: str, detail: str, who: str, kind: str = "") -> bool:
         return self.bot.ask_owner(title, detail, who)
 
     def send_file(self, path: Path) -> None:

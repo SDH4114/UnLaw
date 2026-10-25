@@ -16,14 +16,18 @@ Options:
   -c, --continue         Continue the last console conversation
   -m, --model <name>     Use another downloaded model for this run
 Console:
-  Enter sends; end a line with \\ to continue it. Esc or Ctrl+C stops the agent,
-  Ctrl+D quits. Tab completes /commands and @paths.
-  /help /new /model /today /plan /unschedule <id> /status /log /thinking /copy /exit
+  / opens a command menu and @ a file menu: up/down choose, Enter or Tab picks,
+  Esc closes it. /model and /unschedule open a second menu with models or jobs.
+  Enter sends; Alt+Enter or Ctrl+J adds a line (pasting keeps lines); up/down
+  browse history. Esc stops the agent; Ctrl+C clears the input, twice quits;
+  Ctrl+D quits. Approvals: left/right and Enter, or y (yes), a (yes for this kind
+  of action until you quit), n (no).
+  /help /new /model /today /plan /unschedule /status /log /thinking /copy /exit
   !cmd runs a shell command and shares its output; !!cmd keeps the output to you.
   @path attaches a file or an image to the message.
 What it may do: read, list and search files inside agent.roots without asking;
 writing, editing, moving, deleting (to the Trash), shell commands and `ul`
-commands from agent.commands need your approval ([y/N] in the console, Yes/No
+commands from agent.commands need your approval (a picker in the console, Yes/No
 buttons in Telegram; no answer within agent.confirm_timeout seconds means no).
 Keys, .env files, the keychain and Unlaw's config are always blocked.
 Schedule and today: ask in plain words ("remind me at 9:00 to ...", "what is on

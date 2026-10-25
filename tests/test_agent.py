@@ -189,17 +189,22 @@ class Terminal:
     def send(self, keys: str) -> None:
         os.write(self.master, keys.encode())
 
-    def prompt(self) -> None:
-        """Wait until the input prompt is up again (keys typed while the agent works are dropped)."""
+    def prompt(self, after: str = "") -> None:
+        """Wait for the input box drawn after `after` (keys typed while the agent works are dropped)."""
         deadline = time.monotonic() + 30
-        while not self.output.rstrip(" ").endswith("›"):
+        quiet_since = time.monotonic()
+        while True:
+            start = self.output.rfind(after) if after else 0
+            if start >= 0 and "@ files" in self.output[start:] and time.monotonic() - quiet_since > 0.3:
+                return
             if time.monotonic() > deadline:
-                raise AssertionError(f"no prompt:\n{self.output}")
-            if select.select([self.master], [], [], 0.2)[0]:
+                raise AssertionError(f"no input box after {after!r}:\n{self.output}")
+            if select.select([self.master], [], [], 0.1)[0]:
                 self.output += os.read(self.master, 4096).decode("utf-8", errors="replace")
+                quiet_since = time.monotonic()
 
-    def quit(self) -> int:
-        self.prompt()
+    def quit(self, after: str = "") -> int:
+        self.prompt(after)
         self.send("\x04")
         return self.finish()
 
@@ -818,56 +823,127 @@ class ConsoleTests(AgentCase):
         model = self.model(script)
         terminal = Terminal([str(binary()), "agent", *args], {**self.env, "NO_COLOR": "1", "COLUMNS": "100"}, self.files)
         self.addCleanup(lambda: terminal.process.poll() is None and terminal.process.kill())
-        terminal.expect("› ")
+        terminal.prompt()
         return terminal, model
 
-    def test_streams_answers_and_shows_the_footer(self) -> None:
+    def test_streams_answers_and_the_status_line(self) -> None:
         terminal, model = self.console([{"content": "Hi there, I am local."}])
         self.assertIn("ula", terminal.output)
-        self.assertIn("Esc stops", terminal.output)
+        self.assertIn("Ask anything", terminal.output)
         terminal.send("hello\r")
         terminal.expect("Hi there, I am local.")
-        terminal.expect("ctx 1.2k")
-        terminal.send("/help\r")
-        terminal.expect("/unschedule")
-        self.assertEqual(terminal.quit(), 0)
+        terminal.prompt("Hi there")
+        self.assertIn("ctx 1.2k", terminal.output[terminal.output.rfind("Hi there") :])
+        self.assertIn("› hello", terminal.output, "the sent message stays in the transcript")
         self.assertTrue(model.requests[0]["stream"])
+        self.assertEqual(terminal.quit(), 0)
+
+    def test_slash_opens_a_command_menu(self) -> None:
+        terminal, _ = self.console([])
+        terminal.send("/")
+        terminal.expect("start a new conversation")
+        terminal.expect("switch the local model")
+        terminal.send("\x1b[B")  # Down: /help -> /new
+        time.sleep(0.2)
+        terminal.send("\r")
+        terminal.expect("New conversation.")
+        terminal.prompt("New conversation.")
+        terminal.send("/he")
+        terminal.expect("commands and keys")
+        terminal.send("\r")
+        terminal.expect("Ctrl+J new line")
+        self.assertEqual(terminal.quit("Ctrl+J new line"), 0)
+
+    def test_at_opens_a_file_menu(self) -> None:
+        terminal, model = self.console([{"content": "It says alpha."}])
+        terminal.send("@no")
+        terminal.expect("notes.txt")
+        terminal.send("\t")
+        time.sleep(0.2)
+        terminal.send("what is inside?\r")
+        terminal.expect("It says alpha.")
+        self.assertIn("alpha", model.last_user())
+        self.assertIn(str(self.files / "notes.txt"), model.last_user())
+        self.assertEqual(terminal.quit("It says alpha."), 0)
+
+    def test_history_and_ctrl_c(self) -> None:
+        terminal, model = self.console([{"content": "first answer"}, {"content": "second answer"}])
+        terminal.send("same question\r")
+        terminal.expect("first answer")
+        terminal.prompt("first answer")
+        terminal.send("\x1b[A")  # Up brings back the last message
+        time.sleep(0.2)
+        terminal.send("\r")
+        terminal.expect("second answer")
+        self.assertEqual(model.last_user(), "same question")
+        terminal.prompt("second answer")
+        terminal.send("draft text")
+        time.sleep(0.2)
+        terminal.send("\x03")  # clears the input
+        time.sleep(0.2)
+        terminal.send("\x03")
+        terminal.expect("Press Ctrl+C again to quit")
+        terminal.send("\x03")
+        self.assertEqual(terminal.finish(), 0)
+        self.assertEqual(len(model.requests), 2, "the cleared draft was never sent")
 
     def test_tool_calls_and_approvals(self) -> None:
-        target = self.files / "made.txt"
-        script = [call("list_dir", path=str(self.files)), call("write_file", path=str(target), content="new\n"), {"content": "Done."}]
+        first, second = self.files / "one.txt", self.files / "two.txt"
+        script = [
+            call("list_dir", path=str(self.files)),
+            call("write_file", path=str(first), content="1\n"),
+            call("write_file", path=str(second), content="2\n"),
+            {"content": "Done."},
+        ]
         terminal, _ = self.console(script)
-        terminal.send("make a file\r")
+        terminal.send("make files\r")
         terminal.expect("● list_dir")
         terminal.expect("notes.txt")
-        terminal.expect("Allow?")
-        terminal.send("y")
+        terminal.expect("don't ask again for write file")
+        terminal.send("a")  # yes, and for the rest of the session
+        terminal.expect("allowed for this session")
         terminal.expect("Done.")
-        self.assertEqual(target.read_text(encoding="utf-8"), "new\n")
-        self.assertEqual(terminal.quit(), 0)
+        self.assertEqual(first.read_text(encoding="utf-8"), "1\n")
+        self.assertEqual(second.read_text(encoding="utf-8"), "2\n")
+        self.assertEqual(terminal.quit("Done."), 0)
+
+    def test_declining_with_the_picker(self) -> None:
+        target = self.files / "never.txt"
+        terminal, model = self.console([call("write_file", path=str(target), content="x"), {"content": "Fine."}])
+        terminal.send("write\r")
+        terminal.expect("No")
+        terminal.send("\x1b[C")  # Right: Yes -> always
+        time.sleep(0.1)
+        terminal.send("\x1b[C")  # Right: always -> No
+        time.sleep(0.1)
+        terminal.send("\r")
+        terminal.expect("Fine.")
+        self.assertFalse(target.exists())
+        self.assertIn("declined", model.tool_results()[-1])
+        self.assertEqual(terminal.quit("Fine."), 0)
 
     def test_escape_stops_the_answer(self) -> None:
         terminal, model = self.console([{"content": "too late", "delay": 30.0}, {"content": "after"}])
         terminal.send("slow\r")
-        terminal.expect("Esc stops")
-        time.sleep(0.5)
+        terminal.expect("working")
         terminal.send("\x1b")
         terminal.expect("stopped", timeout=10)
-        terminal.prompt()
+        terminal.prompt("stopped")
         terminal.send("next\r")
         terminal.expect("after")
         history = [m["content"] for m in model.requests[-1]["messages"] if m["role"] == "assistant"]
         self.assertIn("[stopped by the user]", history[-1])
-        self.assertEqual(terminal.quit(), 0)
+        self.assertEqual(terminal.quit("after"), 0)
 
     def test_shell_output_is_shared_and_continue_resumes(self) -> None:
         terminal, model = self.console([{"content": "noted"}])
         terminal.send("!echo shared-output\r")
         terminal.expect("exit 0")
+        terminal.prompt("exit 0")
         terminal.send("what did it print?\r")
         terminal.expect("noted")
         self.assertIn("shared-output", model.last_user())
-        terminal.prompt()
+        terminal.prompt("noted")
         terminal.send("/exit\r")
         self.assertEqual(terminal.finish(), 0)
         terminal, model = self.console([{"content": "still here"}], "-c")
@@ -875,4 +951,52 @@ class ConsoleTests(AgentCase):
         terminal.send("again\r")
         terminal.expect("still here")
         self.assertIn("noted", json.dumps(model.requests[0]["messages"]))
-        self.assertEqual(terminal.quit(), 0)
+        self.assertEqual(terminal.quit("still here"), 0)
+
+
+class InterfaceTests(CoreTestCase):
+    def test_markdown_lines(self) -> None:
+        from unlawful.agent_ui import Paint, render_markdown_line
+
+        paint = Paint(True)
+        line, code = render_markdown_line("# Title", False, paint)
+        self.assertIn("Title", line)
+        self.assertNotIn("#", line)
+        line, _ = render_markdown_line("- item with `code` and **bold**", False, paint)
+        self.assertIn("• item with ", line)
+        self.assertNotIn("`", line)
+        self.assertNotIn("**", line)
+        _, code = render_markdown_line("```python", False, paint)
+        self.assertTrue(code)
+        line, code = render_markdown_line("x = `not code`", True, paint)
+        self.assertIn("`not code`", line, "inside a code block nothing is styled away")
+        from unlawful.agent_ui import MarkdownStream
+
+        written: list[str] = []
+        stream = MarkdownStream(Paint(False), written.append)
+        stream.feed("**plain** text\nmore")
+        stream.close()
+        self.assertEqual("".join(written), "**plain** text\nmore", "without colors the text passes through as is")
+
+    def test_keyboard_sequences(self) -> None:
+        from unlawful.agent_ui import Keyboard
+
+        read, write = os.pipe()
+        self.addCleanup(os.close, read)
+        os.write(write, "\x1b[A\x1b[1;3Dпривет\x1b\r\x1b[200~a\nb\x1b[201~\r\x03".encode())
+        os.close(write)
+        keyboard = Keyboard(read)
+        events = [keyboard.read(0.1) for _ in range(7)]
+        self.assertEqual(
+            events,
+            [("key", "up"), ("key", "word-left"), ("text", "привет"), ("key", "newline"), ("paste", "a\nb"), ("key", "enter"), ("key", "ctrl-c")],
+        )
+
+    def test_wrapping_counts_wide_characters(self) -> None:
+        from unlawful.agent_ui import _wrap, cells
+
+        self.assertEqual(cells("abc"), 3)
+        self.assertEqual(cells("日本"), 4)
+        self.assertEqual(_wrap("abcdef", 4), [(0, 4), (4, 6)])
+        self.assertEqual(_wrap("日本語", 4), [(0, 2), (2, 3)])
+        self.assertEqual(_wrap("", 4), [(0, 0)])
