@@ -311,6 +311,9 @@ pub fn open_keymaps(ed: &mut Editor) {
             data: Data::Keys(keys.replace("<leader>", &leader)),
         })
         .collect();
+    for (keys, description) in crate::standard::KEYS {
+        items.push(Item { label: format!("{keys:<16} {description}"), detail: "standard".into(), data: Data::Keys(String::new()) });
+    }
     for (keys, description) in crate::help::VIM_KEYS {
         items.push(Item {
             label: format!("{keys:<16} {description}"),

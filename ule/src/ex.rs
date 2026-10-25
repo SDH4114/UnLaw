@@ -842,6 +842,8 @@ fn replacement(text: &str) -> String {
                 Some('n') | Some('r') => out.push('\n'),
                 Some('t') => out.push('\t'),
                 Some('&') => out.push('&'),
+                // `\$` is a literal dollar (the regex crate needs `$$`).
+                Some('$') => out.push_str("$$"),
                 Some(other) => out.push(other),
                 None => out.push('\\'),
             },
@@ -1263,6 +1265,14 @@ fn input(ed: &mut Editor, action: InputAction, text: &str) -> Result<(), String>
                 let message = ed.save(doc, Some(PathBuf::from(text)), false)?;
                 ed.info(message);
             }
+        }
+        InputAction::GotoLine => {
+            let (line, col) = text.split_once(':').map_or((text, None), |(line, col)| (line, Some(col)));
+            let line: usize = line.trim().parse().map_err(|_| format!("not a line number: {text}"))?;
+            let col = col.and_then(|col| col.trim().parse::<usize>().ok()).unwrap_or(1);
+            ed.push_jump();
+            ed.set_cursor(Pos::new(line.saturating_sub(1), col.saturating_sub(1)));
+            ed.center_cursor_if_offscreen();
         }
         InputAction::Replace { pattern } => {
             let line = format!("%s/{}/{}/g", pattern.replace('/', "\\/"), text.replace('/', "\\/"));

@@ -66,8 +66,10 @@ impl Key {
         let code = match event.code {
             KeyCode::Char(c) => {
                 // Terminals report Ctrl+Shift+a as Ctrl+A; keep letters lower case under Ctrl.
+                // With Ctrl, Shift is kept as a flag on the lower-case letter (Ctrl-Shift-K).
+                let shifted = ctrl && (shift || c.is_ascii_uppercase()) && c.is_ascii_alphabetic();
                 let c = if ctrl && c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c };
-                return Some(Key { code: Code::Char(c), ctrl, alt, shift: false });
+                return Some(Key { code: Code::Char(c), ctrl, alt, shift: shifted });
             }
             KeyCode::Esc => Code::Esc,
             KeyCode::Enter => Code::Enter,
@@ -215,6 +217,9 @@ fn parse_angle(inner: &str) -> Option<Key> {
     let code = match (chars.next(), chars.next()) {
         (Some(c), None) => {
             let c = if ctrl { c.to_ascii_lowercase() } else { c };
+            if shift && ctrl && c.is_ascii_alphabetic() {
+                return Some(Key { code: Code::Char(c), ctrl, alt, shift: true });
+            }
             if shift && c.is_alphabetic() {
                 return Some(Key { code: Code::Char(c.to_uppercase().next().unwrap_or(c)), ctrl, alt, shift: false });
             }
@@ -251,7 +256,7 @@ mod tests {
     #[test]
     fn notation_round_trips() {
         let leader = [Key::char(' ')];
-        for text in ["<C-s>", "<space>f", "<A-j>", "<cr>", "<f5>", "x", "<S-up>"] {
+        for text in ["<C-s>", "<space>f", "<A-j>", "<cr>", "<f5>", "x", "<S-up>", "<C-S-k>", "<A-S-down>", "<C-bs>"] {
             let keys = parse(text, &leader).unwrap();
             assert_eq!(parse(&notation(&keys), &leader).unwrap(), keys, "{text}");
         }

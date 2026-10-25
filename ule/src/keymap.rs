@@ -173,7 +173,7 @@ const DEFAULTS: &[(&str, &str, &str, &str)] = &[
     ("n", "<C-_>", "comment_line", "toggle comment"),
     ("n", "<C-/>", "comment_line", "toggle comment"),
     ("i", "<C-space>", "complete", "completion"),
-    ("n", "<C-z>", "suspend", "back to the shell (fg returns)"),
+    ("n", "<leader>z", "suspend", "back to the shell (fg returns)"),
     ("n", "Q", "macro_replay", "replay the last recorded macro"),
 ];
 

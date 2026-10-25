@@ -27,6 +27,7 @@ pub mod lsp;
 pub mod motion;
 pub mod picker;
 pub mod render;
+pub mod standard;
 pub mod state;
 pub mod syntax;
 pub mod text;

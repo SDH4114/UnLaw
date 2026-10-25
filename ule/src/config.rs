@@ -68,6 +68,7 @@ pub struct Options {
     pub color_column: bool,
     pub incsearch: bool,
     pub hlsearch: bool,
+    pub standard_keys: bool,
 }
 
 impl Default for Options {
@@ -110,6 +111,7 @@ impl Default for Options {
             color_column: false,
             incsearch: true,
             hlsearch: true,
+            standard_keys: true,
         }
     }
 }
@@ -152,6 +154,7 @@ pub const OPTIONS: &[(&str, &str)] = &[
     ("restore_cursor", "reopen files where you left them"),
     ("incsearch", "jump to matches while typing a search"),
     ("hlsearch", "highlight all search matches"),
+    ("standard_keys", "Ctrl-Z/C/V/X, Shift-select, word/line deletion like other editors (:help standard)"),
 ];
 
 fn parse_bool(value: &str) -> Option<bool> {
@@ -233,6 +236,7 @@ impl Options {
             "restore_cursor" => self.restore_cursor = boolean()?,
             "incsearch" | "is" => self.incsearch = boolean()?,
             "hlsearch" | "hls" => self.hlsearch = boolean()?,
+            "standard_keys" => self.standard_keys = boolean()?,
             _ => return Err(format!("unknown option {name:?} (:help options)")),
         }
         Ok(())
@@ -306,6 +310,7 @@ impl Options {
             "restore_cursor" => self.restore_cursor.to_string(),
             "incsearch" | "is" => self.incsearch.to_string(),
             "hlsearch" | "hls" => self.hlsearch.to_string(),
+            "standard_keys" => self.standard_keys.to_string(),
             _ => return None,
         })
     }
@@ -527,6 +532,7 @@ pub const TEMPLATE: &str = r##"# ule settings. Changes apply after :config-reloa
 # hidden_files = false
 # explorer_width = 30
 # panel_height = 12
+# standard_keys = true      # Ctrl-Z/C/V/X, Shift+arrows, Ctrl+Backspace…; false = pure vim
 
 # Key bindings: a command name (see :commands), ":ex command", or keys.
 # Lists run in order. "nop" removes a default binding.

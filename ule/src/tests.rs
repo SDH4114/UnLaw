@@ -114,9 +114,9 @@ fn visual_modes() {
     assert_eq!(content(&run("one two three", "wvwd")), "one hree");
     assert_eq!(content(&run("a\nb\nc", "Vjd")), "c");
     assert_eq!(content(&run("a\nb\nc", "Vj>")), "    a\n    b\nc");
-    assert_eq!(content(&run("abc\nabc\nabc", "l<C-v>jjd")), "ac\nac\nac");
-    assert_eq!(content(&run("abc\nabc\nabc", "<C-v>jjI- <esc>")), "- abc\n- abc\n- abc");
-    assert_eq!(content(&run("abc\nabc", "<C-v>j$A;<esc>")), "abc;\nabc;");
+    assert_eq!(content(&run("abc\nabc\nabc", "l<C-q>jjd")), "ac\nac\nac");
+    assert_eq!(content(&run("abc\nabc\nabc", "<C-q>jjI- <esc>")), "- abc\n- abc\n- abc");
+    assert_eq!(content(&run("abc\nabc", "<A-v>j$A;<esc>")), "abc;\nabc;");
     assert_eq!(content(&run("hello", "vU")), "Hello");
     assert_eq!(content(&run("hello world", "viwy$p")), "hello worldhello");
     assert_eq!(content(&run("x y", "yiwwviwp")), "x x");
@@ -202,8 +202,8 @@ fn comments_join_case_increment() {
     assert_eq!(content(&run("a\n  b\nc", "3J")), "a b c");
     assert_eq!(content(&run("hello", "g~iw")), "HELLO");
     assert_eq!(content(&run("hello", "gUU")), "HELLO");
-    assert_eq!(content(&run("v1.9", "<C-a>")), "v2.9");
-    assert_eq!(content(&run("x 7", "5<C-x>")), "x 2");
+    assert_eq!(content(&run("v1.9", "<A-a>")), "v2.9");
+    assert_eq!(content(&run("x 7", "5<A-x>")), "x 2");
     assert_eq!(content(&run("ab", "~~")), "AB");
 }
 
@@ -346,4 +346,76 @@ fn random_keys_never_panic() {
         ed.prompt = None;
         crate::ui::draw(&mut ed);
     }
+}
+
+fn vim_only(text: &str, input: &str) -> Editor {
+    let mut ed = editor(text);
+    ed.options.standard_keys = false;
+    keys(&mut ed, input);
+    ed
+}
+
+#[test]
+fn standard_keys_undo_copy_paste() {
+    // Ctrl-Z / Ctrl-Y in insert mode keep typing.
+    let ed = run("", "ihello<C-z>");
+    assert_eq!(content(&ed), "");
+    assert_eq!(ed.mode, Mode::Insert);
+    let ed = run("", "ihello<C-z><C-y>");
+    assert_eq!(content(&ed), "hello");
+    // No selection: Ctrl-C/Ctrl-X take the whole line; Ctrl-V puts it above.
+    assert_eq!(content(&run("a\nb\nc", "j<C-x>")), "a\nc");
+    assert_eq!(content(&run("a\nb\nc", "<C-c>jj<C-v>")), "a\nb\na\nc");
+    // A shift-selection copies exactly what is highlighted.
+    assert_eq!(content(&run("hello world", "i<S-right><S-right><C-c><esc>$<C-v>")), "hello worldhe");
+    assert_eq!(content(&run("hello world", "i<S-end><C-x>")), "");
+    // Vim's visual selection works with Ctrl-C too.
+    assert_eq!(content(&run("one two", "viw<C-c>$<C-v>")), "one twoone");
+}
+
+#[test]
+fn standard_keys_selection_replaces() {
+    assert_eq!(content(&run("hello world", "i<S-right><S-right><S-right>XY<esc>")), "XYlo world");
+    assert_eq!(content(&run("hello world", "A<C-S-left>there<esc>")), "hello there");
+    assert_eq!(content(&run("hello world", "A<S-home><bs>")), "");
+    let ed = run("abc", "i<S-right><S-left>");
+    assert_eq!(ed.mode, Mode::Insert, "shrinking to nothing goes back to typing");
+    assert_eq!(content(&run("abc\ndef", "<C-a>x")), "x", "select all, then type");
+    let ed = run("abcdef", "ll<S-right><S-right><left>");
+    assert_eq!((ed.mode, ed.cursor()), (Mode::Normal, Pos::new(0, 2)), "Left lands on the selection start");
+    assert_eq!(content(&run("a\nb", "V<tab>")), "    a\nb");
+}
+
+#[test]
+fn standard_keys_delete_by_word_and_line() {
+    assert_eq!(content(&run("", "ione two three<C-bs>")), "one two ");
+    assert_eq!(content(&run("", "ione two<A-bs>")), "one ");
+    assert_eq!(content(&run("one two three", "i<C-del>")), " two three");
+    assert_eq!(content(&run("one two three", "w<A-d>")), "one  three");
+    assert_eq!(content(&run("one two three", "wi<C-k>")), "one ");
+    assert_eq!(content(&run("a\nb\nc", "ji<C-S-k>")), "a\nc");
+    assert_eq!(content(&run("one two", "A<C-u>")), "");
+    let ed = run("one two three", "i<C-right>");
+    assert_eq!(ed.cursor(), Pos::new(0, 3));
+    let ed = run("one two three", "A<A-left>");
+    assert_eq!(ed.cursor(), Pos::new(0, 8));
+    let ed = run("  x", "A<home>");
+    assert_eq!(ed.cursor(), Pos::new(0, 2), "Home goes to the first char, again to column 0");
+}
+
+#[test]
+fn standard_keys_lines_and_extras() {
+    assert_eq!(content(&run("a\nb\nc", "<A-down>")), "b\na\nc");
+    assert_eq!(content(&run("a\nb", "<A-S-down>")), "a\na\nb");
+    let ed = run("a\nb\nc\nd", "<C-g>3<cr>");
+    assert_eq!(ed.cursor().line, 2);
+    let ed = run("foo bar foo", "<C-f>bar<cr>");
+    assert_eq!(ed.cursor(), Pos::new(0, 4));
+}
+
+#[test]
+fn vim_keys_without_standard_keys() {
+    assert_eq!(content(&vim_only("v1", "<C-a>")), "v2");
+    assert_eq!(content(&vim_only("abc\nabc", "<C-v>jd")), "bc\nbc");
+    assert_eq!(vim_only("abc", "i<C-c>").mode, Mode::Normal, "Ctrl-C leaves insert mode in pure vim");
 }

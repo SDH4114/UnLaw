@@ -203,6 +203,12 @@ fn draw_view(ed: &mut Editor, surface: &mut Surface, theme: &Theme, id: usize, r
     // Selection, search and bracket overlays for the visible lines.
     let selection = if focused {
         match ed.mode {
+            // A Shift-selection's end is exclusive, like other editors.
+            Mode::Visual(_) if ed.vim.select_mode => {
+                let (start, end) = (ed.anchor.min(cursor), ed.anchor.max(cursor));
+                let text = &ed.docs[&doc_id].text;
+                (start != end).then(|| (start, text.prev(end).unwrap_or(start), VisualKind::Char))
+            }
             Mode::Visual(kind) => Some((ed.anchor.min(cursor), ed.anchor.max(cursor), kind)),
             _ => None,
         }
@@ -452,6 +458,9 @@ fn draw_view(ed: &mut Editor, surface: &mut Surface, theme: &Theme, id: usize, r
 }
 
 fn mode_name(ed: &Editor) -> (&'static str, &'static str) {
+    if ed.vim.select_mode && matches!(ed.mode, Mode::Visual(_)) {
+        return ("SELECT", "ui.mode.visual");
+    }
     match ed.mode {
         Mode::Normal => ("NORMAL", "ui.mode.normal"),
         Mode::Insert => ("INSERT", "ui.mode.insert"),
@@ -604,7 +613,7 @@ fn command_line(ed: &Editor, surface: &mut Surface, theme: &Theme) {
         surface.text(x, y, &pending, base.patch(theme.get("ui.hint")), surface.width);
     }
     if surface.cursor.is_some() {
-        surface.cursor_bar = matches!(ed.mode, Mode::Insert) && ed.options.cursor_shape;
+        surface.cursor_bar = (matches!(ed.mode, Mode::Insert) || ed.vim.select_mode) && ed.options.cursor_shape;
     }
 }
 

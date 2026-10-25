@@ -7,6 +7,7 @@ pub const TOPICS: &[(&str, &str)] = &[
     ("start", "the first five minutes"),
     ("keys", "every key binding"),
     ("vim", "vim keys ule understands"),
+    ("standard", "Ctrl-Z/C/V, Shift-select and other keys of ordinary editors"),
     ("commands", ":commands"),
     ("options", "settings for ule.toml and :set"),
     ("languages", "language settings, LSP, formatters, run commands"),
@@ -74,6 +75,15 @@ fn keys_section(ed: &Editor) -> String {
 fn text(ed: &Editor, topic: &str) -> String {
     match topic {
         "keys" => format!("# Key bindings\n\n{}", keys_section(ed)),
+        "standard" => {
+            let mut out = String::from(
+                "# Keys of ordinary editors\n\nOn by default (`standard_keys = true`); they work next to vim keys. `standard_keys = false` in `[editor]` of ule.toml gives pure vim back. Your own `[keys.*]` bindings always win.\n\nIn Ghostty, Cmd-Left/Right send Ctrl-A/Ctrl-E (line start/end) and Cmd-Backspace sends Ctrl-U; Option+arrows move by word.\n\n",
+            );
+            for (keys, description) in crate::standard::KEYS {
+                out.push_str(&format!("- `{keys}` {description}\n"));
+            }
+            out
+        }
         "vim" => {
             let mut out = String::from("# Vim keys\n\nCounts work everywhere (`3dd`, `d2w`, `5j`). Registers prefix any command (`\"ayy`, `\"ap`).\n\n");
             for (keys, description) in VIM_KEYS {
@@ -127,7 +137,7 @@ fn text(ed: &Editor, topic: &str) -> String {
         _ => {
             let leader = crate::keys::notation(&ed.keymap.leader);
             format!(
-                "# ule\n\nUnlaw's editor: vim keys, a `{leader}` menu for everything else, language servers, fuzzy pickers and ul built in.\n\n## First five minutes\n\n- `i` types, `Esc` stops typing, `:w` saves (`Ctrl-s` too), `:q` quits.\n- `{leader}` opens a menu that shows what comes next. `{leader}{leader}` finds a file, `{leader}/` searches the project, `{leader}e` is the file explorer.\n- `gd` goes to a definition, `K` shows documentation, `gr` references, `{leader}ca` fixes, `{leader}cr` renames.\n- `{leader}r` runs the file, `{leader}o` shows the output panel.\n- `{leader}?` searches every key binding; `{leader}:` every command.\n- Settings: `{leader}fc` opens ule.toml (every option is in it, commented).\n\n## Topics\n\n{}\n\nOpen one with `:help <topic>` or `gf` on a name below.\n",
+                "# ule\n\nUnlaw's editor: vim keys, a `{leader}` menu for everything else, language servers, fuzzy pickers and ul built in.\n\n## First five minutes\n\n- `i` types, `Esc` stops typing, `:w` saves (`Ctrl-s` too), `:q` quits.\n- `{leader}` opens a menu that shows what comes next. `{leader}{leader}` finds a file, `{leader}/` searches the project, `{leader}e` is the file explorer.\n- `gd` goes to a definition, `K` shows documentation, `gr` references, `{leader}ca` fixes, `{leader}cr` renames.\n- `{leader}r` runs the file, `{leader}o` shows the output panel.\n- `{leader}?` searches every key binding; `{leader}:` every command.\n- Ordinary editor keys work too: Ctrl-Z/Y, Ctrl-C/X/V, Shift+arrows to select, Ctrl+Backspace (`:help standard`).\n- Settings: `{leader}fc` opens ule.toml (every option is in it, commented).\n\n## Topics\n\n{}\n\nOpen one with `:help <topic>` or `gf` on a name below.\n",
                 TOPICS.iter().map(|(topic, description)| format!("- `:help {topic}` {description}")).collect::<Vec<_>>().join("\n")
             )
         }

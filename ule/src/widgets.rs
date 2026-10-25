@@ -118,6 +118,7 @@ pub enum InputAction {
     Run,
     SaveAs(usize),
     Replace { pattern: String },
+    GotoLine,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

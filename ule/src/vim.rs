@@ -34,6 +34,9 @@ pub struct VimState {
     pub last_substitute: Option<(String, String, String)>,
     pub last_ex: Option<String>,
     pub last_count_explicit: bool,
+    /// A Shift-arrow selection (exclusive end, typing replaces it).
+    pub select_mode: bool,
+    pub select_from_insert: bool,
 }
 
 impl VimState {
@@ -308,7 +311,12 @@ fn parse(keys: &[Key], visual: bool) -> Parse {
         (Code::Char('e'), true, false) => Act::ScrollLines(1),
         (Code::Char('y'), true, false) => Act::ScrollLines(-1),
         (Code::Char('g'), true, false) => Act::FileInfo,
-        (Code::Char('v'), true, false) => Act::Visual(VisualKind::Block),
+        // Ctrl-Q and Alt-V also start block visual (Ctrl-V pastes with standard_keys).
+        (Code::Char('v'), true, false) | (Code::Char('q'), true, false) | (Code::Char('v'), false, true) => {
+            Act::Visual(VisualKind::Block)
+        }
+        (Code::Char('a'), false, true) => Act::Increment(1),
+        (Code::Char('x'), false, true) => Act::Increment(-1),
         (Code::Insert, _, _) => Act::Insert('i'),
         (Code::Delete, _, _) => Act::DeleteChar(true),
         (Code::Char(c), false, false) => match c {
@@ -482,6 +490,14 @@ pub fn handle_key(ed: &mut Editor, key: Key) {
             }
             _ => ed.popup = None,
         }
+    }
+    if crate::standard::enabled(ed) && crate::standard::handle(ed, key) {
+        let focus = ed.focus;
+        ed.scroll_to_cursor(focus);
+        return;
+    }
+    if ed.vim.select_mode && !matches!(ed.mode, Mode::Visual(_)) {
+        ed.vim.select_mode = false;
     }
     match ed.mode {
         Mode::Insert | Mode::Replace => insert_key(ed, key),
@@ -1314,6 +1330,8 @@ fn act_on(ed: &mut Editor, act: Act, register: Option<char>, count: Option<usize
 }
 
 pub fn exit_visual(ed: &mut Editor) {
+    ed.vim.select_mode = false;
+    ed.vim.select_from_insert = false;
     if let Mode::Visual(kind) = ed.mode {
         ed.last_visual = Some((ed.view().doc, ed.anchor, ed.cursor(), kind));
     }

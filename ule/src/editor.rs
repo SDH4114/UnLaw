@@ -939,7 +939,10 @@ impl Editor {
     pub fn get_register(&mut self, name: Option<char>) -> Option<Register> {
         let name = name.unwrap_or('"');
         let from_clipboard = |cache: &Option<String>, fallback: Option<&Register>| {
-            let text = crate::clipboard::get()?;
+            // Without pbpaste (or with it disabled) the register itself is the clipboard.
+            let Some(text) = crate::clipboard::get() else {
+                return fallback.cloned();
+            };
             if cache.as_deref() == Some(text.as_str()) {
                 if let Some(register) = fallback {
                     return Some(register.clone());
