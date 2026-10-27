@@ -88,6 +88,8 @@ LEGACY_SOURCE_HASHES: dict[str, set[str]] = {
         "1a1cc7ec191f33960644a15553cf02b796af6deffd5380f245e408561c8998cb",
         "4dc2aa8198cb48e36a79bbc2b801ab0405a146397e11fc030f4d92c8992654a0",
         "3350048da95a672c85208ed5710d66627807cbc62a76f8566617672092f357f2",
+        # Release 3.6.2 (commit 8b3d392), before --podcast.
+        "b4c91e0514ce64251de429df9af49eb9eb2913cd6afdbfb3e6ae74f93bd81bb9",
     },
     "zed": {
         "b38672c8a421b0d577e2b63f41f284a35a8dd5ce2489c618a9a9cd48c65b8a05",
@@ -268,6 +270,7 @@ LEGACY_NORMALIZED_HASHES: dict[str, set[str]] = {
         "14ee5019403f8ec6b7a3114617b8d8d2c08c3538562fdaae373af097a4ee0afb",
         "9595fdee81ea1798facb2702c67168c31d699ecceec19482d9000e88ac9e49fe",
         "fadf583e9c7da5de0cf73ebffe8c53bc06a2ef40c333a69d08602045993b14df",
+        "453470dc75762c750f1d7499a50752fbdc72d9ab871739a04df94f13db3e5cc8",
     },
     "zed": {
         "216719a6c7040471dae1c66265d31b480f097ef0f8c9484532e35293582dfc70",
@@ -360,7 +363,11 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
         }
     },
     "work": {"apps": {"editor": "Zed", "lofi_url": "https://lofi-engine.vercel.app/"}},
-    "yt": {"storage": {"root": "data"}, "apps": {"youtube_url": "https://www.youtube.com/"}},
+    "yt": {
+        "storage": {"root": "data"},
+        "apps": {"youtube_url": "https://www.youtube.com/"},
+        "yt": {"podcast_dir": "~/Library/Mobile Documents/com~apple~CloudDocs/Podcasts"},
+    },
     "zed": {"apps": {"editor": "Zed"}},
 }
 

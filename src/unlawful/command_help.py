@@ -188,16 +188,20 @@ Options:
   --sub-lang [code]    Choose ru/en/etc.; no value selects original. Implies --sub
                        unless --full is used; unknown codes list available languages
   --full               Save video with sound, separate MP3 and .md subtitles
+  --podcast            Save a small mono MP3 (64 kbps, title/channel/cover tags)
+                       into yt.podcast_dir, by default iCloud Drive/Podcasts
   --quality <height>   Maximum video height, e.g. 720, 1080, 2160
   --output <directory> Save into this directory (created if needed)
   -h, --help           Show this help, also after download
-Modes --audio, --sub and --full cannot be combined.
+Modes --audio, --podcast, --sub and --full cannot be combined.
 Subtitle-only mode cannot use --quality or --format; --full supports both.
 Markdown starts with the video link, then title, language/source and cleaned text.
 Authored captions are preferred; automatic captions may contain recognition errors.
 --full downloads media once and extracts MP3 locally. Missing/failed subtitles
 produce a clear warning and a nonzero exit code while retaining saved media.
 Defaults: MOV video with audio; storage.root/youtube.
+--podcast saves into yt.podcast_dir (setting; --output overrides it). Its parent
+folder must exist, so a disabled iCloud Drive is reported instead of filled locally.
 MOV/MP4 conversion uses H.264/AAC when conversion is needed; it can take time.
 Raw preserves the source codecs/container (possibly WebM); it is not camera RAW.
 Dependencies: yt-dlp; video/audio also need ffmpeg/ffprobe. Deno supports YouTube.
@@ -209,6 +213,7 @@ Examples:
   ul yt download "https://youtu.be/VIDEO_ID" --format mp4
   ul yt download "https://youtu.be/VIDEO_ID" --format raw
   ul yt download "https://youtu.be/VIDEO_ID" --audio
+  ul yt download "https://youtu.be/VIDEO_ID" --podcast
   ul yt download "https://youtu.be/VIDEO_ID" --sub
   ul yt download "https://youtu.be/VIDEO_ID" --sub-lang
   ul yt download "https://youtu.be/VIDEO_ID" --sub-lang ru

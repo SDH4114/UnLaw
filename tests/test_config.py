@@ -134,7 +134,11 @@ class ConfigTests(unittest.TestCase):
                     "lofi_url": "https://lofi-engine.vercel.app/",
                 }
             },
-            "yt": {"storage": {"root": "data"}, "apps": {"youtube_url": "https://www.youtube.com/"}},
+            "yt": {
+                "storage": {"root": "data"},
+                "apps": {"youtube_url": "https://www.youtube.com/"},
+                "yt": {"podcast_dir": "~/Library/Mobile Documents/com~apple~CloudDocs/Podcasts"},
+            },
             "zed": {"apps": {"editor": "Zed"}},
             "agent": {
                 "storage": {"root": "data"},

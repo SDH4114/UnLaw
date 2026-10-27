@@ -42,6 +42,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "games": {"difficulty": "normal"},
     "zip": {"format": "zip", "level": "max", "keep_junk": False},
+    "yt": {"podcast_dir": "~/Library/Mobile Documents/com~apple~CloudDocs/Podcasts"},
     "apps": {
         "spotify": "Spotify",
         "editor": "Zed",
@@ -287,6 +288,7 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ("games.difficulty", str, {"easy", "normal", "hard"}),
         ("zip.format", str, {"zip", "7z", "rar", "tar.zst", "tar.xz", "tar.gz"}),
         ("zip.keep_junk", bool, None),
+        ("yt.podcast_dir", str, None),
         ("apps.spotify", str, None),
         ("apps.editor", str, None),
         ("apps.spotify_autoplay_delay", (int, float), None),

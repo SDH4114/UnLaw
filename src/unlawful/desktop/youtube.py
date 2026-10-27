@@ -148,6 +148,17 @@ def _publish(source: Path, destination: Path) -> None:
         print(f"Already exists: {destination}", flush=True)
 
 
+def _podcast_dir() -> Path:
+    folder = Path(str(load_config()["yt"]["podcast_dir"])).expanduser()
+    if not folder.is_absolute():
+        raise ConfigError("yt.podcast_dir must be an absolute path or start with ~")
+    # Create only the last folder: a missing parent usually means iCloud Drive is off,
+    # and a local look-alike folder would never reach the phone.
+    if not folder.parent.is_dir():
+        raise OSError(f"{folder.parent} does not exist (is iCloud Drive on?); set yt.podcast_dir or use --output")
+    return folder
+
+
 def _selector(height: int | None) -> str:
     if height is None:
         return "bestvideo*+bestaudio/best"
@@ -261,6 +272,7 @@ def _download(args: list[str]) -> int:
     modes.add_argument("--audio", action="store_true", help="save audio as MP3")
     modes.add_argument("--sub", action="store_true", help="save only subtitles as Markdown")
     modes.add_argument("--full", action="store_true", help="save video, separate MP3 and Markdown subtitles")
+    modes.add_argument("--podcast", action="store_true", help="save a small mono MP3 for speech into yt.podcast_dir")
     parser.add_argument("--sub-lang", nargs="?", const="original", help="subtitle language; omitted value selects original and implies --sub")
     parser.add_argument("--quality", type=_quality, help="maximum video height, e.g. 1080")
     parser.add_argument("--output", type=Path, help="output directory (default: storage.root/youtube)")
@@ -292,15 +304,17 @@ def _download(args: list[str]) -> int:
     if not is_video:
         print("unlaw yt: Provide a video URL (watch, shorts, live or youtu.be), not a playlist/channel.", file=sys.stderr)
         return 2
-    if options.audio and options.quality is not None:
-        print("unlaw yt: --audio cannot be combined with --quality.", file=sys.stderr)
+    audio_flag = "--podcast" if options.podcast else "--audio"
+    audio_only = options.audio or options.podcast
+    if audio_only and options.quality is not None:
+        print(f"unlaw yt: {audio_flag} cannot be combined with --quality.", file=sys.stderr)
         return 2
-    if options.audio and options.format is not None:
-        print("unlaw yt: --format is for video; --audio saves MP3.", file=sys.stderr)
+    if audio_only and options.format is not None:
+        print(f"unlaw yt: --format is for video; {audio_flag} saves MP3.", file=sys.stderr)
         return 2
     subtitles_only = options.sub or (options.sub_lang is not None and not options.full)
-    if subtitles_only and (options.audio or options.quality is not None or options.format is not None):
-        print("unlaw yt: Subtitle-only mode cannot use --audio, --quality or --format; use --full for a bundle.", file=sys.stderr)
+    if subtitles_only and (audio_only or options.quality is not None or options.format is not None):
+        print("unlaw yt: Subtitle-only mode cannot use --audio, --podcast, --quality or --format; use --full for a bundle.", file=sys.stderr)
         return 2
     executable = shutil.which("yt-dlp")
     required = ("yt-dlp",) if subtitles_only else ("yt-dlp", "ffmpeg", "ffprobe")
@@ -309,7 +323,11 @@ def _download(args: list[str]) -> int:
         print(f"unlaw yt: Missing tools: {', '.join(missing)}. Run: brew install yt-dlp ffmpeg deno", file=sys.stderr)
         return 1
     try:
-        output = (options.output.expanduser() if options.output is not None else storage_path("youtube")).resolve()
+        if options.output is not None:
+            output = options.output.expanduser()
+        else:
+            output = _podcast_dir() if options.podcast else storage_path("youtube")
+        output = output.resolve()
         output.mkdir(parents=True, exist_ok=True)
         if subtitles_only or options.full:
             return _subtitle_bundle(options, executable, output)
@@ -317,8 +335,15 @@ def _download(args: list[str]) -> int:
             executable, "--ignore-config", "--no-playlist", "--no-overwrites", "--no-post-overwrites",
             "--paths", str(output), "--output", "%(title).180B [%(id)s].%(ext)s",
         ]
-        if options.audio:
+        if audio_only:
             command.extend(["--format", "bestaudio/best", "--extract-audio", "--audio-format", "mp3"])
+            if options.podcast:
+                # Speech needs little: mono 64 kbps is about 29 MB per hour. Tags and cover
+                # make the episode recognisable in Files and podcast players.
+                command.extend([
+                    "--audio-quality", "64K", "--postprocessor-args", "ExtractAudio+ffmpeg_o:-ac 1",
+                    "--embed-metadata", "--embed-thumbnail", "--convert-thumbnails", "jpg",
+                ])
         else:
             selector = _selector(options.quality)
             command.extend(["--format", selector])

@@ -282,6 +282,7 @@ const CHECKS: &[(&str, Kind, &[&str])] = &[
     ("games.difficulty", Kind::Str, &["easy", "hard", "normal"]),
     ("zip.format", Kind::Str, &["7z", "rar", "tar.gz", "tar.xz", "tar.zst", "zip"]),
     ("zip.keep_junk", Kind::Bool, &[]),
+    ("yt.podcast_dir", Kind::Str, &[]),
     ("apps.spotify", Kind::Str, &[]),
     ("apps.editor", Kind::Str, &[]),
     ("apps.spotify_autoplay_delay", Kind::Number, &[]),

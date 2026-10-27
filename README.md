@@ -230,6 +230,9 @@ format = "zip"                  # zip, 7z, rar, tar.zst, tar.xz, tar.gz
 level = "max"                   # 0–9 or store, fastest, fast, normal, max, ultra
 keep_junk = false
 
+[yt]
+podcast_dir = "~/Library/Mobile Documents/com~apple~CloudDocs/Podcasts"   # ul yt download --podcast
+
 [apps]
 spotify = "Spotify"
 editor = "Zed"
@@ -916,7 +919,7 @@ visible through `ul doctor`.
 
 All built-in commands support `ul <command> --help`, `-h` and `ul help <command>`. Help describes the purpose, actions, options and examples without running the command. New commands from `ul create command <name>` also get a help handler; update its text when you change the command.
 
-For downloads, install the external tools: `brew install yt-dlp ffmpeg deno`. Unlaw stays a package without Python dependencies. By default video is saved as MOV with audio; `--format mp4` picks MP4, `--format raw` keeps YouTube's source container and codecs (including WebM) without re-encoding. This is not camera RAW. Converting to MOV/MP4 uses H.264/AAC when the format has to change and may take a while. `--quality` sets an upper bound on height (if that quality isn't available, a lower one is picked); `--audio` saves MP3 and can't be combined with `--quality` or `--format`. The default location is `storage.root/youtube`; `--output` sets another folder. A single video is downloaded, including Shorts links and videos from a playlist; links to entire playlists and channels are rejected. Existing files are never overwritten.
+For downloads, install the external tools: `brew install yt-dlp ffmpeg deno`. Unlaw stays a package without Python dependencies. By default video is saved as MOV with audio; `--format mp4` picks MP4, `--format raw` keeps YouTube's source container and codecs (including WebM) without re-encoding. This is not camera RAW. Converting to MOV/MP4 uses H.264/AAC when the format has to change and may take a while. `--quality` sets an upper bound on height (if that quality isn't available, a lower one is picked); `--audio` saves MP3 and can't be combined with `--quality` or `--format`. The default location is `storage.root/youtube`; `--output` sets another folder. `--podcast` saves a speech-friendly MP3 (mono, 64 kbps, about 29 MB per hour, with title, channel and cover tags) straight into `yt.podcast_dir`, by default `iCloud Drive/Podcasts`, so the episode appears in the Files app on iPhone. If that folder's parent does not exist (iCloud Drive is off), the command fails instead of creating a local look-alike. A single video is downloaded, including Shorts links and videos from a playlist; links to entire playlists and channels are rejected. Existing files are never overwritten.
 
 ### YouTube subtitles and full bundle
 

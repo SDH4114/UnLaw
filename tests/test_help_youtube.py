@@ -170,5 +170,72 @@ class HelpAndYouTubeTests(unittest.TestCase):
         self.assertTrue((target / "fake.mp3").exists())
 
 
+    def test_podcast_saves_small_tagged_mp3_into_podcast_dir(self):
+        from unlawful.config import ensure_layout, set_config_value
+        ensure_layout()
+        (self.root / "iCloud").mkdir()
+        folder = self.root / "iCloud" / "Podcasts"
+        set_config_value("yt.podcast_dir", str(folder))
+        code, run, error = self._download(["https://youtu.be/example", "--podcast"])
+        self.assertEqual(code, 0, error)
+        args = run.call_args.args[0]
+        self.assertEqual(Path(args[args.index("--paths") + 1]).parent, folder)
+        self.assertEqual(args[args.index("--audio-format") + 1], "mp3")
+        self.assertEqual(args[args.index("--audio-quality") + 1], "64K")
+        self.assertEqual(args[args.index("--postprocessor-args") + 1], "ExtractAudio+ffmpeg_o:-ac 1")
+        for flag in ("--extract-audio", "--embed-metadata", "--embed-thumbnail", "--no-playlist", "--no-overwrites"):
+            self.assertIn(flag, args)
+        self.assertNotIn("--recode-video", args)
+        self.assertTrue((folder / "fake.mov").exists())
+
+    def test_podcast_output_overrides_podcast_dir(self):
+        target = self.root / "elsewhere"
+        code, run, error = self._download(["https://youtu.be/example", "--podcast", "--output", str(target)])
+        self.assertEqual(code, 0, error)
+        args = run.call_args.args[0]
+        self.assertEqual(Path(args[args.index("--paths") + 1]).parent, target)
+
+    def test_podcast_refuses_missing_icloud_drive(self):
+        from unlawful.config import ensure_layout, set_config_value
+        ensure_layout()
+        folder = self.root / "no-icloud" / "Podcasts"
+        set_config_value("yt.podcast_dir", str(folder))
+        code, run, error = self._download(["https://youtu.be/example", "--podcast"])
+        self.assertEqual(code, 1)
+        self.assertIn("iCloud Drive", error)
+        self.assertFalse(folder.parent.exists())
+        run.assert_not_called()
+        set_config_value("yt.podcast_dir", "relative/Podcasts")
+        code, run, error = self._download(["https://youtu.be/example", "--podcast"])
+        self.assertEqual(code, 2)
+        self.assertIn("absolute", error)
+        run.assert_not_called()
+
+    def test_podcast_rejects_video_and_other_modes(self):
+        for extra in (["--audio"], ["--sub"], ["--full"], ["--format", "mp4"], ["--quality", "720"], ["--sub-lang", "en"]):
+            with self.subTest(extra=extra):
+                code, run, error = self._download(["https://youtu.be/example", "--podcast", *extra])
+                self.assertEqual(code, 2)
+                run.assert_not_called()
+
+    def test_seeded_podcast_default_is_icloud_drive(self):
+        from unlawful.config import ensure_layout
+        root = ensure_layout()
+        tools = self.root / "bin"
+        tools.mkdir()
+        for name in ("yt-dlp", "ffmpeg", "ffprobe"):
+            script = tools / name
+            script.write_text(f"#!{sys.executable}\nraise SystemExit(9)\n")
+            script.chmod(0o755)
+        home = self.root / "home"
+        home.mkdir()
+        result = subprocess.run(
+            [sys.executable, str(root / "commands/yt/main.py"), "download", "https://youtu.be/example", "--podcast"],
+            env={**os.environ, "PATH": str(tools), "HOME": str(home)}, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(str(home / "Library/Mobile Documents/com~apple~CloudDocs"), result.stderr)
+        self.assertIn("iCloud Drive", result.stderr)
+
 if __name__ == "__main__":
     unittest.main()
