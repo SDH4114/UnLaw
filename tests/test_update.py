@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -9,6 +10,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ulbin import CoreTestCase, binary  # noqa: E402
+
+VERSION = re.search(r'__version__ = "(.+)"', (Path(__file__).resolve().parents[1] / "src/unlawful/__init__.py").read_text()).group(1)
 
 REPOSITORY = "https://github.com/SDH4114/UnLaw.git"
 
@@ -152,7 +155,7 @@ class UpdateTests(CoreTestCase):
         cargo_log = self.fake_cargo()
         curl_log = self.fake_curl('[package]\nname = "unlaw"\nversion = "9.0.0"\n')
         result = self.ok("update", "--check")
-        installed = f"3.6.2 ({self.installed_commit})" if self.installed_commit else "3.6.2"
+        installed = f"{VERSION} ({self.installed_commit})" if self.installed_commit else VERSION
         self.assertEqual(result.stdout.splitlines()[:2], [f"Installed: {installed}", "Latest:    9.0.0 (1234567, main)"])
         self.assertIn("Update available: a new version", result.stdout)
         self.assertIn("https://raw.githubusercontent.com/SDH4114/UnLaw/main/Cargo.toml", curl_log.read_text())
@@ -164,7 +167,7 @@ class UpdateTests(CoreTestCase):
     def test_check_compares_commits_when_the_version_is_the_same(self) -> None:
         if not self.installed_commit:
             self.skipTest("this build has no commit")
-        self.fake_curl('[package]\nversion = "3.6.2"\n')
+        self.fake_curl(f'[package]\nversion = "{VERSION}"\n')
         self.fake_git(self.installed_commit + "0" * 33)
         self.assertIn("Up to date.", self.ok("update", "--check").stdout)
         self.fake_git("f" * 40)

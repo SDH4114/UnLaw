@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sys
 import unittest
@@ -9,6 +10,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ulbin import CoreTestCase  # noqa: E402
+
+VERSION = re.search(r'__version__ = "(.+)"', (Path(__file__).resolve().parents[1] / "src/unlawful/__init__.py").read_text()).group(1)
 
 
 class CliTests(CoreTestCase):
@@ -41,7 +44,7 @@ class CliTests(CoreTestCase):
 
     def test_cli_reports_version_3_with_the_build_commit(self) -> None:
         line = self.ok("--version").stdout
-        self.assertRegex(line, r"^Unlaw 3\.6\.2( \([0-9a-f]{7}\))?\n$")
+        self.assertRegex(line, rf"^Unlaw {re.escape(VERSION)}( \([0-9a-f]{{7}}\))?\n$")
         self.assertEqual(self.ok("version").stdout, line)
         self.assertIn(line.strip().replace("Unlaw ", "version "), self.ok("doctor", "--verbose", timeout=60).stdout)
 

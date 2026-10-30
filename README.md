@@ -549,6 +549,7 @@ ul game tetris
 ul game snake easy
 ul game minesweeper normal
 ul game invaders hard
+ul game chomp
 ```
 
 The games are built into the Rust core and support keyboard and mouse. Each screen
@@ -562,12 +563,14 @@ Enter or a click plays again, Esc returns to the menu. Best scores are stored in
 | Snake | 2-character-wide cells, turn buffer, speeds up as it grows, timed ★ bonus | click — turn toward the click |
 | Minesweeper | Beginner 9×9/10, Intermediate 16×16/40, Expert 30×16/99, safe first click, chording on numbers, classic colors, timer | left — reveal or chord, right — flag |
 | Space Invaders | 5×11 formation, three alien types, speeds up as they fall, only the bottom row shoots, one player bullet on screen, bunkers, UFO, lives and waves, extra life at 1500 | cannon follows the cursor, click — fire |
+| Chomp | original maze chase: a new symmetric maze every level, pellets and power pellets, four hunters with their own habits (Hound chases, Fox cuts off the junction ahead, Owl goes where it heard you eat, Moth guards the power pellets), rest/hunt phases, 200→1600 combo, bonus items, extra life at 10 000 | click — turn toward the click |
 
 Difficulty: `easy` — slow start and assists (Tetris has a ghost piece and 3 pieces
-in Next, the snake passes through walls, 5 lives in Invaders); `normal` — classic;
+in Next, the snake passes through walls, 5 lives in Invaders and Chomp); `normal` — classic;
 `hard` — genuinely hard: Tetris starts at level 12 without ghost or Hold, with
 garbage rising from below, the snake gets obstacles and double growth, Minesweeper
-is Expert without a guaranteed opening, aliens fire nonstop and you have 2 lives.
+is Expert without a guaranteed opening, aliens fire nonstop and you have 2 lives, Chomp hunters are as fast as you and
+fright lasts 2 s (gone from level 5).
 Set the default with `ul config set games.difficulty hard`.
 
 ## Telegram

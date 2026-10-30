@@ -1,9 +1,10 @@
-//! `ul game`: Tetris, Snake, Minesweeper and Space Invaders in the terminal,
+//! `ul game`: Tetris, Snake, Minesweeper, Space Invaders and Chomp in the terminal,
 //! playable with keyboard or mouse.
 //!
 //! Every game is a state machine (input → update → draw) that talks only to
 //! the [`Screen`] trait, so it runs on a real terminal and headless in tests.
 
+mod chomp;
 mod invaders;
 mod mines;
 mod snake;
@@ -19,28 +20,31 @@ use toml_edit::DocumentMut;
 use crate::config::Config;
 
 pub const HELP: &str = "Play a terminal arcade game; no arguments opens the game menu.
-Usage: ul game [tetris|snake|minesweeper|invaders] [easy|normal|hard]
+Usage: ul game [tetris|snake|minesweeper|invaders|chomp] [easy|normal|hard]
 Games:
   tetris        7-bag pieces, next/hold, ghost, wall kicks, levels every 10 lines
   snake         eat ● (and bonus ★), grow and speed up; walls kill on normal/hard
   minesweeper   first click is safe; flag mines, click a number to clear around it
   invaders      5x11 formation, shields, UFO, waves; one shot on screen at a time
+  chomp         maze chase: eat every pellet, power pellets make the 4 hunters
+                edible; a new maze each level
 Controls (shown in every game): arrows/WASD, Space, P pause, Q or Esc leaves.
 Mouse: click menus; Tetris follows the pointer (left click drops, right rotates);
 Snake steers toward a click; Minesweeper left reveals, right flags;
-Invaders follow the pointer and click to fire.
+Invaders follow the pointer and click to fire; Chomp steers toward a click.
 Difficulty (default: games.difficulty):
   easy     slow start, extra help (Tetris ghost + 3 previews, Snake wraps, 5 lives)
   normal   the classic game
   hard     really hard: Tetris starts at level 12 without ghost/hold, Snake has
            obstacles and doubles growth, Minesweeper is Expert with no safe
-           opening, Invaders fire constantly and you have 2 lives
+           opening, Invaders fire constantly and you have 2 lives, Chomp
+           hunters are as fast as you and fright lasts 2 s (none from level 5)
 Best scores: storage.root/runtime/arcade.toml.
 Example: ul game snake hard
 ";
 
-pub const GAMES: [(&str, &str); 4] =
-    [("tetris", "Tetris"), ("snake", "Snake"), ("minesweeper", "Minesweeper"), ("invaders", "Space Invaders")];
+pub const GAMES: [(&str, &str); 5] =
+    [("tetris", "Tetris"), ("snake", "Snake"), ("minesweeper", "Minesweeper"), ("invaders", "Space Invaders"), ("chomp", "Chomp")];
 
 /// Seconds per frame of the real-time games.
 pub const FRAME: f64 = 1.0 / 30.0;
@@ -482,6 +486,7 @@ pub fn play_once(screen: &mut dyn Screen, game: &str, level: Level, rng: &mut Rn
         "tetris" => tetris::play(screen, level, rng, best),
         "snake" => snake::play(screen, level, rng, best),
         "minesweeper" => mines::play(screen, level, rng, best),
+        "chomp" => chomp::play(screen, level, rng, best),
         _ => invaders::play(screen, level, rng, best),
     }
 }
@@ -509,7 +514,7 @@ pub fn arcade(screen: &mut dyn Screen, default: Level, rng: &mut Rng, scores: &m
 }
 
 fn usage() -> i32 {
-    eprintln!("Usage: ul game [tetris|snake|minesweeper|invaders] [easy|normal|hard]");
+    eprintln!("Usage: ul game [tetris|snake|minesweeper|invaders|chomp] [easy|normal|hard]");
     2
 }
 
@@ -651,11 +656,11 @@ mod tests {
         let scores = Scores::load(None);
         let pick = |inputs: &[Option<Input>]| game_menu(&mut Fake::new((40, 120)).keys(inputs), &scores, Level::Normal).unwrap();
         assert_eq!(pick(&[special(Key::Down), key('j'), special(Key::Enter)]), Some("minesweeper"));
-        assert_eq!(pick(&[key('k'), special(Key::Enter)]), Some("invaders"));
+        assert_eq!(pick(&[key('k'), special(Key::Enter)]), Some("chomp"));
         assert_eq!(pick(&[key('2')]), Some("snake"));
         assert_eq!(pick(&[key('9'), special(Key::Esc)]), None);
         // Rows start two lines under the title, which sits at height/2 - 2 - 3.
-        let top = 40 / 2 - 4 / 2 - 3;
+        let top = 40 / 2 - 5 / 2 - 3;
         assert_eq!(pick(&[click(top + 2 + 3, 60, Button::Left)]), Some("invaders"));
         assert_eq!(pick(&[Some(Input::Hover { y: top + 3, x: 60 }), special(Key::Enter)]), Some("snake"));
         assert_eq!(pick(&[click(0, 0, Button::Left), key('q')]), None);
