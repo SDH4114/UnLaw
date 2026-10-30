@@ -1,6 +1,6 @@
 [package]
 name = "unlaw"
-version = "3.8.0"
+version = "3.9.0"
 edition = "2021"
 rust-version = "1.82"
 description = "A small, extensible macOS command launcher"
@@ -26,10 +26,20 @@ path = "rust/src/bin/unlaw.rs"
 [[bin]]
 name = "ula"
 path = "rust/src/bin/ula.rs"
+required-features = ["agent"]
 
 [[bin]]
 name = "unlawagent"
 path = "rust/src/bin/unlawagent.rs"
+required-features = ["agent"]
+
+# Optional parts chosen at install time (`ul features`); a plain build has all of them.
+[features]
+default = ["game", "lm", "agent"]
+game = []
+lm = []
+# Only the ula/unlawagent shortcuts; the agent itself is a seeded Python command.
+agent = []
 
 [dependencies]
 crossterm = { version = "0.28", default-features = false, features = ["events", "bracketed-paste"] }

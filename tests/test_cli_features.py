@@ -11,8 +11,10 @@ from ulbin import CoreTestCase  # noqa: E402
 
 
 class CliFeatureTests(CoreTestCase):
-    def test_first_help_bootstraps_user_directory(self) -> None:
+    def test_first_help_is_read_only_and_init_bootstraps(self) -> None:
         self.ok()
+        self.assertFalse(self.unlaw.exists())
+        self.ok("init")
         self.assertTrue((self.unlaw / "config.toml").is_file())
         self.assertTrue((self.unlaw / "commands").is_dir())
 

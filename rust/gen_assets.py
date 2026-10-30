@@ -5,19 +5,46 @@ version stay defined once in `src/unlawful`; build.rs runs this script so the
 binary can never drift from them.
 
 Usage: python3 -I rust/gen_assets.py <src-dir> <out-dir>
+       python3 -I rust/gen_assets.py --catalog <src-dir> <catalog-dir>
+
+`--catalog` writes the command catalog that `ul commands search` downloads from
+GitHub: catalog/index.json and catalog/<name>/main.py for every seeded command.
+Regenerate it whenever a seed changes (tests/test_catalog.py checks it).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
 
 
+def write_catalog(source: Path, catalog: Path) -> None:
+    sys.path.insert(0, str(source))
+    from unlawful.command_help import COMMAND_HELP
+    from unlawful.command_sources import command_source
+    from unlawful.config import DEFAULT_COMMAND_NAMES
+
+    entries = []
+    for name in sorted(DEFAULT_COMMAND_NAMES):
+        code = command_source(name)
+        (catalog / name).mkdir(parents=True, exist_ok=True)
+        (catalog / name / "main.py").write_text(code, encoding="utf-8")
+        summary = COMMAND_HELP[name].splitlines()[0]
+        entries.append({"name": name, "summary": summary, "sha256": hashlib.sha256(code.encode()).hexdigest()})
+    index = {"format": 1, "commands": entries}
+    (catalog / "index.json").write_text(json.dumps(index, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 def main() -> int:
+    if sys.argv[1] == "--catalog":
+        write_catalog(Path(sys.argv[2]).resolve(), Path(sys.argv[3]))
+        return 0
     source, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2])
     sys.path.insert(0, str(source))
     from unlawful import __version__
+    from unlawful.command_help import COMMAND_HELP
     from unlawful.command_sources import (
         LEGACY_NORMALIZED_HASHES,
         LEGACY_SOURCE_HASHES,
@@ -25,8 +52,8 @@ def main() -> int:
         RETIRED_NORMALIZED_HASHES,
         command_source,
     )
-    from unlawful.command_help import COMMAND_HELP
     from unlawful.config import DEFAULT_COMMAND_NAMES, DEFAULT_CONFIG, serialize_config
+    from unlawful.features import CARGO, CORE, FEATURES, REQUIRES
 
     seeds = output / "seeds"
     seeds.mkdir(parents=True, exist_ok=True)
@@ -57,6 +84,16 @@ def main() -> int:
         hashes = ", ".join(json.dumps(digest) for digest in sorted(LEGACY_SOURCE_HASHES[name]))
         normalized = ", ".join(json.dumps(digest) for digest in sorted(RETIRED_NORMALIZED_HASHES[name]))
         lines.append(f"    ({json.dumps(name)}, &[{hashes}], &[{normalized}]),")
+    lines.append("];")
+    lines.append(f"pub const FEATURE_CORE: &str = {json.dumps(CORE)};")
+    lines.append("/// (name, group, summary, cargo feature, seeded command, requirements) from src/unlawful/features.py.")
+    lines.append("pub type FeatureRow = (&'static str, &'static str, &'static str, bool, bool, &'static [&'static str]);")
+    lines.append("pub const FEATURE_LIST: &[FeatureRow] = &[")
+    for name, group, summary in FEATURES:
+        requires = ", ".join(json.dumps(item) for item in REQUIRES.get(name, ()))
+        cargo = "true" if name in CARGO else "false"
+        seed = "true" if name in DEFAULT_COMMAND_NAMES else "false"
+        lines.append(f"    ({json.dumps(name)}, {json.dumps(group)}, {json.dumps(summary)}, {cargo}, {seed}, &[{requires}]),")
     lines.append("];")
     (output / "default_config.toml").write_text(serialize_config(DEFAULT_CONFIG), encoding="utf-8")
     (output / "assets.rs").write_text("\n".join(lines) + "\n", encoding="utf-8")

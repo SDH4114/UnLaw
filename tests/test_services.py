@@ -19,7 +19,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from unlawful import harness, telegram  # noqa: E402
-from unlawful.built_in_commands.app import main as app_command  # noqa: E402
 from unlawful.built_in_commands.mac import main as mac_command  # noqa: E402
 from unlawful.config import ensure_layout, set_config_value  # noqa: E402
 
@@ -368,19 +367,6 @@ class HarnessTests(ServiceTestCase):
         code, _, error = self.run_main(lambda args: harness.click("App", 1, 2), [])
         self.assertEqual(code, 1)
         self.assertIn("mac.timeout", error)
-
-
-class AppTests(ServiceTestCase):
-    def test_app_opens_named_application(self) -> None:
-        self.assertEqual(self.run_main(app_command.main, ["Visual", "Studio", "Code"])[0], 0)
-        self.assertEqual(self.lines(self.open_log), ["-a|Visual Studio Code"])
-        code, _, error = self.run_main(app_command.main, [])
-        self.assertEqual(code, 2)
-        self.assertIn("Usage: ul app", error)
-        with patch.object(app_command.subprocess, "run", side_effect=OSError("no open")):
-            code, _, error = self.run_main(app_command.main, ["X"])
-        self.assertEqual(code, 1)
-        self.assertIn("no open", error)
 
 
 if __name__ == "__main__":

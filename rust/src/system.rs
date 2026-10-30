@@ -70,10 +70,15 @@ pub fn list_commands(args: &[String]) -> i32 {
     if print_if_requested("commands", args) {
         return 0;
     }
+    match args.first().map(String::as_str) {
+        Some("search") => return crate::catalog::search(&args[1..]),
+        Some("get") => return crate::catalog::get(&args[1..]),
+        _ => {}
+    }
     let flag = match args {
         [] => "",
         [flag] if ["--verbose", "--json", "--describe"].contains(&flag.as_str()) => flag.as_str(),
-        _ => return usage("Usage: ul commands [--verbose|--describe|--json]"),
+        _ => return usage("Usage: ul commands [--verbose|--describe|--json] | search [words...] [--list] | get <name>..."),
     };
     let config = match config::load() {
         Ok(config) => config,
@@ -321,6 +326,35 @@ pub fn complete(args: &[String]) -> i32 {
         .iter()
         .map(|(name, text)| candidate(name, text))
         .collect(),
+        (2, Some("commands")) => [
+            ("search", "Browse the command catalog on GitHub"),
+            ("get", "Download commands from the catalog"),
+            ("--verbose", "Include source and path"),
+            ("--describe", "Add descriptions"),
+            ("--json", "Structured records"),
+        ]
+        .iter()
+        .map(|(name, text)| candidate(name, text))
+        .collect(),
+        (2, Some("features")) => [
+            ("list", "Show which features are installed"),
+            ("add", "Install features"),
+            ("remove", "Remove features"),
+            ("set", "Install exactly these (or all)"),
+            ("choose", "Pick in a checklist"),
+        ]
+        .iter()
+        .map(|(name, text)| candidate(name, text))
+        .collect(),
+        (_, Some("features")) if words.get(1).is_some_and(|word| ["add", "remove", "set"].contains(&word.as_str())) => {
+            let mut lines: Vec<String> =
+                crate::features::FEATURES.iter().map(|feature| candidate(feature.name, feature.summary)).collect();
+            lines.push(candidate("--no-build", "Save without rebuilding ul"));
+            if words[1] == "set" {
+                lines.push(candidate("all", "Every feature"));
+            }
+            lines
+        }
         (3, Some("skills")) if words.get(1).is_some_and(|word| word == "show") => all_commands(),
         (_, Some("skills")) if words.get(1).is_some_and(|word| word == "install" || word == "remove") => {
             [("--project", "Current directory"), ("--path", "Another directory"), ("--claude", "Link for Claude Code"), ("--all", "Every install (remove)")]
@@ -329,7 +363,6 @@ pub fn complete(args: &[String]) -> i32 {
                 .collect()
         }
         (2, Some("completion")) => vec![candidate("zsh", "Zsh completion code")],
-        (2, Some("commands")) => ["--verbose", "--describe", "--json"].iter().map(|f| candidate(f, "")).collect(),
         (2, Some("update")) => [("--check", "Compare with GitHub"), ("--branch", "Install a branch"), ("--tag", "Install a tag")]
             .iter()
             .map(|(name, text)| candidate(name, text))
@@ -819,7 +852,7 @@ fn doctor_checks() -> Vec<Check> {
     let (python, (permissions, permission_detail), (lm_server, lm_detail)) = thread::scope(|scope| {
         let python = scope.spawn(|| python_check(config.as_ref()));
         let permissions = scope.spawn(|| harness_permissions(harness.as_deref()));
-        let lm = scope.spawn(|| crate::builtin::lm::server_status(lm_port));
+        let lm = scope.spawn(|| crate::builtin::lm_server_status(lm_port));
         (python.join().unwrap(), permissions.join().unwrap(), lm.join().unwrap())
     });
 
@@ -833,6 +866,17 @@ fn doctor_checks() -> Vec<Check> {
         Check { name: "Unlaw", available: true, required: true, detail: crate::version_line().replacen("Unlaw ", "version ", 1) },
         Check { name: "Layout", available: root.is_dir(), required: true, detail: root.display().to_string() },
         Check { name: "Configuration", available: config_ok, required: true, detail: config_detail },
+        {
+            let selection = crate::features::selected(effective);
+            let built = crate::features::compiled();
+            let wanted = crate::features::cargo_features(&selection);
+            let detail = if wanted == built {
+                format!("{} of {}; change with `ul features`", selection.len(), crate::features::FEATURES.len())
+            } else {
+                format!("ul is built with [{}] but [{}] is chosen; run `ul update`", built.join(", "), wanted.join(", "))
+            };
+            Check { name: "Features", available: wanted == built, required: false, detail }
+        },
         Check { name: "Storage", available: storage.is_dir(), required: false, detail: storage.display().to_string() },
         python,
         tool("uv", "uv", "optional; Python falls back to venv"),
@@ -878,7 +922,7 @@ fn doctor_checks() -> Vec<Check> {
         },
         Check { name: "macOS permissions", available: permissions, required: false, detail: permission_detail },
         {
-            let (ready, detail) = crate::builtin::lm::engine_status(&storage);
+            let (ready, detail) = crate::builtin::lm_engine_status(&storage);
             Check { name: "Local model engine", available: ready, required: false, detail }
         },
         Check { name: "Local model server", available: lm_server, required: false, detail: lm_detail },

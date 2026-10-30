@@ -21,11 +21,24 @@ pub const SYSTEM_HELP: &[(&str, &str)] = &[
     (
         "commands",
         "List available system commands, installed commands and aliases.
-Usage: ul commands [--verbose|--describe|--json]
+Usage:
+  ul commands [--verbose|--describe|--json]
+  ul commands search [words...] [--list]   Browse the catalog on GitHub
+  ul commands get <name>...                Download commands from the catalog
 Options: --verbose includes source/path; --describe adds one-line descriptions
 read from help.txt, the main.py docstring or a script's first comment (the
 command is not run); --json prints structured records.
-Example: ul commands --describe
+search lists every command of the catalog (catalog/ on GitHub, branch main)
+with what is installed; on a terminal it opens a checklist (Space picks, Enter
+downloads), --list only prints. Words filter names and descriptions.
+get downloads into commands/<name>/main.py after checking its sha256. An
+existing commands/<name> folder is never overwritten (delete it to download
+again). A downloaded optional feature is added to core.features.
+Needs curl; UNLAW_CATALOG_URL points at another catalog.
+Examples:
+  ul commands --describe
+  ul commands search youtube
+  ul commands get yt music
 ",
     ),
     (
@@ -85,6 +98,28 @@ ul config edit uses the same editor and checks config.toml afterwards.
 Examples:
   ul edit src/main.rs:42
   ul config set core.editor nvim
+",
+    ),
+    (
+        "features",
+        "Choose the optional parts of Unlaw: which commands are installed.
+Usage:
+  ul features                    List features; [x] marks installed ones
+  ul features add <name>...      Install features (and what they need)
+  ul features remove <name>...   Remove features (and what needs them)
+  ul features set <name>...|all|none   Install exactly these (none: core only)
+  ul features choose             Pick in a checklist (Space toggles, Enter saves)
+Options: --no-build saves the choice without rebuilding ul.
+Always installed: ul, ule, system commands, zip, app, browser.
+Seeded commands are added to or removed from the commands folder; edited
+ones are never deleted. game, lm and agent's ula shortcut are built into ul,
+so changing them rebuilds it with cargo (like `ul update`, same commit).
+The choice is stored in core.features (default [\"all\"]: everything, also
+features added by later releases).
+Examples:
+  ul features add yt game
+  ul features remove netflix steam
+  ul features set all
 ",
     ),
     (

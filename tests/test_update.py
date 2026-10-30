@@ -38,12 +38,12 @@ class UpdateTests(CoreTestCase):
         return log
 
     def fake_cargo(self, *, exit_code: int = 0, version: str = "9.9.9") -> Path:
-        """Logs argv and UNLAW_PYTHON, then installs a fake `ul` into --root/bin."""
+        """Appends UNLAW_PYTHON and argv (one call per block, ending with `==`), then installs a fake `ul`."""
         log = self.root / "cargo.log"
         self.tool(
             "cargo",
             f"#!{sys.executable}\nimport os, pathlib, sys\n"
-            f"pathlib.Path({str(log)!r}).write_text('\\n'.join([os.environ.get('UNLAW_PYTHON', ''), *sys.argv[1:]]))\n"
+            f"open({str(log)!r}, 'a').write('\\n'.join([os.environ.get('UNLAW_PYTHON', ''), *sys.argv[1:], '==']) + '\\n')\n"
             f"pathlib.Path({str(self.root / 'target.log')!r}).write_text(os.environ.get('CARGO_TARGET_DIR', ''))\n"
             f"if {exit_code}: raise SystemExit({exit_code})\n"
             "root = pathlib.Path(sys.argv[sys.argv.index('--root') + 1]) / 'bin'\n"
@@ -77,9 +77,10 @@ class UpdateTests(CoreTestCase):
     def test_update_reinstalls_from_github_into_local_bin(self) -> None:
         log = self.fake_cargo()
         result = self.ok("update")
+        common = [sys.executable, "install", "--locked", "--force", "--git", REPOSITORY, "--root", str(self.home / ".local")]
         self.assertEqual(
             log.read_text().splitlines(),
-            [sys.executable, "install", "--locked", "--force", "--git", REPOSITORY, "--root", str(self.home / ".local"), "unlaw", "ule"],
+            [*common, "--no-default-features", "--features", "lm,agent,game", "unlaw", "==", *common, "ule", "=="],
         )
         self.assertIn("Updated to Unlaw 9.9.9", result.stdout)
         self.assertIn("edited ones are kept", result.stdout)
@@ -137,6 +138,18 @@ class UpdateTests(CoreTestCase):
         result = self.ul("update")
         self.assertEqual(result.returncode, 101)
         self.assertIn("was not changed", result.stderr)
+
+    def test_second_package_failure_reports_partial_update(self) -> None:
+        self.fake_cargo()
+        cargo = self.bin / "cargo"
+        source = cargo.read_text()
+        source = source.replace("root = pathlib.Path", "if sys.argv[-1] == 'ule': raise SystemExit(42)\nroot = pathlib.Path")
+        cargo.write_text(source)
+        result = self.ul("update", "--force")
+        self.assertEqual(result.returncode, 42)
+        self.assertIn("unlaw was installed", result.stderr)
+        self.assertIn("ule", result.stderr)
+        self.assertNotIn("was not changed", result.stderr)
 
     def test_missing_cargo_explains_how_to_install_rust(self) -> None:
         result = self.ul("update")

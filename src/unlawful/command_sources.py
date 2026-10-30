@@ -280,16 +280,46 @@ LEGACY_NORMALIZED_HASHES: dict[str, set[str]] = {
     },
 }
 
+# Official agent seed before resolving symlinks during search.
+LEGACY_SOURCE_HASHES["agent"].add("427202e3b1fafa6bc3c0c5da70dbff2b1f3934009105d65721a1461060ad4110")
+
 # Commands now built into the Rust core. Untouched seeds with these hashes are
 # removed so the built-in runs; edited copies stay and override it.
-RETIRED_COMMANDS = ("game", "zip", "lm")
+RETIRED_COMMANDS = ("game", "zip", "lm", "app", "browser")
 LEGACY_SOURCE_HASHES["game"].add("4eb7ad4f73245d473ae986086fc5943893fb9656d350703018e97f57a7b292e7")
 LEGACY_SOURCE_HASHES["zip"].add("e69649db613965b2d5a2235467e4e5e4d5a2b8cb5f694bcb1c9a0132eecc34e6")
 # The LM Studio client of release 3.0.0; `lm` now runs its own MLX engine.
 LEGACY_SOURCE_HASHES["lm"].add("30c60510d1f33bf3c74b56d1fc1e8fbd05e64b74018ac937d9c5718fb29d0586")
-# Hashes of official sources with blank lines removed: some installs got copies
-# that differ only in blank lines, which are untouched code, not user edits.
+# Every official app/browser seed up to 3.8.0; both are built into the core since 3.9.0.
+LEGACY_SOURCE_HASHES["app"].add("10235e245be4ecc36ccf5ce4fb4d2bb9036274f550379405245aba3112be5c29")
+LEGACY_SOURCE_HASHES["app"].add("a78a2a240dbbe7c48e5c9f53f0b38341b49a6f87dd44d23f53aa751fbcf00980")
+LEGACY_SOURCE_HASHES["app"].add("c424b7120f2f51a1d33553aa9ae088d3989a1c4ed181db99c0e2df2d46aa4426")
+LEGACY_SOURCE_HASHES["app"].add("fb335c5b8bd7d3038b911e4c207a0425b4467cc98ff35c7329dc626aa65673ab")
+LEGACY_SOURCE_HASHES["app"].add("ff749fdbfe8a0337509612b46a4324aaf081355778048f519d2f9508d34630c2")
+LEGACY_SOURCE_HASHES["browser"].add("0562ed878703da8e4cd91fb167d1ce2c17157ff6313c996152a49ca70e097262")
+LEGACY_SOURCE_HASHES["browser"].add("b1462695784f6221564c0d314af3ef6df27345bdc919c70da641ab6b97e8ade9")
+LEGACY_SOURCE_HASHES["browser"].add("b8f811f12db056940153dd2b3d817f068018cf4848717bd972f1f9957eb02f13")
+LEGACY_SOURCE_HASHES["browser"].add("d0a4b632c9e7f6abb04c6b92c1b3375052b672299dc40ea8b7053c7059d0ca69")
+LEGACY_SOURCE_HASHES["browser"].add("db814ce6b36d767e3a59c0edea8e5b00b54daebc0700150019902832b6441cbe")
+# Hashes of official sources with blank lines removed (and, for app/browser, also
+# `normalized_source`): some installs got copies that differ only in blank lines
+# or the summary docstring, which are untouched code, not user edits.
 RETIRED_NORMALIZED_HASHES = {
+    "app": {
+        "181e657d412afa5d5f39858100184208258f709350d2191bcf8635614258ae63",
+        "312edbff8ef9041c1dbaef2702f6fb02ad5d2fb5a11b696f5b82c004e0fbad60",
+        "66405fd82baadbc7525e97c1bfa3f952e61072afe10d9e20d5089f563948cfcf",
+        "9b8bc21176bbe97c571f6bde04f3613351b217c4104781fdb81294c22bfcbcb5",
+        "c638c95dc60c2b7a1f6d1ab7b5fe2b2ebd5bc9b3f08b07caca71f199a0e9e1ca",
+        "e9f05860e8a51f992c310385c18b820ae8546225d2991ad51a3009449e03d0ad",
+    },
+    "browser": {
+        "0ed5ca7e2bc0c00b02d2bf2021d34099da533ed34759effb0738f4dde1133f0e",
+        "38a3adf46f514dd25e5f2391f1918932fef0142d7e5e37cb0684bff9636f29e2",
+        "9aaebacf5f6b5f0f88f8330c3a923aca967dd8005f4bb79e068367aaedd2df00",
+        "c41abf5e6772c30202e0462faefc728180bde086604a973d29e6295cb424b549",
+        "ddb3b6b1a15cefaded70b910a1123c90343e8a5eafec57fd7cb5170b466a007f",
+    },
     "game": {
         "2822ae92d02cfa55faa4194920c2e0a85c7359929c7482e54d86c8d59fc4558f",
         "f6e4c0a2fc55f721a471ef773a823be6b4d7f9df8260d443e03f63dc3aaa2cce",
@@ -331,7 +361,6 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
             "users": {},
         },
     },
-    "browser": {"apps": {"browser_url": "https://duckduckgo.com/"}},
     "capture": {
         "storage": {"root": "data"},
         "capture": {
@@ -496,8 +525,6 @@ def latest_capture() -> Path | None:
 
 _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "agent": ("agent_ui.py", "agent.py"),
-    "app": ("built_in_commands/app/main.py",),
-    "browser": ("built_in_commands/browser/main.py",),
     "capture": ("capture.py",),
     "cpp": ("project_templates.py", "built_in_commands/cpp/main.py"),
     "git": ("built_in_commands/git/main.py",),

@@ -58,15 +58,6 @@ Examples:
   ula -c
   ula server
 ''',
-    "app": '''Open a macOS application by name.
-Usage: ul app <application>
-Example: ul app "Visual Studio Code"
-''',
-    "browser": '''Open the configured browser homepage in your default browser.
-Usage: ul browser
-Setting: apps.browser_url
-Example: ul config set apps.browser_url "https://duckduckgo.com/"
-''',
     "capture": '''Capture screenshots or record screen, camera and microphone.
 Usage: ul capture <action> [output] [--duration <seconds>]
 Actions:

@@ -18,6 +18,56 @@ Python 3.11+ is required (`brew install python`). The `ul`, `unlaw`, `ula` binar
 and the `ule` editor are installed into `~/.local/bin`; the old uv-based Unlaw is
 removed automatically.
 
+### Choosing features
+
+The installer shows a checklist of optional features (↑/↓ move, Space toggles,
+`a` selects all or none, Enter installs, `q` cancels); everything starts checked.
+The core is always installed: `ul`/`unlaw`, the `ule` editor, system commands,
+`ul zip`, `ul app` and `ul browser`.
+
+| Group | Features |
+|---|---|
+| AI | `lm` (local models), `agent` (needs `lm`; adds `ula`), `tg`, `gpt` |
+| Media | `yt`, `music`, `lofi`, `netflix`, `capture` |
+| Productivity | `todo`, `obsidian`, `work` |
+| Development | `git`, `py`, `rust`, `cpp`, `zed` |
+| System | `mac`, `steam`, `minecraft` |
+| Fun | `game` |
+
+Re-running the installer on a machine that already has Unlaw is an update: it keeps
+the features in `config.toml` and asks nothing (so does `ul update`). Without a
+terminal (CI, scripts) everything is installed; pick features up front with
+`UNLAW_FEATURES` (`all`, `none` = the core only, or names):
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/SDH4114/UnLaw/main/install.sh | UNLAW_FEATURES="yt git game" sh
+```
+
+Change them later:
+
+```bash
+ul features                    # list; [x] marks installed ones
+ul features add yt game        # also adds what they need (agent → lm)
+ul features remove netflix     # also removes what needs it
+ul features set all            # everything, also features of later releases
+ul features set none           # the core only
+ul features choose             # the same checklist
+```
+
+Commands are added to or removed from `~/.config/unlaw/commands/`; ones you edited
+are never deleted. `game`, `lm` and `agent`'s `ula` shortcut are compiled into `ul`,
+so changing them rebuilds it with cargo from the same commit (`--no-build` only saves
+the choice; the next `ul update` applies it). The choice lives in `core.features`
+(default `["all"]`). Running a feature that isn't installed says how to add it.
+
+`ul commands search` shows every command of the catalog in the repository
+(`catalog/`, branch `main`) and marks installed ones; Space picks, Enter downloads.
+`ul commands get <name>...` does the same without the checklist. Downloads are
+checked against the catalog's sha256 and go to `commands/<name>/main.py`; an existing
+`commands/<name>` is never overwritten (`installed*` marks a copy that differs from
+GitHub; delete the folder to download it again). A downloaded optional feature is
+added to `core.features`. Needs `curl`.
+
 Update to the latest version from GitHub:
 
 ```bash
@@ -50,8 +100,8 @@ automatically create the user structure:
 ~/.config/unlaw/
 ├── config.toml
 ├── commands/                   # all non-system commands
-│   ├── game/main.py
 │   ├── todo/main.py
+│   ├── yt/main.py
 │   └── ...
 ├── data/                       # single default storage
 │   ├── captures/
@@ -82,6 +132,9 @@ ul commands                     # all commands and aliases
 ul commands --verbose           # sources and real paths
 ul commands --describe          # one-line descriptions (without running commands)
 ul commands --json              # machine-readable JSON
+ul commands search              # the command catalog on GitHub (checklist on a terminal)
+ul commands search youtube      # filter by name and description; --list only prints
+ul commands get yt music        # download commands that are not installed yet
 ul templates                    # saved project templates
 ul list                         # templates first, then commands
 ul which git                    # where a command comes from
@@ -354,16 +407,19 @@ folder).
 
 ### Built-in Rust commands
 
-`ul zip`, `ul game` and `ul lm` are built into the core. Lookup order: system
+`ul zip`, `ul app`, `ul browser`, `ul game` and `ul lm` are built into the core
+(`game` and `lm` only when those features are chosen). Lookup order: system
 commands → `commands/<name>/` → built-ins, so your own `commands/zip` folder still
 overrides the built-in `zip`. Untouched old `commands/zip/main.py`,
-`commands/game/main.py` and `commands/lm/main.py` (the LM Studio client from 3.0)
+`commands/game/main.py`, `commands/lm/main.py` (the LM Studio client from 3.0),
+`commands/app/main.py` and `commands/browser/main.py` (Python seeds up to 3.8)
 are removed automatically on update; manually edited ones stay and keep running
 instead of the built-ins.
 
 ## Commands in config
 
-All commands below live at `~/.config/unlaw/commands/<name>/main.py`. They are
+All commands below (except `app`, built into the core) live at
+`~/.config/unlaw/commands/<name>/main.py` when their feature is installed. They are
 complete standalone sources: at runtime they don't import `unlawful` and don't
 depend on the package's internal structure. The system dispatcher looks for
 commands only in this folder.

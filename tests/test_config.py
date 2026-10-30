@@ -22,6 +22,25 @@ class ConfigTests(unittest.TestCase):
         self.config_home = Path(self.temp.name) / "xdg"
         self.env = {"XDG_CONFIG_HOME": str(self.config_home)}
 
+    def test_invalid_core_table_reports_errors_without_crashing(self) -> None:
+        import copy
+        from unlawful.config import DEFAULT_CONFIG, validate_config
+        config = copy.deepcopy(DEFAULT_CONFIG)
+        config["core"] = "broken"
+        self.assertTrue(validate_config(config))
+
+    def test_python_seeder_preserves_replaced_and_non_utf8_commands(self) -> None:
+        from unlawful.config import ensure_layout
+        root = self.config_home / "unlaw"
+        for name, entry, data in (("music", "main.sh", b"#!/bin/sh\n"), ("yt", "main.py", b"\xff")):
+            directory = root / "commands" / name
+            directory.mkdir(parents=True)
+            (directory / entry).write_bytes(data)
+        with patch.dict(os.environ, self.env):
+            ensure_layout()
+        self.assertFalse((root / "commands/music/main.py").exists())
+        self.assertEqual((root / "commands/yt/main.py").read_bytes(), b"\xff")
+
     def test_bootstrap_creates_complete_layout_on_first_run(self) -> None:
         from unlawful.config import ensure_layout
 
@@ -47,8 +66,6 @@ class ConfigTests(unittest.TestCase):
             root = ensure_layout()
         commands = root / "commands"
         expected = {
-            "app",
-            "browser",
             "capture",
             "cpp",
             "git",
@@ -92,7 +109,6 @@ class ConfigTests(unittest.TestCase):
         from unlawful.config import DEFAULT_CONFIG, ensure_layout
 
         expected = {
-            "browser": {"apps": {"browser_url": "https://duckduckgo.com/"}},
             "capture": {
                 "storage": {"root": "data"},
                 "capture": {
@@ -186,10 +202,6 @@ class ConfigTests(unittest.TestCase):
             for other_command, other_target in targets.items():
                 if other_command != command:
                     self.assertNotIn(other_target, source, f"{command} contains {other_command}")
-        browser = (commands / "browser" / "main.py").read_text(encoding="utf-8")
-        self.assertIn("browser_url", browser)
-        self.assertNotIn("LSHandler", browser)
-        self.assertNotIn("google.com", browser)
 
     def test_bootstrap_replaces_the_old_official_wrapper_with_full_source(self) -> None:
         from unlawful.config import ensure_layout

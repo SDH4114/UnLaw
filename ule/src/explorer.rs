@@ -120,7 +120,8 @@ impl Explorer {
 
 /// Moves a file to the macOS Trash (Finder via osascript; falls back to ~/.Trash).
 pub fn trash(path: &Path) -> Result<(), String> {
-    let absolute = std::fs::canonicalize(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let absolute = crate::document::absolute(path);
+    std::fs::symlink_metadata(&absolute).map_err(|error| format!("{}: {error}", path.display()))?;
     let script = format!(
         "tell application \"Finder\" to delete POSIX file \"{}\"",
         absolute.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"")
@@ -273,5 +274,39 @@ pub fn key(ed: &mut Editor, key: Key) {
             ));
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trash_moves_the_link_and_keeps_its_target() {
+        if let Some(link) = std::env::var_os("ULE_TEST_TRASH_LINK") {
+            trash(Path::new(&link)).unwrap();
+            return;
+        }
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let root = std::env::temp_dir().join(format!("ule-trash-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        let tool = root.join("bin/osascript");
+        std::fs::write(&tool, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let target = root.join("target");
+        let link = root.join("link");
+        std::fs::write(&target, "keep me").unwrap();
+        symlink(&target, &link).unwrap();
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "explorer::tests::trash_moves_the_link_and_keeps_its_target"])
+            .env("ULE_TEST_TRASH_LINK", &link)
+            .env("HOME", &root)
+            .env("PATH", root.join("bin"))
+            .output().unwrap();
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+        assert!(target.exists(), "trashing a link must never trash the target");
+        assert!(!link.is_symlink());
+        assert!(root.join(".Trash/link").is_symlink());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

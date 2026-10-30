@@ -122,7 +122,8 @@ impl Document {
                 if bytes.iter().take(8000).any(|byte| *byte == 0) {
                     return Err(io::Error::new(io::ErrorKind::InvalidData, "binary file"));
                 }
-                let content = String::from_utf8_lossy(&bytes).into_owned();
+                let content = String::from_utf8(bytes)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("file is not UTF-8: {error}")))?;
                 doc.load(&content);
                 doc.mtime = fs::metadata(&path).and_then(|meta| meta.modified()).ok();
                 doc.readonly = fs::metadata(&path).map(|meta| meta.permissions().readonly()).unwrap_or(false);
@@ -206,7 +207,7 @@ impl Document {
 
     /// Replaces `start..end` with `text`; returns the end of the new text.
     pub fn replace(&mut self, start: Pos, end: Pos, text: &str, cursor: Pos) -> Pos {
-        let start = self.text.clamp(start.min(end));
+        let (start, end) = (self.text.clamp(start.min(end)), self.text.clamp(start.max(end)));
         self.remove(start, end, cursor);
         self.insert(start, text, cursor)
     }
@@ -277,8 +278,10 @@ impl Document {
             path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
             std::process::id()
         ));
+        // An existing temporary path may be a symlink or belong to another save.
+        // Acquire it exclusively before entering the cleanup scope.
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
         let result = (|| {
-            let mut file = fs::File::create(&temporary)?;
             file.write_all(content.as_bytes())?;
             file.sync_all()?;
             if let Some(permissions) = &permissions {
@@ -464,6 +467,41 @@ mod tests {
         doc.set_content("a:\n\tb\n\tc\n\td\n");
         doc.detect_indent();
         assert_eq!(doc.indent.as_deref(), Some("\t"));
+    }
+
+    #[test]
+    fn invalid_utf8_is_refused_without_lossy_conversion() {
+        let path = temp("invalid-utf8.txt");
+        fs::write(&path, [b'a', 0xff, b'b']).unwrap();
+        let (languages, _) = Languages::load(None);
+        assert_eq!(Document::open(1, &path, &languages).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(fs::read(&path).unwrap(), [b'a', 0xff, b'b']);
+    }
+
+    #[test]
+    fn replacing_a_reversed_range_removes_the_whole_range() {
+        let mut doc = Document::scratch(1, "x", DocKind::File);
+        doc.set_content("abcdef");
+        doc.replace(Pos::new(0, 4), Pos::new(0, 1), "X", Pos::default());
+        assert_eq!(doc.text.to_string_lf(), "aXef");
+    }
+
+    #[test]
+    fn save_does_not_follow_an_existing_temporary_symlink() {
+        let path = temp("safe-save.txt");
+        let victim = path.with_file_name("victim.txt");
+        fs::write(&victim, "keep me").unwrap();
+        let temporary = path.with_file_name(format!(".safe-save.txt.ule-{}", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &temporary).unwrap();
+        let mut doc = Document::scratch(1, "x", DocKind::File);
+        doc.set_content("new content");
+        let result = doc.save_to(&path, true);
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "keep me");
+        if result.is_ok() {
+            assert_eq!(fs::read_to_string(&path).unwrap(), "new content\n");
+        }
+        assert!(temporary.is_symlink(), "a preexisting file belongs to someone else");
+        fs::remove_file(temporary).unwrap();
     }
 
     #[test]

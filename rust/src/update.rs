@@ -6,13 +6,14 @@ use std::process::Command;
 
 use crate::commands;
 use crate::config;
+use crate::features;
 use crate::help::print_if_requested;
 use crate::util::{home, is_executable, shell_join, which};
 use crate::{COMMIT, VERSION};
 
 pub const REPOSITORY: &str = "https://github.com/SDH4114/UnLaw.git";
 
-fn repository() -> String {
+pub(crate) fn repository() -> String {
     env::var("UNLAW_UPDATE_REPOSITORY").ok().filter(|url| !url.is_empty()).unwrap_or_else(|| REPOSITORY.into())
 }
 
@@ -57,7 +58,7 @@ fn parse(args: &[String]) -> Result<Options, ()> {
 }
 
 /// `https://github.com/OWNER/REPO(.git)` → raw URL of a file at `git_ref`.
-fn raw_url(repository: &str, git_ref: &str, file: &str) -> Option<String> {
+pub(crate) fn raw_url(repository: &str, git_ref: &str, file: &str) -> Option<String> {
     let path = repository.strip_prefix("https://github.com/")?.trim_end_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path);
     let (owner, repo) = path.split_once('/')?;
@@ -164,17 +165,39 @@ fn install_root() -> PathBuf {
         .unwrap_or_else(|| home().join(".local"))
 }
 
-pub fn run(args: &[String]) -> i32 {
-    if print_if_requested("update", args) {
-        return 0;
-    }
-    let Ok(options) = parse(args) else {
-        eprintln!("Usage: ul update [--check] [--force] [--branch <name>|--tag <name>]");
-        return 2;
+/// The features to build: the configured ones, or this build's when the
+/// configuration cannot be read.
+fn selection() -> Vec<&'static str> {
+    config::load().map(|config| features::selected(&config)).unwrap_or_else(|_| features::compiled())
+}
+
+/// `cargo install` arguments for both packages; unlaw gets the chosen cargo
+/// features, ule has none.
+fn install_commands(cargo: &Path, root: &Path, source: &Source, rev: Option<&str>, selection: &[&str]) -> Vec<Vec<String>> {
+    let package = |name: &str| {
+        let mut command =
+            vec![cargo.to_string_lossy().into_owned(), "install".into(), "--locked".into(), "--force".into(), "--git".into(), repository()];
+        match (rev, source) {
+            (Some(rev), _) => command.extend(["--rev".into(), rev.to_string()]),
+            (None, Source::Default) => {}
+            (None, Source::Branch(name)) => command.extend(["--branch".into(), name.clone()]),
+            (None, Source::Tag(name)) => command.extend(["--tag".into(), name.clone()]),
+        }
+        command.extend(["--root".into(), root.to_string_lossy().into_owned()]);
+        if name == "unlaw" {
+            command.push("--no-default-features".into());
+            let cargo_features = features::cargo_features(selection);
+            if !cargo_features.is_empty() {
+                command.extend(["--features".into(), cargo_features.join(",")]);
+            }
+        }
+        command.push(name.into());
+        command
     };
-    if options.check {
-        return check(&options);
-    }
+    vec![package("unlaw"), package("ule")]
+}
+
+fn install(source: &Source, rev: Option<&str>) -> i32 {
     let Some(cargo) = cargo() else {
         eprintln!(
             "unlaw update: cargo was not found. Install Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
@@ -184,52 +207,34 @@ pub fn run(args: &[String]) -> i32 {
     let config = config::load().ok();
     let python = commands::python(config.as_ref());
     let root = install_root();
-    // Nothing to do when this build is the published commit and ule is installed too.
-    if !options.force && !COMMIT.is_empty() && root.join("bin").join("ule").is_file() {
-        if let Some(latest) = remote_commit(&repository(), &options.source) {
-            if latest == COMMIT {
-                println!("Unlaw {VERSION} ({COMMIT}) is up to date. `ul update --force` reinstalls anyway.");
-                return 0;
+    for command in install_commands(&cargo, &root, source, rev, &selection()) {
+        println!("Updating Unlaw {VERSION}: {}", shell_join(&command));
+        let mut process = Command::new(&command[0]);
+        process.args(&command[1..]);
+        // One build folder for both packages and every update: shared dependencies
+        // compile once, and later updates rebuild only what changed.
+        if env::var_os("CARGO_TARGET_DIR").is_none() {
+            let cache = home().join("Library").join("Caches").join("unlaw").join("cargo-target");
+            process.env("CARGO_TARGET_DIR", &cache);
+        }
+        if let Some(python) = &python {
+            process.env("UNLAW_PYTHON", python);
+        }
+        let status = match process.status() {
+            Ok(status) => status,
+            Err(error) => {
+                eprintln!("unlaw update: Could not run cargo: {error}");
+                return 1;
             }
+        };
+        if !status.success() {
+            if command.last().is_some_and(|package| package == "ule") {
+                eprintln!("unlaw update: unlaw was installed, but ule installation failed; run `ul update --force` to retry.");
+            } else {
+                eprintln!("unlaw update: cargo install failed; the installed version was not changed.");
+            }
+            return status.code().unwrap_or(1);
         }
-    }
-    let mut command = vec![
-        cargo.to_string_lossy().into_owned(),
-        "install".into(),
-        "--locked".into(),
-        "--force".into(),
-        "--git".into(),
-        repository(),
-    ];
-    match &options.source {
-        Source::Default => {}
-        Source::Branch(name) => command.extend(["--branch".into(), name.clone()]),
-        Source::Tag(name) => command.extend(["--tag".into(), name.clone()]),
-    }
-    // Both packages of the workspace: ul/unlaw/ula and the editor ule.
-    command.extend(["--root".into(), root.to_string_lossy().into_owned(), "unlaw".into(), "ule".into()]);
-    println!("Updating Unlaw {VERSION}: {}", shell_join(&command));
-    let mut process = Command::new(&command[0]);
-    process.args(&command[1..]);
-    // One build folder for both packages and every update: shared dependencies
-    // compile once, and later updates rebuild only what changed.
-    if env::var_os("CARGO_TARGET_DIR").is_none() {
-        let cache = home().join("Library").join("Caches").join("unlaw").join("cargo-target");
-        process.env("CARGO_TARGET_DIR", &cache);
-    }
-    if let Some(python) = &python {
-        process.env("UNLAW_PYTHON", python);
-    }
-    let status = match process.status() {
-        Ok(status) => status,
-        Err(error) => {
-            eprintln!("unlaw update: Could not run cargo: {error}");
-            return 1;
-        }
-    };
-    if !status.success() {
-        eprintln!("unlaw update: cargo install failed; the installed version was not changed.");
-        return status.code().unwrap_or(1);
     }
     let installed = root.join("bin").join("ul");
     let version = Command::new(&installed)
@@ -242,6 +247,41 @@ pub fn run(args: &[String]) -> i32 {
     println!("Updated to {version} in {}.", root.join("bin").display());
     println!("Unchanged default commands are upgraded on the next run; edited ones are kept.");
     0
+}
+
+/// Rebuild this same commit with the configured features (`ul features`), so
+/// adding a feature never upgrades everything else by surprise.
+pub fn rebuild() -> i32 {
+    if COMMIT.is_empty() {
+        println!("This build's commit is unknown; installing the newest commit of main instead.");
+        return install(&Source::Default, None);
+    }
+    install(&Source::Default, Some(COMMIT))
+}
+
+pub fn run(args: &[String]) -> i32 {
+    if print_if_requested("update", args) {
+        return 0;
+    }
+    let Ok(options) = parse(args) else {
+        eprintln!("Usage: ul update [--check] [--force] [--branch <name>|--tag <name>]");
+        return 2;
+    };
+    if options.check {
+        return check(&options);
+    }
+    let root = install_root();
+    // Nothing to do when this build is the published commit with the chosen
+    // features and ule is installed too.
+    if !options.force && !COMMIT.is_empty() && root.join("bin").join("ule").is_file() && !features::needs_rebuild(&selection()) {
+        if let Some(latest) = remote_commit(&repository(), &options.source) {
+            if latest == COMMIT {
+                println!("Unlaw {VERSION} ({COMMIT}) is up to date. `ul update --force` reinstalls anyway.");
+                return 0;
+            }
+        }
+    }
+    install(&options.source, None)
 }
 
 #[cfg(test)]
@@ -263,6 +303,18 @@ mod tests {
         for bad in [&["--branch"][..], &["--branch", "--check"], &["--tag", "a", "--branch", "b"], &["--check", "--check"], &["now"]] {
             assert_eq!(parse(&words(bad)), Err(()), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn unlaw_gets_the_chosen_cargo_features_and_ule_none() {
+        let commands = install_commands(Path::new("/c/cargo"), Path::new("/r"), &Source::Tag("v3".into()), None, &["lm", "agent", "yt"]);
+        let unlaw = commands[0].join(" ");
+        assert!(unlaw.ends_with("--root /r --no-default-features --features lm,agent unlaw"), "{unlaw}");
+        assert!(unlaw.contains("--tag v3"));
+        assert_eq!(commands[1].last().map(String::as_str), Some("ule"));
+        assert!(!commands[1].iter().any(|arg| arg.starts_with("--features") || arg == "--no-default-features"));
+        let bare = install_commands(Path::new("cargo"), Path::new("/r"), &Source::Default, Some("abc1234"), &["yt"]);
+        assert!(bare[0].join(" ").ends_with("--rev abc1234 --root /r --no-default-features unlaw"), "{:?}", bare[0]);
     }
 
     #[test]

@@ -95,17 +95,6 @@ class LauncherCommandTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self._run(command), arguments)
 
-    def test_browser_opens_duckduckgo_by_default(self) -> None:
-        self.assertEqual(self._run("browser"), ["https://duckduckgo.com/"])
-
-    def test_browser_opens_the_user_configured_page(self) -> None:
-        from unlawful.config import ensure_layout, set_config_value
-
-        with patch.dict(os.environ, self.env, clear=True):
-            ensure_layout()
-            set_config_value("apps.browser_url", "https://example.com/start")
-        self.assertEqual(self._run("browser"), ["https://example.com/start"])
-
     def test_tg_without_arguments_opens_telegram(self) -> None:
         self.assertEqual(self._run("tg", tty=True), ["-a", "Telegram"])
 
@@ -116,50 +105,109 @@ class CurlInstallerTests(unittest.TestCase):
         script.write_text("#!/bin/sh\n" + body, encoding="utf-8")
         script.chmod(0o755)
 
-    def _install(self, *, uv_has_unlaw: bool) -> tuple[subprocess.CompletedProcess[str], Path]:
+    def _install(
+        self, *, uv_has_unlaw: bool, features: str | None = None, prepare: object = None
+    ) -> tuple[subprocess.CompletedProcess[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         fake_bin = root / "bin"
         fake_bin.mkdir()
-        cargo_log, uv_log = root / "cargo.txt", root / "uv.txt"
-        self._fake(fake_bin, "cargo", f'printf "%s\\n" "UNLAW_PYTHON=$UNLAW_PYTHON" "$@" > "{cargo_log}"\n')
-        self._fake(fake_bin, "python3.13", "exit 0\n")
+        cargo_log, uv_log, ul_log = root / "cargo.txt", root / "uv.txt", root / "ul.txt"
+        # Each cargo call is logged; installing unlaw puts a fake ul into --root/bin.
+        self._fake(
+            fake_bin,
+            "cargo",
+            f'printf "%s\\n" "UNLAW_PYTHON=$UNLAW_PYTHON" "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "$@" "==" >> "{cargo_log}"\n'
+            'while [ "$1" != --root ]; do shift; done\n'
+            'mkdir -p "$2/bin"\n'
+            f'printf \'#!/bin/sh\\nprintf "%%s\\\\n" "$@" > "{ul_log}"\\n\' > "$2/bin/ul"\n'
+            'chmod +x "$2/bin/ul"\n',
+        )
+        (fake_bin / "python3.13").symlink_to(sys.executable)
         listing = "unlaw v2.1.3" if uv_has_unlaw else "ruff v0.1"
         self._fake(
             fake_bin,
             "uv",
             f'if [ "$2" = list ]; then echo "{listing}"; else printf "%s\\n" "$@" > "{uv_log}"; fi\n',
         )
+        if callable(prepare):
+            prepare(root)
         installer = ROOT / "install.sh"
+        env = {"PATH": f"{fake_bin}{os.pathsep}/usr/bin{os.pathsep}/bin", "HOME": str(root / "home")}
+        if features is not None:
+            env["UNLAW_FEATURES"] = features
         result = subprocess.run(
             ["sh", str(installer)],
-            env={"PATH": f"{fake_bin}{os.pathsep}/usr/bin{os.pathsep}/bin", "HOME": str(root / "home")},
+            env=env,
             capture_output=True,
             text=True,
             check=False,
+            # No controlling terminal, so the checklist is skipped like in CI.
+            start_new_session=True,
         )
         return result, root
+
+    def cargo_calls(self, root: Path) -> list[list[str]]:
+        calls, current = [], []
+        for line in (root / "cargo.txt").read_text(encoding="utf-8").splitlines():
+            if line == "==":
+                calls.append(current)
+                current = []
+            else:
+                current.append(line)
+        return calls
 
     def test_installer_builds_the_rust_core_into_local_bin(self) -> None:
         result, root = self._install(uv_has_unlaw=False)
         self.assertEqual(result.returncode, 0, result.stderr)
+        common = [
+            "UNLAW_PYTHON=python3.13",
+            f"CARGO_TARGET_DIR={root / 'home' / 'Library' / 'Caches' / 'unlaw' / 'cargo-target'}",
+            "install",
+            "--locked",
+            "--force",
+            "--git",
+            "https://github.com/SDH4114/UnLaw.git",
+            "--root",
+            str(root / "home" / ".local"),
+        ]
         self.assertEqual(
-            (root / "cargo.txt").read_text(encoding="utf-8").splitlines(),
-            [
-                "UNLAW_PYTHON=python3.13",
-                "install",
-                "--locked",
-                "--force",
-                "--git",
-                "https://github.com/SDH4114/UnLaw.git",
-                "--root",
-                str(root / "home" / ".local"),
-                "unlaw",
-                "ule",
-            ],
+            self.cargo_calls(root),
+            [[*common, "--no-default-features", "--features", "lm,agent,game", "unlaw"], [*common, "ule"]],
         )
+        self.assertEqual((root / "ul.txt").read_text().splitlines(), ["features", "set", "--no-build", "all"])
+        self.assertIn("Installing the core and: all", result.stdout)
         self.assertFalse((root / "uv.txt").exists())
+
+    def test_reinstalling_keeps_the_existing_choice_without_asking(self) -> None:
+        def prepare(root: Path) -> None:
+            config = root / "home" / ".config" / "unlaw" / "config.toml"
+            config.parent.mkdir(parents=True)
+            config.write_text('[core]\nfeatures = ["yt", "game"]\n')
+
+        result, root = self._install(uv_has_unlaw=False, prepare=prepare)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("keeping its features", result.stdout)
+        self.assertEqual(self.cargo_calls(root)[0][-4:], ["--no-default-features", "--features", "game", "unlaw"])
+        self.assertEqual((root / "ul.txt").read_text().splitlines(), ["features", "set", "--no-build", "yt", "game"])
+
+    def test_installer_takes_features_from_the_environment(self) -> None:
+        result, root = self._install(uv_has_unlaw=False, features="yt agent")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        unlaw, ule = self.cargo_calls(root)
+        self.assertEqual(unlaw[-4:], ["--no-default-features", "--features", "lm,agent", "unlaw"])
+        self.assertEqual(ule[-1], "ule")
+        self.assertEqual((root / "ul.txt").read_text().splitlines(), ["features", "set", "--no-build", "lm", "agent", "yt"])
+        result, root = self._install(uv_has_unlaw=False, features="music")
+        self.assertEqual(self.cargo_calls(root)[0][-2:], ["--no-default-features", "unlaw"])
+        result, root = self._install(uv_has_unlaw=False, features="none")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((root / "ul.txt").read_text().splitlines(), ["features", "set", "--no-build", "none"])
+        result, root = self._install(uv_has_unlaw=False, features="nope")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("nope", result.stderr)
+        self.assertFalse((root / "cargo.txt").exists(), "nothing is built for an unknown feature")
 
     def test_installer_removes_the_previous_uv_tool(self) -> None:
         result, root = self._install(uv_has_unlaw=True)

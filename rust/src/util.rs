@@ -3,7 +3,7 @@
 
 use std::env;
 use std::ffi::OsStr;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -44,7 +44,7 @@ pub fn create_new_atomic(destination: &Path, text: &str, prefix: &str) -> io::Re
     let directory = destination.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(directory)?;
     let temporary = directory.join(format!("{prefix}{}.tmp", std::process::id()));
-    let mut handle = File::create(&temporary)?;
+    let mut handle = OpenOptions::new().write(true).create_new(true).open(&temporary)?;
     let result = (|| {
         handle.write_all(text.as_bytes())?;
         handle.sync_all()?;
@@ -297,6 +297,19 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(fs::read_to_string(&target).unwrap(), "first");
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn create_new_atomic_does_not_truncate_a_temporary_symlink() {
+        let directory = scratch("symlink");
+        let victim = directory.join("victim");
+        fs::write(&victim, "private data").unwrap();
+        let temporary = directory.join(format!(".new.{}.tmp", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &temporary).unwrap();
+        let _ = create_new_atomic(&directory.join("new"), "replacement", ".new.");
+        assert_eq!(fs::read_to_string(victim).unwrap(), "private data");
+        assert!(temporary.is_symlink());
         fs::remove_dir_all(directory).unwrap();
     }
 

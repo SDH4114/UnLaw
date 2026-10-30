@@ -989,6 +989,7 @@ class Tools:
             raise ToolError("query is empty")
         found: list[str] = []
         guard = protected()
+        allowed_roots = roots(self.config)
         deadline = time.monotonic() + 20
         for directory, folders, files in os.walk(folder):
             folders[:] = [
@@ -998,7 +999,13 @@ class Tools:
             ]
             for name in files:
                 candidate = Path(directory) / name
-                if denied(candidate, guard):
+                try:
+                    target = candidate.resolve()
+                except (OSError, RuntimeError):
+                    continue
+                if denied(candidate, guard) or denied(target, guard):
+                    continue
+                if not any(target == root or root in target.parents for root in allowed_roots):
                     continue
                 if not content and needle in name.casefold():
                     found.append(str(candidate))

@@ -1,4 +1,4 @@
-"""The built-in Rust commands (zip, game), migration from their Python seeds, and Rust user commands."""
+"""The built-in Rust commands (zip, game, app, browser), migration from their Python seeds, and Rust user commands."""
 
 from __future__ import annotations
 
@@ -267,7 +267,46 @@ class GameTests(CoreTestCase):
         self.assertEqual(process.returncode, 0)
 
 
+class LauncherBuiltinTests(CoreTestCase):
+    def test_app_opens_the_named_application(self) -> None:
+        log = self.recording_tool("open")
+        self.ok("app", "Visual", "Studio", "Code")
+        self.assertEqual(self.calls(log), [["-a", "Visual Studio Code"]])
+        self.assertEqual(self.ul("app").returncode, 2)
+        self.assertIn("Usage: ul app", self.ok("app", "--help").stdout)
+        self.assertEqual(self.calls(log), [["-a", "Visual Studio Code"]], "help and usage open nothing")
+
+    def test_browser_opens_the_configured_homepage(self) -> None:
+        log = self.recording_tool("open")
+        self.ok("browser")
+        self.ok("config", "set", "apps.browser_url", "https://example.com/start")
+        self.ok("browser")
+        self.assertEqual(self.calls(log), [["https://duckduckgo.com/"], ["https://example.com/start"]])
+        self.assertEqual(self.ul("browser", "extra").returncode, 2)
+        self.assertIn("apps.browser_url", self.ok("browser", "-h").stdout)
+
+    def test_open_failures_pass_through(self) -> None:
+        self.recording_tool("open", exit_code=3)
+        self.assertEqual(self.ul("app", "Nope").returncode, 3)
+
+
 class BuiltinMigrationTests(CoreTestCase):
+    def old_seed(self, name: str) -> str:
+        return (HERE / "fixtures" / f"{name}-3.8.0.py").read_text(encoding="utf-8")
+
+    def test_seed_copies_without_blank_lines_or_docstring_are_retired_too(self) -> None:
+        source = self.old_seed("browser")
+        lines = [line for line in source.splitlines() if line.strip()]
+        stripped = "\n".join(line for index, line in enumerate(lines) if not (index < 3 and line.startswith('"""')))
+        self.command("browser", stripped + "\n")
+        self.command("app", self.old_seed("app").replace("\n\n", "\n"))
+        self.ok("init")
+        self.assertFalse((self.unlaw / "commands" / "browser").exists())
+        self.assertFalse((self.unlaw / "commands" / "app").exists())
+        self.command("app", self.old_seed("app") + "# mine\n")
+        self.ok("init")
+        self.assertTrue((self.unlaw / "commands" / "app" / "main.py").exists(), "an edited copy stays")
+
     def test_builtins_are_listed_and_resolved(self) -> None:
         self.assertEqual(self.ok("which", "zip").stdout, "zip: builtin (Rust)\n")
         self.assertIn("zip              Compress files", self.ok("commands", "--describe").stdout)
@@ -287,6 +326,14 @@ class BuiltinMigrationTests(CoreTestCase):
         )
         self.ok("init")
         self.assertFalse(legacy.parent.exists(), "an untouched official zip seed is removed")
+        for name in ("app", "browser"):
+            # The 3.8.0 seeds, as Haos's Mac and every 3.8.0 install has them.
+            seed = self.unlaw / "commands" / name / "main.py"
+            seed.parent.mkdir(parents=True)
+            seed.write_text(self.old_seed(name))
+        self.ok("init")
+        for name in ("app", "browser"):
+            self.assertFalse((self.unlaw / "commands" / name).exists(), f"untouched {name} seed is removed")
         edited = self.command("game", "print('my own game')\n")
         self.assertEqual(self.ok("game").stdout, "my own game\n")
         self.assertTrue(edited.exists())

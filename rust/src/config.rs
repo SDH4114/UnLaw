@@ -448,6 +448,7 @@ pub fn validate(config: &Value) -> Vec<String> {
             }
         }
     }
+    errors.extend(crate::features::config_errors(config.lookup("core.features")));
     errors.extend(agent_errors(config.get("agent")));
     match config.get("aliases") {
         Some(Value::Table(entries)) => {

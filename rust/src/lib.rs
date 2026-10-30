@@ -6,10 +6,13 @@ mod assets {
     include!(concat!(env!("OUT_DIR"), "/assets.rs"));
 }
 mod builtin;
+mod catalog;
+mod checklist;
 mod commands;
 mod config;
 mod config_cmd;
 mod editor;
+mod features;
 mod help;
 mod layout;
 mod shell;
@@ -48,6 +51,7 @@ fn system(name: &str, args: &[String]) -> Option<i32> {
         "create" => system::create(args),
         "doctor" => system::doctor(args),
         "edit" => editor::run(args),
+        "features" => features::run(args),
         "init" => system::init(args),
         "list" => system::list_all(args),
         "skills" => skills::run(args),
@@ -145,6 +149,17 @@ fn unknown(name: &str, aliases: &[(String, Vec<String>)]) -> i32 {
     available.extend(builtin::names().map(str::to_string));
     available.extend(aliases.iter().map(|(alias, _)| alias.clone()));
     let available: Vec<String> = available.into_iter().collect();
+    if let Some(feature) = features::find(name) {
+        let selected = config::load().map(|config| features::selected(&config).contains(&feature.name)).unwrap_or(false);
+        if selected && feature.seed {
+            eprintln!("unlaw: {name} is selected but commands/{name} is missing. Restore it: ul init");
+        } else if selected {
+            eprintln!("unlaw: {name} is selected but this ul was built without it. Rebuild: ul update");
+        } else {
+            eprintln!("unlaw: {name} is not installed. Add it: ul features add {name}");
+        }
+        return 2;
+    }
     let suggestions = util::close_matches(name, &available, 3, 0.55);
     eprintln!("unlaw: Unknown command: {name}");
     if suggestions.is_empty() {
@@ -156,10 +171,6 @@ fn unknown(name: &str, aliases: &[(String, Vec<String>)]) -> i32 {
 }
 
 pub fn main_with(argv: Vec<String>) -> i32 {
-    if let Err(error) = layout::ensure_layout() {
-        eprintln!("unlaw: Could not initialize configuration: {error}");
-        return 1;
-    }
     let mut args = argv;
     let (mut dry_run, mut verbose) = (false, false);
     while let Some(flag) = args.first() {
@@ -185,6 +196,21 @@ pub fn main_with(argv: Vec<String>) -> i32 {
     }
 
     let (name, rest) = (args[0].clone(), args[1..].to_vec());
+    // Built-in/system help must work without creating or migrating user files.
+    if help::wants_help(&rest) {
+        if help::is_system(&name) {
+            print!("{}", help::system_help(&name));
+            return 0;
+        }
+        if commands::resolve(&name).is_none() && builtin::is_builtin(&name) {
+            print!("{}", builtin::help(&name));
+            return 0;
+        }
+    }
+    if let Err(error) = layout::ensure_layout() {
+        eprintln!("unlaw: Could not initialize configuration: {error}");
+        return 1;
+    }
     if let Some(code) = hidden(&name, &rest) {
         return code;
     }

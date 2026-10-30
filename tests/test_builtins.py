@@ -29,16 +29,6 @@ class InTemporaryDirectory(unittest.TestCase):
         self.addCleanup(self.env_patch.stop)
 
 
-class AppCommandTests(unittest.TestCase):
-    def test_app_uses_macos_open(self) -> None:
-        from unlawful.built_in_commands.app import main as app
-
-        completed = subprocess.CompletedProcess([], 0)
-        with patch.object(app.subprocess, "run", return_value=completed) as run:
-            self.assertEqual(app.main(["Zed"]), 0)
-        run.assert_called_once_with(["open", "-a", "Zed"], check=False)
-
-
 class GitCommandTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()

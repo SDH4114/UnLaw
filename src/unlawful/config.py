@@ -4,12 +4,15 @@ import copy
 import json
 import os
 import re
+import shutil
 import tempfile
 import tomllib
 from pathlib import Path
 from typing import Any
 
 from .command_sources import command_source, is_replaceable_command_source
+from .features import NAMES as OPTIONAL_FEATURES
+from .features import resolve as resolve_features
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "core": {
@@ -19,6 +22,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "show_timing": False,
         "python": "auto",
         "editor": "auto",
+        "features": ["all"],
     },
     "aliases": {},
     "storage": {"root": "data"},
@@ -86,8 +90,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
 TEMPLATE_NAMES = ("commands", "python", "rust", "cpp", "projects")
 DEFAULT_COMMAND_NAMES = (
     "agent",
-    "app",
-    "browser",
     "capture",
     "cpp",
     "git",
@@ -147,13 +149,46 @@ def storage_path(*parts: str) -> Path:
     return root.joinpath(*parts)
 
 
+def _configured_selection() -> list[str] | None:
+    """The chosen features, or None when config.toml cannot be read or is invalid."""
+    try:
+        with config_file().open("rb") as handle:
+            config = _deep_merge(DEFAULT_CONFIG, tomllib.load(handle))
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    return None if validate_config(config) else selected_features(config)
+
+
 def _seed_default_commands() -> None:
+    """Seed chosen features and remove untouched seeds of the others; mirrors rust/src/layout.rs."""
     root = user_commands_dir()
+    selection = _configured_selection()
     for name in DEFAULT_COMMAND_NAMES:
         destination = root / name / "main.py"
-        if destination.exists() and not is_replaceable_command_source(
-            destination.read_text(encoding="utf-8"), name
-        ):
+        if destination.parent.is_symlink() or destination.is_symlink():
+            continue
+        try:
+            existing = destination.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            existing = None
+        except (OSError, UnicodeError):
+            continue
+        if selection is not None and name not in selection:
+            if existing is not None and is_replaceable_command_source(existing, name):
+                destination.unlink()
+                (destination.parent / ".DS_Store").unlink(missing_ok=True)
+                shutil.rmtree(destination.parent / "__pycache__", ignore_errors=True)
+                try:
+                    destination.parent.rmdir()
+                except OSError:
+                    pass
+            continue
+        if selection is None and not destination.parent.exists():
+            continue
+        if existing is not None:
+            if not is_replaceable_command_source(existing, name):
+                continue
+        elif any((destination.parent / entry).exists() for entry in ("main.sh", "main.js", "Cargo.toml", "main")):
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(command_source(name), encoding="utf-8")
@@ -220,6 +255,20 @@ def _expect(
     if choices is not None and value not in choices:
         expected = ", ".join(map(str, sorted(choices)))
         raise ConfigError(f"Invalid {dotted}: expected one of {expected}")
+
+
+def _feature_errors(features: Any) -> list[str]:
+    """Rules for core.features; mirrored in rust/src/features.rs (`config_errors`)."""
+    message = "Invalid core.features: expected an array of feature names"
+    if not isinstance(features, list) or not all(isinstance(item, str) for item in features):
+        return [message]
+    return [f"Unknown feature in core.features: {name}" for name in features if name != "all" and name not in OPTIONAL_FEATURES]
+
+
+def selected_features(config: dict[str, Any]) -> list[str]:
+    """`core.features` with "all" expanded and requirements added, like the Rust core."""
+    names = config.get("core", {}).get("features", ["all"])
+    return resolve_features(names if isinstance(names, list) else ["all"])
 
 
 def _agent_errors(agent: Any) -> list[str]:
@@ -366,6 +415,8 @@ def validate_config(config: dict[str, Any]) -> list[str]:
             errors.append("Invalid zip.level: expected 0-9 or store, fastest, fast, normal, max, ultra")
     except ConfigError as error:
         errors.append(str(error))
+    core = config.get("core")
+    errors.extend(_feature_errors(core.get("features") if isinstance(core, dict) else None))
     errors.extend(_agent_errors(config.get("agent")))
     aliases = config.get("aliases")
     if not isinstance(aliases, dict):

@@ -313,6 +313,24 @@ class AgentCommandTests(AgentCase):
         self.assertNotIn("KEY", "".join(results))
         self.assertNotIn("TOKEN=1", "".join(results))
 
+    def test_search_cannot_read_secrets_or_outside_roots_through_links(self) -> None:
+        secret = self.files / ".env"
+        secret.write_text("UNIQUE_SECRET_MARKER=1")
+        outside = self.home / "outside.txt"
+        outside.write_text("UNIQUE_SECRET_MARKER=2")
+        (self.files / "innocent.txt").symlink_to(secret)
+        (self.files / "outside-link.txt").symlink_to(outside)
+        (self.files / "inside-link.txt").symlink_to(self.files / "notes.txt")
+        model = self.model([
+            call("search", query="UNIQUE_SECRET_MARKER", path=str(self.files), content=True),
+            call("search", query="alpha", path=str(self.files), content=True),
+            {"content": "done"},
+        ])
+        self.ok("agent", "search")
+        results = model.tool_results()
+        self.assertNotIn("UNIQUE_SECRET_MARKER=", results[0])
+        self.assertIn("inside-link.txt", results[1])
+
     def test_changes_need_approval(self) -> None:
         target = self.files / "new.txt"
         model = self.model(

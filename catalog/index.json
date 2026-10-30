@@ -1,0 +1,100 @@
+{
+ "format": 1,
+ "commands": [
+  {
+   "name": "agent",
+   "summary": "Your local AI agent: files, TODO board and schedule, in the console or Telegram.",
+   "sha256": "b01cdecf794e5137f75226df9d148db002d641238b90cbeb86e7cc475f5e2727"
+  },
+  {
+   "name": "capture",
+   "summary": "Capture screenshots or record screen, camera and microphone.",
+   "sha256": "93524963e0f27a49e034da77dbdc259f85104d0d594c151b6c46ed71dfc4adfd"
+  },
+  {
+   "name": "cpp",
+   "summary": "Create a C++ project from the configured templates.",
+   "sha256": "8b29e6379a137b88c35caf88dc1fa7c72db6f0e9f4d9efdea58738be2d075d06"
+  },
+  {
+   "name": "git",
+   "summary": "Stage, commit and push the current Git project, or run a Git action.",
+   "sha256": "6c31d29bcf57a73f1d09fc14bcd04255519c2a76401ca524dbc1427bd2f0a2d7"
+  },
+  {
+   "name": "gpt",
+   "summary": "Open the ChatGPT macOS application.",
+   "sha256": "6c08d56baa4bcd2808647d8b9e3850f06d771c776d1627eba22554a9cc836d9f"
+  },
+  {
+   "name": "lofi",
+   "summary": "Open the configured lofi website in your default browser.",
+   "sha256": "de3712d5f03e53e447531dd0270f154372a5b3f1afa31de915ba57b8f9f057a8"
+  },
+  {
+   "name": "mac",
+   "summary": "Control macOS applications through optional macos-harness.",
+   "sha256": "ebc638dd6a9924ac87e72aaf9113697748c1c4dd4db03545094493dab9b544c0"
+  },
+  {
+   "name": "minecraft",
+   "summary": "Open the Prism Launcher macOS application for Minecraft.",
+   "sha256": "dc43ae7bd02a6f6bec09328218362ea4462be6d33fb3f08e8d2911aec6fec90d"
+  },
+  {
+   "name": "music",
+   "summary": "Open Spotify, or search for a track and attempt to play it.",
+   "sha256": "89547b5e5a0231b58e8ae8d5479a0a29504f83f33b5654d8695e86a640b6a838"
+  },
+  {
+   "name": "netflix",
+   "summary": "Open Netflix in your default browser.",
+   "sha256": "38e1a6839e12369d20012f5bfdc19c60b4d95511c80b5cf606d4c61d5888a64c"
+  },
+  {
+   "name": "obsidian",
+   "summary": "Open the Obsidian macOS application.",
+   "sha256": "661832a90e068aef9b18964d06e0cbcd17eaa63e5412cc56f2c1c77396275ced"
+  },
+  {
+   "name": "py",
+   "summary": "Create a Python project from the configured templates.",
+   "sha256": "b571fa22dcafcb547e5f4dc2b17b512219ca1cc079b1cde71e37b70c26357bc2"
+  },
+  {
+   "name": "rust",
+   "summary": "Create a Rust project using Cargo and the configured templates.",
+   "sha256": "11dca21812881b5e076e8ecfddaf63548444d5ad4ad8c8d107d4266f8275841d"
+  },
+  {
+   "name": "steam",
+   "summary": "Open the Steam macOS application.",
+   "sha256": "577bb17e2452c055e961da61348642f62e6cbd5bc9b1bceb2f2aab6885bcac6d"
+  },
+  {
+   "name": "tg",
+   "summary": "Open Telegram, or send and download messages/files through your bot.",
+   "sha256": "de149db5991eb8b148ca7df1723f48d1c87e14ae9292b18523b1ec0249de8e7d"
+  },
+  {
+   "name": "todo",
+   "summary": "Read and update the configured Obsidian TODO board.",
+   "sha256": "30142885066978c9cbb73fdb0a99d3daa4c7b6fdf2c785bac569606ba7d76974"
+  },
+  {
+   "name": "work",
+   "summary": "Open the configured lofi website and the current directory in your editor.",
+   "sha256": "68814b798020bf0f2ec5ce63f8491669cfcb674aa608ec939bd954ff8ebcae1b"
+  },
+  {
+   "name": "yt",
+   "summary": "Open YouTube, search, or download one YouTube video.",
+   "sha256": "1351b55748106ad21a067328f269ad3f16ecd33607cddedf085fe121e13281b6"
+  },
+  {
+   "name": "zed",
+   "summary": "Open the current directory in the configured editor (default: Zed).",
+   "sha256": "341db58fe09d6d4f9320aa2b107c7234c20cd8ffb47efcfd87303ad5b3588923"
+  }
+ ]
+}
