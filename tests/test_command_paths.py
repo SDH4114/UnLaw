@@ -78,13 +78,13 @@ class GitTests(ToolTestCase):
         self.assertEqual(self.lines(log), ["pull"])
 
     def test_prompt_cancel_and_empty_message_stop_before_commit(self) -> None:
-        log = self.tool("git")
+        log = self.tool("git", body="if sys.argv[1:2] == ['diff']:\n    raise SystemExit(1)\n")
         for side_effect, message in ((EOFError, "commit cancelled"), (["  "], "cannot be empty"), (KeyboardInterrupt, "cancelled")):
             with self.subTest(message=message), patch("builtins.input", side_effect=side_effect):
                 code, _, error = self.run_main(git_command.main, [])
                 self.assertEqual(code, 2)
                 self.assertIn(message, error)
-        self.assertEqual(set(self.lines(log)), {"add|."})
+        self.assertEqual(set(self.lines(log)), {"add|.", "diff|--cached|--quiet"})
 
     def test_failures_stop_the_workflow(self) -> None:
         log = self.tool("git", exit_code=1)
@@ -96,9 +96,9 @@ class GitTests(ToolTestCase):
         self.assertIn("unlaw git:", error)
 
     def test_commit_message_tokens_are_joined(self) -> None:
-        log = self.tool("git")
+        log = self.tool("git", body="if sys.argv[1:2] == ['diff']:\n    raise SystemExit(1)\n")
         self.assertEqual(self.run_main(git_command.main, ["fix", "the", "bug"])[0], 0)
-        self.assertEqual(self.lines(log), ["add|.", "commit|-m|fix the bug", "push"])
+        self.assertEqual(self.lines(log), ["add|.", "diff|--cached|--quiet", "commit|-m|fix the bug", "push"])
 
 
 class CaptureTests(ToolTestCase):

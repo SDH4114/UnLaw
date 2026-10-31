@@ -63,8 +63,7 @@ class LayoutTests(CoreTestCase):
 
     def test_untouched_source_from_the_previous_release_is_upgraded(self) -> None:
         current = command_source("git")
-        lines = current.splitlines(keepends=True)
-        previous = lines[0] + "".join(lines[2:])  # 2.1.3 had no summary docstring
+        previous = (Path(__file__).parent / "fixtures" / "git-3.10.0.py").read_text()
         self.assertIn(hashlib.sha256(previous.encode()).hexdigest(), LEGACY_SOURCE_HASHES["git"])
         script = self.command("git", previous)
         self.ok("init")

@@ -29,6 +29,17 @@ class InTemporaryDirectory(unittest.TestCase):
         self.addCleanup(self.env_patch.stop)
 
 
+def git_results(staged: bool = True):
+    """Fake subprocess.run: `git diff --cached --quiet` exits 1 when something is staged."""
+
+    def run(command, check=False):
+        if command[:2] == ["git", "diff"]:
+            return subprocess.CompletedProcess(command, 1 if staged else 0)
+        return subprocess.CompletedProcess(command, 0)
+
+    return run
+
+
 class GitCommandTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -42,13 +53,13 @@ class GitCommandTests(unittest.TestCase):
     def test_git_runs_add_commit_with_message_and_push(self) -> None:
         from unlawful.built_in_commands.git import main as git_command
 
-        completed = subprocess.CompletedProcess([], 0)
-        with patch.object(git_command.subprocess, "run", return_value=completed) as run:
+        with patch.object(git_command.subprocess, "run", side_effect=git_results()) as run:
             self.assertEqual(git_command.main(["fix", "parser"]), 0)
         self.assertEqual(
             run.call_args_list,
             [
                 call(["git", "add", "."], check=False),
+                call(["git", "diff", "--cached", "--quiet"], check=False),
                 call(["git", "commit", "-m", "fix parser"], check=False),
                 call(["git", "push"], check=False),
             ],
@@ -65,8 +76,7 @@ class GitCommandTests(unittest.TestCase):
         command = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(command)
 
-        completed = subprocess.CompletedProcess([], 0)
-        with patch.object(command.subprocess, "run", return_value=completed) as run, patch(
+        with patch.object(command.subprocess, "run", side_effect=git_results()) as run, patch(
             "builtins.input", return_value="update docs"
         ) as prompt:
             self.assertEqual(command.main([]), 0)
@@ -76,10 +86,48 @@ class GitCommandTests(unittest.TestCase):
             run.call_args_list,
             [
                 call(["git", "add", "."], check=False),
+                call(["git", "diff", "--cached", "--quiet"], check=False),
                 call(["git", "commit", "-m", "update docs"], check=False),
                 call(["git", "push"], check=False),
             ],
         )
+
+    def test_git_with_nothing_to_commit_still_pushes(self) -> None:
+        from unlawful.built_in_commands.git import main as git_command
+
+        with patch.object(git_command.subprocess, "run", side_effect=git_results(staged=False)) as run, patch(
+            "builtins.input"
+        ) as prompt:
+            self.assertEqual(git_command.main(["3.10.0"]), 0)
+        prompt.assert_not_called()
+        self.assertEqual(
+            run.call_args_list,
+            [
+                call(["git", "add", "."], check=False),
+                call(["git", "diff", "--cached", "--quiet"], check=False),
+                call(["git", "push"], check=False),
+            ],
+        )
+
+    def test_git_commit_with_nothing_to_commit_does_nothing(self) -> None:
+        from unlawful.built_in_commands.git import main as git_command
+
+        with patch.object(git_command.subprocess, "run", side_effect=git_results(staged=False)) as run:
+            self.assertEqual(git_command.main(["commit", "docs"]), 0)
+        self.assertEqual(
+            run.call_args_list,
+            [call(["git", "add", "."], check=False), call(["git", "diff", "--cached", "--quiet"], check=False)],
+        )
+
+    def test_git_outside_repository_stops_before_commit(self) -> None:
+        from unlawful.built_in_commands.git import main as git_command
+
+        def run(command, check=False):
+            return subprocess.CompletedProcess(command, 128 if command[:2] == ["git", "diff"] else 0)
+
+        with patch.object(git_command.subprocess, "run", side_effect=run) as fake:
+            self.assertEqual(git_command.main(["msg"]), 128)
+        self.assertEqual(len(fake.call_args_list), 2)
 
     def test_git_stops_after_failed_step(self) -> None:
         from unlawful.built_in_commands.git import main as git_command

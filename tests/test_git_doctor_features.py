@@ -14,6 +14,11 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 
+def staged_run(command, check=False):
+    """`git diff --cached --quiet` exits 1: there is something to commit."""
+    return subprocess.CompletedProcess(command, 1 if command[:2] == ["git", "diff"] else 0)
+
+
 class GitDoctorFeatureTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -35,12 +40,15 @@ class GitDoctorFeatureTests(unittest.TestCase):
     def test_git_commit_adds_changes_but_does_not_push(self) -> None:
         from unlawful.built_in_commands.git import main as git_command
 
-        completed = subprocess.CompletedProcess([], 0)
-        with patch.object(git_command.subprocess, "run", return_value=completed) as run:
+        with patch.object(git_command.subprocess, "run", side_effect=staged_run) as run:
             self.assertEqual(git_command.main(["commit", "fix", "parser"]), 0)
         self.assertEqual(
             run.call_args_list,
-            [call(["git", "add", "."], check=False), call(["git", "commit", "-m", "fix parser"], check=False)],
+            [
+                call(["git", "add", "."], check=False),
+                call(["git", "diff", "--cached", "--quiet"], check=False),
+                call(["git", "commit", "-m", "fix parser"], check=False),
+            ],
         )
 
     def test_git_default_always_pushes(self) -> None:
@@ -49,13 +57,13 @@ class GitDoctorFeatureTests(unittest.TestCase):
 
         ensure_layout()
         set_config_value("git.auto_push", False)
-        completed = subprocess.CompletedProcess([], 0)
-        with patch.object(git_command.subprocess, "run", return_value=completed) as run:
+        with patch.object(git_command.subprocess, "run", side_effect=staged_run) as run:
             self.assertEqual(git_command.main(["message"]), 0)
         self.assertEqual(
             run.call_args_list,
             [
                 call(["git", "add", "."], check=False),
+                call(["git", "diff", "--cached", "--quiet"], check=False),
                 call(["git", "commit", "-m", "message"], check=False),
                 call(["git", "push"], check=False),
             ],
@@ -64,14 +72,14 @@ class GitDoctorFeatureTests(unittest.TestCase):
     def test_git_sync_pulls_rebases_commits_and_pushes(self) -> None:
         from unlawful.built_in_commands.git import main as git_command
 
-        completed = subprocess.CompletedProcess([], 0)
-        with patch.object(git_command.subprocess, "run", return_value=completed) as run:
+        with patch.object(git_command.subprocess, "run", side_effect=staged_run) as run:
             self.assertEqual(git_command.main(["sync", "daily"]), 0)
         self.assertEqual(
             run.call_args_list,
             [
                 call(["git", "pull", "--rebase"], check=False),
                 call(["git", "add", "."], check=False),
+                call(["git", "diff", "--cached", "--quiet"], check=False),
                 call(["git", "commit", "-m", "daily"], check=False),
                 call(["git", "push"], check=False),
             ],

@@ -36,10 +36,29 @@ def _commit_message(tokens: list[str]) -> str | None:
     return message
 
 
+def _has_staged_changes() -> bool | int:
+    """True or False, or git's exit code when it cannot tell (not a repository)."""
+    try:
+        code = subprocess.run(["git", "diff", "--cached", "--quiet"], check=False).returncode
+    except OSError as error:
+        print(f"unlaw git: {error}", file=sys.stderr)
+        return 1
+    if code in (0, 1):
+        return code == 1
+    return code
+
+
 def _commit_workflow(tokens: list[str], *, push: bool) -> int:
     code = _run_all([["git", "add", "."]])
     if code:
         return code
+    staged = _has_staged_changes()
+    if staged is False:
+        # Earlier commits may still be unpushed, so a clean tree must not stop the push.
+        print("unlaw git: nothing to commit.", file=sys.stderr)
+        return _run_all([["git", "push"]]) if push else 0
+    if staged is not True:
+        return staged
     message = _commit_message(tokens)
     if message is None:
         return 2
@@ -53,9 +72,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] in {"-h", "--help", "help"}:
         print(COMMAND_HELP['git'], end="")
-        return 0
-    if args and args[0] in {"-h", "--help", "help"}:
-        print(USAGE)
         return 0
     if args and args[0] in {"status", "pull", "push"}:
         if len(args) != 1:

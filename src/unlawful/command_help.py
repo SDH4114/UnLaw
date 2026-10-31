@@ -78,7 +78,8 @@ Example: ul cpp demo --std 23 --git
     "git": '''Stage, commit and push the current Git project, or run a Git action.
 Usage: ul git [message|status|pull|push|commit [message]|sync [message]]
 Actions:
-  no arguments / <message>    git add ., commit, then push (prompts for missing message)
+  no arguments / <message>    git add ., commit, then push (prompts for missing message;
+                              with nothing to commit it only pushes)
   status / pull / push       Run the corresponding Git command
   commit [message]           Stage and commit without pushing
   sync [message]             Pull with rebase, then stage, commit and push
