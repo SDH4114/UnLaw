@@ -137,6 +137,53 @@ Example: ul list
 ",
     ),
     (
+        "reinstall",
+        "Reinstall Unlaw from scratch: the program, its settings and default commands.
+Usage: ul reinstall [--yes]
+Options:
+  --yes, -y    Do not ask for confirmation
+Shows what happens and asks first. Deletes the build cache
+~/Library/Caches/unlaw/cargo-target (unless CARGO_TARGET_DIR is set), installs
+the newest main from GitHub like `ul update --force`, then resets config.toml
+and ule.toml to the defaults (core.features and storage.root are kept) and
+installs fresh copies of the default commands. The old settings and edited
+default commands go to <config>/backups/reinstall-<time>/.
+Never touched: commands you wrote, templates, storage (downloads, captures,
+models, agent sessions) and the Telegram token in the Keychain. If the build
+fails, nothing is reset.
+Dependencies: cargo (Rust), Python 3.11+ for the build, git.
+Examples:
+  ul reinstall
+  ul reinstall --yes
+",
+    ),
+    (
+        "remove",
+        "Remove Unlaw completely, or delete installed commands.
+Usage:
+  ul remove [--yes]               Uninstall Unlaw and delete all its files
+  ul remove <command>... [--yes]  Delete commands/<command> (folder and files)
+Options:
+  --yes, -y    Do not ask for confirmation
+Both forms list what will be deleted and wait for y; nothing can be undone.
+ul remove deletes ul, unlaw, ula, unlawagent and ule from the directory that
+holds the current ul, the config folder with everything in it (settings, every
+command including your own, templates, storage: Telegram and YouTube downloads,
+captures, converted models, agent sessions), ~/Library/Caches/unlaw, the
+agent's launchd job, the shell integration block in ~/.zshrc, installed agent
+skills and the Telegram token in the Keychain. Kept: models in the Hugging Face
+cache, the PATH line in ~/.zshrc and a storage.root outside the config folder.
+ul remove <command> deletes that command's folder; a default command is also
+taken out of core.features so it is not installed again (ul features add
+<command> brings it back). System commands cannot be removed; lm and game are
+built into ul: ul features remove <name>.
+Examples:
+  ul remove todo
+  ul remove hello --yes
+  ul remove
+",
+    ),
+    (
         "skills",
         "Install an Agent Skill that teaches coding agents to use ul.
 Usage:

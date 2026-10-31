@@ -17,8 +17,8 @@ from unlawful.command_sources import LEGACY_SOURCE_HASHES, command_source  # noq
 from unlawful.config import DEFAULT_COMMAND_NAMES, DEFAULT_CONFIG, serialize_config  # noqa: E402
 
 SYSTEM_COMMANDS = (
-    "commands", "completion", "config", "create", "doctor", "init", "list", "templates", "update", "venv", "version",
-    "which",
+    "commands", "completion", "config", "create", "doctor", "init", "list", "reinstall", "remove", "templates", "update",
+    "venv", "version", "which",
 )
 
 

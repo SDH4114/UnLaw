@@ -149,13 +149,13 @@ fn check(options: &Options) -> i32 {
     0
 }
 
-fn cargo() -> Option<PathBuf> {
+pub(crate) fn cargo() -> Option<PathBuf> {
     which("cargo").or_else(|| Some(home().join(".cargo/bin/cargo")).filter(|path| is_executable(path)))
 }
 
 /// Install next to the running binary when it lives in a `bin` directory
 /// (`~/.local/bin`, `~/.cargo/bin`), otherwise into `~/.local`.
-fn install_root() -> PathBuf {
+pub(crate) fn install_root() -> PathBuf {
     let exe = env::current_exe().and_then(std::fs::canonicalize).ok();
     exe.as_deref()
         .and_then(Path::parent)
@@ -169,6 +169,11 @@ fn install_root() -> PathBuf {
 /// configuration cannot be read.
 fn selection() -> Vec<&'static str> {
     config::load().map(|config| features::selected(&config)).unwrap_or_else(|_| features::compiled())
+}
+
+/// The shared build folder of `ul update` (unless CARGO_TARGET_DIR is set).
+pub(crate) fn build_cache() -> PathBuf {
+    home().join("Library").join("Caches").join("unlaw").join("cargo-target")
 }
 
 /// `cargo install` arguments for both packages; unlaw gets the chosen cargo
@@ -214,8 +219,7 @@ fn install(source: &Source, rev: Option<&str>) -> i32 {
         // One build folder for both packages and every update: shared dependencies
         // compile once, and later updates rebuild only what changed.
         if env::var_os("CARGO_TARGET_DIR").is_none() {
-            let cache = home().join("Library").join("Caches").join("unlaw").join("cargo-target");
-            process.env("CARGO_TARGET_DIR", &cache);
+            process.env("CARGO_TARGET_DIR", build_cache());
         }
         if let Some(python) = &python {
             process.env("UNLAW_PYTHON", python);
@@ -247,6 +251,11 @@ fn install(source: &Source, rev: Option<&str>) -> i32 {
     println!("Updated to {version} in {}.", root.join("bin").display());
     println!("Unchanged default commands are upgraded on the next run; edited ones are kept.");
     0
+}
+
+/// `ul reinstall`: the newest commit of main, built again.
+pub(crate) fn install_latest() -> i32 {
+    install(&Source::Default, None)
 }
 
 /// Rebuild this same commit with the configured features (`ul features`), so

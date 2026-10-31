@@ -363,6 +363,13 @@ pub fn complete(args: &[String]) -> i32 {
                 .collect()
         }
         (2, Some("completion")) => vec![candidate("zsh", "Zsh completion code")],
+        (2, Some("reinstall")) => vec![candidate("--yes", "Do not ask for confirmation")],
+        (_, Some("remove")) => {
+            let mut lines: Vec<String> =
+                commands::discover().into_values().map(|command| candidate(&command.name, &commands::summary(&command).unwrap_or_default())).collect();
+            lines.push(candidate("--yes", "Do not ask for confirmation"));
+            lines
+        }
         (2, Some("update")) => [("--check", "Compare with GitHub"), ("--branch", "Install a branch"), ("--tag", "Install a tag")]
             .iter()
             .map(|(name, text)| candidate(name, text))

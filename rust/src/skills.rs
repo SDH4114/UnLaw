@@ -458,6 +458,24 @@ fn remove_skill(install: &Install) -> io::Result<bool> {
     Ok(fs::remove_dir(&install.path).is_ok())
 }
 
+/// Every skill folder `ul skills install` wrote (for `ul remove`).
+pub fn installed() -> Vec<PathBuf> {
+    read_manifest()
+        .unwrap_or_default()
+        .installs
+        .into_iter()
+        .map(|install| install.path)
+        .collect()
+}
+
+/// Remove every install and the manifest (for `ul remove`).
+pub fn remove_all() -> io::Result<()> {
+    for install in read_manifest().unwrap_or_default().installs {
+        remove_skill(&install)?;
+    }
+    write_manifest(&Manifest::default())
+}
+
 fn remove(args: &[String]) -> i32 {
     let options = match parse(args, true) {
         Ok(options) => options,

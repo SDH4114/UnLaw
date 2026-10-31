@@ -399,7 +399,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "ule"
-version = "3.10.1"
+version = "3.10.3"
 dependencies = [
  "crossterm",
  "libc",
@@ -423,7 +423,7 @@ checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 
 [[package]]
 name = "unlaw"
-version = "3.10.1"
+version = "3.10.3"
 dependencies = [
  "crossterm",
  "libc",

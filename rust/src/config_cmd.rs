@@ -29,7 +29,7 @@ fn edit() -> i32 {
 }
 
 /// Local time as `YYYYmmdd-HHMMSS-micro`, like the Python backup names.
-fn timestamp() -> String {
+pub(crate) fn timestamp() -> String {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
     let seconds = now.as_secs() as libc::time_t;
     let mut parts: libc::tm = unsafe { std::mem::zeroed() };

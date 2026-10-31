@@ -86,6 +86,22 @@ Configuration, data and manually edited commands are left untouched; unmodified
 standard commands are updated on the next run. Requires `cargo` and Python 3.11+;
 `--check` also needs `curl`. `UNLAW_UPDATE_REPOSITORY` points to a fork.
 
+Reinstall from scratch, uninstall, or delete a command (each lists what it does and
+waits for `y`; `--yes` skips the question):
+
+```bash
+ul reinstall               # clean build of main, default settings and default commands
+ul remove todo             # delete commands/todo (a default one also leaves core.features)
+ul remove                  # uninstall Unlaw and delete its files
+```
+
+`ul reinstall` keeps your own commands, templates, storage and `core.features`; the
+old `config.toml`, `ule.toml` and edited default commands go to
+`~/.config/unlaw/backups/`. `ul remove` deletes the binaries, `~/.config/unlaw`
+(commands, downloads, captures and all), `~/Library/Caches/unlaw`, the agent's
+launchd job, the shell integration in `~/.zshrc`, agent skills and the Telegram
+token; models in the Hugging Face cache stay.
+
 From a local checkout (install and update are the same commands):
 
 ```bash

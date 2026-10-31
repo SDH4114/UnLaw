@@ -147,7 +147,7 @@ fn unknown_names<'a>(names: &[&'a str], allow_all: bool) -> Vec<&'a str> {
 }
 
 /// The selection without `names` and everything that needs them.
-fn without(selection: &[&'static str], names: &[&str]) -> Vec<&'static str> {
+pub(crate) fn without(selection: &[&'static str], names: &[&str]) -> Vec<&'static str> {
     let mut removed: Vec<&str> = names.to_vec();
     loop {
         let more: Vec<&str> = selection

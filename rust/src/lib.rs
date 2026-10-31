@@ -15,6 +15,7 @@ mod editor;
 mod features;
 mod help;
 mod layout;
+mod remove;
 mod shell;
 mod skills;
 mod system;
@@ -41,7 +42,7 @@ pub fn version_line() -> String {
     }
 }
 
-const RAW_SYSTEM_COMMANDS: [&str; 7] = ["completion", "config", "doctor", "edit", "init", "update", "version"];
+const RAW_SYSTEM_COMMANDS: [&str; 9] = ["completion", "config", "doctor", "edit", "init", "reinstall", "remove", "update", "version"];
 
 fn system(name: &str, args: &[String]) -> Option<i32> {
     Some(match name {
@@ -54,6 +55,8 @@ fn system(name: &str, args: &[String]) -> Option<i32> {
         "features" => features::run(args),
         "init" => system::init(args),
         "list" => system::list_all(args),
+        "reinstall" => remove::reinstall(args),
+        "remove" => remove::run(args),
         "skills" => skills::run(args),
         "templates" => system::list_templates(args),
         "update" => update::run(args),

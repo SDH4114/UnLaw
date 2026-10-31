@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
@@ -126,6 +126,34 @@ fn seed_default_commands(selection: Option<&[&str]>) -> io::Result<Vec<&'static 
         fs::write(&destination, source)?;
     }
     Ok(kept)
+}
+
+/// `ul reinstall`: take every official seed folder out of commands/ so the
+/// next run seeds fresh copies. Untouched copies are deleted; edited ones,
+/// or folders holding other files, move into `backup`. Symlinks are the
+/// user's and stay. Returns the names moved into the backup.
+pub fn reset_seeds(backup: &Path) -> io::Result<Vec<&'static str>> {
+    let mut moved = Vec::new();
+    for (name, source, hashes, normalized) in SEEDS {
+        let directory = commands_dir().join(name);
+        let script = directory.join("main.py");
+        if directory.is_symlink() || script.is_symlink() || !directory.is_dir() {
+            continue;
+        }
+        let only_script = fs::read_dir(&directory)?
+            .flatten()
+            .all(|entry| ["main.py", ".DS_Store", "__pycache__"].iter().any(|name| entry.file_name() == *name));
+        let untouched = fs::read_to_string(&script).is_ok_and(|existing| is_untouched_seed(&existing, name, source, hashes, normalized));
+        if only_script && untouched {
+            fs::remove_dir_all(&directory)?;
+        } else {
+            let destination = backup.join("commands").join(name);
+            fs::create_dir_all(backup.join("commands"))?;
+            fs::rename(&directory, &destination)?;
+            moved.push(*name);
+        }
+    }
+    Ok(moved)
 }
 
 /// After `ul features` changed the selection.
