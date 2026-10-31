@@ -1,145 +1,20 @@
 from __future__ import annotations
 
-import os
-import re
 import subprocess
 import sys
-import tempfile
 from collections.abc import Sequence
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from unlawful.command_help import COMMAND_HELP
 from .config import ConfigError, load_config
+from .kanban import TASK, KanbanBoard, complete_task, completed_section, configured_board, write_board
 
-TASK = re.compile(r"^- \[([ xX])\] (.+)$")
-HEADING = re.compile(r"^## (.+?)\s*$")
-KANBAN_MARKER = "%% kanban:settings"
 USAGE = "Usage: ul todo [open|path|search <text>|add <text> [--column <name>]|move <id> <column>|done <id>]"
 
 
-@dataclass
-class Section:
-    name: str
-    preamble: list[str] = field(default_factory=list)
-    tasks: list[list[str]] = field(default_factory=list)
-
-
-@dataclass
-class KanbanBoard:
-    prefix: list[str]
-    sections: list[Section]
-    footer: list[str]
-
-    @classmethod
-    def parse(cls, text: str) -> KanbanBoard:
-        lines = text.splitlines()
-        footer_at = next((i for i, line in enumerate(lines) if line.strip() == KANBAN_MARKER), len(lines))
-        body, footer = lines[:footer_at], lines[footer_at:]
-        heading_positions = [(i, match.group(1)) for i, line in enumerate(body) if (match := HEADING.match(line))]
-        if not heading_positions:
-            raise ValueError("TODO.md has no '##' Kanban columns")
-        prefix = body[: heading_positions[0][0]]
-        sections: list[Section] = []
-        for position, (start, name) in enumerate(heading_positions):
-            end = heading_positions[position + 1][0] if position + 1 < len(heading_positions) else len(body)
-            content = body[start + 1 : end]
-            starts = [i for i, line in enumerate(content) if TASK.match(line)]
-            if not starts:
-                sections.append(Section(name=name, preamble=_trim_blank(content)))
-                continue
-            preamble = _trim_blank(content[: starts[0]])
-            tasks = []
-            for index, task_start in enumerate(starts):
-                task_end = starts[index + 1] if index + 1 < len(starts) else len(content)
-                tasks.append(_trim_blank(content[task_start:task_end]))
-            sections.append(Section(name=name, preamble=preamble, tasks=tasks))
-        return cls(prefix=_trim_blank_right(prefix), sections=sections, footer=_trim_blank(footer))
-
-    def section(self, name: str) -> Section:
-        exact = next((section for section in self.sections if section.name == name), None)
-        if exact:
-            return exact
-        folded = next((section for section in self.sections if section.name.casefold() == name.casefold()), None)
-        if folded:
-            return folded
-        available = ", ".join(section.name for section in self.sections)
-        raise ValueError(f"Unknown column '{name}'. Available: {available}")
-
-    def numbered_tasks(self) -> list[tuple[int, Section, list[str]]]:
-        result: list[tuple[int, Section, list[str]]] = []
-        number = 1
-        for section in self.sections:
-            for task in section.tasks:
-                result.append((number, section, task))
-                number += 1
-        return result
-
-    def pop_task(self, number: int) -> tuple[Section, list[str]]:
-        for current, section, task in self.numbered_tasks():
-            if current == number:
-                section.tasks.remove(task)
-                return section, task
-        raise ValueError(f"Task #{number} does not exist")
-
-    def render(self) -> str:
-        lines = list(self.prefix)
-        if lines:
-            lines.append("")
-        for section in self.sections:
-            lines.append(f"## {section.name}")
-            lines.append("")
-            if section.preamble:
-                lines.extend(section.preamble)
-                lines.append("")
-            for task in section.tasks:
-                lines.extend(task)
-            lines.append("")
-        if self.footer:
-            lines.extend(self.footer)
-        return "\n".join(lines).rstrip() + "\n"
-
-
-DONE_COLUMNS = {"done", "completed", "finished", "готово", "сделано", "выполнено"}
-
-
-def completed_section(board: KanbanBoard, configured: str) -> Section:
-    """todo.completed_column, or the board's own Done-like column when that one is missing."""
-    try:
-        return board.section(configured)
-    except ValueError:
-        for section in board.sections:
-            if section.name.casefold() in DONE_COLUMNS:
-                return section
-        raise
-
-
-def _trim_blank(lines: list[str]) -> list[str]:
-    start, end = 0, len(lines)
-    while start < end and not lines[start].strip():
-        start += 1
-    while end > start and not lines[end - 1].strip():
-        end -= 1
-    return lines[start:end]
-
-
-def _trim_blank_right(lines: list[str]) -> list[str]:
-    end = len(lines)
-    while end and not lines[end - 1].strip():
-        end -= 1
-    return lines[:end]
-
-
 def todo_path() -> Path:
-    settings = load_config()["todo"]
-    vault = Path(settings["vault_path"]).expanduser()
-    candidate = (vault / settings["file"]).resolve()
-    try:
-        candidate.relative_to(vault.resolve())
-    except ValueError as error:
-        raise ValueError("todo.file must stay inside todo.vault_path") from error
-    return candidate
+    return configured_board(load_config()["todo"])
 
 
 def _read() -> tuple[Path, KanbanBoard]:
@@ -150,19 +25,7 @@ def _read() -> tuple[Path, KanbanBoard]:
 
 
 def _write(path: Path, board: KanbanBoard) -> None:
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w", encoding="utf-8", dir=path.parent, prefix=".todo.", suffix=".tmp", delete=False
-        ) as handle:
-            handle.write(board.render())
-            handle.flush()
-            os.fsync(handle.fileno())
-            temporary = Path(handle.name)
-        os.replace(temporary, path)
-    finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
+    write_board(path, board)
 
 
 def _print_tasks(board: KanbanBoard, query: str | None = None) -> int:
@@ -241,16 +104,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if action == "done" and len(rest) == 1:
             number = int(rest[0])
             _, task = board.pop_task(number)
-            match = TASK.match(task[0])
-            if match is None:
+            if TASK.match(task[0]) is None:
                 raise ValueError(f"Task #{number} is malformed")
-            title = match.group(2)
-            if "[completion::" not in title:
-                title += f"  [completion:: {datetime.now().astimezone().date().isoformat()}]"
-            task[0] = f"- [x] {title}"
+            title = complete_task(task, datetime.now().astimezone().date())
             completed_section(board, load_config()["todo"]["completed_column"]).tasks.append(task)
             _write(path, board)
-            print(f"Completed #{number}: {match.group(2)}")
+            print(f"Completed #{number}: {title}")
             return 0
     except (ConfigError, FileNotFoundError, OSError, ValueError) as error:
         print(f"unlaw todo: {error}", file=sys.stderr)

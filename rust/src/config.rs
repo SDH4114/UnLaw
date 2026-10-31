@@ -275,6 +275,13 @@ const CHECKS: &[(&str, Kind, &[&str])] = &[
     ("todo.vault_path", Kind::Str, &[]),
     ("todo.file", Kind::Str, &[]),
     ("todo.completed_column", Kind::Str, &[]),
+    ("desk.port", Kind::Int, &[]),
+    ("desk.open_browser", Kind::Bool, &[]),
+    ("desk.sound", Kind::Bool, &[]),
+    ("desk.pomodoro.work", Kind::Number, &[]),
+    ("desk.pomodoro.short_break", Kind::Number, &[]),
+    ("desk.pomodoro.long_break", Kind::Number, &[]),
+    ("desk.pomodoro.cycles", Kind::Int, &[]),
     ("capture.camera_device", Kind::Str, &[]),
     ("capture.audio_device", Kind::Str, &[]),
     ("capture.screen_audio", Kind::Bool, &[]),
@@ -423,6 +430,23 @@ pub fn validate(config: &Value) -> Vec<String> {
     if let Some(Value::Int(port)) = config.lookup("lm.port") {
         if !(1..=65535).contains(port) {
             errors.push("Invalid lm.port: must be between 1 and 65535".into());
+        }
+    }
+    if let Some(Value::Int(port)) = config.lookup("desk.port") {
+        if !(0..=65535).contains(port) {
+            errors.push("Invalid desk.port: must be between 0 and 65535".into());
+        }
+    }
+    for dotted in ["desk.pomodoro.work", "desk.pomodoro.short_break", "desk.pomodoro.long_break"] {
+        if let Some(minutes) = number(config.lookup(dotted)) {
+            if !(minutes > 0.0 && minutes <= 600.0) {
+                errors.push(format!("Invalid {dotted}: must be between 0 and 600 minutes"));
+            }
+        }
+    }
+    if let Some(Value::Int(cycles)) = config.lookup("desk.pomodoro.cycles") {
+        if *cycles < 1 {
+            errors.push("Invalid desk.pomodoro.cycles: must be greater than zero".into());
         }
     }
     if let Some(Value::Int(tokens)) = config.lookup("lm.max_tokens") {

@@ -38,6 +38,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "file": "TODO.md",
         "completed_column": "Completed",
     },
+    "desk": {
+        "port": 8765,
+        "open_browser": True,
+        "sound": True,
+        "pomodoro": {"work": 25, "short_break": 5, "long_break": 15, "cycles": 4},
+    },
     "capture": {
         "camera_device": "0",
         "audio_device": "0",
@@ -92,6 +98,7 @@ DEFAULT_COMMAND_NAMES = (
     "agent",
     "capture",
     "cpp",
+    "desk",
     "git",
     "gpt",
     "lofi",
@@ -330,6 +337,13 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ("todo.vault_path", str, None),
         ("todo.file", str, None),
         ("todo.completed_column", str, None),
+        ("desk.port", int, None),
+        ("desk.open_browser", bool, None),
+        ("desk.sound", bool, None),
+        ("desk.pomodoro.work", (int, float), None),
+        ("desk.pomodoro.short_break", (int, float), None),
+        ("desk.pomodoro.long_break", (int, float), None),
+        ("desk.pomodoro.cycles", int, None),
         ("capture.camera_device", str, None),
         ("capture.audio_device", str, None),
         ("capture.screen_audio", bool, None),
@@ -391,6 +405,25 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         port = _get_from(config, "lm.port")
         if isinstance(port, int) and not isinstance(port, bool) and not 1 <= port <= 65535:
             errors.append("Invalid lm.port: must be between 1 and 65535")
+    except ConfigError:
+        pass
+    try:
+        port = _get_from(config, "desk.port")
+        if isinstance(port, int) and not isinstance(port, bool) and not 0 <= port <= 65535:
+            errors.append("Invalid desk.port: must be between 0 and 65535")
+    except ConfigError:
+        pass
+    for dotted in ("desk.pomodoro.work", "desk.pomodoro.short_break", "desk.pomodoro.long_break"):
+        try:
+            minutes = _get_from(config, dotted)
+            if isinstance(minutes, (int, float)) and not isinstance(minutes, bool) and not 0 < minutes <= 600:
+                errors.append(f"Invalid {dotted}: must be between 0 and 600 minutes")
+        except ConfigError:
+            pass
+    try:
+        cycles = _get_from(config, "desk.pomodoro.cycles")
+        if isinstance(cycles, int) and not isinstance(cycles, bool) and cycles < 1:
+            errors.append("Invalid desk.pomodoro.cycles: must be greater than zero")
     except ConfigError:
         pass
     try:

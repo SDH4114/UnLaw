@@ -44,21 +44,29 @@ def load_config() -> dict:
         raise ConfigError(f"Could not read {path}: {error}") from error
     return _deep_merge(DEFAULT_CONFIG, configured)
 
+"""Obsidian Kanban boards (`## Column` + `- [ ] task`), shared by `ul todo` and `ul desk`.
+
+Seeded into both commands' sources, so each stays standalone.
+"""
+
+
+import hashlib
 import os
 import re
-import subprocess
-import sys
 import tempfile
-from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, timedelta
 from pathlib import Path
-
 
 TASK = re.compile(r"^- \[([ xX])\] (.+)$")
 HEADING = re.compile(r"^## (.+?)\s*$")
 KANBAN_MARKER = "%% kanban:settings"
-USAGE = "Usage: ul todo [open|path|search <text>|add <text> [--column <name>]|move <id> <column>|done <id>]"
+DONE_COLUMNS = {"done", "completed", "finished", "готово", "сделано", "выполнено"}
+TAG = re.compile(r"(?<![\w&/])#([^\s#\[\]{}(),.;:!?'\"]+)")
+DUE = re.compile(r"@\{(\d{4}-\d{2}-\d{2})\}|📅\s*(\d{4}-\d{2}-\d{2})")
+LINK = re.compile(r"\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]")
+COMPLETION = re.compile(r"\s*\[completion::\s*(\d{4}-\d{2}-\d{2})\]")
+NEW_BOARD = '---\n\nkanban-plugin: board\n\n---\n\n## To do\n\n## Doing\n\n## Done\n\n%% kanban:settings\n```\n{"kanban-plugin":"board"}\n```\n%%\n'
 
 
 @dataclass
@@ -77,15 +85,26 @@ class KanbanBoard:
     @classmethod
     def parse(cls, text: str) -> KanbanBoard:
         lines = text.splitlines()
-        footer_at = next((i for i, line in enumerate(lines) if line.strip() == KANBAN_MARKER), len(lines))
+        footer_at = next(
+            (i for i, line in enumerate(lines) if line.strip() == KANBAN_MARKER),
+            len(lines),
+        )
         body, footer = lines[:footer_at], lines[footer_at:]
-        heading_positions = [(i, match.group(1)) for i, line in enumerate(body) if (match := HEADING.match(line))]
+        heading_positions = [
+            (i, match.group(1))
+            for i, line in enumerate(body)
+            if (match := HEADING.match(line))
+        ]
         if not heading_positions:
             raise ValueError("TODO.md has no '##' Kanban columns")
         prefix = body[: heading_positions[0][0]]
         sections: list[Section] = []
         for position, (start, name) in enumerate(heading_positions):
-            end = heading_positions[position + 1][0] if position + 1 < len(heading_positions) else len(body)
+            end = (
+                heading_positions[position + 1][0]
+                if position + 1 < len(heading_positions)
+                else len(body)
+            )
             content = body[start + 1 : end]
             starts = [i for i, line in enumerate(content) if TASK.match(line)]
             if not starts:
@@ -94,16 +113,31 @@ class KanbanBoard:
             preamble = _trim_blank(content[: starts[0]])
             tasks = []
             for index, task_start in enumerate(starts):
-                task_end = starts[index + 1] if index + 1 < len(starts) else len(content)
+                task_end = (
+                    starts[index + 1] if index + 1 < len(starts) else len(content)
+                )
                 tasks.append(_trim_blank(content[task_start:task_end]))
             sections.append(Section(name=name, preamble=preamble, tasks=tasks))
-        return cls(prefix=_trim_blank_right(prefix), sections=sections, footer=_trim_blank(footer))
+        return cls(
+            prefix=_trim_blank_right(prefix),
+            sections=sections,
+            footer=_trim_blank(footer),
+        )
 
     def section(self, name: str) -> Section:
-        exact = next((section for section in self.sections if section.name == name), None)
+        exact = next(
+            (section for section in self.sections if section.name == name), None
+        )
         if exact:
             return exact
-        folded = next((section for section in self.sections if section.name.casefold() == name.casefold()), None)
+        folded = next(
+            (
+                section
+                for section in self.sections
+                if section.name.casefold() == name.casefold()
+            ),
+            None,
+        )
         if folded:
             return folded
         available = ", ".join(section.name for section in self.sections)
@@ -143,7 +177,15 @@ class KanbanBoard:
         return "\n".join(lines).rstrip() + "\n"
 
 
-DONE_COLUMNS = {"done", "completed", "finished", "готово", "сделано", "выполнено"}
+def configured_board(settings: dict) -> Path:
+    """The `ul todo` board: todo.file inside todo.vault_path."""
+    vault = Path(str(settings["vault_path"])).expanduser()
+    candidate = (vault / str(settings["file"])).resolve()
+    try:
+        candidate.relative_to(vault.resolve())
+    except ValueError as error:
+        raise ValueError("todo.file must stay inside todo.vault_path") from error
+    return candidate
 
 
 def completed_section(board: KanbanBoard, configured: str) -> Section:
@@ -155,6 +197,25 @@ def completed_section(board: KanbanBoard, configured: str) -> Section:
             if section.name.casefold() in DONE_COLUMNS:
                 return section
         raise
+
+
+def complete_task(task: list[str], today: date) -> str:
+    """Check a task and stamp its completion date; returns its title."""
+    match = TASK.match(task[0])
+    if match is None:
+        raise ValueError("The task is malformed")
+    title = match.group(2)
+    if "[completion::" not in title:
+        title += f"  [completion:: {today.isoformat()}]"
+    task[0] = f"- [x] {title}"
+    return match.group(2)
+
+
+def reopen_task(task: list[str]) -> None:
+    match = TASK.match(task[0])
+    if match is None:
+        raise ValueError("The task is malformed")
+    task[0] = f"- [ ] {COMPLETION.sub('', match.group(2)).rstrip()}"
 
 
 def _trim_blank(lines: list[str]) -> list[str]:
@@ -173,15 +234,92 @@ def _trim_blank_right(lines: list[str]) -> list[str]:
     return lines[:end]
 
 
-def todo_path() -> Path:
-    settings = load_config()["todo"]
-    vault = Path(settings["vault_path"]).expanduser()
-    candidate = (vault / settings["file"]).resolve()
+def write_board(path: Path, board: KanbanBoard) -> None:
+    """Replace the board file atomically (a temporary file next to it, then rename)."""
+    temporary: Path | None = None
     try:
-        candidate.relative_to(vault.resolve())
-    except ValueError as error:
-        raise ValueError("todo.file must stay inside todo.vault_path") from error
-    return candidate
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=".todo.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(board.render())
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary = Path(handle.name)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
+def version_of(data: bytes) -> str:
+    """A short content hash: the board's version for conflict checks and ETags."""
+    return hashlib.sha256(data).hexdigest()[:16]
+
+
+def card(task: list[str]) -> dict:
+    """A task as JSON for `ul desk`: title, checkbox, details, tags, due date, links, completion."""
+    match = TASK.match(task[0])
+    checked, title = (
+        (match.group(1).casefold() == "x", match.group(2))
+        if match
+        else (False, task[0])
+    )
+    due = DUE.search(title)
+    completed = COMPLETION.search(title)
+    return {
+        "line": task[0],
+        "title": title,
+        "checked": checked,
+        "details": [line.strip() for line in task[1:]],
+        "tags": sorted({tag.casefold() for tag in TAG.findall(title)}),
+        "due": (due.group(1) or due.group(2)) if due else None,
+        "links": LINK.findall(title),
+        "completed": completed.group(1) if completed else None,
+    }
+
+
+QUICK_DATES = {"today": 0, "сегодня": 0, "tomorrow": 1, "завтра": 1}
+
+
+def quick_text(text: str, today: date) -> str:
+    """Quick-add shortcuts: `@today`/`@сегодня`, `@tomorrow`/`@завтра`, `@2026-11-01`, `@+3` become `@{date}`."""
+
+    def replace(match: re.Match[str]) -> str:
+        word = match.group(1)
+        if word.casefold() in QUICK_DATES:
+            return (
+                "@{"
+                + (today + timedelta(days=QUICK_DATES[word.casefold()])).isoformat()
+                + "}"
+            )
+        if word.startswith("+") and word[1:].isdigit():
+            return "@{" + (today + timedelta(days=int(word[1:]))).isoformat() + "}"
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", word):
+            try:
+                return "@{" + date.fromisoformat(word).isoformat() + "}"
+            except ValueError:
+                pass
+        return match.group(0)
+
+    return re.sub(r"(?<![\w{])@([^\s{}]+)", replace, text).strip()
+
+import subprocess
+import sys
+from collections.abc import Sequence
+from datetime import datetime
+from pathlib import Path
+
+
+USAGE = "Usage: ul todo [open|path|search <text>|add <text> [--column <name>]|move <id> <column>|done <id>]"
+
+
+def todo_path() -> Path:
+    return configured_board(load_config()["todo"])
 
 
 def _read() -> tuple[Path, KanbanBoard]:
@@ -192,19 +330,7 @@ def _read() -> tuple[Path, KanbanBoard]:
 
 
 def _write(path: Path, board: KanbanBoard) -> None:
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w", encoding="utf-8", dir=path.parent, prefix=".todo.", suffix=".tmp", delete=False
-        ) as handle:
-            handle.write(board.render())
-            handle.flush()
-            os.fsync(handle.fileno())
-            temporary = Path(handle.name)
-        os.replace(temporary, path)
-    finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
+    write_board(path, board)
 
 
 def _print_tasks(board: KanbanBoard, query: str | None = None) -> int:
@@ -283,16 +409,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if action == "done" and len(rest) == 1:
             number = int(rest[0])
             _, task = board.pop_task(number)
-            match = TASK.match(task[0])
-            if match is None:
+            if TASK.match(task[0]) is None:
                 raise ValueError(f"Task #{number} is malformed")
-            title = match.group(2)
-            if "[completion::" not in title:
-                title += f"  [completion:: {datetime.now().astimezone().date().isoformat()}]"
-            task[0] = f"- [x] {title}"
+            title = complete_task(task, datetime.now().astimezone().date())
             completed_section(board, load_config()["todo"]["completed_column"]).tasks.append(task)
             _write(path, board)
-            print(f"Completed #{number}: {match.group(2)}")
+            print(f"Completed #{number}: {title}")
             return 0
     except (ConfigError, FileNotFoundError, OSError, ValueError) as error:
         print(f"unlaw todo: {error}", file=sys.stderr)

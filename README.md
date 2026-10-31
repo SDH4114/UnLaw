@@ -29,7 +29,7 @@ The core is always installed: `ul`/`unlaw`, the `ule` editor, system commands,
 |---|---|
 | AI | `lm` (local models), `agent` (needs `lm`; adds `ula`), `tg`, `gpt` |
 | Media | `yt`, `music`, `lofi`, `netflix`, `capture` |
-| Productivity | `todo`, `obsidian`, `work` |
+| Productivity | `todo`, `desk`, `obsidian`, `work` |
 | Development | `git`, `py`, `rust`, `cpp`, `zed` |
 | System | `mac`, `steam`, `minecraft` |
 | Fun | `game` |
@@ -269,6 +269,17 @@ vault_path = "~/aiwork/data-obsidian"
 file = "TODO.md"
 completed_column = "Completed"
 
+[desk]
+port = 8765              # 0 = any free port; a busy port moves to the next one
+open_browser = true
+sound = true
+
+[desk.pomodoro]
+work = 25                # minutes
+short_break = 5
+long_break = 15
+cycles = 4               # focus sessions before a long break
+
 [capture]
 camera_device = "0"
 audio_device = "0"
@@ -499,6 +510,34 @@ ul todo path
 
 Changes are written atomically. Multi-line descriptions move together with the
 task.
+
+## Desk: board, today and pomodoro in the browser
+
+`ul desk` opens the same board in the browser: drag cards between columns,
+double-click to edit, check them off (they move to `todo.completed_column`), and
+filter by `#tag` or search. Cards understand Obsidian Kanban markup: `#tags`,
+due dates `@{2026-11-01}` (quick add: `@today`, `@tomorrow`, `@завтра`, `@+3`)
+and `[[note]]` links that open in Obsidian. The Today view lists overdue cards,
+cards due today, cards in a Doing column and the next seven days; Stats shows
+focus sessions, finished tasks, the day streak and the cards you focused on most.
+
+```bash
+ul desk                                  # the ul todo board
+ul desk ~/notes/Project.md --no-open     # any Kanban .md file
+ul desk new ~/notes/Plan.md              # a new board: To do / Doing / Done
+ul desk pomodoro start 50 --card "Write chapter 3"
+ul desk pomodoro                         # status; also pause, resume, skip, stop
+ul desk stats
+```
+
+The Markdown file stays the source of truth: `ul todo`, the agent and Obsidian
+see each change, and edits made elsewhere show up on the page within two seconds.
+A change based on an old version of the file is refused and retried on top of
+the new one, so nothing is overwritten. The timer lives in `storage.root/desk`,
+so a reloaded tab, the terminal and the page share it; each phase ends with a
+macOS notification. The server listens on 127.0.0.1 only and needs the random
+token in the printed address. Keys: `n` new card, `/` search, `space` timer,
+`1` `2` `3` views. Only the Python standard library is used.
 
 ## Screen, video and audio capture
 

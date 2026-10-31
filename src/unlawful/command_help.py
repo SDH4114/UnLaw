@@ -162,6 +162,41 @@ Actions:
 Settings: todo.vault_path, todo.file, todo.completed_column.
 Example: ul todo add "Study Python" --column "To do"
 ''',
+    "desk": '''Kanban board, TODO list and pomodoro timer in the browser, on your Obsidian board file.
+Usage: ul desk [board.md] [--port N] [--no-open]
+       ul desk new <board.md> | path [board.md] | stats [board.md]
+       ul desk pomodoro [status|start [minutes] [--card <text>]|pause|resume|stop|skip]
+Actions:
+  no arguments     Serve the todo board (todo.vault_path + todo.file) on 127.0.0.1
+                   and open it in the browser; Ctrl+C stops the server
+  board.md         Serve another Kanban Markdown file instead
+  --port N         Use exactly this port (0 = any free one); default desk.port,
+                   or the next free port after it
+  --no-open        Print the address without opening the browser
+  new <board.md>   Create a board with To do / Doing / Done columns
+  path [board.md]  Print the board's path
+  stats [board.md] Focus sessions, finished tasks, streak and busiest cards
+  pomodoro         Show or control the timer from the terminal; the page shows
+                   the same timer, and a macOS notification marks each phase end
+Page: Board (drag cards between columns, double-click to edit), Today (overdue,
+  due today, in progress, next 7 days), Stats. Keys: n new card, / search,
+  space start/pause timer, 1 2 3 views, Esc clear filters.
+Cards: #tag filters, @{2026-11-01} due dates (quick add: @today @tomorrow
+  @сегодня @завтра @+3 @2026-11-01), [[note]] opens the note in Obsidian.
+  Done cards move to todo.completed_column (or the board's Done column).
+The file stays the source of truth: ul todo, the agent and Obsidian see every
+  change, and edits made elsewhere appear on the page within two seconds.
+Security: listens on 127.0.0.1 only and needs the random token in the printed
+  address; it reads and writes only the open board and storage.root/desk.
+Settings: desk.port (8765), desk.open_browser (true), desk.sound (true),
+  desk.pomodoro.work (25), short_break (5), long_break (15), cycles (4) in minutes;
+  todo.vault_path, todo.file, todo.completed_column, apps.lofi_url.
+Storage: storage.root/desk (timer state, pomodoro.jsonl log, recent boards).
+Dependencies: Python standard library; osascript for notifications.
+Examples: ul desk
+          ul desk ~/notes/Project.md --no-open
+          ul desk pomodoro start 50 --card "Write chapter 3"
+''',
     "work": '''Open the configured lofi website and the current directory in your editor.
 Usage: ul work
 Settings: apps.lofi_url, apps.editor.

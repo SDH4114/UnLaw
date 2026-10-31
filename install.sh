@@ -36,6 +36,7 @@ FEATURES = [
     ("netflix", "Media", "Open Netflix"),
     ("capture", "Media", "Screenshots and screen, camera and microphone recording"),
     ("todo", "Productivity", "Obsidian TODO board"),
+    ("desk", "Productivity", "Kanban board, TODO and pomodoro in the browser"),
     ("obsidian", "Productivity", "Open Obsidian"),
     ("work", "Productivity", "lofi plus the current folder in your editor"),
     ("git", "Development", "Stage, commit and push in one command"),

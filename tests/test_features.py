@@ -18,7 +18,7 @@ sys.path.insert(0, str(HERE))
 from ulbin import CoreTestCase  # noqa: E402
 
 SEEDED = {
-    "agent", "capture", "cpp", "git", "gpt", "lofi", "mac", "minecraft", "music", "netflix",
+    "agent", "capture", "cpp", "desk", "git", "gpt", "lofi", "mac", "minecraft", "music", "netflix",
     "obsidian", "py", "rust", "steam", "tg", "todo", "work", "yt", "zed",
 }
 
@@ -41,7 +41,7 @@ class FeatureListTests(unittest.TestCase):
         self.assertEqual(namespace["CORE"], features.CORE)
         self.assertEqual(namespace["REQUIRES"], features.REQUIRES)
         self.assertEqual(namespace["CARGO"], features.CARGO)
-        self.assertEqual(len(features.FEATURES), 21)
+        self.assertEqual(len(features.FEATURES), 22)
         self.assertEqual(set(DEFAULT_COMMAND_NAMES), SEEDED)
         self.assertEqual(set(features.NAMES) - set(features.CARGO), SEEDED - {"agent"})
 
@@ -152,7 +152,7 @@ class FeatureListTests(unittest.TestCase):
         self.assertIn("Core (always)", text)
         selection, cargo = self.result(text)
         self.assertEqual(cargo, "game")
-        self.assertEqual(selection, "gpt yt music lofi netflix capture todo obsidian work git py rust cpp zed mac steam minecraft game")
+        self.assertEqual(selection, "gpt yt music lofi netflix capture todo desk obsidian work git py rust cpp zed mac steam minecraft game")
         code, _ = self.interactive([b"q"])
         self.assertEqual(code, 1)
         code, text = self.interactive([b"a", b" ", b"\r"])

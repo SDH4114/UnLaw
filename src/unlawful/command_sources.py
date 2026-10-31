@@ -81,7 +81,11 @@ LEGACY_SOURCE_HASHES: dict[str, set[str]] = {
         # Release 3.3.0, with the token in .env.
         "52d64a2db878c148f093f03fb7e18347acbb3e94776b4bee44a426bf4011a7b9",
     },
-    "todo": {"d74e2f777a824840c8d064c2a9237dcbfd78ed6e28cda1d3054c42f19a64b9d0"},
+    "todo": {
+        "d74e2f777a824840c8d064c2a9237dcbfd78ed6e28cda1d3054c42f19a64b9d0",
+        # Releases 3.5.1 to 3.9.0, before kanban.py was shared with desk.
+        "30142885066978c9cbb73fdb0a99d3daa4c7b6fdf2c785bac569606ba7d76974",
+    },
     "work": {"35b3d9d20deb6d2927a36446d1986439ab18184f14a67b27dc6b47eef4da8e27"},
     "yt": {
         "435ff09674eb854cd96050936f843ab83f67eec8f2fcad00566b7e099ce4a884",
@@ -257,6 +261,7 @@ LEGACY_NORMALIZED_HASHES: dict[str, set[str]] = {
         "d890f471f964cfab60a98ab953c71d746c44410de7c82d9acd8c52844cb2472b",
     },
     "todo": {
+        "52c628fd14f9ca5e2f35791f6834779af23cc6463fc57b5f36a7658fbacb20d1",
         "64798e6a229b6270eae8e28d5e32313ea15be81f63a5c8127f83874db93bb317",
         "baad25a60e557e42189f33fd04647804adb952ef3cd08a85dace040c82c3dc4e",
         "ebc06bd13d49938517513e63d27d7210d10450b5b3fb7beea57c7addc335f3c4",
@@ -390,6 +395,21 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
             "file": "TODO.md",
             "completed_column": "Completed",
         }
+    },
+    "desk": {
+        "storage": {"root": "data"},
+        "todo": {
+            "vault_path": "~/aiwork/data-obsidian",
+            "file": "TODO.md",
+            "completed_column": "Completed",
+        },
+        "desk": {
+            "port": 8765,
+            "open_browser": True,
+            "sound": True,
+            "pomodoro": {"work": 25, "short_break": 5, "long_break": 15, "cycles": 4},
+        },
+        "apps": {"lofi_url": "https://lofi-engine.vercel.app/"},
     },
     "work": {"apps": {"editor": "Zed", "lofi_url": "https://lofi-engine.vercel.app/"}},
     "yt": {
@@ -539,7 +559,8 @@ _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "rust": ("project_templates.py", "built_in_commands/rust/main.py"),
     "steam": ("built_in_commands/steam/main.py",),
     "tg": ("telegram.py",),
-    "todo": ("todo.py",),
+    "todo": ("kanban.py", "todo.py"),
+    "desk": ("kanban.py", "desk_ui.py", "desk.py"),
     "work": ("desktop/work.py",),
     "yt": ("desktop/youtube.py",),
     "zed": ("built_in_commands/zed/main.py",),
@@ -554,7 +575,7 @@ def _support_source(name: str) -> str:
         parts.append(_CONFIG_SUPPORT.replace("__DEFAULT_CONFIG__", rendered))
     if name in {"cpp", "py", "rust"}:
         parts.append(_TEMPLATES_SUPPORT)
-    if name in {"agent", "capture", "tg", "yt"}:
+    if name in {"agent", "capture", "desk", "tg", "yt"}:
         parts.append(_STORAGE_SUPPORT)
     if name == "tg":
         parts.extend((_CONFIG_WRITE_SUPPORT, _LATEST_CAPTURE_SUPPORT))
@@ -571,6 +592,8 @@ def _clean_fragment(source: str, *, command: str) -> str:
         "from unlawful import harness",
         "from .capture import latest_capture",
         "from .agent_ui import ",
+        "from .kanban import ",
+        "from .desk_ui import ",
     )
     lines: list[str] = []
     skipping = False

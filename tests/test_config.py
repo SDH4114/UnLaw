@@ -144,6 +144,12 @@ class ConfigTests(unittest.TestCase):
                     "completed_column": "Completed",
                 }
             },
+            "desk": {
+                "storage": {"root": "data"},
+                "todo": DEFAULT_CONFIG["todo"],
+                "desk": DEFAULT_CONFIG["desk"],
+                "apps": {"lofi_url": "https://lofi-engine.vercel.app/"},
+            },
             "work": {
                 "apps": {
                     "editor": "Zed",

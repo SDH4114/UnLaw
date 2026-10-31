@@ -17,6 +17,11 @@
    "sha256": "8b29e6379a137b88c35caf88dc1fa7c72db6f0e9f4d9efdea58738be2d075d06"
   },
   {
+   "name": "desk",
+   "summary": "Kanban board, TODO list and pomodoro timer in the browser, on your Obsidian board file.",
+   "sha256": "8c73f66ac65f183b2e971718ef39fcd40b33a4d77577957757de993d97aa43f3"
+  },
+  {
    "name": "git",
    "summary": "Stage, commit and push the current Git project, or run a Git action.",
    "sha256": "6c31d29bcf57a73f1d09fc14bcd04255519c2a76401ca524dbc1427bd2f0a2d7"
@@ -79,7 +84,7 @@
   {
    "name": "todo",
    "summary": "Read and update the configured Obsidian TODO board.",
-   "sha256": "30142885066978c9cbb73fdb0a99d3daa4c7b6fdf2c785bac569606ba7d76974"
+   "sha256": "be9d9c1235678e85d4a91821c5f359d2cc7eac99345ba56cce2a5dec24bc865c"
   },
   {
    "name": "work",
