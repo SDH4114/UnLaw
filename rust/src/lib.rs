@@ -194,7 +194,7 @@ pub fn main_with(argv: Vec<String>) -> i32 {
         args.push("--help".into());
     }
     if args.is_empty() || ["-h", "--help", "help"].contains(&args[0].as_str()) {
-        print!("{}", help::HELP);
+        print!("{}", help::global_help());
         return 0;
     }
 

@@ -1,21 +1,74 @@
 //! Help for the dispatcher and system commands. Seeded commands keep their
 //! own help in `src/unlawful/command_help.py`.
 
-pub const HELP: &str = "Usage: ul [global-options] <command> [arguments]
+const GLOBAL_OPTIONS: &str = "Usage: ul [global-options] <command> [arguments]
 
 Global options:
   --dry-run     Show the resolved command without running it
   --verbose     Show command source, invocation, and timing
   --no-color    Disable colored output
   --version     Show the installed version
-
-Run `ul commands` to list available commands.
-Run `ul <command> --help` or `ul help <command>` for command usage.
-Run `ul create command <name>` to create one.
-Run `ul create template [name]` to save the current project.
-Run `ul venv` to create and activate .venv in the current Zsh.
-Run `ul config show` to inspect configuration.
 ";
+
+/// System commands of `ul --help`, by topic; a test keeps every one listed.
+const SECTIONS: &[(&str, &[&str])] = &[
+    ("Install and update", &["update", "reinstall", "remove", "features", "doctor", "version"]),
+    ("Configuration", &["config", "edit", "init", "completion", "skills"]),
+    ("Commands and projects", &["commands", "list", "which", "create", "templates", "venv"]),
+];
+
+fn summary_line(name: &str, summary: &str) -> String {
+    format!("  {name:<11} {}\n", summary.trim_end_matches('.'))
+}
+
+/// Names joined into lines of at most `width` columns, indented by two.
+fn wrapped(names: &[String], width: usize) -> String {
+    let mut text = String::new();
+    let mut line = String::from(" ");
+    for name in names {
+        if line.len() + name.len() + 1 > width && line.len() > 1 {
+            text.push_str(&line);
+            text.push('\n');
+            line = String::from(" ");
+        }
+        line.push(' ');
+        line.push_str(name);
+    }
+    if line.len() > 1 {
+        text.push_str(&line);
+        text.push('\n');
+    }
+    text
+}
+
+/// `ul --help`: built from each command's own help, so new commands show up
+/// without editing this text. Reads commands/ but never writes anything.
+pub fn global_help() -> String {
+    let mut text = format!("{}: your commands for macOS in one place.\n\n{GLOBAL_OPTIONS}", crate::version_line());
+    for (title, names) in SECTIONS {
+        text.push_str(&format!("\n{title}:\n"));
+        for name in *names {
+            text.push_str(&summary_line(name, system_summary(name)));
+        }
+    }
+    text.push_str("\nBuilt in:\n");
+    for name in crate::builtin::names() {
+        text.push_str(&summary_line(name, crate::builtin::summary(name)));
+    }
+    let installed: Vec<String> = crate::commands::discover().into_keys().collect();
+    if !installed.is_empty() {
+        text.push_str(&format!("\nInstalled commands ({}):\n", installed.len()));
+        text.push_str(&wrapped(&installed, 78));
+    }
+    text.push_str(
+        "
+Run `ul <command> --help` or `ul help <command>` for options and examples.
+Run `ul commands --describe` to see every command with its description.
+Run `ul commands search` to download more, `ul create command <name>` to write one.
+",
+    );
+    text
+}
 
 pub const SYSTEM_HELP: &[(&str, &str)] = &[
     (
@@ -138,7 +191,7 @@ Example: ul list
     ),
     (
         "reinstall",
-        "Reinstall Unlaw from scratch: the program, its settings and default commands.
+        "Reinstall Unlaw from scratch: program, settings and default commands.
 Usage: ul reinstall [--yes]
 Options:
   --yes, -y    Do not ask for confirmation
@@ -289,5 +342,26 @@ pub fn print_if_requested(name: &str, args: &[String]) -> bool {
         true
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_system_command_is_in_one_section() {
+        let listed: Vec<&str> = SECTIONS.iter().flat_map(|(_, names)| names.iter().copied()).collect();
+        for name in system_names() {
+            assert_eq!(listed.iter().filter(|listed| **listed == name).count(), 1, "{name}");
+        }
+        assert_eq!(listed.len(), SYSTEM_HELP.len());
+    }
+
+    #[test]
+    fn names_wrap_at_the_width() {
+        let names: Vec<String> = ["alpha", "beta", "gamma"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(wrapped(&names, 13), "  alpha beta\n  gamma\n");
+        assert_eq!(wrapped(&[], 13), "");
     }
 }

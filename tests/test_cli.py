@@ -34,8 +34,11 @@ class CliTests(CoreTestCase):
     def test_help_is_shown_without_command(self) -> None:
         result = self.ok()
         self.assertIn("Usage: ul", result.stdout)
-        self.assertIn("ul create template", result.stdout)
-        self.assertIn("ul venv", result.stdout)
+        for line in ("Install and update:", "  reinstall   Reinstall Unlaw", "  remove      Remove Unlaw", "  venv ", "  zip "):
+            self.assertIn(line, result.stdout)
+        self.assertNotIn("Installed commands", result.stdout, "help runs before bootstrap")
+        self.ok("init")
+        self.assertIn("Installed commands", self.ok("--help").stdout)
 
     def test_unknown_command_is_an_error(self) -> None:
         result = self.ul("missing-command")
