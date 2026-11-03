@@ -358,6 +358,12 @@ fn tar() -> String {
     which("bsdtar").or_else(|| which("tar")).map(|path| path.to_string_lossy().into_owned()).unwrap_or_else(|| "tar".into())
 }
 
+/// Relative operands must not be interpreted as the native tool's options.
+fn operand_name(path: &Path) -> String {
+    let name = name_of(path);
+    if name.starts_with('-') { format!("./{name}") } else { name }
+}
+
 fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
@@ -495,7 +501,7 @@ fn create_commands(
             .map(|source| {
                 let mut command: Vec<String> =
                     ["zip", "-r", "-y", "-X", "-q"].map(String::from).into_iter().collect();
-                command.extend([format!("-{level}"), path_string(temporary), name_of(source)]);
+                command.extend([format!("-{level}"), path_string(temporary), operand_name(source)]);
                 if !options.keep_junk {
                     command.extend(
                         ["-x", "*.DS_Store", "*/._*", "._*", "*__MACOSX*", "*Thumbs.db", "*desktop.ini"].map(String::from),
@@ -540,7 +546,7 @@ fn create_commands(
     }
     for source in sources {
         let parent = source.parent().map(path_string).unwrap_or_else(|| "/".into());
-        tar_command.extend(["-C".into(), parent, name_of(source)]);
+        tar_command.extend(["-C".into(), parent, operand_name(source)]);
     }
     if format == "tar.zst" {
         if which("zstd").is_none() {
@@ -775,13 +781,10 @@ fn detect(path: &Path) -> io::Result<Kind> {
     if is_ustar(&head) {
         return Ok(Kind::Tar);
     }
-    for (magic, codec) in [(&b"\x1f\x8b"[..], Codec::Gz), (b"BZh", Codec::Bz2), (b"\xfd7zXZ\x00", Codec::Xz)] {
+    for (magic, codec) in [(&b"\x1f\x8b"[..], Codec::Gz), (b"BZh", Codec::Bz2), (b"\xfd7zXZ\x00", Codec::Xz), (b"\x28\xb5\x2f\xfd", Codec::Zst)] {
         if head.starts_with(magic) {
             return Ok(if is_ustar(&decompressed_head(path, codec)) { Kind::Tar } else { Kind::Stream(codec) });
         }
-    }
-    if head.starts_with(b"\x28\xb5\x2f\xfd") {
-        return Ok(Kind::Stream(Codec::Zst));
     }
     Ok(Kind::Other)
 }

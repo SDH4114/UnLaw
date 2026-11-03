@@ -46,25 +46,32 @@ fn fancy_underline() -> bool {
 struct Screen {
     enhanced: bool,
     mouse: bool,
+    active: std::cell::Cell<bool>,
 }
 
 impl Screen {
     fn enter(mouse: bool) -> io::Result<Screen> {
         terminal::enable_raw_mode()?;
+        let mut screen = Screen { enhanced: false, mouse: false, active: std::cell::Cell::new(true) };
         let mut out = io::stdout();
         execute!(out, EnterAlternateScreen, EnableBracketedPaste, EnableFocusChange)?;
         if mouse {
+            screen.mouse = true;
             execute!(out, EnableMouseCapture)?;
         }
         // Lets Esc, Ctrl-i and Tab, Ctrl-/ be told apart where the terminal supports it.
         let enhanced = matches!(terminal::supports_keyboard_enhancement(), Ok(true));
         if enhanced {
+            screen.enhanced = true;
             execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES))?;
         }
-        Ok(Screen { enhanced, mouse })
+        Ok(screen)
     }
 
     fn leave(&self) {
+        if !self.active.replace(false) {
+            return;
+        }
         let mut out = io::stdout();
         if self.enhanced {
             let _ = execute!(out, PopKeyboardEnhancementFlags);
@@ -81,6 +88,12 @@ impl Screen {
             LeaveAlternateScreen
         );
         let _ = terminal::disable_raw_mode();
+    }
+}
+
+impl Drop for Screen {
+    fn drop(&mut self) {
+        self.leave();
     }
 }
 
@@ -125,8 +138,10 @@ pub fn prepare(launch: &Launch) -> Editor {
         doc.lang = ed.languages.detect(None, text.lines().next().unwrap_or(""));
         ed.show_doc(id);
     }
+    // Resolve every CLI path before a directory argument changes the process cwd.
+    let files: Vec<_> = launch.files.iter().map(|(path, line, col)| (crate::document::absolute(path), *line, *col)).collect();
     let mut first = true;
-    for (path, line, col) in &launch.files {
+    for (path, line, col) in &files {
         let opened = if path.is_dir() {
             if first {
                 let _ = std::env::set_current_dir(path);
@@ -152,7 +167,7 @@ pub fn prepare(launch: &Launch) -> Editor {
     }
     // Show the first file given (opening several leaves the last one in front).
     if launch.files.len() > 1 {
-        if let Some(id) = launch.files.first().and_then(|(path, _, _)| ed.find_doc(path)) {
+        if let Some(id) = files.first().and_then(|(path, _, _)| ed.find_doc(path)) {
             ed.show_doc(id);
         }
     }
@@ -320,8 +335,9 @@ fn paste(ed: &mut Editor, text: &str) {
         crate::picker::paste(ed, &text);
         return;
     }
-    if let Mode::Visual(_) = ed.mode {
-        crate::vim::exit_visual(ed);
+    crate::edit::commit(ed);
+    if matches!(ed.mode, Mode::Visual(_)) {
+        crate::standard::delete_selection(ed);
     }
     let cursor = ed.cursor();
     let at = if ed.mode == Mode::Normal && ed.doc().text.line_len(cursor.line) > 0 {
@@ -329,7 +345,6 @@ fn paste(ed: &mut Editor, text: &str) {
     } else {
         cursor
     };
-    crate::edit::commit(ed);
     let end = ed.doc_mut().insert(at, &text, cursor);
     crate::edit::commit(ed);
     if ed.mode == Mode::Normal {
@@ -503,5 +518,54 @@ fn bufferline_click(ed: &mut Editor, x: u16) {
             return;
         }
         column += width;
+    }
+}
+
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+
+    #[test]
+    fn review_native_paste_replaces_shift_and_visual_selections() {
+        crate::clipboard::disable();
+        for select_mode in [true, false] {
+            let mut config = crate::config::Config::default();
+            config.options.lsp = false;
+            let mut ed = Editor::new(config);
+            ed.doc_mut().set_content("abcde");
+            ed.anchor = Pos::new(0, 1);
+            ed.view_mut().cursor = Pos::new(0, if select_mode { 3 } else { 2 });
+            ed.mode = Mode::Visual(VisualKind::Char);
+            ed.vim.select_mode = select_mode;
+            paste(&mut ed, "X\r\nY");
+            assert_eq!(ed.doc().text.to_string_lf(), "aX\nYde");
+            let cursor = ed.cursor();
+            ed.doc_mut().undo(cursor).unwrap();
+            assert_eq!(ed.doc().text.to_string_lf(), "abcde");
+        }
+    }
+
+    #[test]
+    fn review_relative_directory_launch_uses_original_cwd() {
+        if std::env::var_os("ULE_DIR_PROBE").is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "app::review_tests::review_relative_directory_launch_uses_original_cwd", "--nocapture"])
+                .env("ULE_DIR_PROBE", "1")
+                .status().unwrap();
+            assert!(status.success());
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("ule-review-launch-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("child")).unwrap();
+        std::env::set_var("HOME", &root);
+        std::env::set_var("XDG_CONFIG_HOME", root.join("config"));
+        std::env::set_var("ULE_UL", root.join("no-ul"));
+        std::env::set_current_dir(&root).unwrap();
+        let root = std::env::current_dir().unwrap();
+        let ed = prepare(&Launch { files: vec![(PathBuf::from("child"), None, None)], stdin: None, readonly: false, clean: true });
+        assert_eq!(ed.cwd, root.join("child"));
+        assert_eq!(ed.explorer.as_ref().map(|explorer| &explorer.root), Some(&root.join("child")));
+        assert!(ed.doc().path.is_none());
     }
 }

@@ -238,16 +238,20 @@ pub fn accept(ed: &mut Editor) {
         return;
     };
     let cursor = ed.cursor();
-    let (start, raw) = match &item.edit {
-        Some((start, _end, text)) => (*start, text.clone()),
-        None => (completion.start, if item.insert.is_empty() { item.label.clone() } else { item.insert.clone() }),
+    let (start, replace_end, raw) = match &item.edit {
+        Some((start, end, text)) => (*start, (*end).max(cursor), text.clone()),
+        None => (completion.start, cursor, if item.insert.is_empty() { item.label.clone() } else { item.insert.clone() }),
     };
-    let start = if start.line == cursor.line && start.col <= cursor.col { start } else { completion.start };
+    let (start, replace_end) = if start.line == cursor.line && start.col <= cursor.col {
+        (start, replace_end)
+    } else {
+        (completion.start, cursor)
+    };
     let (text, stop) = if raw.contains('$') { expand_snippet(&raw) } else { (raw, None) };
     // Keep the indentation of the line for multi-line snippets.
     let indent = ed.doc().text.indent_of(cursor.line).to_string();
     let text = text.replace('\n', &format!("\n{indent}"));
-    let end = ed.doc_mut().replace(start, cursor, &text, cursor);
+    let end = ed.doc_mut().replace(start, replace_end, &text, cursor);
     let target = match stop {
         Some(offset) => {
             let before: String = text.chars().take(offset).collect();
@@ -283,4 +287,27 @@ mod tests {
         assert_eq!(expand_snippet("a\\$b"), ("a$b".into(), None));
         assert_eq!(expand_snippet("${1|one,two|}"), ("one".into(), Some(0)));
     }
+
+    #[test]
+    fn review_lsp_completion_replaces_the_full_edit_range() {
+        crate::clipboard::disable();
+        let mut config = crate::config::Config::default();
+        config.options.lsp = false;
+        let mut ed = Editor::new(config);
+        ed.doc_mut().set_content("print");
+        ed.mode = Mode::Insert;
+        ed.view_mut().cursor = Pos::new(0, 2);
+        ed.completion = Some(Completion {
+            doc: ed.view().doc,
+            items: vec![CompletionItem {
+                label: "printf".into(),
+                edit: Some((Pos::default(), Pos::new(0, 5), "printf".into())),
+                ..CompletionItem::default()
+            }],
+            shown: vec![0], selected: Some(0), start: Pos::default(), from_lsp: true, offset: 0,
+        });
+        accept(&mut ed);
+        assert_eq!(ed.doc().text.to_string_lf(), "printf");
+    }
+
 }

@@ -210,7 +210,12 @@ pub fn main_with(argv: Vec<String>) -> i32 {
             return 0;
         }
     }
-    if let Err(error) = layout::ensure_layout() {
+    let initialized = if RAW_SYSTEM_COMMANDS.contains(&name.as_str()) && name != "init" {
+        layout::ensure_config_layout()
+    } else {
+        layout::ensure_layout()
+    };
+    if let Err(error) = initialized {
         eprintln!("unlaw: Could not initialize configuration: {error}");
         return 1;
     }

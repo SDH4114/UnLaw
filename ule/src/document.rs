@@ -100,7 +100,7 @@ impl Document {
             saved_id: 0,
             saved_dirty: false,
             crlf: false,
-            final_newline: true,
+            final_newline: false,
             version: 0,
             diagnostics: Vec::new(),
             mtime: None,
@@ -140,7 +140,7 @@ impl Document {
     fn load(&mut self, content: &str) {
         self.crlf = content.contains("\r\n");
         let normalized = if self.crlf { content.replace("\r\n", "\n") } else { content.to_string() };
-        self.final_newline = normalized.ends_with('\n') || normalized.is_empty();
+        self.final_newline = normalized.ends_with('\n');
         let body = normalized.strip_suffix('\n').unwrap_or(&normalized);
         self.text = Text::new(body);
         self.invalidate(0);
@@ -155,7 +155,7 @@ impl Document {
     }
 
     pub fn modified(&self) -> bool {
-        self.kind == DocKind::File
+        matches!(self.kind, DocKind::File | DocKind::Scratch)
             && (self.history.current_id() != self.saved_id || self.history.has_pending() || self.saved_dirty)
     }
 
@@ -257,7 +257,7 @@ impl Document {
     /// The file's content as saved: line endings and the final newline restored.
     pub fn content(&self, final_newline: bool) -> String {
         let mut content = self.text.to_string_lf();
-        if (self.final_newline || final_newline) && !self.text.is_empty() {
+        if self.final_newline || (final_newline && !self.text.is_empty()) {
             content.push('\n');
         }
         if self.crlf {
@@ -282,13 +282,12 @@ impl Document {
         // Acquire it exclusively before entering the cleanup scope.
         let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
         let result = (|| {
+            // Capture the umask-filtered mode for new files, then keep unfinished content private.
+            let permissions = permissions.clone().unwrap_or(file.metadata()?.permissions());
+            fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
             file.write_all(content.as_bytes())?;
             file.sync_all()?;
-            if let Some(permissions) = &permissions {
-                fs::set_permissions(&temporary, permissions.clone())?;
-            } else {
-                fs::set_permissions(&temporary, fs::Permissions::from_mode(0o644))?;
-            }
+            fs::set_permissions(&temporary, permissions)?;
             // A symlinked file keeps its link: write through to the target.
             let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
             fs::rename(&temporary, &target)
@@ -297,9 +296,7 @@ impl Document {
             let _ = fs::remove_file(&temporary);
         }
         result?;
-        if final_newline {
-            self.final_newline = true;
-        }
+        self.final_newline = content.ends_with('\n');
         self.mark_saved();
         self.mtime = fs::metadata(path).and_then(|meta| meta.modified()).ok();
         if self.path.as_deref() != Some(path) {
@@ -332,7 +329,11 @@ impl Document {
     pub fn reload(&mut self, cursor: Pos) -> io::Result<()> {
         let path = self.path.clone().ok_or_else(|| io::Error::other("no file"))?;
         let bytes = fs::read(&path)?;
-        let content = String::from_utf8_lossy(&bytes).into_owned();
+        if bytes.iter().take(8000).any(|byte| *byte == 0) {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "binary file"));
+        }
+        let content = String::from_utf8(bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("file is not UTF-8: {error}")))?;
         let crlf = content.contains("\r\n");
         let normalized = if crlf { content.replace("\r\n", "\n") } else { content.clone() };
         let body = normalized.strip_suffix('\n').unwrap_or(&normalized).to_string();
@@ -343,7 +344,7 @@ impl Document {
             self.commit(cursor);
         }
         self.crlf = crlf;
-        self.final_newline = normalized.ends_with('\n') || normalized.is_empty();
+        self.final_newline = normalized.ends_with('\n');
         self.mark_saved();
         self.mtime = fs::metadata(&path).and_then(|meta| meta.modified()).ok();
         Ok(())
@@ -511,4 +512,52 @@ mod tests {
         let (languages, _) = Languages::load(None);
         assert!(Document::open(1, &path, &languages).is_err());
     }
+
+    #[test]
+    fn review_reload_refuses_invalid_utf8_and_binary() {
+        let path = temp("review-reload.txt");
+        fs::write(&path, "original\n").unwrap();
+        let (languages, _) = Languages::load(None);
+        let mut doc = Document::open(1, &path, &languages).unwrap();
+        for bytes in [vec![b'a', 0xff, b'b'], vec![b'a', 0, b'b']] {
+            fs::write(&path, &bytes).unwrap();
+            assert_eq!(doc.reload(Pos::default()).unwrap_err().kind(), io::ErrorKind::InvalidData);
+            assert_eq!(doc.text.to_string_lf(), "original");
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn review_roundtrips_empty_and_newline_only_files() {
+        let (languages, _) = Languages::load(None);
+        for (index, content) in ["", "\n", "\r\n", "\n\n"].iter().enumerate() {
+            let path = temp(&format!("review-newlines-{index}.txt"));
+            fs::write(&path, content).unwrap();
+            let mut doc = Document::open(1, &path, &languages).unwrap();
+            doc.save_to(&path, true).unwrap();
+            doc.save_to(&path, true).unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), *content);
+        }
+    }
+
+    #[test]
+    fn review_new_save_respects_private_umask() {
+        if std::env::var_os("ULE_UMASK_PROBE").is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "document::tests::review_new_save_respects_private_umask", "--nocapture"])
+                .env("ULE_UMASK_PROBE", "1")
+                .status().unwrap();
+            assert!(status.success());
+            return;
+        }
+        // This subprocess runs only this test, so its process-wide umask cannot affect other tests.
+        unsafe { libc::umask(0o077); }
+        let path = temp("review-private.txt");
+        let _ = fs::remove_file(&path);
+        let mut doc = Document::scratch(1, "private", DocKind::File);
+        doc.set_content("secret");
+        doc.save_to(&path, false).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+
 }

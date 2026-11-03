@@ -111,12 +111,7 @@ class ConfigTests(unittest.TestCase):
         expected = {
             "capture": {
                 "storage": {"root": "data"},
-                "capture": {
-                    "camera_device": "0",
-                    "audio_device": "0",
-                    "screen_audio": True,
-                    "show_clicks": True,
-                },
+                "capture": DEFAULT_CONFIG["capture"],
             },
             "cpp": {"projects": {"cpp": {"standard": 20, "initialize_git": False}}},
             "lofi": {"apps": {"lofi_url": "https://lofi-engine.vercel.app/"}},
@@ -148,6 +143,7 @@ class ConfigTests(unittest.TestCase):
                 "storage": {"root": "data"},
                 "todo": DEFAULT_CONFIG["todo"],
                 "desk": DEFAULT_CONFIG["desk"],
+                "games": DEFAULT_CONFIG["games"],
                 "apps": {"lofi_url": "https://lofi-engine.vercel.app/"},
             },
             "work": {

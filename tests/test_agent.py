@@ -412,7 +412,7 @@ class AgentCommandTests(AgentCase):
                 {"content": "ok"},
             ]
         )
-        self.ok("agent", "-p", "plan my day")
+        self.ok("agent", "-p", "plan my day", input="y\ny\n")
         scheduled, _far, past, today, plan = model.tool_results()
         self.assertIn("stretch (daily)", scheduled)
         self.assertIn("in the past", past)
@@ -426,7 +426,7 @@ class AgentCommandTests(AgentCase):
         self.assertIn("far away", plan)
         job = re.search(r"#(\w+)\s+far away", plan).group(1)
         model = self.model([call("unschedule", id=job), call("list_schedule"), {"content": "ok"}])
-        self.ok("agent", "-p", "cancel it")
+        self.ok("agent", "-p", "cancel it", input="y\n")
         self.assertNotIn("far away", model.tool_results()[-1])
 
     def test_claims_without_a_tool_call_get_a_warning(self) -> None:
@@ -460,7 +460,7 @@ class AgentCommandTests(AgentCase):
 
     def test_todo_tools(self) -> None:
         self.model([call("todo_add", text="Buy milk"), {"content": "ok"}])
-        self.ok("agent", "-p", "remember milk")
+        self.ok("agent", "-p", "remember milk", input="y\n")
         self.assertIn("Buy milk", (self.vault / "TODO.md").read_text(encoding="utf-8"))
 
     def test_print_mode_reads_piped_stdin_and_options(self) -> None:

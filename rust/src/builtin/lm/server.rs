@@ -114,6 +114,11 @@ fn route(service: &Arc<Service>, request: &Request, stream: &mut TcpStream) -> i
 
 /// The CLI's own endpoint: a worker job in, worker events out as NDJSON.
 fn cli_job(service: &Service, request: &Request, stream: &mut TcpStream) -> io::Result<()> {
+    // This endpoint grants local-file authority to the native CLI. Browsers
+    // must not gain it through a simple POST, or even with public API CORS on.
+    if request.header("origin").is_some() || request.header("x-unlaw-cli") != Some("1") {
+        return http::respond_json(stream, 403, &json!({"error": {"message": "Local jobs require the native CLI", "type": "forbidden"}}));
+    }
     let body = match parse_body(request) {
         Ok(body) => body,
         Err(failure) => return send_error(stream, &failure),

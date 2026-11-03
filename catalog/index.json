@@ -4,12 +4,12 @@
   {
    "name": "agent",
    "summary": "Your local AI agent: files, TODO board and schedule, in the console or Telegram.",
-   "sha256": "b01cdecf794e5137f75226df9d148db002d641238b90cbeb86e7cc475f5e2727"
+   "sha256": "b5fb76247daf4d6755c0e4cec2fa846d67011d2046c055553927f6a2559a1f04"
   },
   {
    "name": "capture",
-   "summary": "Capture screenshots or record screen, camera and microphone.",
-   "sha256": "93524963e0f27a49e034da77dbdc259f85104d0d594c151b6c46ed71dfc4adfd"
+   "summary": "Screenshots and screen, camera and audio recordings on macOS.",
+   "sha256": "d69e6501cbd293b129ac274070485ac8e8b7007f35221dd80c573f1f82cb96c9"
   },
   {
    "name": "cpp",
@@ -19,7 +19,7 @@
   {
    "name": "desk",
    "summary": "Kanban board, TODO list and pomodoro timer in the browser, on your Obsidian board file.",
-   "sha256": "8c73f66ac65f183b2e971718ef39fcd40b33a4d77577957757de993d97aa43f3"
+   "sha256": "af25dd930ea26166b52cdaa335453958aa3da80de5577d7ca1b97b9a03c931bc"
   },
   {
    "name": "git",
@@ -79,7 +79,7 @@
   {
    "name": "tg",
    "summary": "Open Telegram, or send and download messages/files through your bot.",
-   "sha256": "de149db5991eb8b148ca7df1723f48d1c87e14ae9292b18523b1ec0249de8e7d"
+   "sha256": "59521bc6e03acb1f48903fd7c95f894b26b0e705d8168d28c5a2850a99342ba2"
   },
   {
    "name": "todo",

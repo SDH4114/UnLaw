@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use std::io;
 
-use super::{finish, inputs_until, pause, too_small, After, Button, Color, Input, Key, Level, Played, Rng, Screen, Style, FRAME};
+use super::{finish, inputs_until, pause, too_small, After, Button, Color, Input, Key, Level, Played, Rng, Scores, Screen, Style, FRAME};
 
 pub const COLUMNS: i32 = 11;
 pub const ROWS: i32 = 5;
@@ -353,7 +353,7 @@ fn draw(screen: &mut dyn Screen, game: &Invaders, layout: &Layout, level: Level,
     screen.controls("←→ / A D move · Space / click fire · mouse moves the cannon · P pause · Esc quit");
 }
 
-pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u64>) -> io::Result<Played> {
+pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u64>, scores: Option<&mut Scores>) -> io::Result<Played> {
     let (height, width) = screen.size();
     let field_height = (height - 4).min(30);
     let field_width = (width - 2).min(90);
@@ -391,7 +391,7 @@ pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u
         if event == Event::GameOver {
             draw(screen, &game, &layout, level, best);
             let details = [format!("Score {} · Wave {}", game.score, game.wave)];
-            let after = finish(screen, "GAME OVER — the invaders won", &details, Some((game.score, best, "invaders")))?;
+            let after = finish(screen, "GAME OVER — the invaders won", &details, Some((game.score, best, "invaders")), scores.map(|scores| (scores, level)))?;
             return Ok(Played { score: Some(game.score), after });
         }
     }
@@ -562,12 +562,12 @@ mod tests {
         let mut inputs = vec![key(' '), special(Key::Left), special(Key::Right), Some(Input::Hover { y: 10, x: 20 }), click(5, 5, Button::Left)];
         inputs.extend(std::iter::repeat_n(None, 6000));
         let mut screen = Fake::new((26, 80)).keys(&inputs).keys(&[special(Key::Esc)]);
-        let played = play(&mut screen, Level::Hard, &mut Rng::seeded(4), None).unwrap();
+        let played = play(&mut screen, Level::Hard, &mut Rng::seeded(4), None, None).unwrap();
         assert_eq!(played.after, After::Leave);
         assert!(screen.drew("GAME OVER"));
         let mut quit = Fake::new((26, 80)).keys(&[key('p'), key('p'), key('q')]);
-        assert_eq!(play(&mut quit, Level::Easy, &mut Rng::seeded(4), None).unwrap().score, None);
+        assert_eq!(play(&mut quit, Level::Easy, &mut Rng::seeded(4), None, None).unwrap().score, None);
         let mut small = Fake::new((20, 50)).keys(&[key('x')]);
-        assert_eq!(play(&mut small, Level::Easy, &mut Rng::seeded(4), None).unwrap().after, After::Leave);
+        assert_eq!(play(&mut small, Level::Easy, &mut Rng::seeded(4), None, None).unwrap().after, After::Leave);
     }
 }

@@ -77,7 +77,7 @@ fn end_selection(ed: &mut Editor) {
 }
 
 /// Deletes the selection (if any); the cursor goes to its start, in insert mode.
-fn delete_selection(ed: &mut Editor) -> bool {
+pub(crate) fn delete_selection(ed: &mut Editor) -> bool {
     let Some((start, end, linewise)) = range(ed) else {
         return false;
     };

@@ -1259,13 +1259,19 @@ def _step(repeat: str) -> dt.timedelta | None:
 def _valid_job(job: Any) -> bool:
     if not isinstance(job, dict) or not isinstance(job.get("id"), str) or not isinstance(job.get("prompt"), str):
         return False
+    if not isinstance(job.get("next"), str) or not isinstance(job.get("repeat", "once"), str):
+        return False
     try:
-        dt.datetime.fromisoformat(str(job.get("next")))
-        step = _step(str(job.get("repeat", "once")))
-    except ValueError:
+        moment = dt.datetime.fromisoformat(job["next"])
+        repeat = job.get("repeat", "once")
+        if repeat not in {"once", "daily", "weekly"} and not re.fullmatch(r"every \d+m", repeat):
+            return False
+        step = _step(repeat)
+    except (ValueError, OverflowError):
         return False
     # A zero or negative step would loop forever while finding the next time.
-    return step is None or step > dt.timedelta(0)
+    # Stored times use the local, naive format emitted by parse_when and now.
+    return moment.tzinfo is None and (step is None or step > dt.timedelta(0))
 
 
 class Schedule:
@@ -1275,6 +1281,8 @@ class Schedule:
     def jobs(self) -> list[dict]:
         stored = _read_json(self.path, {})
         jobs = stored.get("jobs", []) if isinstance(stored, dict) else []
+        if not isinstance(jobs, list):
+            return []
         # A hand-edited or damaged entry must never stop the server's tick.
         return sorted((job for job in jobs if _valid_job(job)), key=lambda job: job["next"])
 
@@ -1707,7 +1715,8 @@ class Tools:
         file = self._path(path)
         if not file.is_file():
             raise ToolError(f"{file} is not a file")
-        data = file.read_bytes()[:READ_LIMIT]
+        with file.open("rb") as handle:
+            data = handle.read(READ_LIMIT)
         if b"\0" in data[:8192]:
             raise ToolError(f"{file} is binary ({file.stat().st_size} bytes)")
         lines = data.decode("utf-8", errors="replace").splitlines()
@@ -1881,20 +1890,26 @@ class Tools:
         return f"exit {result.returncode}\n{_clip(output, 8000)}"
 
     def _todo_add(self, text: str, column: str = "") -> str:
+        self._approve(f"Add task to {column or 'To do'}", text)
         result = run_ul(
             "todo", "add", text, *(["--column", column] if column else []), timeout=60
         )
         return (result.stdout + result.stderr).strip()
 
     def _todo_done(self, id: int) -> str:
-        result = run_ul("todo", "done", str(int(id)), timeout=60)
+        number = int(id)
+        self._approve(f"Complete TODO task #{number}")
+        result = run_ul("todo", "done", str(number), timeout=60)
         return (result.stdout + result.stderr).strip()
 
     def _schedule(self, prompt: str, when: str, repeat: str = "once", kind: str = "reminder") -> str:
-        job = Schedule().add(prompt, parse_when(when, now()), parse_repeat(repeat), self.who, kind or "reminder")
+        moment, interval = parse_when(when, now()), parse_repeat(repeat)
+        self._approve(f"Schedule {kind or 'reminder'} at {moment.isoformat(sep=' ')}", f"{prompt}\nRepeat: {interval}")
+        job = Schedule().add(prompt, moment, interval, self.who, kind or "reminder")
         return f"Scheduled {describe_job(job)}."
 
     def _unschedule(self, id: str) -> str:
+        self._approve(f"Cancel scheduled job #{str(id).lstrip('#')}")
         return f"Cancelled {describe_job(Schedule().remove(str(id)))}."
 
 
@@ -2261,7 +2276,8 @@ def attach(text: str, cwd: Path) -> Any:
             encoded = base64.b64encode(path.read_bytes()).decode()
             images.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}})
             return str(path)
-        data = path.read_bytes()[:READ_LIMIT]
+        with path.open("rb") as handle:
+            data = handle.read(READ_LIMIT)
         if b"\0" in data[:8192]:
             notes.append(f"[{path} is binary and was not attached]")
         else:
@@ -3119,9 +3135,10 @@ class Bot:
         downloads = storage_path("telegram", "downloads")
         voice = message.get("voice") or message.get("audio")
         if voice:
+            filename = Path(str(voice.get("file_name") or "voice.ogg")).name
             path = self.telegram.download(
                 voice["file_id"],
-                _unique(downloads / (voice.get("file_name") or "voice.ogg")),
+                _unique(downloads / (filename if filename not in {"", ".", ".."} else "voice.ogg")),
             )
             heard = self.model.transcribe(path)
             path.unlink(missing_ok=True)
@@ -3146,9 +3163,10 @@ class Bot:
         if document:
             if self.level(chat_id) == "chat":
                 return text or None
+            filename = Path(str(document.get("file_name") or "file")).name
             path = self.telegram.download(
                 document["file_id"],
-                _unique(downloads / (document.get("file_name") or "file")),
+                _unique(downloads / (filename if filename not in {"", ".", ".."} else "file")),
             )
             return f"{text}\n[The user sent a file; it is saved at {path}]".strip()
         return text or None

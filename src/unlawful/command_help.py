@@ -58,16 +58,57 @@ Examples:
   ula -c
   ula server
 ''',
-    "capture": '''Capture screenshots or record screen, camera and microphone.
-Usage: ul capture <action> [output] [--duration <seconds>]
-Actions:
-  screenshot / area / window   Full screen, selected area or selected window PNG
-  screen / camera / audio     Start a recording (camera/audio require ffmpeg)
-  devices                     List camera and microphone devices
-  stop                        Stop the active recording
-  last                        Open the latest capture
-Defaults: storage.root/captures; --duration must be positive.
-Examples: ul capture area; ul capture screen --duration 30
+    "capture": '''Screenshots and screen, camera and audio recordings on macOS.
+Usage: ul capture                 a menu: pick what to capture (in a terminal)
+       ul capture shot [screen|area|window] [options] [PATH]
+       ul capture record [screen|camera|audio] [options] [PATH]
+       ul capture pause | resume | stop | status
+       ul capture list | last | open | reveal | copy | delete | trim | convert | devices
+Screenshots (shot):
+  screen (default) the whole display; area / window let you select with the mouse
+  --display N      which display (1 = main; see `devices`)   --delay S  wait S seconds
+  --clipboard      copy instead of saving   --cursor  include the pointer
+  --jpg            JPEG instead of PNG      --open    open the file afterwards
+Recording (record) runs in the background until `ul capture stop`:
+  screen (default) the display with system audio (macOS screencapture) and the
+                   microphone; --camera puts the camera in a corner (capture.overlay)
+  camera           the camera with the microphone
+  audio            the microphone only (m4a, mp3 or wav)
+  --mic NAME|N     microphone by name or number; --no-mic records without it
+  --cam NAME|N     camera by name or number (default: capture.camera_device)
+  --system-audio / --no-system-audio   sound of the Mac (screen only)
+  --display N      --rect X,Y,W,H (part of the screen, in points)   --no-clicks
+  --format F       mov|mp4 for video, m4a|mp3|wav for audio
+  --duration S     record S seconds in the foreground, then save
+  --wait           stay in the foreground: Enter stops, p + Enter pauses
+  pause / resume   pause and continue; the parts are joined when you stop
+  stop             stop and save (adds the camera and microphone; may take a moment)
+  status           what is recording, for how long, and where it goes
+Library:
+  list [N] [--all] the newest captures with kind, length and size
+  last [--reveal]  open the newest capture (or show it in Finder)
+  open|reveal X    open a capture, or show it in Finder (X: name, path or `last`)
+  copy X           put a screenshot on the clipboard
+  delete X         move a capture to the Trash (only from the capture folders)
+  trim X --from T [--to T]   cut a recording exactly (T: seconds or m:ss); keeps the original
+  convert X --to mp4|mov|gif|m4a|mp3|wav   a new file next to the original
+  devices          displays, cameras and microphones with their numbers
+  wave X [--bars N] the loudness of a recording as bars (like Voice Memos)
+  thumb X / preview [--display N]   small JPEGs (used by `ul desk`)
+Add --json to any action for machine-readable output.
+Files: storage.root/captures/screenshots and /recordings; never overwritten (" 2" is added).
+Settings: capture.audio_device and capture.camera_device (`default` = what macOS
+  uses, a name, or a number from `devices`), capture.screen_audio (microphone in
+  screen recordings, true), capture.system_audio (true), capture.show_clicks (true),
+  capture.video_format (mov), capture.audio_format (m4a), capture.overlay
+  (bottom-right, bottom-left, top-right, top-left).
+Permissions: the terminal (or the app running ul) needs Screen Recording, Camera
+  and Microphone in System Settings > Privacy & Security.
+Dependencies: macOS screencapture; ffmpeg + ffprobe (brew install ffmpeg) for the
+  camera, a non-default microphone, audio, pause, MP4, trim and convert.
+`ul desk` has a Studio tab with the same controls, a preview and a player.
+Examples: ul capture shot area; ul capture record --camera; ul capture stop
+  ul capture record audio --duration 60; ul capture convert last --to gif
 ''',
     "cpp": '''Create a C++ project from the configured templates.
 Usage: ul cpp <project-name> [--std 11|14|17|20|23|26] [--git]
@@ -180,8 +221,13 @@ Actions:
   pomodoro         Show or control the timer from the terminal; the page shows
                    the same timer, and a macOS notification marks each phase end
 Page: Board (drag cards between columns, double-click to edit), Today (overdue,
-  due today, in progress, next 7 days), Stats. Keys: n new card, / search,
-  space start/pause timer, 1 2 3 views, Esc clear filters.
+  due today, in progress, next 7 days), Stats, Games. Keys: n new card,
+  / search, space start/pause timer, 1 2 3 4 views, Esc clear filters, ? keys.
+Games: Tetris, Snake, Minesweeper, Space Invaders and Chomp from `ul game`,
+  played in the page with keyboard and mouse at easy/normal/hard. The page
+  runs `ul game --stream` (the same Rust games), so best scores are the ones
+  in storage.root/runtime/arcade.toml that the terminal arcade shows too.
+  Leaving the tab pauses a game; closing the page ends it.
 Cards: #tag filters, @{2026-11-01} due dates (quick add: @today @tomorrow
   @сегодня @завтра @+3 @2026-11-01), [[note]] opens the note in Obsidian.
   Done cards move to todo.completed_column (or the board's Done column).
@@ -191,9 +237,11 @@ Security: listens on 127.0.0.1 only and needs the random token in the printed
   address; it reads and writes only the open board and storage.root/desk.
 Settings: desk.port (8765), desk.open_browser (true), desk.sound (true),
   desk.pomodoro.work (25), short_break (5), long_break (15), cycles (4) in minutes;
-  todo.vault_path, todo.file, todo.completed_column, apps.lofi_url.
+  todo.vault_path, todo.file, todo.completed_column, apps.lofi_url,
+  games.difficulty (default level on the Games tab).
 Storage: storage.root/desk (timer state, pomodoro.jsonl log, recent boards).
-Dependencies: Python standard library; osascript for notifications.
+Dependencies: Python standard library; osascript for notifications; the Games
+  tab needs ul built with the `game` feature.
 Examples: ul desk
           ul desk ~/notes/Project.md --no-open
           ul desk pomodoro start 50 --card "Write chapter 3"

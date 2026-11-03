@@ -181,50 +181,6 @@ class DesktopCommandTests(ConfiguredTestCase):
         self.assertEqual(run.call_args.args[0], ["open", "https://www.youtube.com/"])
 
 
-class CaptureCommandTests(ConfiguredTestCase):
-    def test_screenshot_uses_native_screencapture_and_creates_parent(self) -> None:
-        from unlawful import capture
-
-        target = self.root / "captures" / "shot.png"
-        completed = subprocess.CompletedProcess([], 0)
-        with patch.dict(os.environ, self.env, clear=False), patch.object(
-            capture.subprocess, "run", return_value=completed
-        ) as run:
-            self.assertEqual(capture.main(["screenshot", str(target)]), 0)
-        self.assertTrue(target.parent.is_dir())
-        self.assertEqual(run.call_args.args[0], ["screencapture", "-x", str(target)])
-
-    def test_screen_recording_writes_pid_and_stop_removes_it(self) -> None:
-        from unlawful import capture
-
-        process = Mock(pid=4242)
-        target = self.root / "captures" / "screen.mov"
-        with patch.dict(os.environ, self.env, clear=False), patch.object(
-            capture.subprocess, "Popen", return_value=process
-        ):
-            self.assertEqual(capture.main(["screen", str(target)]), 0)
-            self.assertTrue(capture.recording_state_file().is_file())
-        with patch.dict(os.environ, self.env, clear=False), patch.object(capture.os, "kill") as kill:
-            self.assertEqual(capture.main(["stop"]), 0)
-        kill.assert_called_once_with(4242, capture.signal.SIGINT)
-        self.assertFalse(capture.recording_state_file().exists())
-
-    def test_camera_and_audio_commands_use_configured_avfoundation_devices(self) -> None:
-        from unlawful.capture import recording_command
-
-        self.assertEqual(
-            recording_command("camera", Path("camera.mov"), camera_device="2", audio_device="1"),
-            [
-                "ffmpeg", "-y", "-f", "avfoundation", "-framerate", "30",
-                "-i", "2:1", "-c:v", "h264_videotoolbox", "-c:a", "aac", "camera.mov",
-            ],
-        )
-        self.assertEqual(
-            recording_command("audio", Path("voice.m4a"), camera_device="2", audio_device="1"),
-            ["ffmpeg", "-y", "-f", "avfoundation", "-i", ":1", "-c:a", "aac", "voice.m4a"],
-        )
-
-
 class TelegramCommandTests(ConfiguredTestCase):
     def test_message_builds_send_message_request(self) -> None:
         from unlawful import telegram

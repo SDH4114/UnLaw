@@ -123,7 +123,7 @@ fn seed_default_commands(selection: Option<&[&str]>) -> io::Result<Vec<&'static 
             Err(_) => continue,
         }
         fs::create_dir_all(&directory)?;
-        fs::write(&destination, source)?;
+        crate::util::atomic_write(&destination, source, ".seed.")?;
     }
     Ok(kept)
 }
@@ -194,8 +194,9 @@ pub fn ensure_storage_layout() -> io::Result<PathBuf> {
     Ok(root)
 }
 
-/// Create everything Unlaw needs without overwriting user files.
-pub fn ensure_layout() -> io::Result<PathBuf> {
+/// Bootstrap commands and config separately so recovery commands still work
+/// when the storage disk is unavailable or its path is invalid.
+pub fn ensure_config_layout() -> io::Result<PathBuf> {
     fs::create_dir_all(commands_dir())?;
     for name in TEMPLATE_NAMES {
         fs::create_dir_all(templates_dir().join(name))?;
@@ -204,8 +205,14 @@ pub fn ensure_layout() -> io::Result<PathBuf> {
     let selection = config::load().ok().map(|config| features::selected(&config));
     seed_default_commands(selection.as_deref())?;
     retire_builtin_seeds()?;
-    ensure_storage_layout()?;
     Ok(config_dir())
+}
+
+/// Create everything Unlaw needs without overwriting user files.
+pub fn ensure_layout() -> io::Result<PathBuf> {
+    let root = ensure_config_layout()?;
+    ensure_storage_layout()?;
+    Ok(root)
 }
 
 #[cfg(test)]

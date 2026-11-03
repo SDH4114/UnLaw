@@ -8,11 +8,13 @@ mod chomp;
 mod invaders;
 mod mines;
 mod snake;
+mod stream;
 mod tetris;
 mod terminal;
 
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
+use std::os::fd::AsRawFd;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use toml_edit::DocumentMut;
@@ -21,6 +23,7 @@ use crate::config::Config;
 
 pub const HELP: &str = "Play a terminal arcade game; no arguments opens the game menu.
 Usage: ul game [tetris|snake|minesweeper|invaders|chomp] [easy|normal|hard]
+       ul game --stream [--size ROWSxCOLS] [game] [difficulty]
 Games:
   tetris        7-bag pieces, next/hold, ghost, wall kicks, levels every 10 lines
   snake         eat ● (and bonus ★), grow and speed up; walls kill on normal/hard
@@ -39,8 +42,12 @@ Difficulty (default: games.difficulty):
            obstacles and doubles growth, Minesweeper is Expert with no safe
            opening, Invaders fire constantly and you have 2 lives, Chomp
            hunters are as fast as you and fright lasts 2 s (none from level 5)
-Best scores: storage.root/runtime/arcade.toml.
-Example: ul game snake hard
+Best scores: storage.root/runtime/arcade.toml, shared by the terminal and
+`ul desk` (Games tab); every finished game rereads the file first.
+--stream plays without a terminal for `ul desk`: JSON-line input on stdin
+(keys, clicks, hover, resize), one JSON frame per change on stdout; closing
+stdin ends the game. --size sets the grid (default 30x100).
+Examples: ul game snake hard; ul game --stream --size 40x120 tetris
 ";
 
 pub const GAMES: [(&str, &str); 5] =
@@ -315,12 +322,40 @@ impl Scores {
         Scores { path, document }
     }
 
+    /// Reread the file: another `ul game` (terminal or desk) may have saved a best.
+    pub fn reload(&mut self) {
+        let fresh = self.path.as_ref().and_then(|path| std::fs::read_to_string(path).ok()).and_then(|text| text.parse().ok());
+        if let Some(document) = fresh {
+            self.document = document;
+        }
+    }
+
     pub fn best(&self, game: &str, level: Level) -> Option<u64> {
         self.document.get(game)?.get(level.name())?.as_integer().and_then(|value| u64::try_from(value).ok())
     }
 
     /// Record a finished game; saves and returns true for a new best.
     pub fn record(&mut self, game: &str, level: Level, score: u64) -> bool {
+        // Lock the stable sidecar, not the TOML inode replaced by atomic_write.
+        let locked = (|| -> io::Result<Option<std::fs::File>> {
+            let Some(path) = &self.path else { return Ok(None) };
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let file = std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(path.with_extension("lock"))?;
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(Some(file))
+        })();
+        let _lock = match locked {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!("unlaw game: could not lock best scores: {error}");
+                return false;
+            }
+        };
+        self.reload();
         if !is_better(game, score, self.best(game, level)) {
             return false;
         }
@@ -329,7 +364,10 @@ impl Scores {
         }
         self.document[game][level.name()] = toml_edit::value(score.min(i64::MAX as u64) as i64);
         if let Some(path) = &self.path {
-            let _ = crate::util::atomic_write(path, &self.document.to_string(), ".arcade.");
+            if let Err(error) = crate::util::atomic_write(path, &self.document.to_string(), ".arcade.") {
+                eprintln!("unlaw game: could not save best scores: {error}");
+                return false;
+            }
         }
         true
     }
@@ -355,7 +393,11 @@ pub fn overlay(screen: &mut dyn Screen, lines: &[(String, Style)]) {
 
 /// End-of-game box: Enter/Space/click plays again, Esc/Q leaves. Keys in the
 /// first half second are ignored so a held key cannot skip it by accident.
-pub fn finish(screen: &mut dyn Screen, title: &str, details: &[String], score: Option<(u64, Option<u64>, &str)>) -> io::Result<After> {
+pub fn finish(screen: &mut dyn Screen, title: &str, details: &[String], score: Option<(u64, Option<u64>, &str)>, record: Option<(&mut Scores, Level)>) -> io::Result<After> {
+    // Persist before presenting or waiting: closing the page can end either I/O operation.
+    if let (Some((score, _, game)), Some((scores, level))) = (score, record) {
+        scores.record(game, level, score);
+    }
     let mut lines = vec![(title.to_string(), Style::fg(Color::Yellow).bold())];
     lines.extend(details.iter().map(|line| (line.clone(), Style::PLAIN)));
     if let Some((score, best, game)) = score {
@@ -481,23 +523,21 @@ pub fn difficulty_menu(screen: &mut dyn Screen, default: Level) -> io::Result<Op
     Ok(menu(screen, "SELECT DIFFICULTY", &labels, start, footer)?.map(|index| [Level::Easy, Level::Normal, Level::Hard][index]))
 }
 
-pub fn play_once(screen: &mut dyn Screen, game: &str, level: Level, rng: &mut Rng, best: Option<u64>) -> io::Result<Played> {
+pub fn play_once(screen: &mut dyn Screen, game: &str, level: Level, rng: &mut Rng, best: Option<u64>, scores: Option<&mut Scores>) -> io::Result<Played> {
     match game {
-        "tetris" => tetris::play(screen, level, rng, best),
-        "snake" => snake::play(screen, level, rng, best),
-        "minesweeper" => mines::play(screen, level, rng, best),
-        "chomp" => chomp::play(screen, level, rng, best),
-        _ => invaders::play(screen, level, rng, best),
+        "tetris" => tetris::play(screen, level, rng, best, scores),
+        "snake" => snake::play(screen, level, rng, best, scores),
+        "minesweeper" => mines::play(screen, level, rng, best, scores),
+        "chomp" => chomp::play(screen, level, rng, best, scores),
+        _ => invaders::play(screen, level, rng, best, scores),
     }
 }
 
 /// Play `game` until the player leaves, recording best scores.
 pub fn play(screen: &mut dyn Screen, game: &str, level: Level, rng: &mut Rng, scores: &mut Scores) -> io::Result<()> {
     loop {
-        let played = play_once(screen, game, level, rng, scores.best(game, level))?;
-        if let Some(score) = played.score {
-            scores.record(game, level, score);
-        }
+        scores.reload();
+        let played = play_once(screen, game, level, rng, scores.best(game, level), Some(scores))?;
         if played.after == After::Leave {
             return Ok(());
         }
@@ -505,16 +545,17 @@ pub fn play(screen: &mut dyn Screen, game: &str, level: Level, rng: &mut Rng, sc
 }
 
 pub fn arcade(screen: &mut dyn Screen, default: Level, rng: &mut Rng, scores: &mut Scores) -> io::Result<()> {
-    while let Some(game) = game_menu(screen, scores, default)? {
+    loop {
+        scores.reload();
+        let Some(game) = game_menu(screen, scores, default)? else { return Ok(()) };
         if let Some(level) = difficulty_menu(screen, default)? {
             play(screen, game, level, rng, scores)?;
         }
     }
-    Ok(())
 }
 
 fn usage() -> i32 {
-    eprintln!("Usage: ul game [tetris|snake|minesweeper|invaders|chomp] [easy|normal|hard]");
+    eprintln!("Usage: ul game [--stream [--size ROWSxCOLS]] [tetris|snake|minesweeper|invaders|chomp] [easy|normal|hard]");
     2
 }
 
@@ -523,6 +564,23 @@ pub fn run(args: &[String], config: &Config) -> i32 {
         print!("{HELP}");
         return 0;
     }
+    let mut stream_size = None;
+    let mut rest: Vec<String> = Vec::new();
+    let mut flags = args.iter();
+    while let Some(arg) = flags.next() {
+        match arg.as_str() {
+            "--stream" => stream_size = stream_size.or(Some((30, 100))),
+            "--size" => match flags.next().and_then(|size| stream::parse_size(size)) {
+                Some(size) => stream_size = Some(size),
+                None => {
+                    eprintln!("unlaw game: --size needs ROWSxCOLS, for example 40x120");
+                    return 2;
+                }
+            },
+            _ => rest.push(arg.clone()),
+        }
+    }
+    let args = rest.as_slice();
     let default = config.string("games.difficulty");
     let (game, difficulty) = match args {
         [] => (None, default.as_str()),
@@ -537,12 +595,28 @@ pub fn run(args: &[String], config: &Config) -> i32 {
         eprintln!("unlaw game: difficulty must be easy, normal, or hard");
         return 2;
     };
+    let mut scores = Scores::load(Some(config.storage_root().join("runtime").join("arcade.toml")));
+    let mut rng = Rng::from_time();
+    if let Some(size) = stream_size {
+        let mut screen = stream::Stream::new(io::BufReader::new(io::stdin()), io::stdout(), size);
+        let result = match game {
+            Some(game) => play(&mut screen, game, level, &mut rng, &mut scores),
+            None => arcade(&mut screen, level, &mut rng, &mut scores),
+        };
+        // A closed stdin (the desk left) or stdout is the normal way out.
+        return match result {
+            Ok(()) => 0,
+            Err(error) if matches!(error.kind(), io::ErrorKind::Interrupted | io::ErrorKind::BrokenPipe) => 0,
+            Err(error) => {
+                eprintln!("unlaw game: stream error: {error}");
+                1
+            }
+        };
+    }
     if !io::stdout().is_terminal() || !io::stdin().is_terminal() {
         eprintln!("unlaw game: terminal error: stdin and stdout must be a terminal");
         return 1;
     }
-    let mut scores = Scores::load(Some(config.storage_root().join("runtime").join("arcade.toml")));
-    let mut rng = Rng::from_time();
     let result = terminal::Terminal::open().and_then(|mut screen| match game {
         Some(game) => play(&mut screen, game, level, &mut rng, &mut scores),
         None => arcade(&mut screen, level, &mut rng, &mut scores),
@@ -690,14 +764,64 @@ mod tests {
     }
 
     #[test]
+    fn scores_reread_bests_saved_by_another_game() {
+        // The terminal and `ul desk` run separate processes on one arcade.toml.
+        let path = std::env::temp_dir().join(format!("unlaw-arcade-shared-{}.toml", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut terminal = Scores::load(Some(path.clone()));
+        let mut desk = Scores::load(Some(path.clone()));
+        assert!(desk.record("tetris", Level::Normal, 900));
+        assert_eq!(terminal.best("tetris", Level::Normal), None, "not reread yet");
+        terminal.reload();
+        assert_eq!(terminal.best("tetris", Level::Normal), Some(900));
+        assert!(!terminal.record("tetris", Level::Normal, 500), "a lower score never replaces the desk's best");
+        assert!(terminal.record("snake", Level::Easy, 7));
+        let saved = Scores::load(Some(path.clone()));
+        assert_eq!(saved.best("tetris", Level::Normal), Some(900));
+        assert_eq!(saved.best("snake", Level::Easy), Some(7));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn score_records_wait_for_the_shared_file_lock() {
+        use std::os::fd::AsRawFd;
+        let path = std::env::temp_dir().join(format!("unlaw-arcade-lock-{}.toml", std::process::id()));
+        let lock_path = path.with_extension("lock");
+        let lock = std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(&lock_path).unwrap();
+        assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
+        let (started, ready) = std::sync::mpsc::channel();
+        let (done, result) = std::sync::mpsc::channel();
+        let writer_path = path.clone();
+        let writer = std::thread::spawn(move || {
+            let mut scores = Scores::load(Some(writer_path));
+            started.send(()).unwrap();
+            let recorded = scores.record("snake", Level::Normal, 100);
+            done.send(recorded).unwrap();
+        });
+        ready.recv().unwrap();
+        let waited = result.recv_timeout(Duration::from_millis(100)).is_err();
+        // Publish a competing result while the writer is blocked, as a second process would.
+        std::fs::write(&path, "[tetris]\nnormal = 900\n").unwrap();
+        drop(lock);
+        writer.join().unwrap();
+        let recorded = if waited { result.recv().unwrap() } else { false };
+        let saved = Scores::load(Some(path.clone()));
+        let both = saved.best("snake", Level::Normal) == Some(100) && saved.best("tetris", Level::Normal) == Some(900);
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(lock_path);
+        assert!(waited, "score write ignored the shared file lock");
+        assert!(recorded && both, "concurrent bests were not merged after acquiring the lock");
+    }
+
+    #[test]
     fn finish_ignores_early_keys_then_offers_again_or_leave() {
         let mut screen = Fake::new((30, 80)).keys(&[special(Key::Enter)]);
         screen.clock = 10.0;
         // The fake advances 0.6s per key, which passes the 0.5s guard.
-        assert_eq!(finish(&mut screen, "GAME OVER", &["Score 5".into()], Some((5, Some(9), "snake"))).unwrap(), After::Again);
+        assert_eq!(finish(&mut screen, "GAME OVER", &["Score 5".into()], Some((5, Some(9), "snake")), None).unwrap(), After::Again);
         assert!(screen.drew("Best 9"));
         let mut screen = Fake::new((30, 80)).keys(&[key('q')]);
-        assert_eq!(finish(&mut screen, "WIN", &[], Some((3, Some(9), "minesweeper"))).unwrap(), After::Leave);
+        assert_eq!(finish(&mut screen, "WIN", &[], Some((3, Some(9), "minesweeper")), None).unwrap(), After::Leave);
         assert!(screen.drew("New best"));
     }
 

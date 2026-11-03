@@ -9,6 +9,7 @@ use std::io::{self, Read};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -258,6 +259,60 @@ impl Drop for IgnoreSignals {
     }
 }
 
+static PENDING_SIGNAL: AtomicI32 = AtomicI32::new(0);
+
+/// A timed command runs in its own process group. When Unlaw owns the
+/// terminal, that group must own it too, or reading the keyboard or changing
+/// terminal modes stops the command (SIGTTIN/SIGTTOU) until the timeout.
+/// Dropping this gives the terminal back to Unlaw's group.
+struct Foreground {
+    group: libc::pid_t,
+}
+
+impl Foreground {
+    fn claim() -> Option<Self> {
+        let group = unsafe { libc::getpgrp() };
+        (unsafe { libc::isatty(libc::STDIN_FILENO) == 1 && libc::tcgetpgrp(libc::STDIN_FILENO) == group }).then_some(Foreground { group })
+    }
+}
+
+impl Drop for Foreground {
+    fn drop(&mut self) {
+        unsafe {
+            // A background group may only take the terminal with SIGTTOU ignored.
+            let previous = libc::signal(libc::SIGTTOU, libc::SIG_IGN);
+            libc::tcsetpgrp(libc::STDIN_FILENO, self.group);
+            libc::signal(libc::SIGTTOU, previous);
+        }
+    }
+}
+
+extern "C" fn remember_signal(signal: libc::c_int) {
+    PENDING_SIGNAL.store(signal, Ordering::Relaxed);
+}
+
+/// A timed command owns a process group so its descendants can be stopped too.
+/// The parent remains in the terminal's group and forwards terminal signals.
+struct ForwardSignals {
+    _restore: IgnoreSignals,
+}
+
+impl ForwardSignals {
+    fn new() -> Self {
+        PENDING_SIGNAL.store(0, Ordering::Relaxed);
+        let handler = remember_signal as *const () as libc::sighandler_t;
+        let previous = unsafe { IgnoreSignals(libc::signal(libc::SIGINT, handler), libc::signal(libc::SIGQUIT, handler)) };
+        Self { _restore: previous }
+    }
+
+    fn forward(&self, group: u32) {
+        let signal = PENDING_SIGNAL.swap(0, Ordering::Relaxed);
+        if signal != 0 {
+            unsafe { libc::kill(-(group as libc::pid_t), signal); }
+        }
+    }
+}
+
 /// Run a helper tool to completion: Ctrl-C reaches the tool, while Unlaw keeps
 /// running so it can clean up and report (a SIGINT exit becomes 130).
 pub(crate) fn status_shielded(process: &mut Command) -> io::Result<ExitStatus> {
@@ -306,10 +361,24 @@ pub fn run(command: &UserCommand, args: &[String], config: &Config, options: &Ru
     }
 
     let _guard = IgnoreSignals::new();
+    let signals = if options.timeout.is_zero() {
+        None
+    } else {
+        process.process_group(0);
+        Some(ForwardSignals::new())
+    };
+    let foreground = signals.as_ref().and_then(|_| Foreground::claim());
+    let take_terminal = foreground.is_some();
     unsafe {
-        process.pre_exec(|| {
+        process.pre_exec(move || {
             libc::signal(libc::SIGINT, libc::SIG_DFL);
             libc::signal(libc::SIGQUIT, libc::SIG_DFL);
+            if take_terminal {
+                // setpgid already ran; move the terminal to the new group before exec.
+                libc::signal(libc::SIGTTOU, libc::SIG_IGN);
+                libc::tcsetpgrp(libc::STDIN_FILENO, libc::getpgrp());
+                libc::signal(libc::SIGTTOU, libc::SIG_DFL);
+            }
             Ok(())
         });
     }
@@ -322,11 +391,15 @@ pub fn run(command: &UserCommand, args: &[String], config: &Config, options: &Ru
         child.wait()
     } else {
         loop {
+            if let Some(signals) = &signals {
+                signals.forward(child.id());
+            }
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
                 Ok(None) if started.elapsed() >= options.timeout => {
-                    let _ = child.kill();
+                    unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL); }
                     let _ = child.wait();
+                    drop(foreground);
                     eprintln!("unlaw: Command timed out: {}", command.name);
                     return 124;
                 }

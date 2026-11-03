@@ -297,10 +297,14 @@ long_break = 15
 cycles = 4               # focus sessions before a long break
 
 [capture]
-camera_device = "0"
-audio_device = "0"
-screen_audio = true
+camera_device = "default"       # `default` = the camera macOS picks, a name, or a number
+audio_device = "default"        # same for the microphone (see `ul capture devices`)
+screen_audio = true             # microphone in screen recordings
+system_audio = true             # sound of the Mac in screen recordings
 show_clicks = true
+video_format = "mov"            # mov or mp4
+audio_format = "m4a"            # m4a, mp3 or wav
+overlay = "bottom-right"        # camera corner in screen + camera recordings
 
 [games]
 difficulty = "normal"
@@ -553,28 +557,51 @@ the new one, so nothing is overwritten. The timer lives in `storage.root/desk`,
 so a reloaded tab, the terminal and the page share it; each phase ends with a
 macOS notification. The server listens on 127.0.0.1 only and needs the random
 token in the printed address. Keys: `n` new card, `/` search, `space` timer,
-`1` `2` `3` views. Only the Python standard library is used.
+`1`–`5` views, `?` all shortcuts. Only the Python standard library is used.
+
+**Games** plays the `ul game` arcade (Tetris, Snake, Minesweeper, Space Invaders,
+Chomp) in the page with keyboard and mouse. The desk runs `ul game --stream`, so
+these are the same Rust games, and best scores are shared with the terminal in
+`storage.root/runtime/arcade.toml`. Leaving the tab pauses a game.
+
+**Studio** is a small recording studio on top of `ul capture`: record the screen
+(with system audio and the microphone), the screen with the camera in a corner,
+the camera or audio; pause, resume and stop; take screenshots; see a preview of
+the display, the camera and the microphone level. The library plays recordings
+in the page and can trim, convert (MP4, GIF, MP3, …), copy screenshots, show
+files in Finder and move them to the Trash. A red REC badge in the header shows
+a running recording from any tab; recordings started in the terminal appear there
+too, and a recording keeps going when the page is closed.
 
 ## Screen, video and audio capture
 
 ```bash
-ul capture screenshot
-ul capture area
-ul capture window
-ul capture screen                 # background screen + microphone recording
-ul capture camera                 # camera + microphone via ffmpeg
-ul capture audio                  # microphone via ffmpeg
-ul capture screen --duration 30
-ul capture devices
-ul capture stop
-ul capture last
+ul capture                        # a menu: pick a screenshot or a recording
+ul capture shot                   # the whole screen (PNG); also: area, window
+ul capture shot area --clipboard  # select an area, copy it instead of saving
+ul capture record                 # screen + system audio + microphone, in the background
+ul capture record --camera        # the same with the camera in a corner
+ul capture record camera          # camera + microphone
+ul capture record audio --format mp3
+ul capture record --duration 30   # record 30 s in the foreground, then save
+ul capture pause                  # resume / stop / status
+ul capture stop                   # save (joins paused parts, adds camera and microphone)
+ul capture list                   # newest captures with length and size
+ul capture trim last --from 0:05 --to 1:30
+ul capture convert last --to gif
+ul capture devices                # displays, cameras and microphones
 ```
 
-The first run may ask for Screen Recording, Camera, Microphone and Accessibility
-permissions. `camera_device` and `audio_device` can be picked from the output of
-`ul capture devices`. By default all media goes into `storage.root/captures`;
-Telegram saves downloads to `storage.root/telegram/downloads`, and runtime files
-go to `storage.root/runtime`.
+Screen recordings use macOS `screencapture`, which records the sound of the Mac
+without extra drivers. ffmpeg (`brew install ffmpeg`) is needed for the camera,
+audio, a microphone other than the system default, pause, MP4, trim and convert.
+The first run asks for Screen Recording, Camera and Microphone permissions for
+the terminal. Devices are picked by name or number; `default` follows the system
+choice, and `ul capture devices` warns when the microphone is a virtual device
+such as BlackHole. Old one-word actions (`ul capture screenshot`, `area`,
+`screen`, `audio`, …) still work. Files go to `storage.root/captures` and are
+never overwritten; Telegram saves downloads to `storage.root/telegram/downloads`,
+and runtime files go to `storage.root/runtime`.
 
 ## Quick apps
 

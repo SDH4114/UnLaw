@@ -21,7 +21,7 @@ from tests.ulbin import CoreTestCase, binary
 HERE = Path(__file__).resolve().parent
 
 FAKE_WORKER = r'''
-import json, os, sys, threading
+import json, os, sys, threading, time
 out = os.fdopen(os.dup(1), "w", buffering=1)
 os.dup2(2, 1)
 def emit(event): out.write(json.dumps(event) + "\n"); out.flush()
@@ -55,7 +55,7 @@ if sys.argv[1] == "hub":
                 os.unlink(path)
         emit({"result": {"incomplete": len(unfinished), "incomplete_bytes": 5 * len(unfinished), "shared": 0, "shared_bytes": 0, "revisions": 0}})
     sys.exit(0)
-cancelled = set(); jobs = []; cv = threading.Condition()
+cancelled = set(); jobs = []; loaded_groups = {}; cv = threading.Condition()
 def reader():
     for line in sys.stdin:
         job = json.loads(line)
@@ -70,7 +70,11 @@ while True:
         while not jobs: cv.wait()
         job = jobs.pop(0)
     ident, op, model = job["id"], job["op"], job.get("model", {})
-    emit({"loaded": [model.get("id")]})
+    delay = os.path.join(os.path.dirname(__file__), "worker-delay")
+    if os.path.exists(delay): time.sleep(float(open(delay).read()))
+    group = "chat" if model.get("kind") in ("text", "vision") else model.get("kind")
+    loaded_groups[group] = model.get("id")
+    emit({"loaded": list(loaded_groups.values())})
     if op in ("chat", "complete"):
         text = job.get("prompt") if op == "complete" else job["messages"][-1]["content"]
         if text == "crash":
@@ -93,7 +97,8 @@ while True:
     elif op in ("speak", "image", "video", "music"):
         emit({"id": ident, "event": "progress", "step": 1, "total": 2})
         os.makedirs(os.path.dirname(job["output"]), exist_ok=True)
-        open(job["output"], "w").write(op + ":" + (job.get("text") or job.get("prompt") or ""))
+        suffix = ":" + str(job["seed"]) if op == "video" and job.get("seed") is not None else ""
+        open(job["output"], "w").write(op + ":" + (job.get("text") or job.get("prompt") or "") + suffix)
         emit({"id": ident, "event": "done", "model": model["id"], "path": job["output"], "seed": 5, "width": job.get("width"),
               "height": job.get("height"), "frames": job.get("frames"), "voice": job.get("voice") or "v1", "voices": ["v1", "v2"],
               "audio_seconds": 1.0, "stats": {"seconds": 0.1}, "echo": job})
@@ -358,6 +363,19 @@ class LmCliTests(LmTestCase):
         self.assertIn("Image not found", self.ul("lm", "image", "x", "-i", "missing.png").stderr)
         self.assertIn("needs an image model", self.ul("lm", "image", "-m", "tiny", "x").stderr)
 
+    def test_split_gguf_counts_all_selected_shards(self) -> None:
+        snapshot = self.repo("someone/Split-GGUF", {
+            "model-Q4_K_M-00001-of-00002.gguf": "x",
+            "model-Q4_K_M-00002-of-00002.gguf": "x",
+            "model-Q8_0.gguf": "x",
+        })
+        for name, size in (("model-Q4_K_M-00001-of-00002.gguf", 1024), ("model-Q4_K_M-00002-of-00002.gguf", 2048), ("model-Q8_0.gguf", 8192)):
+            path = snapshot / name
+            path.write_bytes(gguf_header("qwen3"))
+            with path.open("r+b") as handle:
+                handle.truncate(size)
+        self.assertIn("Loads:        3.0 KB", self.ok("lm", "info", "Split-GGUF").stdout)
+
     def test_old_lm_studio_seed_and_settings_are_retired(self) -> None:
         legacy = self.unlaw / "commands" / "lm" / "main.py"
         legacy.parent.mkdir(parents=True)
@@ -507,15 +525,69 @@ class LmServerTests(LmTestCase):
         # Jobs from the API may not name local files; the terminal's may.
         status, body = self.call("/v1/chat/completions", {"model": "eye", "messages": [{"role": "user", "content": "x"}]})
         self.assertEqual(json.loads(body)["choices"][0]["message"]["reasoning_content"], "hmm")
-        status, body = self.call("/ul/job", {"model": "mlx-community/Eye-4bit", "job": {"op": "chat", "messages": [{"role": "user", "content": "x"}]}})
+        status, body = self.call("/ul/job", {"model": "mlx-community/Eye-4bit", "job": {"op": "chat", "messages": [{"role": "user", "content": "x"}]}}, headers={"X-Unlaw-CLI": "1"})
         self.assertIn('"text": "hmm local"'.replace(" ", ""), body.decode().replace(" ", ""))
+
+    def test_browser_cannot_submit_local_file_jobs(self) -> None:
+        output = self.root / "outside-storage.png"
+        output.write_text("keep")
+        payload = {"model": "prism-ml/bonsai-image-ternary", "job": {"op": "image", "prompt": "overwrite", "output": str(output)}}
+        for headers in (
+            {"Content-Type": "text/plain", "Origin": "https://foreign.example"},
+            {"Content-Type": "text/plain"},
+            {"X-Unlaw-CLI": "1", "Origin": "https://foreign.example"},
+        ):
+            status, _ = self.call("/ul/job", payload, headers=headers)
+            self.assertEqual(status, 403)
+            self.assertEqual(output.read_text(), "keep")
+
+    def test_video_jobs_with_same_prompt_keep_separate_outputs(self) -> None:
+        (self.root / "worker-delay").write_text("0.4")
+        # Both jobs are queued before the first output exists, in one timestamp second.
+        while time.time() % 1 > 0.2:
+            time.sleep(0.01)
+        records = [json.loads(self.call("/v1/videos", {"prompt": "collision", "seed": seed})[1]) for seed in (1, 2)]
+        for _ in range(100):
+            states = [json.loads(self.call(f"/v1/videos/{record['id']}")[1]) for record in records]
+            if all(state["status"] == "completed" for state in states):
+                break
+            time.sleep(0.05)
+        self.assertEqual([state["status"] for state in states], ["completed", "completed"])
+        contents = [self.call(f"/v1/videos/{record['id']}/content")[1] for record in records]
+        self.assertEqual(contents, [b"video:collision:1", b"video:collision:2"])
+
+    def large_weights(self, repo: str) -> None:
+        memory = int(subprocess.check_output(["/usr/sbin/sysctl", "-n", "hw.memsize"]))
+        weight = self.cache / ("models--" + repo.replace("/", "--")) / "snapshots" / "abc" / "model.safetensors"
+        with weight.open("r+b") as handle:
+            handle.truncate(memory // 2)
+
+    def test_helper_models_share_one_memory_budget(self) -> None:
+        self.large_weights("mlx-community/all-MiniLM-L6-v2-4bit")
+        self.large_weights("mlx-community/Voice-TTS")
+        time.sleep(2.1)  # allow the server's model-stat cache to expire
+        self.assertEqual(self.call("/v1/embeddings", {"model": "minilm", "input": "x"})[0], 200)
+        self.assertEqual(self.call("/v1/audio/speech", {"model": "Voice-TTS", "input": "hi"})[0], 200)
+        self.assertEqual(json.loads(self.call("/ul/ps")[1])["loaded"], ["mlx-community/Voice-TTS"])
+
+    def test_loading_lanes_reserve_memory_before_worker_reports_loaded(self) -> None:
+        self.large_weights("mlx-community/Tiny-4bit")
+        self.large_weights("mlx-community/all-MiniLM-L6-v2-4bit")
+        time.sleep(2.1)
+        (self.root / "worker-delay").write_text("0.4")
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            chat = pool.submit(self.call, "/v1/chat/completions", {"model": "tiny", "messages": [{"role": "user", "content": "hi"}]})
+            embed = pool.submit(self.call, "/v1/embeddings", {"model": "minilm", "input": "x"})
+            self.assertEqual(sorted([chat.result()[0], embed.result()[0]]), [200, 507])
 
     def test_gguf_jobs_carry_the_engine(self) -> None:
         chat = self.cache / "models--someone--Chat-GGUF" / "snapshots" / "r1"
         chat.mkdir(parents=True)
         (chat / "model-Q4_K_M.gguf").write_bytes(gguf_header("llama"))
         time.sleep(2.1)  # the server rescans its model list every 2 s
-        status, body = self.call("/ul/job", {"model": "someone/Chat-GGUF", "job": {"op": "chat", "messages": [{"role": "user", "content": "x"}]}})
+        status, body = self.call("/ul/job", {"model": "someone/Chat-GGUF", "job": {"op": "chat", "messages": [{"role": "user", "content": "x"}]}}, headers={"X-Unlaw-CLI": "1"})
         done = json.loads(body.decode().strip().splitlines()[-1])
         spec = done["echo"]["model"]["gguf"]
         self.assertEqual((spec["runtime"], spec["server"], spec["architecture"]), ("llama", "/fake/llama-server", "llama"))

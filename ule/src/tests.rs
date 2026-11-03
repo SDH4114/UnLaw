@@ -471,3 +471,42 @@ fn replay_debug() {
         eprintln!("{:<40} {:?} {:?} len={} line={:?}", key.notation(), ed.mode, cursor, ed.doc().text.line_len(cursor.line.min(ed.doc().text.last_line())), ed.doc().text.line(cursor.line));
     }
 }
+
+
+#[test]
+fn review_scratch_changes_block_quit_and_close() {
+    let mut ed = run("", "iunsaved<esc>");
+    assert!(ed.doc().modified());
+    let doc = ed.view().doc;
+    assert!(ed.close_doc(doc, false).is_err());
+    crate::ex::run(&mut ed, "q");
+    assert!(!ed.quit);
+}
+
+#[test]
+fn review_conflict_check_keeps_write_protection() {
+    let mut ed = editor("");
+    let path = std::env::temp_dir().join(format!("ule-review-conflict-{}.txt", std::process::id()));
+    std::fs::write(&path, "original\n").unwrap();
+    let id = ed.open(&path).unwrap();
+    ed.doc_mut().insert(Pos::default(), "local ", Pos::default());
+    ed.doc_mut().mtime = Some(std::time::UNIX_EPOCH);
+    std::fs::write(&path, "external\n").unwrap();
+    ed.check_disk_changes();
+    assert!(ed.save(id, None, false).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "external\n");
+    assert!(ed.save(id, None, true).is_ok());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "local original\n");
+}
+
+#[test]
+fn review_save_as_requires_force_to_overwrite() {
+    let mut ed = editor("new content");
+    let path = std::env::temp_dir().join(format!("ule-review-save-as-{}.txt", std::process::id()));
+    std::fs::write(&path, "keep me\n").unwrap();
+    let id = ed.view().doc;
+    assert!(ed.save(id, Some(path.clone()), false).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep me\n");
+    assert!(ed.save(id, Some(path.clone()), true).is_ok());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "new content\n");
+}

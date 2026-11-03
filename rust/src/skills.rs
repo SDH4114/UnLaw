@@ -419,7 +419,11 @@ fn install(args: &[String], config: &Config) -> i32 {
         path: target,
         links,
     });
-    manifest.fingerprint = fingerprint(&records(config, false));
+    // Installing one target must not mark other, stale snapshots as current.
+    // Keep their old fingerprint so the next normal run refreshes every install.
+    if manifest.installs.len() == 1 {
+        manifest.fingerprint = fingerprint(&records(config, false));
+    }
     if let Err(error) = write_manifest(&manifest) {
         return fail(format!(
             "Could not save {}: {error}",

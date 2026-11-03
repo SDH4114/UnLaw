@@ -1119,6 +1119,9 @@ impl Editor {
             Some(path) => path,
             None => return Err("no file name: :w <path>".into()),
         };
+        if !force && doc.path.as_deref() != Some(target.as_path()) && target.symlink_metadata().is_ok() {
+            return Err("the destination already exists (:w! <path> overwrites)".into());
+        }
         if doc.readonly && !force && doc.path.as_deref() == Some(target.as_path()) {
             return Err("the file is read-only (:w! to try anyway)".into());
         }
@@ -1194,12 +1197,7 @@ impl Editor {
             }
             if doc.modified() {
                 let title = doc.title();
-                let doc = self.docs.get_mut(&id).expect("document");
-                doc.mtime = doc
-                    .path
-                    .as_ref()
-                    .and_then(|path| std::fs::metadata(path).ok())
-                    .and_then(|meta| meta.modified().ok());
+                // Keep the last loaded mtime so an ordinary write still refuses the conflict.
                 self.warn(format!("{title} changed on disk and here; :e! takes the disk version, :w! keeps yours"));
                 continue;
             }

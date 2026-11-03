@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::thread;
@@ -48,10 +49,23 @@ impl Jobs {
     }
 
     pub fn kill_all(&mut self) {
-        for job in self.running.values_mut() {
-            let _ = job.child.kill();
+        for (_, mut job) in self.running.drain() {
+            stop(&mut job);
         }
     }
+}
+
+impl Drop for Jobs {
+    fn drop(&mut self) {
+        self.kill_all();
+    }
+}
+
+fn stop(job: &mut Job) {
+    // Each shell owns its process group, including commands and their children.
+    unsafe { libc::kill(-(job.child.id() as i32), libc::SIGKILL); }
+    let _ = job.child.kill();
+    let _ = job.child.wait();
 }
 
 /// Single-quotes for sh when needed.
@@ -190,13 +204,14 @@ pub fn spawn(
     let previous: Vec<usize> = ed.jobs.running.iter().filter(|(_, job)| job.doc == doc).map(|(id, _)| *id).collect();
     for id in previous {
         if let Some(mut job) = ed.jobs.running.remove(&id) {
-            let _ = job.child.kill();
+            stop(&mut job);
         }
     }
     let mut process = Command::new(shell());
     process
         .arg("-c")
         .arg(command)
+        .process_group(0)
         .current_dir(&ed.cwd)
         .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
@@ -494,4 +509,45 @@ mod tests {
         assert_eq!(quote("a b'c"), "'a b'\\''c'");
         assert_eq!(quote("src/main.rs"), "src/main.rs");
     }
+
+    #[test]
+    #[ignore]
+    fn review_fake_job_descendant() {
+        let path = std::env::var_os("ULE_JOB_PID").expect("fake child pid file");
+        // Write then rename, so the test never reads a created but still empty file.
+        let path = std::path::PathBuf::from(path);
+        let partial = path.with_extension("partial");
+        std::fs::write(&partial, std::process::id().to_string()).unwrap();
+        std::fs::rename(&partial, &path).unwrap();
+        thread::sleep(std::time::Duration::from_secs(30));
+    }
+
+    #[test]
+    fn review_stop_kills_job_descendants() {
+        crate::clipboard::disable();
+        let mut config = crate::config::Config::default();
+        config.options.lsp = false;
+        let mut ed = Editor::new(config);
+        let pidfile = std::env::temp_dir().join(format!("ule-review-child-{}.pid", std::process::id()));
+        let _ = std::fs::remove_file(&pidfile);
+        let command = format!("ULE_JOB_PID={} {} --ignored --exact jobs::tests::review_fake_job_descendant; :", quote(&pidfile.to_string_lossy()), quote(&std::env::current_exe().unwrap().to_string_lossy()));
+        let doc = ed.output_doc("[fake]");
+        spawn(&mut ed, "fake", &command, None, doc, JobKind::Output).unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        let mut pid = None;
+        while pid.is_none() && Instant::now() < deadline {
+            pid = std::fs::read_to_string(&pidfile).ok().and_then(|text| text.trim().parse::<i32>().ok());
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let pid = pid.expect("the fake job never reported its pid");
+        ed.jobs.kill_all();
+        // Give the shell time to reap its child after the process-group signal.
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline { thread::sleep(std::time::Duration::from_millis(10)); }
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        if alive { unsafe { libc::kill(pid, libc::SIGKILL); } }
+        for job in ed.jobs.running.values_mut() { let _ = job.child.wait(); }
+        assert!(!alive, "stopping a shell must also stop the command it spawned");
+    }
+
 }

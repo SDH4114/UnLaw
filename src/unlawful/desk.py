@@ -3,17 +3,22 @@ from __future__ import annotations
 import fcntl
 import hmac
 import json
+import math
 import os
 import secrets
+import select
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import tomllib
 import urllib.parse
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -157,8 +162,35 @@ class Pomodoro:
         return self.directory / "pomodoro.jsonl"
 
     def _load(self) -> dict:
-        state = _read_json(self.state_file, {})
-        return {**IDLE, **state} if isinstance(state, dict) else dict(IDLE)
+        raw = _read_json(self.state_file, {})
+        state = {**IDLE, **raw} if isinstance(raw, dict) else dict(IDLE)
+
+        def number(value: object) -> bool:
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                return False
+            try:
+                return math.isfinite(value)
+            except OverflowError:
+                return False
+
+        if (
+            not isinstance(state["phase"], str) or state["phase"] not in PHASES
+            or not isinstance(state["cycle"], int) or isinstance(state["cycle"], bool) or state["cycle"] < 0
+            or (state["card"] is not None and not isinstance(state["card"], str))
+            or not number(state["length"]) or state["length"] < 0
+            or (state["paused"] is not None and (not number(state["paused"]) or state["paused"] < 0))
+        ):
+            return dict(IDLE)
+        if state["phase"] != "idle":
+            if not number(state["ends_at"]) or not number(state["started_at"]) or state["length"] <= 0:
+                return dict(IDLE)
+            try:
+                datetime.fromtimestamp(state["started_at"], UTC)
+            except (ValueError, OverflowError, OSError):
+                return dict(IDLE)
+        elif state["paused"] is not None:
+            return dict(IDLE)
+        return state
 
     def _save(self, state: dict) -> None:
         _write_json(self.state_file, state)
@@ -572,6 +604,8 @@ def _find_note(root: Path, name: str) -> Path | None:
 
 class Handler(BaseHTTPRequestHandler):
     desk: Desk
+    arcade: Arcade
+    studio: Studio
     token: str
     port: int
     server_version = "UnlawDesk"
@@ -609,7 +643,7 @@ class Handler(BaseHTTPRequestHandler):
         return host in {f"127.0.0.1:{self.port}", f"localhost:{self.port}"}
 
     def _authorized(self, token: str | None) -> bool:
-        return token is not None and hmac.compare_digest(token, self.token)
+        return token is not None and token.isascii() and hmac.compare_digest(token, self.token)
 
     def _body(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
@@ -624,7 +658,13 @@ class Handler(BaseHTTPRequestHandler):
         if not self._allowed_host():
             self._send(403, b"Forbidden host", "text/plain; charset=utf-8")
             return False
-        if self.path.startswith("/api/") and not self._authorized(
+        if self.path.startswith("/media/"):
+            # <video>/<img> cannot send headers, so media URLs carry the token.
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            if not self._authorized(query.get("t", [None])[0]):
+                self._send(403, b"Forbidden", "text/plain; charset=utf-8")
+                return False
+        elif self.path.startswith("/api/") and not self._authorized(
             self.headers.get("X-Desk-Token")
         ):
             self._json(
@@ -674,10 +714,100 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(
                     200, {"current": str(self.desk.path), "recent": self.desk.recent()}
                 )
+            elif url.path == "/api/games":
+                self._json(200, self.arcade.scores())
+            elif url.path == "/api/studio":
+                self._json(200, self.studio.overview())
+            elif url.path == "/api/studio/status":
+                self._json(200, self.studio.status())
+            elif url.path == "/api/studio/devices":
+                self._json(200, self.studio.run("devices", timeout=30))
+            elif url.path == "/api/studio/wave":
+                query = urllib.parse.parse_qs(url.query)
+                bars = query.get("bars", ["400"])[0]
+                if not bars.isdigit() or not 10 <= int(bars) <= 2000:
+                    raise StudioError("bars must be 10-2000")
+                name = self.studio.member(query.get("name", [""])[0]).name
+                self._json(200, self.studio.run("wave", name, "--bars", bars, timeout=300))
+            elif url.path == "/api/studio/library":
+                self._json(200, self.studio.run("list", "--all", timeout=120))
+            elif url.path.startswith("/media/"):
+                self._media(url)
             else:
                 self._json(404, {"error": "not found"})
+        except StudioError as error:
+            self._json(400, {"error": str(error)})
+        except FileNotFoundError as error:
+            self._json(404, {"error": str(error)})
         except (OSError, ValueError) as error:
             self._json(500, {"error": str(error)})
+
+    def _media(self, url: urllib.parse.SplitResult) -> None:
+        query = urllib.parse.parse_qs(url.query)
+        if url.path == "/media/file":
+            path = self.studio.member(query.get("name", [""])[0])
+        elif url.path == "/media/thumb":
+            name = self.studio.member(query.get("name", [""])[0]).name
+            data = self.studio.run("thumb", name, timeout=60)
+            path = Path(str(data.get("thumbnail") if isinstance(data, dict) else ""))
+        elif url.path == "/media/preview":
+            display = query.get("display", ["1"])[0]
+            if not display.isdigit() or not 1 <= int(display) <= 16:
+                raise ValueError("display must be a number from 1")
+            data = self.studio.run("preview", "--display", display, timeout=30)
+            path = Path(str(data.get("preview") if isinstance(data, dict) else ""))
+        else:
+            self._json(404, {"error": "not found"})
+            return
+        self._send_file(path)
+
+    def _send_file(self, path: Path) -> None:
+        """Serve a file with byte ranges, which video seeking needs."""
+        kind = MEDIA_TYPES.get(path.suffix.casefold())
+        if kind is None or not path.is_file():
+            self._json(404, {"error": "not found"})
+            return
+        size = path.stat().st_size
+        start, end, status = 0, size - 1, 200
+        wanted = self.headers.get("Range", "")
+        if wanted.startswith("bytes="):
+            first, _, last = wanted[6:].split(",")[0].strip().partition("-")
+            try:
+                if first:
+                    start, end = int(first), int(last) if last else size - 1
+                else:
+                    start = max(0, size - int(last))
+            except ValueError:
+                start, end = size, size
+            end = min(end, size - 1)
+            if start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            status = 206
+        self.send_response(status)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        with path.open("rb") as source:
+            source.seek(start)
+            left = end - start + 1
+            try:
+                while left > 0:
+                    chunk = source.read(min(1 << 16, left))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
     def do_POST(self) -> None:
         if not self._guard():
@@ -708,6 +838,29 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(
                     200, self.desk.switch(body.get("path"), bool(body.get("create")))
                 )
+            elif path == "/api/game/start":
+                session = self.arcade.start(
+                    body.get("game"), body.get("level"), body.get("rows"), body.get("cols")
+                )
+                self._json(200, {"session": session})
+            elif path == "/api/game/input":
+                self.arcade.send(body.get("session"), body.get("events"))
+                self._json(200, {"ok": True})
+            elif path == "/api/game/stop":
+                self.arcade.stop(body.get("session"))
+                self._json(200, {"ok": True})
+            elif path == "/api/game/stream":
+                self._stream_game(self.arcade.claim(body.get("session")))
+            elif path == "/api/studio/record":
+                self._json(200, self.studio.record(body))
+            elif path in {"/api/studio/pause", "/api/studio/resume"}:
+                self._json(200, self.studio.run(path.rsplit("/", 1)[1], timeout=60))
+            elif path == "/api/studio/stop":
+                self._json(200, self.studio.stop())
+            elif path == "/api/studio/shot":
+                self._json(200, self.studio.shot(body))
+            elif path == "/api/studio/action":
+                self._json(200, self.studio.action(body))
             elif path == "/api/obsidian":
                 self._json(200, {"ok": self._open_obsidian(body.get("note"))})
             elif path == "/api/lofi":
@@ -719,6 +872,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": ok})
             else:
                 self._json(404, {"error": "not found"})
+        except LookupError as error:
+            self._json(410, {"error": str(error)})
+        except StudioError as error:
+            self._json(400, {"error": str(error)})
         except Conflict:
             self._json(
                 409,
@@ -734,6 +891,40 @@ class Handler(BaseHTTPRequestHandler):
         except OSError as error:
             self._json(500, {"error": str(error)})
 
+    def _stream_game(self, process: subprocess.Popen) -> None:
+        """Relay frames as NDJSON until the game ends or the page goes away.
+
+        Blank lines every 2 s notice a closed page while a menu sits still;
+        a game nobody watches is stopped.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.close_connection = True
+        assert process.stdout is not None
+        # Raw reads: a buffered readline could hold frames that select() cannot see.
+        source = process.stdout.fileno()
+        try:
+            while True:
+                ready, _, _ = select.select([source], [], [], 2)
+                if not ready:
+                    self.wfile.write(b"\n")
+                    self.wfile.flush()
+                    continue
+                chunk = os.read(source, 1 << 16)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush()
+            self.wfile.write(b'{"end":true}\n')
+            self.wfile.flush()
+        except (OSError, ValueError):
+            pass
+        finally:
+            self.arcade.stop_if(process)
+
     def _open_obsidian(self, note: object) -> bool:
         target = self.desk.path
         if isinstance(note, str) and note.strip():
@@ -745,17 +936,489 @@ class Handler(BaseHTTPRequestHandler):
         return subprocess.run(["open", url], check=False).returncode == 0
 
 
-CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'"
+CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; base-uri 'none'; form-action 'none'"
 
 
-def make_server(desk: Desk, port: int, token: str, exact: bool) -> ThreadingHTTPServer:
+MEDIA_TYPES = {
+    ".mov": "video/mp4",
+    ".mp4": "video/mp4",
+    ".m4a": "audio/mp4",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".heic": "image/heic",
+    ".tiff": "image/tiff",
+}
+STUDIO_MODES = ("screen", "screen-camera", "camera", "audio")
+STUDIO_FORMATS = ("mov", "mp4", "m4a", "mp3", "wav")
+
+
+class StudioError(Exception):
+    pass
+
+
+class Studio:
+    """The Studio tab: a thin layer over `ul capture ... --json`.
+
+    Recording, screenshots and editing stay in the capture command, so the
+    terminal and the page share one recording and one library.
+    """
+
+    def __init__(self, binary: str | None, settings: dict) -> None:
+        self.binary = binary
+        self.settings = settings
+        self.lock = threading.Lock()
+        self.saving: threading.Thread | None = None
+        self.last: dict | None = None
+        self._available: bool | None = None
+        self._availability_lock = threading.Lock()
+
+    def available(self) -> bool:
+        with self._availability_lock:
+            return self._probe_available()
+
+    def _probe_available(self) -> bool:
+        if self._available is None:
+            self._available = False
+            if self.binary:
+                try:
+                    result = subprocess.run(
+                        [self.binary, "capture", "--help"],
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                        check=False,
+                    )
+                    self._available = result.returncode == 0 and "record [screen" in result.stdout
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+        return self._available
+
+    def run(self, *args: str, timeout: float = 60) -> object:
+        if not self.available():
+            raise StudioError("the capture command is not installed (ul features)")
+        try:
+            with subprocess.Popen(
+                [self.binary or "ul", "capture", *args, "--json"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            ) as process:
+                try:
+                    stdout, stderr_text = process.communicate(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    # Saving/thumbnail helpers share this group; killing only the
+                    # capture CLI would leave ffmpeg running after the timeout.
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    process.communicate()
+                    raise
+                result = subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr_text)
+        except subprocess.TimeoutExpired as error:
+            raise StudioError(f"ul capture {args[0]} took too long") from error
+        except OSError as error:
+            raise StudioError(f"could not run ul capture {args[0]}: {error}") from error
+        lines = [line for line in result.stdout.splitlines() if line.strip()]
+        try:
+            data = json.loads(lines[-1]) if lines else {}
+        except json.JSONDecodeError:
+            data = {}
+        if result.returncode != 0:
+            message = data.get("error") if isinstance(data, dict) else None
+            stderr = result.stderr.strip().splitlines()
+            raise StudioError(message or (stderr[-1].removeprefix("unlaw capture: ") if stderr else "ul capture failed"))
+        notes = [line.removeprefix("Note: ") for line in result.stderr.splitlines() if line.startswith("Note: ")]
+        if notes and isinstance(data, dict):
+            data["warnings"] = notes
+        return data
+
+    def overview(self) -> dict:
+        settings = {
+            "camera_device": "default",
+            "audio_device": "default",
+            "screen_audio": True,
+            "system_audio": True,
+            "show_clicks": True,
+            "video_format": "mov",
+            "audio_format": "m4a",
+            "overlay": "bottom-right",
+            **{key: value for key, value in self.settings.items() if isinstance(value, (str, bool))},
+        }
+        return {"available": self.available(), "settings": settings}
+
+    def status(self) -> dict:
+        data = self.run("status", timeout=20)
+        assert isinstance(data, dict)
+        data["saving_done"] = self.last
+        return data
+
+    def record(self, body: dict) -> object:
+        mode = body.get("mode")
+        if mode not in STUDIO_MODES:
+            raise ValueError("mode must be screen, screen-camera, camera or audio")
+        args = ["record", "screen" if mode == "screen-camera" else str(mode)]
+        if mode == "screen-camera":
+            args.append("--camera")
+        for key, flag in (("mic", "--mic"), ("cam", "--cam")):
+            value = body.get(key)
+            if value is not None:
+                if not isinstance(value, str) or not value.strip() or len(value) > 200 or value.startswith("-"):
+                    raise ValueError(f"{key} must be a device name")
+                args += [flag, value]
+        display = body.get("display", 1)
+        if isinstance(display, bool) or not isinstance(display, int) or not 1 <= display <= 16:
+            raise ValueError("display must be a number from 1")
+        if mode in {"screen", "screen-camera"}:
+            args += ["--display", str(display)]
+            system = body.get("system_audio")
+            if system is not None:
+                args.append("--system-audio" if system is True else "--no-system-audio")
+            if body.get("clicks") is False:
+                args.append("--no-clicks")
+        fmt = body.get("format")
+        if fmt is not None:
+            if fmt not in STUDIO_FORMATS:
+                raise ValueError("unknown format")
+            args += ["--format", fmt]
+        self.last = None
+        return self.run(*args, timeout=30)
+
+    def stop(self) -> dict:
+        """Saving can take minutes (camera overlay), so it runs in the background."""
+        with self.lock:
+            if self.saving and self.saving.is_alive():
+                return {"saving": True}
+            self.last = None
+
+            def work() -> None:
+                try:
+                    self.last = self.run("stop", timeout=3600)  # type: ignore[assignment]
+                except StudioError as error:
+                    self.last = {"error": str(error)}
+
+            self.saving = threading.Thread(target=work, daemon=True)
+            self.saving.start()
+        return {"saving": True}
+
+    def shot(self, body: dict) -> object:
+        kind = body.get("kind", "screen")
+        if kind not in {"screen", "area", "window"}:
+            raise ValueError("kind must be screen, area or window")
+        args = ["shot", str(kind)]
+        delay = body.get("delay", 0)
+        if isinstance(delay, bool) or not isinstance(delay, int) or not 0 <= delay <= 60:
+            raise ValueError("delay must be 0-60 seconds")
+        if delay:
+            args += ["--delay", str(delay)]
+        display = body.get("display", 1)
+        if isinstance(display, bool) or not isinstance(display, int) or not 1 <= display <= 16:
+            raise ValueError("display must be a number from 1")
+        args += ["--display", str(display)]
+        if body.get("clipboard") is True:
+            args.append("--clipboard")
+        # Area and window wait for the mouse on the Mac.
+        return self.run(*args, timeout=delay + 300)
+
+    def action(self, body: dict) -> object:
+        action = body.get("action")
+        name = self.member(body.get("name")).name
+        if action in {"open", "reveal"}:
+            ok = subprocess.run(["open", *(["-R"] if action == "reveal" else []), str(self.member(name))], check=False).returncode == 0
+            return {"ok": ok}
+        if action in {"copy", "delete"}:
+            return self.run(action, name)
+        if action == "trim":
+            args = ["trim", name]
+            for key in ("from", "to"):
+                value = body.get(key)
+                if value is not None:
+                    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+                        raise ValueError(f"{key} must be seconds")
+                    args += [f"--{key}", f"{value:.3f}"]
+            if len(args) == 2:
+                raise ValueError("trim needs from or to")
+            return self.run(*args, timeout=3600)
+        if action == "convert":
+            to = body.get("to")
+            if to not in {"mp4", "mov", "gif", "m4a", "mp3", "wav"}:
+                raise ValueError("convert to mp4, mov, gif, m4a, mp3 or wav")
+            return self.run("convert", name, "--to", to, timeout=3600)
+        raise ValueError("unknown action")
+
+    @staticmethod
+    def member(name: object) -> Path:
+        """A file directly inside the capture folders; nothing else is ever served or changed."""
+        if not isinstance(name, str) or not name or "/" in name or name.startswith("."):
+            raise FileNotFoundError("unknown capture")
+        for folder in ("screenshots", "recordings"):
+            root = storage_path("captures", folder)
+            path = root / name
+            if path.is_file() and not path.is_symlink() and path.resolve().parent == root.resolve():
+                return path
+        raise FileNotFoundError(f"no capture named {name}")
+
+
+GAMES = {
+    "tetris": "Tetris",
+    "snake": "Snake",
+    "minesweeper": "Minesweeper",
+    "invaders": "Space Invaders",
+    "chomp": "Chomp",
+}
+LEVELS = ("easy", "normal", "hard")
+GAME_KEYS = {"up", "down", "left", "right", "enter", "esc"}
+GAME_ROWS = (24, 80)
+GAME_COLS = (72, 200)
+MAX_EVENTS = 64
+
+
+def _game_event(event: object) -> dict | None:
+    """One browser input in the `ul game --stream` format, or None when invalid."""
+    if not isinstance(event, dict):
+        return None
+
+    def cell(value: object, names: tuple[str, ...]) -> dict | None:
+        if not isinstance(value, dict):
+            return None
+        out = {}
+        for name in names:
+            number = value.get(name)
+            if isinstance(number, bool) or not isinstance(number, int) or not 0 <= number < 1000:
+                return None
+            out[name] = number
+        return out
+
+    key = event.get("key")
+    if isinstance(key, str):
+        if key in GAME_KEYS or (len(key) == 1 and key.isprintable()):
+            return {"key": key}
+        return None
+    if "click" in event:
+        click = cell(event["click"], ("y", "x"))
+        button = event["click"].get("button", "left") if click else None
+        if click is None or button not in {"left", "right", "middle"}:
+            return None
+        return {"click": {**click, "button": button}}
+    if "hover" in event:
+        hover = cell(event["hover"], ("y", "x"))
+        return {"hover": hover} if hover else None
+    if "resize" in event:
+        size = cell(event["resize"], ("rows", "cols"))
+        return {"resize": size} if size else None
+    return None
+
+
+class Arcade:
+    """At most one `ul game --stream` process, fed by the page and read by one stream.
+
+    The games stay in the Rust core; this only relays frames and input, so the
+    desk and the terminal play the same games and share arcade.toml.
+    """
+
+    def __init__(self, binary: str | None, scores: Path, difficulty: str) -> None:
+        self.binary = binary
+        self.scores_file = scores
+        self.difficulty = difficulty if difficulty in LEVELS else "normal"
+        self.lock = threading.Lock()
+        self.process: subprocess.Popen | None = None
+        self.session = ""
+        self.reading = False
+        self._available: bool | None = None
+        self._availability_lock = threading.Lock()
+
+    def available(self) -> bool:
+        with self._availability_lock:
+            return self._probe_available()
+
+    def _probe_available(self) -> bool:
+        if self._available is None:
+            self._available = False
+            if self.binary:
+                try:
+                    result = subprocess.run(
+                        [self.binary, "game", "--help"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    self._available = result.returncode == 0 and "--stream" in result.stdout
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+        return self._available
+
+    def scores(self) -> dict:
+        try:
+            data = tomllib.loads(self.scores_file.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            data = {}
+        games = []
+        for name, label in GAMES.items():
+            table = data.get(name) if isinstance(data.get(name), dict) else {}
+            best = {
+                level: table[level]
+                for level in LEVELS
+                if isinstance(table.get(level), int) and not isinstance(table.get(level), bool)
+            }
+            games.append({"name": name, "label": label, "lower": name == "minesweeper", "best": best})
+        return {"available": self.available(), "difficulty": self.difficulty, "games": games}
+
+    def start(self, game: object, level: object, rows: object, cols: object) -> str:
+        if game is not None and game not in GAMES:
+            raise ValueError("unknown game")
+        if level is not None and (level not in LEVELS or game is None):
+            raise ValueError("difficulty must be easy, normal or hard, with a game")
+        sizes = []
+        for value, (low, high) in ((rows, GAME_ROWS), (cols, GAME_COLS)):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError("rows and cols must be numbers")
+            sizes.append(min(max(value, low), high))
+        if not self.available():
+            raise ValueError("games are not installed in this ul (feature `game`)")
+        command = [self.binary or "ul", "game", "--stream", "--size", f"{sizes[0]}x{sizes[1]}"]
+        if game is not None:
+            command.append(str(game))
+            if level is not None:
+                command.append(str(level))
+        with self.lock:
+            self._stop_locked()
+            self.process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                bufsize=0,
+            )
+            assert self.process.stdin is not None
+            os.set_blocking(self.process.stdin.fileno(), False)
+            self.session = secrets.token_hex(8)
+            self.reading = False
+            return self.session
+
+    def _current(self, session: object) -> subprocess.Popen:
+        if not isinstance(session, str) or not session or not hmac.compare_digest(session, self.session):
+            raise LookupError("this game has ended")
+        if self.process is None:
+            raise LookupError("this game has ended")
+        return self.process
+
+    def send(self, session: object, events: object) -> None:
+        if not isinstance(events, list) or len(events) > MAX_EVENTS:
+            raise ValueError(f"events must be a list of at most {MAX_EVENTS}")
+        lines = []
+        for event in events:
+            clean = _game_event(event)
+            if clean is None:
+                raise ValueError("invalid game input")
+            lines.append(json.dumps(clean) + "\n")
+        with self.lock:
+            process = self._current(session)
+            try:
+                assert process.stdin is not None
+                source = process.stdin.fileno()
+                pending = memoryview("".join(lines).encode())
+                deadline = time.monotonic() + 1
+                while pending:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not select.select([], [source], [], remaining)[1]:
+                        raise TimeoutError("the game stopped reading input")
+                    try:
+                        written = os.write(source, pending)
+                    except BlockingIOError:
+                        continue
+                    pending = pending[written:]
+            except (BrokenPipeError, ValueError, OSError) as error:
+                # A timed-out partial JSON line must never prefix a later event.
+                self._stop_locked()
+                raise LookupError("this game has ended") from error
+
+    def claim(self, session: object) -> subprocess.Popen:
+        """The process whose frames one stream may read; a second reader is refused."""
+        with self.lock:
+            process = self._current(session)
+            if self.reading:
+                raise LookupError("this game is already shown in another tab")
+            self.reading = True
+            return process
+
+    def stop(self, session: object = None) -> None:
+        with self.lock:
+            if session is not None:
+                try:
+                    self._current(session)
+                except LookupError:
+                    return
+            self._stop_locked()
+
+    def stop_if(self, process: subprocess.Popen) -> None:
+        with self.lock:
+            if self.process is process:
+                self._stop_locked()
+
+    def _stop_locked(self) -> None:
+        process, self.process, self.session = self.process, None, ""
+        if process is None:
+            return
+        try:
+            if process.stdin:
+                process.stdin.close()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            process.wait()
+        if process.stdout:
+            process.stdout.close()
+
+
+def game_binary() -> str | None:
+    return os.environ.get("UNLAW_BIN") or shutil.which("ul")
+
+
+def make_server(
+    desk: Desk,
+    port: int,
+    token: str,
+    exact: bool,
+    arcade: Arcade | None = None,
+    studio: Studio | None = None,
+) -> ThreadingHTTPServer:
     """Bind 127.0.0.1 on `port` (0: any free port), trying the next ones unless `exact`."""
     last_error: OSError | None = None
     for candidate in (
         [port] if exact or port == 0 else range(port, min(port + 20, 65536))
     ):
+        if arcade is None:
+            arcade = Arcade(
+                game_binary(),
+                storage_path("runtime", "arcade.toml"),
+                str(desk.config.get("games", {}).get("difficulty", "normal")),
+            )
+        if studio is None:
+            studio = Studio(game_binary(), dict(desk.config.get("capture", {})))
         handler = type(
-            "DeskHandler", (Handler,), {"desk": desk, "token": token, "port": candidate}
+            "DeskHandler",
+            (Handler,),
+            {
+                "desk": desk,
+                "arcade": arcade,
+                "studio": studio,
+                "token": token,
+                "port": candidate,
+            },
         )
         try:
             server = ThreadingHTTPServer(("127.0.0.1", candidate), handler)
@@ -806,6 +1469,7 @@ def serve(path: Path, config: dict, port: int | None, open_browser: bool) -> int
         print("\nStopped.")
     finally:
         stop.set()
+        server.RequestHandlerClass.arcade.stop()
         server.server_close()
     return 0
 

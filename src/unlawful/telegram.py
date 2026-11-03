@@ -3,6 +3,7 @@ from __future__ import annotations
 import getpass
 import json
 import mimetypes
+import re
 import subprocess
 import sys
 import urllib.error
@@ -252,6 +253,18 @@ def _unique(path: Path) -> Path:
     return candidate
 
 
+def _already_saved(target: Path, size: int | None) -> bool:
+    """The file or one of its numbered copies (`name 3.ext`, kept after renames
+    or deletions) already has the same size: it was downloaded before."""
+    if size is None or not target.parent.is_dir():
+        return False
+    copy = re.compile(re.escape(target.stem) + r" \d+" + re.escape(target.suffix))
+    for path in target.parent.iterdir():
+        if (path.name == target.name or copy.fullmatch(path.name)) and path.is_file() and path.stat().st_size == size:
+            return True
+    return False
+
+
 def _last(client: TelegramClient) -> int:
     updates = client.request("getUpdates", {"limit": "10", "timeout": "0"}).get("result", [])
     if not updates:
@@ -277,7 +290,7 @@ def _download(client: TelegramClient, destination: Path) -> int:
             name = Path(filename).name if filename not in {"document", "photo.jpg", "video.mp4", "audio.mp3", "voice.ogg"} else Path(info).name
             target = destination / (name or Path(info).name)
             size = result.get("file_size")
-            if target.exists() and size is not None and target.stat().st_size == size:
+            if _already_saved(target, size):
                 skipped += 1
                 continue
             target = _unique(target)

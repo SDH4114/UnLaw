@@ -146,6 +146,32 @@ class TelegramTests(ServiceTestCase):
         self.assertEqual(self.server.requests[-1]["type"], "application/x-www-form-urlencoded")
         self.assertEqual(self.server.form(), {"chat_id": "42", "text": "hello world"})
 
+    def test_download_skips_numbered_copies_with_the_same_name_and_size(self) -> None:
+        destination = self.root / "downloads"
+        destination.mkdir()
+        (destination / "report.txt").write_bytes(b"original")
+        (destination / "other.txt").write_bytes(b"copy")
+        self.server.routes[f"{self.api}/getUpdates"] = {
+            "ok": True,
+            "result": [{"message": {"document": {"file_name": "report.txt", "file_id": "same-name"}}}],
+        }
+        self.server.routes[f"{self.api}/getFile"] = {
+            "ok": True, "result": {"file_path": "documents/report.txt", "file_size": 4},
+        }
+        remote = f"/file/bot{self.TOKEN}/documents/report.txt"
+        self.server.routes[remote] = b"copy"
+        with patch.dict(os.environ, {"HOME": str(self.root / "home")}):
+            self.assertEqual(self.run_main(telegram.main, ["download", str(destination)])[0], 0)
+            self.assertEqual((destination / "report 2.txt").read_bytes(), b"copy")
+            # Deleted numbered files may leave gaps in this filename's family.
+            (destination / "report 2.txt").rename(destination / "report 3.txt")
+            code, out, error = self.run_main(telegram.main, ["download", str(destination)])
+        self.assertEqual(code, 0, error)
+        self.assertEqual(out, "Already downloaded: 1 file(s).\n")
+        self.assertEqual((destination / "report.txt").read_bytes(), b"original")
+        self.assertEqual(sorted(path.name for path in destination.iterdir()), ["other.txt", "report 3.txt", "report.txt"])
+        self.assertEqual(sum(request["path"] == remote for request in self.server.requests), 1)
+
     def test_message_from_stdin_and_empty_message(self) -> None:
         self.server.routes[f"{self.api}/sendMessage"] = {"ok": True, "result": {"message_id": 8}}
         self.assertEqual(self.run_main(telegram.main, [], stdin="piped text\n")[0], 0)

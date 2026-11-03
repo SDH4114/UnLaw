@@ -15,7 +15,7 @@ use crate::config::{self, commands_dir, config_dir, config_file, templates_dir, 
 use crate::help::{self, is_system, print_if_requested, system_names, system_summary};
 use crate::layout::{ensure_layout, STORAGE_SUBDIRECTORIES};
 use crate::shell;
-use crate::util::{home, shell_join, which, Json};
+use crate::util::{create_new_atomic, home, shell_join, which, Json};
 use crate::workspace;
 
 const COMMAND_TEMPLATE: &str = include_str!("../assets/command_main.py");
@@ -435,12 +435,12 @@ fn create_rust_command(name: &str, directory: &Path) -> i32 {
     };
     for (relative, text) in &files {
         let path = directory.join(relative);
-        if path.exists() {
+        if path.exists() || path.is_symlink() {
             eprintln!("unlaw: Command already exists: {}", path.display());
             return 1;
         }
         let rendered = text.replace("{{command_name}}", name);
-        if let Err(error) = path.parent().map_or(Ok(()), fs::create_dir_all).and_then(|_| fs::write(&path, rendered)) {
+        if let Err(error) = create_new_atomic(&path, &rendered, ".command.") {
             eprintln!("unlaw: Could not create {}: {error}", path.display());
             return 1;
         }
@@ -475,6 +475,10 @@ fn create_user_command(args: &[String]) -> i32 {
         return 2;
     }
     let directory = commands_dir().join(name);
+    if directory.is_symlink() {
+        eprintln!("unlaw: Command already exists: {}", directory.display());
+        return 1;
+    }
     if let Some((existing, _)) = commands::entry_point(&directory) {
         eprintln!("unlaw: Command already exists: {}", existing.display());
         return 1;
@@ -483,7 +487,7 @@ fn create_user_command(args: &[String]) -> i32 {
         return create_rust_command(name, &directory);
     }
     let destination = directory.join("main.py");
-    if destination.exists() {
+    if destination.exists() || destination.is_symlink() {
         eprintln!("unlaw: Command already exists: {}", destination.display());
         return 1;
     }
@@ -499,7 +503,7 @@ fn create_user_command(args: &[String]) -> i32 {
     } else {
         COMMAND_TEMPLATE.to_string()
     };
-    if let Err(error) = fs::create_dir_all(&directory).and_then(|_| fs::write(&destination, template)) {
+    if let Err(error) = create_new_atomic(&destination, &template, ".command.") {
         eprintln!("unlaw: Could not create {}: {error}", destination.display());
         return 1;
     }

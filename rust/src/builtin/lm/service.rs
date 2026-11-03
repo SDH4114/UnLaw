@@ -158,6 +158,39 @@ pub struct Service {
     /// Scanning the cache stats every file; requests reuse it for a moment.
     scanned: Mutex<Option<(Instant, Vec<Model>)>>,
     memory_limit: u64,
+    /// Loads count before a worker has reported them as resident.
+    reservations: Mutex<Vec<Model>>,
+}
+
+struct Reservation<'a> {
+    models: &'a Mutex<Vec<Model>>,
+    id: String,
+    lane: String,
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        let mut models = self.models.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(index) = models.iter().position(|model| model.id == self.id && model.lane() == self.lane) {
+            models.remove(index);
+        }
+    }
+}
+
+/// A worker keeps one model per group. Queued replacements cannot coexist,
+/// but embeddings, speech and music in the helper lane can all stay loaded.
+fn memory_group(model: &Model) -> &'static str {
+    if model.kind.generates() { "chat" } else { model.kind.name() }
+}
+
+fn memory_needed<'a>(models: impl IntoIterator<Item = (&'a str, &'a Model)>) -> u64 {
+    let mut groups: HashMap<(&str, &str), u64> = HashMap::new();
+    for (lane, model) in models {
+        let bytes = model.load_bytes() / 5 * 6;
+        let held = groups.entry((lane, memory_group(model))).or_default();
+        *held = (*held).max(bytes);
+    }
+    groups.values().copied().fold(0, u64::saturating_add)
 }
 
 impl Service {
@@ -171,6 +204,7 @@ impl Service {
             lanes: Mutex::new(HashMap::new()),
             scanned: Mutex::new(None),
             memory_limit: if memory == 0 { u64::MAX } else { memory / 4 * 3 },
+            reservations: Mutex::new(Vec::new()),
         }
     }
 
@@ -310,40 +344,49 @@ impl Service {
 
     /// Make room for `model`: models other lanes hold count too, and idle
     /// lanes are stopped (their memory returns at once) when it would not fit.
-    fn make_room(&self, model: &Model, target: &Arc<Supervisor>) -> Result<(), Failure> {
-        let needed = model.load_bytes() / 5 * 6;
-        let sizes: HashMap<String, u64> = self.models().into_iter().map(|m| (m.id.clone(), m.load_bytes() / 5 * 6)).collect();
-        let lanes: Vec<Arc<Supervisor>> = self.lanes.lock().unwrap_or_else(PoisonError::into_inner).values().cloned().collect();
-        let others: Vec<&Arc<Supervisor>> = lanes.iter().filter(|lane| !Arc::ptr_eq(lane, target)).collect();
-        let held = || -> u64 {
-            others.iter().flat_map(|lane| lane.loaded()).filter(|id| id != &model.id).map(|id| sizes.get(&id).copied().unwrap_or(0)).sum()
+    fn reserve(&self, model: &Model) -> Result<Reservation<'_>, Failure> {
+        // Admission and eviction share a lock; a lane waiting to submit its
+        // reserved job must not be mistaken for an idle eviction candidate.
+        let mut reserved = self.reservations.lock().unwrap_or_else(PoisonError::into_inner);
+        let catalog: HashMap<String, Model> = self.models().into_iter().map(|m| (m.id.clone(), m)).collect();
+        let lanes: Vec<(String, Arc<Supervisor>)> = self.lanes.lock().unwrap_or_else(PoisonError::into_inner)
+            .iter().map(|(key, lane)| (key.clone(), lane.clone())).collect();
+        let requested_lane = model.lane();
+        let total = || {
+            let loaded: Vec<(String, String)> = lanes.iter().flat_map(|(key, lane)| lane.loaded().into_iter().map(|id| (key.clone(), id))).collect();
+            let mut models: Vec<(&str, &Model)> = loaded.iter().filter_map(|(key, id)| catalog.get(id).map(|model| (key.as_str(), model))).collect();
+            let reserved_lanes: Vec<String> = reserved.iter().map(Model::lane).collect();
+            models.extend(reserved_lanes.iter().zip(reserved.iter()).map(|(key, model)| (key.as_str(), model)));
+            models.push((&requested_lane, model));
+            memory_needed(models)
         };
-        if held() + needed <= self.memory_limit || target.loaded().contains(&model.id) {
-            return Ok(());
+        if total() > self.memory_limit {
+            for (key, lane) in &lanes {
+                if !reserved.iter().any(|model| model.lane() == *key) {
+                    lane.stop_if_idle();
+                }
+            }
         }
-        for lane in &others {
-            lane.stop_if_idle();
-        }
-        let still = held();
-        if still + needed > self.memory_limit {
+        let needed = total();
+        if needed > self.memory_limit {
             return Err(Failure::new(
                 "out_of_memory",
                 format!(
-                    "{} needs about {} but running jobs hold {} (limit {}); wait for them to finish",
+                    "{} and resident or loading models need about {} (limit {}); wait for running jobs to finish",
                     model.id,
                     human_size(needed),
-                    human_size(still),
                     human_size(self.memory_limit)
                 ),
             ));
         }
-        Ok(())
+        reserved.push(model.clone());
+        Ok(Reservation { models: &self.reservations, id: model.id.clone(), lane: requested_lane })
     }
 
     /// Run a worker job for `model`, filling in the model spec and defaults.
     pub fn run(&self, mut job: Value, model: &Model, on_event: impl FnMut(&Value) -> bool) -> Result<Value, Failure> {
         let lane = self.lane(model)?;
-        self.make_room(model, &lane)?;
+        let _reservation = self.reserve(model)?;
         job["model"] = self.model_spec(model);
         if model.gguf.as_ref().is_some_and(|gguf| gguf.runtime == store::Runtime::Llama) {
             let server = engine::ensure_llama(&self.storage).map_err(|message| Failure::new("engine_unavailable", message))?;
@@ -367,6 +410,43 @@ impl Service {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sized(kind: Kind, bytes: u64) -> Model {
+        Model { id: format!("test/{}", kind.name()), path: "/x".into(), kind, bytes, partial: false, root: "/x".into(), gguf: None }
+    }
+
+    #[test]
+    fn memory_counts_cached_helper_groups_and_loading_lanes() {
+        let chat = sized(Kind::Text, 100);
+        let replacement = sized(Kind::Vision, 200);
+        let embed = sized(Kind::Embedding, 100);
+        let speech = sized(Kind::Tts, 100);
+        // Replacements free the previous model in their group before loading.
+        assert_eq!(memory_needed([("core:chat", &chat), ("core:chat", &replacement)]), 240);
+        assert_eq!(memory_needed([("core:helper", &embed), ("core:helper", &speech)]), 240);
+        assert_eq!(memory_needed([("core:chat", &chat), ("core:helper", &embed)]), 240);
+        // Duplicate IDs in different processes must not collapse their memory.
+        assert_eq!(memory_needed([("first", &chat), ("second", &chat)]), 240);
+    }
+
+    #[test]
+    fn memory_reservations_release_on_errors_and_unwind() {
+        let model = sized(Kind::Text, 100);
+        let models = Mutex::new(vec![model.clone()]);
+        let failed = || -> Result<(), Failure> {
+            let _reservation = Reservation { models: &models, id: model.id.clone(), lane: model.lane() };
+            Err(Failure::new("engine_unavailable", "failed before submission"))
+        };
+        assert!(failed().is_err());
+        assert!(models.lock().unwrap().is_empty());
+        models.lock().unwrap().push(model.clone());
+        let result = std::panic::catch_unwind(|| {
+            let _reservation = Reservation { models: &models, id: model.id.clone(), lane: model.lane() };
+            panic!("callback failed");
+        });
+        assert!(result.is_err());
+        assert!(models.lock().unwrap().is_empty());
+    }
 
     #[test]
     fn placeholder_names_mean_default() {

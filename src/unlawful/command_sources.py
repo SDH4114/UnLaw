@@ -14,6 +14,8 @@ _ROOT = Path(__file__).parent
 # these known files may be upgraded automatically; user edits are preserved.
 LEGACY_SOURCE_HASHES: dict[str, set[str]] = {
     "agent": {
+        # Pre-review 3.12.1 build.
+        "b01cdecf794e5137f75226df9d148db002d641238b90cbeb86e7cc475f5e2727",
         # Release 3.3.0 (commits fef8485 and 164c1de), before the pi-style console.
         "9228083c2ee374788beae89e025042e3f12210c7c6fbdcb50c6f64af36e3575b",
         "4ef29cf8b409b45b8cfd44851245cdb5556d41d60c3376535f726ce422695ad0",
@@ -36,8 +38,26 @@ LEGACY_SOURCE_HASHES: dict[str, set[str]] = {
         "0562ed878703da8e4cd91fb167d1ce2c17157ff6313c996152a49ca70e097262",
         "db814ce6b36d767e3a59c0edea8e5b00b54daebc0700150019902832b6441cbe",
     },
-    "capture": {"75ad32af09f41eb7cabc8870430983b271897fcf4c40e699c6ac01f12a769a04"},
+    "capture": {
+        # Pre-review 3.12.1 build.
+        "d5f9ae102a0c3f794ee601dfc95622f12e2a659be3552e2d7f5c7f6bdbb2a708",
+        "75ad32af09f41eb7cabc8870430983b271897fcf4c40e699c6ac01f12a769a04",
+        # Releases 3.10.1-3.11.0 (commits 2c4bbea-), before `ul capture` was redone.
+        "93524963e0f27a49e034da77dbdc259f85104d0d594c151b6c46ed71dfc4adfd",
+        # Dev build 3.12.0 installed on Haos's Mac, before waveforms.
+        "cf00f560c82b49ed0bf074303d6f8d24dc06ac8c68710e7dd0c1f2b2c5337d4a",
+    },
     "cpp": {"5f4d547aa2220de60280b23d235da9c3cae89391b4cd4e96c0214e897a3626cb"},
+    # Releases 3.10.0-3.10.4 (commits 27434c4-24c1f0d), before the games tab.
+    "desk": {
+        # Pre-review 3.12.1 build.
+        "5471cdf595ca6b2ea2b9574b2b9cf3ab9076f6a5f8406577efaee2f470f89961",
+        "8c73f66ac65f183b2e971718ef39fcd40b33a4d77577957757de993d97aa43f3",
+        # Release 3.11.0 with the games tab, before the studio tab.
+        "1ee2c962a6b765b9e0a016b809cd44f5fd63ca2f26ebc2f09be880779d50cf30",
+        # Dev build 3.12.0 with the first studio tab, before waveforms.
+        "45089d12f8eb978d2f35a5cfdacd40538b641d1bcb850ebce6860807b4ddb732",
+    },
     "game": {"c563e57bd7aae1e0ba1766034e60398892b3f96531e2afc6ddadc802e276ecc4"},
     "git": {
         "02a1e26e4489d9c66d81f6699bf22c8661431332ded7967d022e0934c73292c8",
@@ -76,6 +96,8 @@ LEGACY_SOURCE_HASHES: dict[str, set[str]] = {
         "b37c7497b9b0a93ec182733440ae34d6a00a136510990b3c039e004a82dacbd3",
     },
     "tg": {
+        # Pre-review 3.12.1 build.
+        "de149db5991eb8b148ca7df1723f48d1c87e14ae9292b18523b1ec0249de8e7d",
         "d228c0425aebe27fe3e211415b10e18bbc80bc4f7ab5b4c0b9f55913a6e1a1a3",
         "57fccff311bac90c76557a33cb75d041c570408906e1df32237141a94175aadf",
         # Release 3.2.0, with the token in the Keychain.
@@ -165,7 +187,11 @@ for _name, _digest in _PRE_DOCSTRING_SOURCE_HASHES.items():
 # (`normalized_source`). Some installs got copies that differ only in those,
 # from every release since 2.1; they are untouched and may be upgraded.
 LEGACY_NORMALIZED_HASHES: dict[str, set[str]] = {
+    "desk": {
+        "d9491e2c4a0d43fcb49b3a54c1cf812d5903d423724ef420ebc6077dcd2cbdaa",
+    },
     "agent": {
+        "52059aea5786ca2dd6eafe43b0d69f9d91e301f593179648731c16ce28f604eb",
         "0869bb6ef10eac6eec8e375225eed6f4691824876fddfe2bdac29df52004f6a9",
         "1bf899690f6f4f15d6eea43632dd81fee95d3f7185a636fac9d70116c572b6d8",
         "277d25da67842adacfe0883bf2b843c126973d445472225687937e77b5dcb63e",
@@ -185,6 +211,7 @@ LEGACY_NORMALIZED_HASHES: dict[str, set[str]] = {
         "ddb3b6b1a15cefaded70b910a1123c90343e8a5eafec57fd7cb5170b466a007f",
     },
     "capture": {
+        "a061d9842f63c9d146e896052e123308b9a3480c410e5ed0198eba7fc746c45e",
         "442c9c234c1b26eff0a1acc1eecd29e814020434dbd83a96b9f04112ec5f1fa1",
         "44630896e8a2f8b704956015e5820d639ee9b77545f48515b9cd4b113b99cbf6",
         "d8ee7c4a787b48b5a76b460337a796bbcafe50d7bb072c0fcb608d93241eafc9",
@@ -256,6 +283,7 @@ LEGACY_NORMALIZED_HASHES: dict[str, set[str]] = {
         "b0370e89c27ba3487ef3af0f6d104fa2b3db29dd51e677d3f92d04eaf98427f9",
     },
     "tg": {
+        "158a1067a030de1813881fa025d16a8b10fac52c73712e49e80d9b071c47b744",
         "317b55590b72f4f83926fae52bfecd1eaafdbbed8261f2680882a6dc902a8fb5",
         "3f91f7a1e1cf6a0b263863b8207dc3851a7758ef7e3959534e01f4bbd4354313",
         "5693ca827ddfbf68c99c837e6766d7c3efa323fc73d5af099150ecf6b471d47b",
@@ -371,10 +399,14 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
     "capture": {
         "storage": {"root": "data"},
         "capture": {
-            "camera_device": "0",
-            "audio_device": "0",
+            "camera_device": "default",
+            "audio_device": "default",
             "screen_audio": True,
+            "system_audio": True,
             "show_clicks": True,
+            "video_format": "mov",
+            "audio_format": "m4a",
+            "overlay": "bottom-right",
         },
     },
     "cpp": {"projects": {"cpp": {"standard": 20, "initialize_git": False}}},
@@ -411,6 +443,7 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
             "sound": True,
             "pomodoro": {"work": 25, "short_break": 5, "long_break": 15, "cycles": 4},
         },
+        "games": {"difficulty": "normal"},
         "apps": {"lofi_url": "https://lofi-engine.vercel.app/"},
     },
     "work": {"apps": {"editor": "Zed", "lofi_url": "https://lofi-engine.vercel.app/"}},
@@ -476,7 +509,12 @@ def storage_path(*parts: str) -> Path:
 
 _CONFIG_WRITE_SUPPORT = r'''
 import json
+import re
 import tempfile
+
+
+def _toml_key(key: str) -> str:
+    return key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else json.dumps(key, ensure_ascii=False)
 
 
 def _toml_value(value: object) -> str:
@@ -495,10 +533,10 @@ def _serialize_table(table: dict, path: tuple[str, ...], lines: list[str]) -> No
     if path:
         if lines and lines[-1] != "":
             lines.append("")
-        lines.append("[" + ".".join(path) + "]")
+        lines.append("[" + ".".join(_toml_key(part) for part in path) + "]")
     for key, value in table.items():
         if not isinstance(value, dict):
-            lines.append(f"{key} = {_toml_value(value)}")
+            lines.append(f"{_toml_key(key)} = {_toml_value(value)}")
     for key, value in table.items():
         if isinstance(value, dict):
             _serialize_table(value, (*path, key), lines)

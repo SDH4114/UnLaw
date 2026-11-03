@@ -2,6 +2,7 @@
 //! explorer, command line, and overlays (picker, completion, popups, which-key).
 
 use std::path::Path;
+use std::io::Read;
 
 use crate::config::LineNumbers;
 use crate::display::{col_to_display, fit, fit_start, str_width, width_at, wrap_rows};
@@ -1096,14 +1097,17 @@ fn read_preview(path: &Path) -> Vec<String> {
     if metadata.is_dir() {
         return vec!["(folder)".into()];
     }
-    let Ok(bytes) = std::fs::read(path) else {
+    let Ok(file) = std::fs::File::open(path) else {
         return vec!["(cannot read)".into()];
     };
-    let bytes = &bytes[..bytes.len().min(2_000_000)];
+    let mut bytes = Vec::new();
+    if file.take(2_000_000).read_to_end(&mut bytes).is_err() {
+        return vec!["(cannot read)".into()];
+    }
     if bytes.iter().take(8000).any(|byte| *byte == 0) {
         return vec![format!("(binary, {} bytes)", metadata.len())];
     }
-    String::from_utf8_lossy(bytes).lines().take(20_000).map(str::to_string).collect()
+    String::from_utf8_lossy(&bytes).lines().take(20_000).map(str::to_string).collect()
 }
 
 fn draw_explorer(ed: &Editor, surface: &mut Surface, theme: &Theme, rect: Rect) {

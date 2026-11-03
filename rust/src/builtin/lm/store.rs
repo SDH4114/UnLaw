@@ -120,7 +120,7 @@ impl Model {
     /// (a repo may hold several quantizations).
     pub fn load_bytes(&self) -> u64 {
         match &self.gguf {
-            Some(gguf) => [Some(&gguf.file), gguf.mmproj.as_ref()].into_iter().flatten().map(|f| fs::metadata(f).map(|m| m.len()).unwrap_or(0)).sum(),
+            Some(gguf) => gguf_bytes(&gguf.file) + gguf.mmproj.as_ref().map(|file| gguf_bytes(file)).unwrap_or(0),
             None => self.bytes,
         }
     }
@@ -147,6 +147,15 @@ impl Model {
     pub fn lane(&self) -> String {
         format!("{}:{}", self.engine().name(), self.kind.lane())
     }
+}
+
+/// llama.cpp loads every shard when given `name-00001-of-000NN.gguf`.
+fn gguf_bytes(file: &Path) -> u64 {
+    let size = |file: &Path| fs::metadata(file).map(|meta| meta.len()).unwrap_or(0);
+    let Some(name) = file.file_name().and_then(|name| name.to_str()) else { return size(file) };
+    let Some((prefix, total)) = name.strip_suffix(".gguf").and_then(|name| name.rsplit_once("-00001-of-")) else { return size(file) };
+    let Some(count) = total.parse::<u32>().ok().filter(|count| (1..=100_000).contains(count)) else { return size(file) };
+    (1..=count).map(|part| size(&file.with_file_name(format!("{prefix}-{part:05}-of-{total}.gguf")))).sum()
 }
 
 pub fn hub_cache() -> PathBuf {

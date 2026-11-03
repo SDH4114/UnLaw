@@ -45,10 +45,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "pomodoro": {"work": 25, "short_break": 5, "long_break": 15, "cycles": 4},
     },
     "capture": {
-        "camera_device": "0",
-        "audio_device": "0",
+        "camera_device": "default",
+        "audio_device": "default",
         "screen_audio": True,
+        "system_audio": True,
         "show_clicks": True,
+        "video_format": "mov",
+        "audio_format": "m4a",
+        "overlay": "bottom-right",
     },
     "games": {"difficulty": "normal"},
     "zip": {"format": "zip", "level": "max", "keep_junk": False},
@@ -198,7 +202,19 @@ def _seed_default_commands() -> None:
         elif any((destination.parent / entry).exists() for entry in ("main.sh", "main.js", "Cargo.toml", "main")):
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(command_source(name), encoding="utf-8")
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=destination.parent, prefix=".seed.", suffix=".tmp", delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+                handle.write(command_source(name))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, destination)
+        finally:
+            if temporary is not None and temporary.exists():
+                temporary.unlink()
 
 
 def _ensure_storage_layout() -> None:
@@ -348,6 +364,10 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ("capture.audio_device", str, None),
         ("capture.screen_audio", bool, None),
         ("capture.show_clicks", bool, None),
+        ("capture.system_audio", bool, None),
+        ("capture.video_format", str, {"mov", "mp4"}),
+        ("capture.audio_format", str, {"m4a", "mp3", "wav"}),
+        ("capture.overlay", str, {"bottom-right", "bottom-left", "top-right", "top-left"}),
         ("games.difficulty", str, {"easy", "normal", "hard"}),
         ("zip.format", str, {"zip", "7z", "rar", "tar.zst", "tar.xz", "tar.gz"}),
         ("zip.keep_junk", bool, None),

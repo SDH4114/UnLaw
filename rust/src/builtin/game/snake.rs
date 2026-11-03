@@ -5,7 +5,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::io;
 
-use super::{finish, inputs_until, pause, too_small, After, Button, Color, Input, Key, Level, Played, Rng, Screen, Style, FRAME};
+use super::{finish, inputs_until, pause, too_small, After, Button, Color, Input, Key, Level, Played, Rng, Scores, Screen, Style, FRAME};
 
 type Cell = (i32, i32);
 
@@ -247,7 +247,7 @@ fn draw(screen: &mut dyn Screen, snake: &Snake, layout: &Layout, level: Level, b
     screen.controls("←↑↓→ / WASD move · click to steer · P pause · Esc quit");
 }
 
-pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u64>) -> io::Result<Played> {
+pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u64>, scores: Option<&mut Scores>) -> io::Result<Played> {
     let (height, width) = screen.size();
     let rows = (height - 4).min(30);
     let columns = ((width - 2) / 2).min(40);
@@ -293,7 +293,7 @@ pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u
             draw(screen, &snake, &layout, level, best);
             let title = if outcome == Step::Won { "YOU WIN — the board is full!" } else { "GAME OVER" };
             let details = [format!("Score {} · Length {}", snake.score, snake.body.len())];
-            let after = finish(screen, title, &details, Some((snake.score, best, "snake")))?;
+            let after = finish(screen, title, &details, Some((snake.score, best, "snake")), scores.map(|scores| (scores, level)))?;
             return Ok(Played { score: Some(snake.score), after });
         }
     }
@@ -430,7 +430,7 @@ mod tests {
     #[test]
     fn plays_on_a_screen_until_game_over_then_offers_again() {
         let mut screen = Fake::new((24, 80)).idle(400).keys(&[special(Key::Esc)]);
-        let played = play(&mut screen, Level::Normal, &mut Rng::constant(0), Some(1000)).unwrap();
+        let played = play(&mut screen, Level::Normal, &mut Rng::constant(0), Some(1000), None).unwrap();
         assert_eq!(played.after, After::Leave);
         assert!(screen.drew("GAME OVER"));
         assert!(screen.drew("Best 1000"));
@@ -440,9 +440,9 @@ mod tests {
     #[test]
     fn pause_and_quit_and_small_terminal() {
         let mut screen = Fake::new((24, 80)).keys(&[key('p'), key('p'), key('q')]);
-        assert_eq!(play(&mut screen, Level::Easy, &mut Rng::constant(0), None).unwrap().score, None);
+        assert_eq!(play(&mut screen, Level::Easy, &mut Rng::constant(0), None, None).unwrap().score, None);
         assert!(screen.drew("PAUSED"));
         let mut small = Fake::new((10, 30)).keys(&[key('x')]);
-        assert_eq!(play(&mut small, Level::Easy, &mut Rng::constant(0), None).unwrap().after, After::Leave);
+        assert_eq!(play(&mut small, Level::Easy, &mut Rng::constant(0), None, None).unwrap().after, After::Leave);
     }
 }

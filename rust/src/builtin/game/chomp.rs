@@ -8,7 +8,7 @@
 use std::collections::VecDeque;
 use std::io;
 
-use super::{finish, inputs_until, pause, too_small, After, Button, Color, Input, Key, Level, Played, Rng, Screen, Style, FRAME};
+use super::{finish, inputs_until, pause, too_small, After, Button, Color, Input, Key, Level, Played, Rng, Scores, Screen, Style, FRAME};
 
 pub type Cell = (i32, i32);
 
@@ -952,7 +952,7 @@ fn draw(screen: &mut dyn Screen, game: &Chomp, layout: &Layout, best: Option<u64
     screen.controls("←↑↓→ / WASD move · click to steer · P pause · Esc quit");
 }
 
-pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u64>) -> io::Result<Played> {
+pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u64>, scores: Option<&mut Scores>) -> io::Result<Played> {
     let (height, width) = screen.size();
     if height < ROWS + 3 || width < COLUMNS * 2 + 2 {
         return too_small(screen, COLUMNS * 2 + 2, ROWS + 3);
@@ -987,7 +987,7 @@ pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u
         if game.update(seconds, rng) == Step::Over {
             draw(screen, &game, &layout, best);
             let details = [format!("Score {} · Level {}", game.score, game.number)];
-            let after = finish(screen, "GAME OVER", &details, Some((game.score, best, "chomp")))?;
+            let after = finish(screen, "GAME OVER", &details, Some((game.score, best, "chomp")), scores.map(|scores| (scores, level)))?;
             return Ok(Played { score: Some(game.score), after });
         }
     }
@@ -1311,7 +1311,7 @@ mod tests {
     #[test]
     fn plays_on_a_screen_until_game_over_then_offers_again() {
         let mut screen = Fake::new((24, 80)).idle(30_000).keys(&[special(Key::Esc)]);
-        let played = play(&mut screen, Level::Hard, &mut Rng::constant(0), Some(1000)).unwrap();
+        let played = play(&mut screen, Level::Hard, &mut Rng::constant(0), Some(1000), None).unwrap();
         assert_eq!(played.after, After::Leave);
         assert!(played.score.is_some());
         assert!(screen.drew("GAME OVER"));
@@ -1322,11 +1322,11 @@ mod tests {
     #[test]
     fn pause_and_quit_and_small_terminal() {
         let mut screen = Fake::new((24, 80)).keys(&[key('p'), key('p'), key('q')]);
-        assert_eq!(play(&mut screen, Level::Easy, &mut Rng::constant(0), None).unwrap().score, None);
+        assert_eq!(play(&mut screen, Level::Easy, &mut Rng::constant(0), None, None).unwrap().score, None);
         assert!(screen.drew("PAUSED"));
         assert!(screen.drew("READY!"));
         let mut small = Fake::new((20, 50)).keys(&[key('x')]);
-        assert_eq!(play(&mut small, Level::Easy, &mut Rng::constant(0), None).unwrap().after, After::Leave);
+        assert_eq!(play(&mut small, Level::Easy, &mut Rng::constant(0), None, None).unwrap().after, After::Leave);
         assert!(small.drew("needs a 56x24 terminal"));
     }
 }

@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 use std::io;
 
-use super::{finish, inputs_until, pause, too_small, After, Button, Color, Input, Key, Level, Played, Rng, Screen, Style};
+use super::{finish, inputs_until, pause, too_small, After, Button, Color, Input, Key, Level, Played, Rng, Scores, Screen, Style};
 
 type Cell = (i32, i32);
 
@@ -221,7 +221,7 @@ fn draw(screen: &mut dyn Screen, game: &Mines, layout: &Layout, level: Level, se
     screen.controls("click / Space open · right-click / F flag · click a number to clear around it · arrows move · P pause · Esc quit");
 }
 
-pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u64>) -> io::Result<Played> {
+pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u64>, scores: Option<&mut Scores>) -> io::Result<Played> {
     let mut game = Mines::new(level);
     let (height, width) = screen.size();
     let (need_width, need_height) = (game.columns * 2 + 4, game.rows + 5);
@@ -304,9 +304,9 @@ pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u
             let seconds = elapsed(screen, started_at).max(1);
             draw(screen, &game, &layout, level, seconds, best);
             let after = if outcome == Outcome::Won {
-                finish(screen, "YOU CLEARED THE FIELD!", &[format!("Time {seconds}s")], Some((seconds, best, "minesweeper")))?
+                finish(screen, "YOU CLEARED THE FIELD!", &[format!("Time {seconds}s")], Some((seconds, best, "minesweeper")), scores.map(|scores| (scores, level)))?
             } else {
-                finish(screen, "BOOM — GAME OVER", &["You stepped on a mine.".into()], None)?
+                finish(screen, "BOOM — GAME OVER", &["You stepped on a mine.".into()], None, scores.map(|scores| (scores, level)))?
             };
             let score = (outcome == Outcome::Won).then_some(seconds);
             return Ok(Played { score, after });
@@ -406,7 +406,7 @@ mod tests {
         }
         screen = screen.keys(&inputs).keys(&[special(Key::Esc)]);
         // A click on the end screen means "play again".
-        let played = play(&mut screen, Level::Easy, &mut Rng::seeded(5), Some(30)).unwrap();
+        let played = play(&mut screen, Level::Easy, &mut Rng::seeded(5), Some(30), None).unwrap();
         assert_eq!(played.after, After::Again);
         assert!(screen.drew("BOOM") || screen.drew("CLEARED"));
         assert!(screen.drew("⚑") || screen.drew("✗"));
@@ -415,9 +415,9 @@ mod tests {
     #[test]
     fn keyboard_play_pause_and_quit() {
         let mut screen = Fake::new((24, 60)).keys(&[key(' '), special(Key::Up), key('f'), key('p'), key('p'), key('q')]);
-        assert_eq!(play(&mut screen, Level::Easy, &mut Rng::seeded(2), None).unwrap().score, None);
+        assert_eq!(play(&mut screen, Level::Easy, &mut Rng::seeded(2), None, None).unwrap().score, None);
         assert!(screen.drew("PAUSED"));
         let mut small = Fake::new((10, 30)).keys(&[key('x')]);
-        assert_eq!(play(&mut small, Level::Hard, &mut Rng::seeded(2), None).unwrap().after, After::Leave);
+        assert_eq!(play(&mut small, Level::Hard, &mut Rng::seeded(2), None, None).unwrap().after, After::Leave);
     }
 }

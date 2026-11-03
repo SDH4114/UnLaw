@@ -569,7 +569,9 @@ pub fn create_video(service: &Arc<Service>, request: &Request, stream: &mut TcpS
         let seconds = body["seconds"].as_str().and_then(|s| s.parse::<f64>().ok()).or(body["seconds"].as_f64());
         let frames = body["frames"].as_u64().or(seconds.map(|s| (s * 24.0).round() as u64 + 1));
         let id = random_id("video");
-        let output = media::output_path(&service.storage, "videos", prompt, "mp4");
+        // Jobs can queue before any file exists: the job id reserves its own
+        // name without relying on a second-resolution timestamp and exists().
+        let output = service.storage.join("generated").join("videos").join(format!("{id}.mp4"));
         let job = json!({"op": "video", "prompt": prompt, "width": size.map(|s| s.0), "height": size.map(|s| s.1), "frames": frames,
                          "seed": body["seed"], "steps": body["steps"], "output": output});
         Ok((id, model, job, prompt.to_string(), size))

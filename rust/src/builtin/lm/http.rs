@@ -202,9 +202,10 @@ pub fn send(port: u16, method: &str, path: &str, body: Option<&[u8]>, timeout: D
     let mut stream = TcpStream::connect_timeout(&address, timeout)?;
     stream.set_read_timeout(Some(timeout))?;
     let body = body.unwrap_or_default();
+    let cli_header = if path == "/ul/job" { "X-Unlaw-CLI: 1\r\n" } else { "" };
     write!(
         stream,
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{cli_header}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     )?;
     stream.write_all(body)?;

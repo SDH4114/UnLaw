@@ -5,7 +5,7 @@
 use std::collections::VecDeque;
 use std::io;
 
-use super::{finish, inputs_until, pause, too_small, After, Button, Color, Input, Key, Level, Played, Rng, Screen, Style, FRAME};
+use super::{finish, inputs_until, pause, too_small, After, Button, Color, Input, Key, Level, Played, Rng, Scores, Screen, Style, FRAME};
 
 pub const WIDTH: i32 = 10;
 pub const VISIBLE: i32 = 20;
@@ -466,7 +466,7 @@ fn draw(screen: &mut dyn Screen, game: &Tetris, layout: &Layout, level: Level, b
     screen.controls(&format!("←→ move · ↑/X rotate · Z back · ↓ soft · Space drop · {hold}P pause · mouse: move, click drop, right-click rotate"));
 }
 
-pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u64>) -> io::Result<Played> {
+pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u64>, scores: Option<&mut Scores>) -> io::Result<Played> {
     let (height, width) = screen.size();
     let total = 12 + WIDTH * 2 + 2 + 2 + 12;
     if height < VISIBLE + 5 || width < total {
@@ -525,7 +525,7 @@ pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u
         if game.over {
             draw(screen, &game, &layout, level, best);
             let details = [format!("Score {} · Level {} · Lines {}", game.score, game.level(), game.lines)];
-            let after = finish(screen, "GAME OVER", &details, Some((game.score, best, "tetris")))?;
+            let after = finish(screen, "GAME OVER", &details, Some((game.score, best, "tetris")), scores.map(|scores| (scores, level)))?;
             return Ok(Played { score: Some(game.score), after });
         }
     }
@@ -711,12 +711,12 @@ mod tests {
         inputs.extend(std::iter::repeat_n(key(' '), 80));
         let mut screen = Fake::new((30, 100)).keys(&inputs).keys(&[special(Key::Esc)]);
         // Space on the end screen means "play again".
-        let played = play(&mut screen, Level::Normal, &mut Rng::constant(0), None).unwrap();
+        let played = play(&mut screen, Level::Normal, &mut Rng::constant(0), None, None).unwrap();
         assert_eq!(played.after, After::Again);
         assert!(played.score.unwrap() > 0);
         assert!(screen.drew("GAME OVER"));
         assert!(screen.drew("HOLD"));
         let mut small = Fake::new((20, 40)).keys(&[key('x')]);
-        assert_eq!(play(&mut small, Level::Easy, &mut Rng::constant(0), None).unwrap().score, None);
+        assert_eq!(play(&mut small, Level::Easy, &mut Rng::constant(0), None, None).unwrap().score, None);
     }
 }
