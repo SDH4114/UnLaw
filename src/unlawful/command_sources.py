@@ -317,6 +317,21 @@ LEGACY_NORMALIZED_HASHES: dict[str, set[str]] = {
 
 # Official agent seed before resolving symlinks during search.
 LEGACY_SOURCE_HASHES["agent"].add("427202e3b1fafa6bc3c0c5da70dbff2b1f3934009105d65721a1461060ad4110")
+# Official seeds of release 3.12.2 (and dev builds installed on the maintainer machine) before the security and robustness fixes.
+LEGACY_SOURCE_HASHES["agent"].add("b5fb76247daf4d6755c0e4cec2fa846d67011d2046c055553927f6a2559a1f04")
+LEGACY_SOURCE_HASHES["agent"].add("b01cdecf794e5137f75226df9d148db002d641238b90cbeb86e7cc475f5e2727")
+LEGACY_SOURCE_HASHES["desk"].add("af25dd930ea26166b52cdaa335453958aa3da80de5577d7ca1b97b9a03c931bc")
+LEGACY_SOURCE_HASHES["desk"].add("45089d12f8eb978d2f35a5cfdacd40538b641d1bcb850ebce6860807b4ddb732")
+LEGACY_SOURCE_HASHES["todo"].add("be9d9c1235678e85d4a91821c5f359d2cc7eac99345ba56cce2a5dec24bc865c")
+LEGACY_SOURCE_HASHES["capture"].add("d69e6501cbd293b129ac274070485ac8e8b7007f35221dd80c573f1f82cb96c9")
+LEGACY_SOURCE_HASHES["capture"].add("cf00f560c82b49ed0bf074303d6f8d24dc06ac8c68710e7dd0c1f2b2c5337d4a")
+LEGACY_SOURCE_HASHES["tg"].add("59521bc6e03acb1f48903fd7c95f894b26b0e705d8168d28c5a2850a99342ba2")
+LEGACY_SOURCE_HASHES["tg"].add("de149db5991eb8b148ca7df1723f48d1c87e14ae9292b18523b1ec0249de8e7d")
+LEGACY_NORMALIZED_HASHES.setdefault("agent", set()).add("5d2fd2cac79f3cea22717b9558f02f7fb89bc1b347a57a16b756b78cd175c2c3")
+LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("2b6e0d78e44afc66b689ab84348b8d3542dcd333d27009c008e40919f3dd6046")
+LEGACY_NORMALIZED_HASHES.setdefault("todo", set()).add("a8d7363778354760824790d3a32559f9c0267259ae5291bf44da99568648b2f1")
+LEGACY_NORMALIZED_HASHES.setdefault("capture", set()).add("502597fd439eda0db96ada615b8b2d36ef82af86535fe3b889f1b25e675a6de4")
+LEGACY_NORMALIZED_HASHES.setdefault("tg", set()).add("11d4d44aaf60e34c615cdfe2db6eec0597da3a37a6d2b7ad59f543e877b93ca3")
 
 # Commands now built into the Rust core. Untouched seeds with these hashes are
 # removed so the built-in runs; edited copies stay and override it.

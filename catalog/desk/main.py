@@ -93,12 +93,23 @@ class KanbanBoard:
     prefix: list[str]
     sections: list[Section]
     footer: list[str]
+    newline: str = "\n"
 
     @classmethod
     def parse(cls, text: str) -> KanbanBoard:
-        lines = text.splitlines()
+        # Only \n and \r\n end a line: str.splitlines() would also split on \x0b, \x0c, \x85, \u2028 and others inside a card.
+        newline = "\r\n" if "\r\n" in text else "\n"
+        lines = re.split(r"\r?\n", text)
+        first_heading = next((i for i, line in enumerate(lines) if HEADING.match(line)), None)
+        if first_heading is None:
+            raise ValueError("TODO.md has no '##' Kanban columns")
+        # The footer starts at Obsidian's `***` archive separator or at the settings block, whichever comes first.
         footer_at = next(
-            (i for i, line in enumerate(lines) if line.strip() == KANBAN_MARKER),
+            (
+                i
+                for i, line in enumerate(lines)
+                if line.strip() == KANBAN_MARKER or (i > first_heading and line.rstrip() == "***")
+            ),
             len(lines),
         )
         body, footer = lines[:footer_at], lines[footer_at:]
@@ -134,6 +145,7 @@ class KanbanBoard:
             prefix=_trim_blank_right(prefix),
             sections=sections,
             footer=_trim_blank(footer),
+            newline=newline,
         )
 
     def section(self, name: str) -> Section:
@@ -186,7 +198,7 @@ class KanbanBoard:
             lines.append("")
         if self.footer:
             lines.extend(self.footer)
-        return "\n".join(lines).rstrip() + "\n"
+        return self.newline.join(lines).rstrip() + self.newline
 
 
 def configured_board(settings: dict) -> Path:
@@ -253,6 +265,7 @@ def write_board(path: Path, board: KanbanBoard) -> None:
         with tempfile.NamedTemporaryFile(
             "w",
             encoding="utf-8",
+            newline="",
             dir=path.parent,
             prefix=".todo.",
             suffix=".tmp",
@@ -262,6 +275,11 @@ def write_board(path: Path, board: KanbanBoard) -> None:
             handle.flush()
             os.fsync(handle.fileno())
             temporary = Path(handle.name)
+        # The temporary file is created 0600; the board keeps the mode it had.
+        try:
+            os.chmod(temporary, path.stat().st_mode & 0o7777)
+        except FileNotFoundError:
+            pass
         os.replace(temporary, path)
     finally:
         if temporary is not None and temporary.exists():
@@ -2714,13 +2732,18 @@ class Handler(BaseHTTPRequestHandler):
         if not self._allowed_host():
             self._send(403, b"Forbidden host", "text/plain; charset=utf-8")
             return False
-        if self.path.startswith("/media/"):
+        if not self.path.startswith("/"):
+            # An absolute-form target (`GET http://host/api/...`) would be routed by its URL path but skip a prefix check on the raw string.
+            self._send(400, b"Bad request target", "text/plain; charset=utf-8")
+            return False
+        url = urllib.parse.urlsplit(self.path)
+        if url.path.startswith("/media/"):
             # <video>/<img> cannot send headers, so media URLs carry the token.
-            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            query = urllib.parse.parse_qs(url.query)
             if not self._authorized(query.get("t", [None])[0]):
                 self._send(403, b"Forbidden", "text/plain; charset=utf-8")
                 return False
-        elif self.path.startswith("/api/") and not self._authorized(
+        elif url.path.startswith("/api/") and not self._authorized(
             self.headers.get("X-Desk-Token")
         ):
             self._json(
@@ -3195,7 +3218,7 @@ class Studio:
             for key in ("from", "to"):
                 value = body.get(key)
                 if value is not None:
-                    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+                    if isinstance(value, bool) or not isinstance(value, (int, float)) or (isinstance(value, float) and not math.isfinite(value)) or value < 0:
                         raise ValueError(f"{key} must be seconds")
                     args += [f"--{key}", f"{value:.3f}"]
             if len(args) == 2:

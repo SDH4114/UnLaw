@@ -782,14 +782,19 @@ fn load(ed: &mut Editor, path: &Path) -> Result<usize, String> {
 
 fn apply_workspace_edit(ed: &mut Editor, client: usize, edit: &Value) -> Result<usize, String> {
     let utf8 = ed.lsp.clients[client].utf8;
-    let mut per_file: Vec<(PathBuf, Vec<Value>)> = Vec::new();
-    if let Some(changes) = edit.get("changes").and_then(Value::as_object) {
-        for (key, edits) in changes {
-            if let Some(path) = path_of(key) {
-                per_file.push((path, edits.as_array().cloned().unwrap_or_default()));
-            }
-        }
-    }
+    apply_workspace_edit_with(ed, utf8, edit)
+}
+
+fn apply_workspace_edit_with(ed: &mut Editor, utf8: bool, edit: &Value) -> Result<usize, String> {
+    let mut count = 0;
+    let mut apply = |ed: &mut Editor, path: PathBuf, edits: &[Value]| -> Result<(), String> {
+        let id = load(ed, &absolute(&path))?;
+        let converted = convert_edits(&ed.docs[&id].text, edits, utf8);
+        crate::edit::apply_edits(ed, id, converted);
+        count += 1;
+        Ok(())
+    };
+    // `documentChanges` wins over `changes` and its operations run in order (a rename may precede edits).
     if let Some(changes) = edit.get("documentChanges").and_then(Value::as_array) {
         for change in changes {
             match change.get("kind").and_then(Value::as_str) {
@@ -813,18 +818,18 @@ fn apply_workspace_edit(ed: &mut Editor, client: usize, edit: &Value) -> Result<
                 Some(_) => {}
                 None => {
                     if let Some(path) = change.pointer("/textDocument/uri").and_then(Value::as_str).and_then(path_of) {
-                        per_file
-                            .push((path, change.get("edits").and_then(Value::as_array).cloned().unwrap_or_default()));
+                        let edits = change.get("edits").and_then(Value::as_array).cloned().unwrap_or_default();
+                        apply(ed, path, &edits)?;
                     }
                 }
             }
         }
-    }
-    let count = per_file.len();
-    for (path, edits) in per_file {
-        let id = load(ed, &absolute(&path))?;
-        let converted = convert_edits(&ed.docs[&id].text, &edits, utf8);
-        crate::edit::apply_edits(ed, id, converted);
+    } else if let Some(changes) = edit.get("changes").and_then(Value::as_object) {
+        for (key, edits) in changes {
+            if let Some(path) = path_of(key) {
+                apply(ed, path, &edits.as_array().cloned().unwrap_or_default())?;
+            }
+        }
     }
     Ok(count)
 }
@@ -999,6 +1004,19 @@ fn completion_items(doc: &Document, result: &Value, utf8: bool) -> Vec<Completio
 }
 
 fn flatten_symbols(value: &Value, depth: usize, path: &Path, doc: Option<&Document>, utf8: bool, out: &mut Vec<Item>) {
+    flatten_into(value, depth, path, doc, utf8, &mut HashMap::new(), out);
+}
+
+/// `files` caches the lines of other files read from disk (workspace symbols point into many files).
+fn flatten_into(
+    value: &Value,
+    depth: usize,
+    path: &Path,
+    doc: Option<&Document>,
+    utf8: bool,
+    files: &mut HashMap<PathBuf, Option<Vec<String>>>,
+    out: &mut Vec<Item>,
+) {
     let Some(items) = value.as_array() else {
         return;
     };
@@ -1020,10 +1038,19 @@ fn flatten_symbols(value: &Value, depth: usize, path: &Path, doc: Option<&Docume
         let start = range.and_then(|range| range.get("start"));
         let pos = match (start, doc) {
             (Some(start), Some(doc)) if target_path == path => pos_from(&doc.text, start, utf8),
-            (Some(start), _) => Pos::new(
-                start.get("line").and_then(Value::as_u64).unwrap_or(0) as usize,
-                start.get("character").and_then(Value::as_u64).unwrap_or(0) as usize,
-            ),
+            (Some(start), _) => {
+                // Another file: the server's units are UTF-16 (or UTF-8), so convert with the line from disk.
+                let line = start.get("line").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let character = start.get("character").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let lines = files.entry(target_path.clone()).or_insert_with(|| {
+                    let text = std::fs::read_to_string(&target_path).ok()?;
+                    Some(text.replace("\r\n", "\n").split('\n').map(str::to_string).collect())
+                });
+                match lines.as_ref().and_then(|lines| lines.get(line)) {
+                    Some(text) => Pos::new(line, from_lsp(text, character, utf8)),
+                    None => Pos::new(line, character),
+                }
+            }
             _ => Pos::default(),
         };
         let container = symbol.get("containerName").and_then(Value::as_str).filter(|name| !name.is_empty());
@@ -1034,7 +1061,7 @@ fn flatten_symbols(value: &Value, depth: usize, path: &Path, doc: Option<&Docume
         };
         out.push(Item { label, detail, data: Data::Location(target_path.clone(), pos) });
         if let Some(children) = symbol.get("children") {
-            flatten_symbols(children, depth + 1, path, doc, utf8, out);
+            flatten_into(children, depth + 1, path, doc, utf8, files, out);
         }
     }
 }
@@ -1440,6 +1467,94 @@ mod tests {
         assert_eq!(from_lsp(line, 3, false), 2);
         assert_eq!(to_lsp(line, 2, true), 5);
         assert_eq!(from_lsp(line, 5, true), 2);
+    }
+
+    fn test_editor() -> Editor {
+        crate::clipboard::disable();
+        let mut config = crate::config::Config::default();
+        config.options.clipboard = false;
+        config.options.lsp = false;
+        Editor::new(config)
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ule-lsp-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn workspace_edit_runs_document_changes_in_order() {
+        let dir = temp_dir("ordered");
+        let (old, new, other) = (dir.join("a.txt"), dir.join("b.txt"), dir.join("c.txt"));
+        std::fs::write(&old, "hello\n").unwrap();
+        std::fs::write(&other, "keep\n").unwrap();
+        let edit = json!({
+            "changes": { uri(&other): [{
+                "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 4 } },
+                "newText": "lost"
+            }] },
+            "documentChanges": [
+                { "kind": "rename", "oldUri": uri(&old), "newUri": uri(&new) },
+                { "textDocument": { "uri": uri(&new), "version": null }, "edits": [{
+                    "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 5 } },
+                    "newText": "bye"
+                }] }
+            ]
+        });
+        let mut ed = test_editor();
+        assert_eq!(apply_workspace_edit_with(&mut ed, false, &edit), Ok(1));
+        let id = ed.find_doc(&new).expect("renamed file is open");
+        assert_eq!(ed.docs[&id].text.to_string_lf(), "bye");
+        assert!(ed.find_doc(&other).is_none(), "`changes` is ignored when `documentChanges` is present");
+    }
+
+    #[test]
+    fn workspace_edit_uses_changes_without_document_changes() {
+        let dir = temp_dir("changes");
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "hello\n").unwrap();
+        let edit = json!({ "changes": { uri(&file): [{
+            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 5 } },
+            "newText": "bye"
+        }] } });
+        let mut ed = test_editor();
+        assert_eq!(apply_workspace_edit_with(&mut ed, false, &edit), Ok(1));
+        let id = ed.find_doc(&file).unwrap();
+        assert_eq!(ed.docs[&id].text.to_string_lf(), "bye");
+    }
+
+    #[test]
+    fn symbols_in_other_files_use_char_columns() {
+        let dir = temp_dir("symbols");
+        let file = dir.join("other.txt");
+        std::fs::write(&file, "first\n😀😀 target\n").unwrap();
+        // UTF-16 column 5 is after two emoji and a space: char column 3.
+        let value = json!([{
+            "name": "target", "kind": 12,
+            "location": { "uri": uri(&file), "range": {
+                "start": { "line": 1, "character": 5 }, "end": { "line": 1, "character": 11 }
+            } }
+        }]);
+        for (utf8, column) in [(false, 5), (true, 9)] {
+            let value = if utf8 {
+                let mut value = value.clone();
+                value[0]["location"]["range"]["start"]["character"] = json!(column);
+                value
+            } else {
+                value.clone()
+            };
+            let mut items = Vec::new();
+            flatten_symbols(&value, 0, Path::new("/nowhere/current.rs"), None, utf8, &mut items);
+            match &items[0].data {
+                Data::Location(path, pos) => {
+                    assert_eq!(path, &file);
+                    assert_eq!(*pos, Pos::new(1, 3), "utf8 = {utf8}");
+                }
+                _ => panic!("expected a location"),
+            }
+        }
     }
 
     #[test]

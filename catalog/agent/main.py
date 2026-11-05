@@ -784,7 +784,21 @@ READ_LIMIT = 200_000
 TELEGRAM_LIMIT = 4000
 OLD_RESULT_LIMIT = 1500
 # Never readable or writable, whatever agent.roots says.
-DENIED_NAMES = {".ssh", ".gnupg", ".aws", ".netrc", ".git-credentials", ".pgpass"}
+# macOS disks ignore case, so every comparison below is casefolded:
+# ~/.SSH/id_ed25519 opens the same file as ~/.ssh/id_ed25519.
+DENIED_NAMES = {".ssh", ".gnupg", ".aws", ".netrc", ".git-credentials", ".pgpass", ".docker", ".kube", ".npmrc", ".pypirc"}
+# Relative to home: tokens of gh, 1Password CLI, Hugging Face, cargo, and macOS stores.
+DENIED_HOME_PATHS = (
+    ".config/gh",
+    ".config/op",
+    ".cache/huggingface",
+    ".cargo/credentials",
+    ".cargo/credentials.toml",
+    "Library/Keychains",
+    "Library/Cookies",
+    "Library/Messages",
+)
+PRIVATE_KEY_PREFIXES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519")
 SKIP_DIRS = {
     ".git",
     "node_modules",
@@ -904,21 +918,34 @@ def protected() -> tuple[Path, Path]:
     return (config_dir() / "config.toml").resolve(), agent_dir().resolve()
 
 
+def _folded(path: Path) -> tuple[str, ...]:
+    return tuple(part.casefold() for part in path.parts)
+
+
+def _within(path: tuple[str, ...], base: Path) -> bool:
+    """`path` is `base` or inside it, ignoring case like the macOS disk does."""
+    folded = _folded(base)
+    return path[: len(folded)] == folded
+
+
 def denied(path: Path, guard: tuple[Path, Path] | None = None) -> str | None:
     home = Path.home().resolve()
     config_file, agent_data = guard or protected()
-    if DENIED_NAMES.intersection(path.parts):
+    parts = _folded(path)
+    name = parts[-1] if parts else ""
+    if DENIED_NAMES.intersection(parts) or name.startswith(PRIVATE_KEY_PREFIXES):
         return "keys and credentials are never accessible"
-    if path.name.startswith(".env"):
+    if name.startswith(".env"):
         return "environment files hold secrets"
-    if (
-        path == home / "Library" / "Keychains"
-        or (home / "Library" / "Keychains") in path.parents
-    ):
+    if name.endswith("_history"):
+        return "shell histories often hold pasted secrets"
+    if _within(parts, home / "Library" / "Keychains"):
         return "the keychain is never accessible"
-    if path == config_file:
+    if any(_within(parts, home / relative) for relative in DENIED_HOME_PATHS):
+        return "keys and credentials are never accessible"
+    if parts == _folded(config_file):
         return "Unlaw's configuration is changed with `ul config`, not by the agent"
-    if path == agent_data or agent_data in path.parents:
+    if _within(parts, agent_data):
         return "the agent's own records (audit log, schedule) are off limits"
     return None
 
@@ -1196,13 +1223,17 @@ _UNITS = {
     "д": 1440, "дн": 1440, "день": 1440, "дня": 1440, "дней": 1440,
 }  # fmt: skip
 _SPAN = re.compile(r"^(\d+)\s*([a-zа-яё]+)\.?$")
+MAX_MINUTES = 10**7  # about 19 years; larger spans overflow datetime or silently never run
 
 
 def _minutes(text: str) -> int:
     match = _SPAN.match(text.strip().lower())
     if not match or match.group(2) not in _UNITS or int(match.group(1)) < 1:
         raise ValueError(f"unknown duration {text!r}; use e.g. 30m, 2h or 1d")
-    return int(match.group(1)) * _UNITS[match.group(2)]
+    minutes = int(match.group(1)) * _UNITS[match.group(2)]
+    if minutes > MAX_MINUTES:
+        raise ValueError(f"duration {text!r} is too long; the limit is {MAX_MINUTES} minutes (about 19 years)")
+    return minutes
 
 
 def parse_when(text: str, base: dt.datetime) -> dt.datetime:
@@ -1278,13 +1309,14 @@ class Schedule:
     def __init__(self) -> None:
         self.path = agent_dir("schedule.json")
 
-    def jobs(self) -> list[dict]:
+    def _stored(self) -> list:
         stored = _read_json(self.path, {})
         jobs = stored.get("jobs", []) if isinstance(stored, dict) else []
-        if not isinstance(jobs, list):
-            return []
-        # A hand-edited or damaged entry must never stop the server's tick.
-        return sorted((job for job in jobs if _valid_job(job)), key=lambda job: job["next"])
+        return jobs if isinstance(jobs, list) else []
+
+    def jobs(self) -> list[dict]:
+        # A hand-edited or damaged entry must never stop the server's tick, but it stays in the file.
+        return sorted((job for job in self._stored() if _valid_job(job)), key=lambda job: job["next"])
 
     @contextlib.contextmanager
     def locked(self):
@@ -1318,22 +1350,23 @@ class Schedule:
             "created": now().isoformat(),
         }
         with self.locked():
-            self._save([*self.jobs(), job])
+            self._save([*self._stored(), job])
         return job
 
     def remove(self, job_id: str) -> dict:
         with self.locked():
-            jobs = self.jobs()
-            match = next((job for job in jobs if job["id"] == job_id.lstrip("#")), None)
+            stored = self._stored()
+            match = next((job for job in stored if _valid_job(job) and job["id"] == job_id.lstrip("#")), None)
             if match is None:
                 raise ValueError(f"no scheduled job #{job_id.lstrip('#')}")
-            self._save([job for job in jobs if job is not match])
+            self._save([job for job in stored if job is not match])
         return match
 
     def take_due(self, moment: dt.datetime) -> list[dict]:
         """Due jobs; repeating ones move to their next time first, so a crash never re-runs them."""
         due, keep = [], []
         with self.locked():
+            keep.extend(job for job in self._stored() if not _valid_job(job))
             for job in self.jobs():
                 when = dt.datetime.fromisoformat(job["next"])
                 if when > moment:
@@ -3178,23 +3211,11 @@ class Bot:
         if due:
             self.reload()
         for job in due:
-            self.log(f"scheduled #{job['id']} › {job['prompt'][:100]}")
-            if job.get("kind", "task") == "reminder":
-                chat_id = str(job.get("by") or self.owner)
-                self.send(chat_id if chat_id in self.allowed else self.owner, f"⏰ {job['prompt']}")
-                continue
-            chat_id = str(job.get("by") or self.owner)
-            if chat_id not in self.allowed or chat_id == "terminal":
-                chat_id = self.owner
-            self.send(chat_id, f"Scheduled task #{job['id']}: {job['prompt']}")
-            chat = Chat(self, chat_id)
-            tools = Tools(self.config, chat, chat_id, self.level(chat_id))
             try:
-                answer = respond(self.config, self.model, tools, Session(None), f"Scheduled task: {job['prompt']}", "Telegram", chat)
-            except RuntimeError as error:
-                answer = f"Error: {error}"
-            self.send(chat_id, answer)
-            audit(chat_id, "scheduled", job["prompt"], "ran")
+                self.run_job(job)
+            except (OSError, RuntimeError) as error:
+                # take_due already moved the job on; one failed delivery must not lose the jobs after it.
+                self.log(f"scheduled #{job['id']} failed: {error}")
         digest = str(self.config["agent"]["digest_time"])
         if (
             digest
@@ -3205,14 +3226,37 @@ class Bot:
             self._save_state()
             self.send(self.owner, today_text(self.config))
 
+    def run_job(self, job: dict) -> None:
+        self.log(f"scheduled #{job['id']} › {job['prompt'][:100]}")
+        if job.get("kind", "task") == "reminder":
+            chat_id = str(job.get("by") or self.owner)
+            self.send(chat_id if chat_id in self.allowed else self.owner, f"⏰ {job['prompt']}")
+            return
+        chat_id = str(job.get("by") or self.owner)
+        if chat_id not in self.allowed or chat_id == "terminal":
+            chat_id = self.owner
+        self.send(chat_id, f"Scheduled task #{job['id']}: {job['prompt']}")
+        chat = Chat(self, chat_id)
+        tools = Tools(self.config, chat, chat_id, self.level(chat_id))
+        try:
+            answer = respond(self.config, self.model, tools, Session(None), f"Scheduled task: {job['prompt']}", "Telegram", chat)
+        except RuntimeError as error:
+            answer = f"Error: {error}"
+        self.send(chat_id, answer)
+        audit(chat_id, "scheduled", job["prompt"], "ran")
+
     def run(self, polls: int | None = None) -> int:
         self.skip_backlog()
         count = 0
         while polls is None or count < polls:
             count += 1
-            self.tick()
+            # A network error or timeout on Telegram's side must never end the server.
+            try:
+                self.tick()
+            except (OSError, RuntimeError) as error:
+                self.log(f"Telegram: {error}")
             while self.backlog:
-                self.handle(self.backlog.pop(0))
+                self.safe_handle(self.backlog.pop(0))
             try:
                 updates = self.fetch(self.poll_timeout)
             except (RuntimeError, OSError, urllib.error.URLError) as error:
@@ -3223,8 +3267,14 @@ class Bot:
                 time.sleep(5)
                 continue
             for update in updates:
-                self.handle(update)
+                self.safe_handle(update)
         return 0
+
+    def safe_handle(self, update: dict) -> None:
+        try:
+            self.handle(update)
+        except (OSError, RuntimeError) as error:
+            self.log(f"update {update.get('update_id', '?')} failed: {error}")
 
 
 def server(config: dict) -> int:

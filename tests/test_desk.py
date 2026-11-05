@@ -19,7 +19,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from unlawful.desk import Conflict, Desk, Pomodoro, desk_settings, stats
-from unlawful.kanban import KanbanBoard, card, complete_task, quick_text, reopen_task
+from unlawful.kanban import KanbanBoard, card, complete_task, quick_text, reopen_task, write_board
 
 BOARD = """---
 
@@ -84,6 +84,53 @@ class KanbanTests(unittest.TestCase):
         self.assertEqual(task[0], "- [x] Task #a  [completion:: 2026-10-30]")
         reopen_task(task)
         self.assertEqual(task[0], "- [ ] Task #a")
+
+
+ARCHIVE_BOARD = """---
+
+kanban-plugin: board
+
+---
+
+## To do
+
+- [ ] Live card
+
+***
+
+## Archive
+
+- [x] Old card
+
+%% kanban:settings
+```
+{"kanban-plugin":"board"}
+```
+%%
+"""
+
+
+class KanbanFileFormatTests(unittest.TestCase):
+    def test_obsidian_archive_footer_is_kept_and_not_numbered(self) -> None:
+        board = KanbanBoard.parse(ARCHIVE_BOARD)
+        self.assertEqual([section.name for section in board.sections], ["To do"])
+        self.assertEqual([number for number, _, _ in board.numbered_tasks()], [1])
+        self.assertEqual(board.sections[0].tasks, [["- [ ] Live card"]])
+        self.assertEqual(board.render(), ARCHIVE_BOARD)
+
+    def test_crlf_files_keep_crlf_and_odd_separators_stay_inside_lines(self) -> None:
+        text = BOARD.replace("Call [[Mom|mom]]", "Call\x0c[[Mom|mom]]\x85now").replace("\n", "\r\n")
+        board = KanbanBoard.parse(text)
+        self.assertEqual(board.sections[0].tasks[1], ["- [ ] Call\x0c[[Mom|mom]]\x85now #home"])
+        self.assertEqual(board.render(), text)
+
+    def test_write_board_keeps_the_file_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "TODO.md"
+            path.write_text(BOARD, encoding="utf-8")
+            path.chmod(0o644)
+            write_board(path, KanbanBoard.parse(BOARD))
+            self.assertEqual(path.stat().st_mode & 0o777, 0o644)
 
 
 class DeskTests(unittest.TestCase):
@@ -404,6 +451,24 @@ class DeskServerTests(unittest.TestCase):
         self.assertIn("From the terminal", titles)
         self.assertNotIn("Late", (self.vault / "TODO.md").read_text())
 
+    def test_request_targets_must_be_origin_form_so_the_token_cannot_be_bypassed(self) -> None:
+        port, token = self.start()
+        auth = {"X-Desk-Token": token}
+        for target in (f"http://127.0.0.1:{port}/api/board", "api/board"):
+            for headers in ({}, auth):
+                self.assertEqual(self.request(port, "GET", target, headers=headers)[0], 400, (target, headers))
+        self.assertEqual(self.request(port, "GET", "/api/board", headers=auth)[0], 200)
+
+    def test_todo_keeps_crlf_line_endings(self) -> None:
+        board = self.vault / "TODO.md"
+        board.write_bytes(BOARD.replace("\n", "\r\n").encode())
+        added = self.run_seed(self.todo, "add", "From the terminal")
+        self.assertEqual(added.returncode, 0, added.stderr)
+        data = board.read_bytes()
+        self.assertIn(b"From the terminal\r\n", data)
+        self.assertNotIn(b"\r\r", data)
+        self.assertEqual(data.count(b"\n"), data.count(b"\r\n"))
+
     def test_pomodoro_from_the_terminal_is_the_page_timer(self) -> None:
         port, token = self.start()
         started = self.run_seed(
@@ -709,6 +774,16 @@ class DeskStudioTests(unittest.TestCase):
         self.assertTrue(all(0 <= value <= 1 for value in wave["peaks"]))
         self.assertEqual(self.call(port, token, f"/api/studio/wave?name={saved.name}&bars=5")[0], 400)
         self.assertEqual(self.call(port, token, "/api/studio/wave?name=..%2Fx.mov")[0], 404)
+
+    def test_trim_rejects_non_finite_seconds(self) -> None:
+        self.media()
+        port, token = self.start()
+        (self.captures / "recordings").mkdir(parents=True, exist_ok=True)
+        (self.captures / "recordings" / "talk.mov").write_bytes(b"video")
+        for value in (float("nan"), float("inf")):
+            status, data = self.call(port, token, "/api/studio/action", {"action": "trim", "name": "talk.mov", "from": value})
+            self.assertEqual(status, 400, value)
+            self.assertEqual(data["error"], "from must be seconds", value)
 
     def test_screenshots_thumbnails_edits_and_trash(self) -> None:
         self.media()

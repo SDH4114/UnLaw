@@ -9,7 +9,7 @@
 //! `{"rows":R,"cols":C,"lines":[[["text","fg","bg",flags],...],...]}` where
 //! flags is 1 bold + 2 reverse + 4 dim. Closing stdin ends the game.
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
@@ -20,6 +20,8 @@ use super::{Button, Color, Input, Key, Screen, Style};
 /// Rows/columns a browser may ask for; games explain when it is too small.
 pub const MIN_SIZE: (i32, i32) = (10, 20);
 pub const MAX_SIZE: (i32, i32) = (200, 400);
+/// Longest stdin line kept; longer ones are dropped so a client cannot grow memory without bound.
+const MAX_LINE: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Message {
@@ -171,14 +173,51 @@ pub struct Stream<W: Write> {
     out: W,
 }
 
+/// Discards input up to and including the next newline (or the end of input).
+fn skip_line<R: BufRead>(input: &mut R) -> io::Result<()> {
+    loop {
+        let available = input.fill_buf()?;
+        if available.is_empty() {
+            return Ok(());
+        }
+        match available.iter().position(|byte| *byte == b'\n') {
+            Some(index) => {
+                input.consume(index + 1);
+                return Ok(());
+            }
+            None => {
+                let length = available.len();
+                input.consume(length);
+            }
+        }
+    }
+}
+
 impl<W: Write> Stream<W> {
     /// Reads `input` on its own thread so `input(timeout)` can wait with a deadline.
     pub fn new<R: BufRead + Send + 'static>(input: R, out: W, size: (i32, i32)) -> Stream<W> {
         let (sender, messages) = mpsc::channel();
         std::thread::spawn(move || {
-            for line in input.lines() {
-                let Ok(line) = line else { break };
-                if let Some(message) = parse(&line) {
+            let mut input = input;
+            let mut buffer = Vec::new();
+            loop {
+                buffer.clear();
+                // Read at most one byte over the cap, so memory stays bounded whatever the client sends.
+                match input.by_ref().take(MAX_LINE as u64 + 1).read_until(b'\n', &mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                if buffer.last() == Some(&b'\n') {
+                    buffer.pop();
+                } else if buffer.len() > MAX_LINE {
+                    // Too long: drop it up to the next newline.
+                    if skip_line(&mut input).is_err() {
+                        break;
+                    }
+                    continue;
+                }
+                let Ok(line) = std::str::from_utf8(&buffer) else { break };
+                if let Some(message) = parse(line.trim_end_matches('\r')) {
                     if sender.send(message).is_err() {
                         break;
                     }
@@ -344,6 +383,22 @@ mod tests {
         assert_eq!(frame["lines"][0][1], json!(["c", "", "", 2]));
         assert_eq!(frame["lines"][0][2][0].as_str().unwrap().len(), 17);
         assert_eq!(frame["lines"].as_array().unwrap().len(), 10);
+    }
+
+    #[test]
+    fn overlong_input_lines_are_dropped() {
+        // A valid message padded past the cap is dropped; the next short line still arrives.
+        let padding = " ".repeat(MAX_LINE + 10);
+        let mut bytes = format!("{{\"key\":\"x\"{padding}}}\n{{\"key\":\"q\"}}\n").into_bytes();
+        bytes.extend(format!("{{\"key\":\"y\"{padding}}}").into_bytes());
+        let mut stream = Stream::new(io::Cursor::new(bytes), Vec::new(), (24, 80));
+        assert_eq!(
+            stream.input(None).unwrap(),
+            Some(Input::Key(Key::Char('q')))
+        );
+        // The unterminated oversized tail is dropped too, then stdin is over.
+        let error = stream.input(Some(Duration::from_secs(5))).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
     }
 
     #[test]

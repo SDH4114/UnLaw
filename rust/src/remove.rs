@@ -168,8 +168,20 @@ fn without_shell_block(text: &str) -> Option<String> {
     Some(format!("{before}{after}"))
 }
 
+/// The Keychain service name; an invalid config.toml still names it in the raw
+/// document, and the default service is the last resort so the token is not left behind.
 fn keychain_service() -> String {
-    config::load().map(|config| config.string("telegram.keychain_service")).unwrap_or_default()
+    if let Ok(config) = config::load() {
+        return config.string("telegram.keychain_service");
+    }
+    let raw = config::read_document().ok().and_then(|document| {
+        let service = document.get("telegram")?.get("keychain_service")?.as_str()?;
+        (!service.is_empty()).then(|| service.to_string())
+    });
+    raw.unwrap_or_else(|| match config::defaults().lookup("telegram.keychain_service") {
+        Some(config::Value::Str(service)) => service.clone(),
+        _ => String::new(),
+    })
 }
 
 fn has_token(service: &str) -> bool {

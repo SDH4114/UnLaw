@@ -146,6 +146,19 @@ fn hidden(name: &str, args: &[String]) -> Option<i32> {
     })
 }
 
+/// System and built-in commands (not overridden by a user folder): `--dry-run`
+/// prints them instead of running them.
+fn is_core_command(name: &str) -> bool {
+    RAW_SYSTEM_COMMANDS.contains(&name)
+        || help::is_system(name)
+        || (builtin::is_builtin(name) && commands::resolve(name).is_none())
+}
+
+fn dry_run_notice(args: &[String]) -> i32 {
+    println!("DRY RUN: ul {}", util::shell_join(args));
+    0
+}
+
 fn unknown(name: &str, aliases: &[(String, Vec<String>)]) -> i32 {
     let mut available: BTreeSet<String> = help::system_names().map(str::to_string).collect();
     available.extend(commands::discover().into_keys());
@@ -210,6 +223,9 @@ pub fn main_with(argv: Vec<String>) -> i32 {
             return 0;
         }
     }
+    if dry_run && is_core_command(&name) {
+        return dry_run_notice(&args);
+    }
     let initialized = if RAW_SYSTEM_COMMANDS.contains(&name.as_str()) && name != "init" {
         layout::ensure_config_layout()
     } else {
@@ -250,6 +266,9 @@ pub fn main_with(argv: Vec<String>) -> i32 {
         }
     };
     let (name, rest) = (&expanded[0], &expanded[1..]);
+    if dry_run && is_core_command(name) {
+        return dry_run_notice(&expanded);
+    }
     if let Some(code) = system(name, rest) {
         return code;
     }

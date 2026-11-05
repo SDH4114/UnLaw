@@ -35,11 +35,20 @@ pub fn pick(title: &str, header: &[String], entries: &mut [Entry], toggle: &dyn 
     }
     let mut stdout = io::stdout();
     terminal::enable_raw_mode()?;
+    // The guard restores the terminal on every exit, also when entering the
+    // alternate screen fails halfway.
+    let _guard = TerminalGuard;
     execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
-    let result = run(&mut stdout, title, header, entries, toggle);
-    let _ = execute!(stdout, cursor::Show, terminal::LeaveAlternateScreen);
-    let _ = terminal::disable_raw_mode();
-    result
+    run(&mut stdout, title, header, entries, toggle)
+}
+
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = execute!(io::stdout(), cursor::Show, terminal::LeaveAlternateScreen);
+        let _ = terminal::disable_raw_mode();
+    }
 }
 
 fn run(out: &mut io::Stdout, title: &str, header: &[String], entries: &mut [Entry], toggle: &dyn Fn(&mut [Entry], usize)) -> io::Result<bool> {

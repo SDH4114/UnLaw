@@ -257,7 +257,9 @@ impl Document {
     /// The file's content as saved: line endings and the final newline restored.
     pub fn content(&self, final_newline: bool) -> String {
         let mut content = self.text.to_string_lf();
-        if self.final_newline || (final_newline && !self.text.is_empty()) {
+        // A buffer emptied by editing is saved as an empty file; an untouched "\n" file keeps its newline.
+        let emptied = self.text.is_empty() && self.modified();
+        if !emptied && (self.final_newline || (final_newline && !self.text.is_empty())) {
             content.push('\n');
         }
         if self.crlf {
@@ -440,6 +442,18 @@ mod tests {
         doc.save_to(&path, true).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "a\r\nbc\r\n");
         assert!(!doc.modified());
+    }
+
+    #[test]
+    fn emptied_buffer_saves_as_empty_file() {
+        let path = temp("emptied.txt");
+        fs::write(&path, "a\n").unwrap();
+        let (languages, _) = Languages::load(None);
+        let mut doc = Document::open(1, &path, &languages).unwrap();
+        doc.replace(Pos::new(0, 0), Pos::new(0, 1), "", Pos::default());
+        assert_eq!(doc.content(true), "");
+        doc.save_to(&path, true).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "");
     }
 
     #[test]

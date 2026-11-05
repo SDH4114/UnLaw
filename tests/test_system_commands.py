@@ -128,7 +128,8 @@ class SystemCommandTests(CoreTestCase):
             with self.subTest(message=message):
                 (projects / "demo.toml").write_text(text)
                 result = self.ul("templates")
-                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("skipping template demo", result.stderr)
                 self.assertIn(message, result.stderr)
         (projects / "demo.toml").unlink()
         (projects / "Bad Name.toml").write_text('path = "/tmp"\napp = "zed"\nai = false\n')

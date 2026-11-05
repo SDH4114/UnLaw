@@ -512,6 +512,17 @@ pub fn parse_value(raw: &str) -> Item {
     }
 }
 
+/// Like `parse_value`, but a key that holds text keeps the raw text
+/// (`telegram.chat_id 123456789` is a string, not an integer).
+pub fn parse_value_for(key: &str, raw: &str) -> Item {
+    let item = parse_value(raw);
+    let text_key = CHECKS.iter().any(|(name, kind, _)| *name == key && matches!(kind, Kind::Str));
+    if text_key && !matches!(item, Item::Value(toml_edit::Value::String(_))) {
+        return Item::Value(raw.into());
+    }
+    item
+}
+
 pub fn set(dotted: &str, item: Item) -> Result<()> {
     let parts: Vec<&str> = dotted.split('.').collect();
     if dotted.is_empty() || parts.iter().any(|part| part.is_empty()) {
@@ -707,5 +718,13 @@ mod tests {
         assert_eq!(storage_root_from("/abs/data"), PathBuf::from("/abs/data"));
         assert_eq!(storage_root_from("data"), config_dir().join("data"));
         assert_eq!(storage_root_from("~/stuff"), crate::util::home().join("stuff"));
+    }
+
+    #[test]
+    fn values_for_string_keys_stay_strings() {
+        assert!(matches!(parse_value_for("telegram.chat_id", "123456789"), Item::Value(toml_edit::Value::String(_))));
+        assert!(matches!(parse_value_for("core.python", "true"), Item::Value(toml_edit::Value::String(_))));
+        assert!(matches!(parse_value_for("core.command_timeout", "12"), Item::Value(toml_edit::Value::Integer(_))));
+        assert!(matches!(parse_value_for("core.color", "false"), Item::Value(toml_edit::Value::Boolean(_))));
     }
 }

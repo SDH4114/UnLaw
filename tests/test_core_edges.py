@@ -212,14 +212,17 @@ class TemplateEdgeTests(CoreTestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("Could not read template missing", result.stderr)
 
-    def test_broken_template_blocks_unknown_command_lookup(self) -> None:
+    def test_broken_template_is_skipped_with_a_warning(self) -> None:
         self.ok("init")
         (self.unlaw / "templates" / "projects" / "bad.toml").write_text("app = 1\n")
         result = self.ul("not-a-command")
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("Invalid template bad", result.stderr)
-        self.assertEqual(self.ul("list").returncode, 2)
-        self.assertEqual(self.ul("create", "template", "x", input="zed\nn\n", cwd=self.project).returncode, 2)
+        self.assertIn("Unknown command", result.stderr)
+        self.assertIn("skipping template bad", result.stderr)
+        listed = self.ul("list")
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertIn("skipping template bad", listed.stderr)
+        result = self.ul("_template-launch", "bad")
+        self.assertEqual(result.returncode, 1)
 
     def test_create_template_validates_name_and_config(self) -> None:
         result = self.ul("create", "template", "Bad Name", cwd=self.project)

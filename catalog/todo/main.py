@@ -81,12 +81,23 @@ class KanbanBoard:
     prefix: list[str]
     sections: list[Section]
     footer: list[str]
+    newline: str = "\n"
 
     @classmethod
     def parse(cls, text: str) -> KanbanBoard:
-        lines = text.splitlines()
+        # Only \n and \r\n end a line: str.splitlines() would also split on \x0b, \x0c, \x85, \u2028 and others inside a card.
+        newline = "\r\n" if "\r\n" in text else "\n"
+        lines = re.split(r"\r?\n", text)
+        first_heading = next((i for i, line in enumerate(lines) if HEADING.match(line)), None)
+        if first_heading is None:
+            raise ValueError("TODO.md has no '##' Kanban columns")
+        # The footer starts at Obsidian's `***` archive separator or at the settings block, whichever comes first.
         footer_at = next(
-            (i for i, line in enumerate(lines) if line.strip() == KANBAN_MARKER),
+            (
+                i
+                for i, line in enumerate(lines)
+                if line.strip() == KANBAN_MARKER or (i > first_heading and line.rstrip() == "***")
+            ),
             len(lines),
         )
         body, footer = lines[:footer_at], lines[footer_at:]
@@ -122,6 +133,7 @@ class KanbanBoard:
             prefix=_trim_blank_right(prefix),
             sections=sections,
             footer=_trim_blank(footer),
+            newline=newline,
         )
 
     def section(self, name: str) -> Section:
@@ -174,7 +186,7 @@ class KanbanBoard:
             lines.append("")
         if self.footer:
             lines.extend(self.footer)
-        return "\n".join(lines).rstrip() + "\n"
+        return self.newline.join(lines).rstrip() + self.newline
 
 
 def configured_board(settings: dict) -> Path:
@@ -241,6 +253,7 @@ def write_board(path: Path, board: KanbanBoard) -> None:
         with tempfile.NamedTemporaryFile(
             "w",
             encoding="utf-8",
+            newline="",
             dir=path.parent,
             prefix=".todo.",
             suffix=".tmp",
@@ -250,6 +263,11 @@ def write_board(path: Path, board: KanbanBoard) -> None:
             handle.flush()
             os.fsync(handle.fileno())
             temporary = Path(handle.name)
+        # The temporary file is created 0600; the board keeps the mode it had.
+        try:
+            os.chmod(temporary, path.stat().st_mode & 0o7777)
+        except FileNotFoundError:
+            pass
         os.replace(temporary, path)
     finally:
         if temporary is not None and temporary.exists():
@@ -326,7 +344,7 @@ def _read() -> tuple[Path, KanbanBoard]:
     path = todo_path()
     if not path.is_file():
         raise FileNotFoundError(f"Kanban file not found: {path}")
-    return path, KanbanBoard.parse(path.read_text(encoding="utf-8"))
+    return path, KanbanBoard.parse(path.read_bytes().decode("utf-8"))
 
 
 def _write(path: Path, board: KanbanBoard) -> None:

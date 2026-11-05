@@ -64,7 +64,7 @@ fn read_chunked(reader: &mut impl BufRead) -> Result<Vec<u8>, ReadError> {
             while !read_line(reader, &mut budget)?.is_empty() {}
             return Ok(body);
         }
-        if body.len() + size > MAX_BODY {
+        if body.len().checked_add(size).is_none_or(|total| total > MAX_BODY) {
             return Err(ReadError::Bad(413, "request body is larger than 64 MB".into()));
         }
         let start = body.len();
@@ -74,7 +74,14 @@ fn read_chunked(reader: &mut impl BufRead) -> Result<Vec<u8>, ReadError> {
     }
 }
 
+#[cfg(test)]
 pub fn read_request(stream: &mut impl Read) -> Result<Request, ReadError> {
+    read_request_with(stream, || Ok(()))
+}
+
+/// Like `read_request`; `interim` is called when the client sent
+/// `Expect: 100-continue`, before the body is read, to send `100 Continue`.
+pub fn read_request_with(stream: &mut impl Read, interim: impl FnOnce() -> io::Result<()>) -> Result<Request, ReadError> {
     let mut reader = BufReader::new(stream);
     let mut budget = MAX_HEAD;
     let first = read_line(&mut reader, &mut budget)?;
@@ -94,6 +101,9 @@ pub fn read_request(stream: &mut impl Read) -> Result<Request, ReadError> {
         }
     }
     let mut request = Request { method: method.to_ascii_uppercase(), path, headers, body: Vec::new() };
+    if request.header("expect").is_some_and(|value| value.eq_ignore_ascii_case("100-continue")) {
+        interim()?;
+    }
     if request.header("transfer-encoding").is_some_and(|value| value.to_ascii_lowercase().contains("chunked")) {
         request.body = read_chunked(&mut reader)?;
     } else if let Some(length) = request.header("content-length") {
@@ -132,6 +142,30 @@ static CORS: AtomicBool = AtomicBool::new(false);
 
 pub fn enable_cors() {
     CORS.store(true, Ordering::SeqCst);
+}
+
+pub fn cors_enabled() -> bool {
+    CORS.load(Ordering::SeqCst)
+}
+
+/// A browser page from another origin: its `Origin` names a host that is not
+/// this machine, or the browser says `Sec-Fetch-Site: cross-site`. Simple
+/// cross-origin POSTs need no preflight, so they must be refused here.
+/// Native clients send neither header.
+pub fn cross_origin(request: &Request) -> bool {
+    if request.header("sec-fetch-site").is_some_and(|value| value.eq_ignore_ascii_case("cross-site")) {
+        return true;
+    }
+    let Some(origin) = request.header("origin") else { return false };
+    let authority = origin.split_once("://").map(|(_, rest)| rest).unwrap_or(origin);
+    let authority = authority.split(['/', '?', '#']).next().unwrap_or("");
+    let authority = authority.rsplit_once('@').map(|(_, host)| host).unwrap_or(authority);
+    let name = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        authority.rsplit_once(':').map(|(name, _)| name).unwrap_or(authority)
+    };
+    !matches!(name.to_ascii_lowercase().as_str(), "127.0.0.1" | "localhost" | "::1")
 }
 
 fn common_headers() -> &'static str {
@@ -246,6 +280,34 @@ pub fn fetch(port: u16, method: &str, path: &str, body: Option<&[u8]>, timeout: 
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn expect_continue_calls_back_before_the_body_and_chunk_sizes_cannot_overflow() {
+        let raw = b"POST /x HTTP/1.1\r\nExpect: 100-continue\r\nContent-Length: 2\r\n\r\nhi";
+        let mut calls = 0;
+        let request = read_request_with(&mut Cursor::new(&raw[..]), || {
+            calls += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!((calls, request.body.as_slice()), (1, &b"hi"[..]));
+        let raw = b"POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nffffffffffffffff\r\n";
+        assert!(matches!(read_request(&mut Cursor::new(&raw[..])), Err(ReadError::Bad(413, _))));
+    }
+
+    #[test]
+    fn only_foreign_origins_are_cross_origin() {
+        let with = |name: &str, value: &str| Request { method: "POST".into(), path: "/".into(), headers: vec![(name.into(), value.into())], body: vec![] };
+        assert!(cross_origin(&with("Origin", "https://evil.example")));
+        assert!(cross_origin(&with("Origin", "http://localhost.evil.example:80")));
+        assert!(cross_origin(&with("Origin", "null")));
+        assert!(cross_origin(&with("Sec-Fetch-Site", "cross-site")));
+        assert!(!cross_origin(&with("Sec-Fetch-Site", "same-origin")));
+        assert!(!cross_origin(&with("Origin", "http://localhost:3000")));
+        assert!(!cross_origin(&with("Origin", "http://127.0.0.1")));
+        assert!(!cross_origin(&with("Origin", "http://[::1]:8080")));
+        assert!(!cross_origin(&Request { method: "POST".into(), path: "/".into(), headers: vec![], body: vec![] }));
+    }
 
     #[test]
     fn requests_parse_with_length_chunks_and_queries() {

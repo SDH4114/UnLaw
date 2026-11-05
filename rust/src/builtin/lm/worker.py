@@ -16,6 +16,7 @@ import fnmatch
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -448,6 +449,7 @@ class Engine:
         if current is not None and current.id == ident:
             return current
         self._free(group)
+        emit({"loaded": self.loaded_ids()})
         loaded = Loaded(ident, kind, path)
         trust = bool(spec.get("trust_remote_code"))
         started = time.time()
@@ -1324,6 +1326,12 @@ def serve() -> int:
         for loaded in list(engine.slots.values()):
             if loaded.server is not None:
                 loaded.server.process.kill()
+        # Servers still loading and generator children are not in any slot: the
+        # worker leads its own process group, so end the whole group.
+        try:
+            os.killpg(os.getpgrp(), signal.SIGKILL)
+        except OSError:
+            pass
         os._exit(0)
 
     threading.Thread(target=reader, daemon=True).start()

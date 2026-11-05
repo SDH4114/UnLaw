@@ -222,6 +222,21 @@ fn comments_join_case_increment() {
 }
 
 #[test]
+fn increment_refuses_huge_numbers_and_overflow() {
+    let huge = "x 99999999999999999999";
+    let ed = run(huge, "<A-a>");
+    assert_eq!(content(&ed), huge);
+    assert!(ed.message.is_some());
+    let max = "n 9223372036854775807";
+    assert_eq!(content(&run(max, "<A-a>")), max);
+    assert_eq!(content(&run(max, "<A-x>")), "n 9223372036854775806");
+    let min = "n -9223372036854775807";
+    assert_eq!(content(&run(min, "2<A-x>")), min);
+    let hex = "0xFFFFFFFFFFFFFFFFFF";
+    assert_eq!(content(&run(hex, "<A-a>")), hex);
+}
+
+#[test]
 fn windows_buffers_and_jumps() {
     let mut ed = editor("a\nb\nc\nd\ne\nf");
     keys(&mut ed, "<C-w>v");

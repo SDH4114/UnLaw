@@ -58,6 +58,7 @@ def storage_path(*parts: str) -> Path:
 import fcntl
 import hashlib
 import json
+import math
 import os
 import select
 import shutil
@@ -194,7 +195,10 @@ def _seconds(text: str) -> float:
     try:
         value = 0.0
         for part in text.strip().split(":"):
-            value = value * 60 + float(part)
+            number = float(part)
+            if not math.isfinite(number) or number < 0:
+                raise ValueError(part)
+            value = value * 60 + number
     except ValueError as error:
         raise CaptureError(f"not a time: {text!r} (use seconds or m:ss)") from error
     if value < 0 or len(text.split(":")) > 3:

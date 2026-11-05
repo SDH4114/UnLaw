@@ -631,7 +631,7 @@ pub fn create_video(service: &Arc<Service>, request: &Request, stream: &mut TcpS
 
 /// `GET /v1/videos/{id}` and `GET /v1/videos/{id}/content`.
 pub fn video(request: &Request, stream: &mut TcpStream) -> io::Result<()> {
-    let rest = request.path.trim_start_matches("/v1/videos/");
+    let rest = request.path.trim_start_matches("/v1/videos/").trim_end_matches('/');
     let (id, content) = match rest.strip_suffix("/content") {
         Some(id) => (id, true),
         None => (rest, false),

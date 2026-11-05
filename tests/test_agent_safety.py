@@ -162,6 +162,57 @@ class AgentSafetyTests(unittest.TestCase):
                     "reading a 200 KB excerpt must not allocate the whole 16 MB file",
                 )
 
+    def test_add_and_remove_keep_entries_the_server_cannot_read(self) -> None:
+        schedule = agent.Schedule()
+        schedule.path.parent.mkdir(parents=True, exist_ok=True)
+        broken = [{"id": 5, "prompt": "bad id"}, "junk"]
+        later = (agent.now() + dt.timedelta(hours=2)).isoformat()
+        good = {"id": "aaaaaa", "prompt": "keep", "next": later, "repeat": "once"}
+        schedule.path.write_text(json.dumps({"jobs": [*broken, good]}))
+        added = schedule.add("new", agent.now() + dt.timedelta(hours=1), "once", "terminal")
+        stored = json.loads(schedule.path.read_text())["jobs"]
+        for entry in broken:
+            self.assertIn(entry, stored)
+        self.assertEqual({job["id"] for job in schedule.jobs()}, {"aaaaaa", added["id"]})
+        schedule.remove(added["id"])
+        stored = json.loads(schedule.path.read_text())["jobs"]
+        for entry in broken:
+            self.assertIn(entry, stored)
+        self.assertEqual([job["id"] for job in schedule.jobs()], ["aaaaaa"])
+
+    def test_taking_due_jobs_keeps_entries_the_server_cannot_read(self) -> None:
+        schedule = agent.Schedule()
+        schedule.path.parent.mkdir(parents=True, exist_ok=True)
+        broken = {"id": 5, "prompt": "bad id"}
+        past = (agent.now() - dt.timedelta(minutes=1)).isoformat()
+        schedule.path.write_text(json.dumps({"jobs": [broken, {"id": "bbbbbb", "prompt": "due", "next": past}]}))
+        self.assertEqual([job["id"] for job in schedule.take_due(agent.now())], ["bbbbbb"])
+        self.assertEqual(json.loads(schedule.path.read_text())["jobs"], [broken])
+
+
+    def test_protected_paths_ignore_letter_case_and_cover_common_tokens(self) -> None:
+        home = Path.home().resolve()
+        guard = agent.protected()
+        blocked = [
+            home / ".SSH" / "id_ed25519",
+            home / "notes" / ".Env.local",
+            home / ".AWS" / "credentials",
+            agent.config_dir().resolve().parent / agent.config_dir().name.upper() / "CONFIG.toml",
+            Path(str(guard[1]).upper()) / "audit.log",
+            home / ".config" / "GH" / "hosts.yml",
+            home / ".cache" / "huggingface" / "token",
+            home / ".docker" / "config.json",
+            home / ".npmrc",
+            home / ".zsh_history",
+            home / "backup" / "ID_RSA.old",
+            home / "Library" / "keychains" / "login.keychain-db",
+        ]
+        for path in blocked:
+            with self.subTest(path=str(path)):
+                self.assertIsNotNone(agent.denied(path, guard))
+        for path in (home / "notes" / "ssh-guide.md", home / ".config" / "ghostty" / "config", home / "history.md"):
+            with self.subTest(path=str(path)):
+                self.assertIsNone(agent.denied(path, guard))
 
 if __name__ == "__main__":
     unittest.main()

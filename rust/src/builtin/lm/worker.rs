@@ -45,6 +45,7 @@ impl Failure {
         match self.code.as_str() {
             "model_not_found" | "not_found" => 404,
             "invalid_request" | "unsupported_model" | "bad_image" => 400,
+            "method_not_allowed" => 405,
             "out_of_memory" => 507,
             "worker_crashed" | "engine_unavailable" => 503,
             _ => 500,

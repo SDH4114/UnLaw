@@ -25,6 +25,8 @@ Usage:
 Create options:
   -f, --format zip|7z|rar|tar.zst|tar.xz|tar.gz   Also: zst, xz, gz, tgz, txz, tzst
   -o, --output <file|dir>   Archive path; its extension selects the format
+  --best                    Smallest archive: 7z at level 9 (tar.xz without
+                            7-Zip); -f/-o still pick the format
   -0 ... -9, -l <level>     Compression level (default: zip.level = max = 7)
   --store|--fastest|--fast|--normal|--max|--ultra   Named levels 0, 1, 3, 5, 7, 9
   -p, --password            Ask for a password: AES-256 (7z/rar also hide file names)
@@ -39,20 +41,22 @@ folder named after the archive. Existing files are never overwritten: a
 " 2" suffix is added. Encrypted archives ask for their password.
 Levels: 0 stores without compression (zstd/gzip use their fastest), 1-3 favor
 speed, 5 is balanced, 7 gives near-best size, 9 is the slowest and smallest
-(7z/zip -mx9, rar -m5, xz -9, zstd --ultra -22). If at least 90% of the input is
+(7z/zip -mx9, rar -m5, xz -9e, zstd --ultra -22). If at least 90% of the input is
 already-compressed media (jpg, heic, mp4, zip...) and no level is given, level 1
 is used: stronger levels only cost time there.
+Which format: zip opens everywhere; 7z is usually 2x smaller on text and
+code; tar.zst is the fastest to pack and unpack; tar.xz is close to 7z.
 Reads: zip, 7z, rar, tar(.gz/.bz2/.xz/.zst), gz, bz2, xz, zst, cab, iso, cpio, xar.
 Settings: zip.format (zip), zip.level (max), zip.keep_junk (false).
 Dependencies: 7-Zip (7z/rar reading, AES zip; falls back to zip/bsdtar),
-zstd for .zst, xz for single .xz files without 7-Zip, rar for creating .rar
+zstd for .zst, xz (faster, multi-threaded .tar.xz; else bsdtar), rar for creating .rar
 (brew install sevenzip zstd xz; brew install --cask rar).
 Examples:
   ul zip project
   ul zip photo.png notes/ -o ~/Desktop/pack.7z
   ul zip project -f 7z -p
   ul zip project -f zst --fast
-  ul zip project -f 7z -9
+  ul zip project --best
   ul zip project.zip
   ul zip x backup.rar -o ~/Downloads
   ul zip ls backup.7z
@@ -474,10 +478,11 @@ fn create_commands(
                 progress(),
                 "-y".into(),
             ];
+            command.push("-mmt=on".into());
             if format == "zip" {
                 command.push("-mcu=on".into());
             } else {
-                command.extend(["-ms=on".into(), "-mmt=on".into()]);
+                command.push("-ms=on".into());
             }
             if options.password {
                 let flags: [&str; 2] = if format == "zip" { ["-p", "-mem=AES256"] } else { ["-p", "-mhe=on"] };
@@ -532,11 +537,12 @@ fn create_commands(
     if options.password {
         return Err("tar formats cannot be encrypted; use --format zip, 7z or rar.".into());
     }
-    let output = if format == "tar.zst" { "-".into() } else { path_string(temporary) };
+    let compressor = tar_compressor(format, level, temporary, seven_zip)?;
+    let output = if compressor.is_some() { "-".into() } else { path_string(temporary) };
     let mut tar_command = vec![tar(), "-cf".into(), output, "--no-mac-metadata".into()];
-    if format == "tar.xz" {
+    if compressor.is_none() && format == "tar.xz" {
         tar_command.extend(["-J".into(), "--options".into(), format!("xz:compression-level={level},xz:threads=0")]);
-    } else if format == "tar.gz" {
+    } else if compressor.is_none() && format == "tar.gz" {
         tar_command.extend(["-z".into(), "--options".into(), format!("gzip:compression-level={}", level.max(1))]);
     }
     if !options.keep_junk {
@@ -548,21 +554,45 @@ fn create_commands(
         let parent = source.parent().map(path_string).unwrap_or_else(|| "/".into());
         tar_command.extend(["-C".into(), parent, operand_name(source)]);
     }
-    if format == "tar.zst" {
-        if which("zstd").is_none() {
-            return Err("tar.zst needs zstd. Install: brew install zstd".into());
+    Ok(match compressor {
+        Some(compressor) => vec![tar_command, compressor],
+        None => vec![tar_command],
+    })
+}
+
+/// The program a tar stream is piped into, or None when bsdtar compresses
+/// by itself. Measured on a 30 MB source tree: zstd --long=27 is 7-9% smaller
+/// at the same speed (and still decodes with default settings everywhere);
+/// xz 5.x with -T0 is faster than bsdtar's built-in liblzma and -9e is
+/// smaller; 7-Zip's deflate is ~5% smaller than zlib but ~6x slower, so it
+/// is used only for level 9.
+fn tar_compressor(format: &str, level: u8, temporary: &Path, seven_zip: Option<&Path>) -> Result<Option<Vec<String>>> {
+    match format {
+        "tar.zst" => {
+            if which("zstd").is_none() {
+                return Err("tar.zst needs zstd. Install: brew install zstd".into());
+            }
+            let native = ZSTD_LEVELS[level as usize];
+            let mut zstd = vec!["zstd".to_string()];
+            if native > 19 {
+                zstd.push("--ultra".into());
+            }
+            zstd.extend([format!("-{native}"), "--long=27".into()]);
+            zstd.extend(["-T0", "-q", "-c"].map(String::from));
+            Ok(Some(zstd))
         }
-        let native = ZSTD_LEVELS[level as usize];
-        let mut zstd = vec!["zstd".to_string()];
-        if native > 19 {
-            zstd.extend(["--ultra".into(), format!("-{native}"), "--long=27".into()]);
-        } else {
-            zstd.push(format!("-{native}"));
-        }
-        zstd.extend(["-T0", "-q", "-c"].map(String::from));
-        return Ok(vec![tar_command, zstd]);
+        "tar.xz" => Ok(which("xz").map(|xz| {
+            let preset = if level >= 9 { "-9e".to_string() } else { format!("-{level}") };
+            vec![path_string(&xz), preset, "-T0".into(), "-q".into(), "-c".into()]
+        })),
+        "tar.gz" if level >= 9 => Ok(seven_zip.map(|seven| {
+            let mut words = vec![path_string(seven)];
+            words.extend(["a", "-tgzip", "-mx=9", "-si", "-bso0", "-bsp0", "-y"].map(String::from));
+            words.push(path_string(temporary));
+            words
+        })),
+        _ => Ok(None),
     }
-    Ok(vec![tar_command])
 }
 
 fn command_for(words: &[String]) -> Command {
@@ -586,12 +616,17 @@ fn feed(command: &mut Command, input: Option<&str>) -> io::Result<i32> {
 }
 
 fn run_create(commands: &[Vec<String>], format: &str, temporary: &Path, sources: &[PathBuf], password: Option<&str>) -> io::Result<i32> {
-    if format == "tar.zst" {
-        let output = File::options().write(true).create_new(true).open(temporary)?;
+    if format.starts_with("tar.") && commands.len() == 2 {
+        let writes_file = commands[1].iter().any(|word| word == "-si");
         let _guard = shield();
         let mut producer = spawn_shielded(command_for(&commands[0]).stdout(Stdio::piped()))?;
         let pipe = producer.stdout.take().unwrap();
-        let mut compressor = spawn_shielded(command_for(&commands[1]).stdin(pipe).stdout(output))?;
+        let mut command = command_for(&commands[1]);
+        command.stdin(pipe);
+        if !writes_file {
+            command.stdout(File::options().write(true).create_new(true).open(temporary)?);
+        }
+        let mut compressor = spawn_shielded(&mut command)?;
         let compressed = exit_code(compressor.wait()?);
         let archived = exit_code(producer.wait()?);
         return Ok(if archived != 0 { archived } else { compressed });
@@ -725,7 +760,7 @@ impl Codec {
         let found = match self {
             Codec::Gz => named("gzip").map(|tool| (tool, vec!["-dc"], vec!["-t"])),
             Codec::Bz2 => named("bzip2").map(|tool| (tool, vec!["-dc"], vec!["-t"])),
-            Codec::Zst => named("zstd").map(|tool| (tool, vec!["-d", "-q", "-c"], vec!["-t", "-q"])),
+            Codec::Zst => named("zstd").map(|tool| (tool, vec!["-d", "-q", "-c", "--long=31"], vec!["-t", "-q", "--long=31"])),
             Codec::Xz => named("xz")
                 .map(|tool| (tool, vec!["-dc"], vec!["-t"]))
                 .or_else(|| seven_zip().map(|seven| (path_string(&seven), vec!["e", "-so", "-bso0", "-bsp0"], vec!["t", "-bso0", "-bsp0"]))),
@@ -817,6 +852,23 @@ fn decompress_stream(archive: &Path, codec: Codec, destination: Option<&Path>) -
     })
 }
 
+/// Run bsdtar on `archive`, piping a zstd-compressed tar through `zstd -d
+/// --long=31` first: bsdtar's own zstd support refuses windows above 128 MiB
+/// that `zstd --long=31` archives use.
+fn run_tar(archive: &Path, mut tar_command: Command) -> io::Result<i32> {
+    let zstd = read_head(archive).ok().filter(|head| head.starts_with(b"\x28\xb5\x2f\xfd")).and_then(|_| Codec::Zst.tool().ok());
+    let Some((tool, args, _)) = zstd else {
+        return status_shielded(tar_command.arg("-f").arg(archive)).map(exit_code);
+    };
+    let _guard = shield();
+    let mut producer = spawn_shielded(Command::new(tool).args(args).arg(archive).stdin(Stdio::null()).stdout(Stdio::piped()))?;
+    let pipe = producer.stdout.take().unwrap();
+    let mut reader = spawn_shielded(tar_command.arg("-f").arg("-").stdin(pipe))?;
+    let read = exit_code(reader.wait()?);
+    let decompressed = exit_code(producer.wait()?);
+    Ok(if decompressed != 0 && read == 0 { decompressed } else { read })
+}
+
 fn extract_into(archive: &Path, kind: Kind, directory: &Path, password: Option<&str>) -> Result<i32> {
     if let Kind::Stream(codec) = kind {
         return decompress_stream(archive, codec, Some(&directory.join(archive_stem(archive))));
@@ -832,9 +884,11 @@ fn extract_into(archive: &Path, kind: Kind, directory: &Path, password: Option<&
                 Some(secret) => feed(&mut command, Some(&format!("{secret}\n"))).map_err(io_error),
             }
         }
-        _ => status_shielded(Command::new(tar()).arg("-xf").arg(archive).arg("-C").arg(directory))
-            .map(exit_code)
-            .map_err(io_error),
+        _ => {
+            let mut command = Command::new(tar());
+            command.arg("-x").arg("-C").arg(directory);
+            run_tar(archive, command).map_err(io_error)
+        }
     }
 }
 
@@ -930,11 +984,11 @@ fn inspect(name: &str, test: bool) -> Result<i32> {
         (Kind::Stream(codec), _) => decompress_stream(&archive, codec, None)?,
         (Kind::Tar, _) | (_, None) => {
             let mut command = Command::new(tar());
-            command.arg(if test { "-tf" } else { "-tvf" }).arg(&archive);
+            command.arg(if test { "-t" } else { "-tv" });
             if test {
                 command.stdout(Stdio::null());
             }
-            status_shielded(&mut command).map(exit_code).map_err(io_error)?
+            run_tar(&archive, command).map_err(io_error)?
         }
         (_, Some(seven)) => {
             let password = password_for(kind, &archive)?;
@@ -973,6 +1027,7 @@ struct Options {
     password: bool,
     keep_junk: bool,
     here: bool,
+    best: bool,
 }
 
 fn parse_options(args: &[String]) -> std::result::Result<Options, String> {
@@ -1002,6 +1057,7 @@ fn parse_options(args: &[String]) -> std::result::Result<Options, String> {
             "-p" | "--password" => options.password = true,
             "--keep-junk" => options.keep_junk = true,
             "--here" => options.here = true,
+            "--best" => options.best = true,
             _ => {
                 let named = flag.strip_prefix("--").and_then(|name| LEVEL_NAMES.iter().find(|(level, _)| *level == name));
                 let numbered = flag.strip_prefix('-').filter(|digit| digit.len() == 1 && digit.as_bytes()[0].is_ascii_digit());
@@ -1061,6 +1117,7 @@ fn dispatch(args: &[String], config: &Config) -> Result<i32> {
             ("--format", options.format.is_some()),
             ("a level", options.level.is_some()),
             ("--password", options.password),
+            ("--best", options.best),
         ]
         .iter()
         .filter(|(_, used)| *used)
@@ -1100,10 +1157,17 @@ fn dispatch(args: &[String], config: &Config) -> Result<i32> {
         }
     }
     let level = options.level.as_deref().map(parse_level).transpose()?;
+    if options.best && level.is_some() {
+        return Err("--best already means level 9; drop the other level.".into());
+    }
+    // --best: the smallest archive we can make. 7z (LZMA2, solid) beats every
+    // other format; without 7-Zip, tar.xz is the next best.
+    let best_format = options.best.then(|| if seven_zip().is_some() { "7z" } else { "tar.xz" });
+    let level = if options.best { Some(9) } else { level };
     create(
         &options.paths,
         options.output.as_deref(),
-        format.or(inferred).unwrap_or(settings.format),
+        format.or(inferred).or(best_format).unwrap_or(settings.format),
         level,
         settings.level,
         options.password,
@@ -1189,6 +1253,7 @@ mod tests {
         assert!(parse_options(&words(&["-o"])).unwrap_err().contains("expected one argument"));
         assert!(parse_options(&words(&["--bogus"])).unwrap_err().contains("unrecognized"));
         assert!(parse_options(&words(&["-12"])).is_err());
+        assert!(parse_options(&words(&["a", "--best"])).unwrap().best);
     }
 
     #[test]
@@ -1213,8 +1278,16 @@ mod tests {
         let gz = &make("tar.gz", 0, false, seven).unwrap()[0];
         assert!(gz.contains(&"gzip:compression-level=1".to_string()));
         assert!(gz.windows(3).any(|w| w == ["-C", "/work", "project"]));
-        let xz = &make("tar.xz", 9, false, seven).unwrap()[0];
-        assert!(xz.contains(&"xz:compression-level=9,xz:threads=0".to_string()));
+        let xz = make("tar.xz", 9, false, seven).unwrap();
+        if which("xz").is_some() {
+            assert_eq!(&xz[1][1..3], &words(&["-9e", "-T0"])[..]);
+            assert_eq!(xz[0][2], "-");
+        } else {
+            assert!(xz[0].contains(&"xz:compression-level=9,xz:threads=0".to_string()));
+        }
+        let ultra_gz = make("tar.gz", 9, false, seven).unwrap();
+        assert_eq!(ultra_gz[1][1..4], words(&["a", "-tgzip", "-mx=9"])[..]);
+        assert_eq!(ultra_gz[1].last().unwrap(), "/work/.tmp/project.x");
         assert!(make("tar.gz", 5, true, seven).unwrap_err().contains("cannot be encrypted"));
     }
 

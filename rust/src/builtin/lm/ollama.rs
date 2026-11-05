@@ -156,9 +156,47 @@ fn ollama_tool_calls(done: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// `keep_alive` of zero: a number, or a zero duration such as "0" or "0s".
+fn keep_alive_zero(value: &Value) -> bool {
+    match value {
+        Value::Number(number) => number.as_f64() == Some(0.0),
+        Value::String(text) => {
+            let digits = text.trim().trim_end_matches(|c: char| c.is_ascii_alphabetic());
+            !digits.is_empty() && digits.parse::<f64>().is_ok_and(|n| n == 0.0)
+        }
+        _ => false,
+    }
+}
+
+/// Ollama's unload: `keep_alive: 0` with nothing to answer.
+fn is_unload(body: &Value, generate: bool) -> bool {
+    let empty = if generate {
+        body["prompt"].as_str().unwrap_or("").is_empty() && body["images"].is_null()
+    } else {
+        body["messages"].as_array().is_none_or(|messages| messages.is_empty())
+    };
+    empty && keep_alive_zero(&body["keep_alive"])
+}
+
 /// `/api/chat`, and with `generate` the prompt-based `/api/generate`.
 pub fn chat(service: &Service, request: &Request, stream: &mut TcpStream, generate: bool) -> io::Result<()> {
     let started = Instant::now();
+    if let Ok(body) = parse_body(request) {
+        if is_unload(&body, generate) {
+            let model = match service.resolve(body["model"].as_str(), Purpose::Chat) {
+                Ok(model) => model,
+                Err(failure) => return send_error(stream, &failure),
+            };
+            service.unload(&model);
+            let mut last = json!({"model": model.id, "created_at": timestamp(), "done": true, "done_reason": "unload"});
+            if generate {
+                last["response"] = json!("");
+            } else {
+                last["message"] = json!({"role": "assistant", "content": ""});
+            }
+            return http::respond_json(stream, 200, &last);
+        }
+    }
     let prepared = (|| {
         let body = parse_body(request)?;
         let model = service.resolve(body["model"].as_str(), Purpose::Chat)?;
@@ -334,6 +372,18 @@ mod tests {
         let stamp = timestamp();
         assert_eq!(stamp.len(), 20);
         assert!(stamp.ends_with('Z') && stamp.as_bytes()[10] == b'T');
+    }
+
+    #[test]
+    fn keep_alive_zero_with_nothing_to_say_is_an_unload() {
+        assert!(is_unload(&json!({"prompt": "", "keep_alive": 0}), true));
+        assert!(is_unload(&json!({"keep_alive": "0"}), true));
+        assert!(is_unload(&json!({"keep_alive": "0s"}), true));
+        assert!(is_unload(&json!({"messages": [], "keep_alive": 0}), false));
+        assert!(!is_unload(&json!({"prompt": "hi", "keep_alive": 0}), true));
+        assert!(!is_unload(&json!({"prompt": ""}), true));
+        assert!(!is_unload(&json!({"prompt": "", "keep_alive": "5m"}), true));
+        assert!(!is_unload(&json!({"messages": [{"role": "user", "content": "x"}], "keep_alive": 0}), false));
     }
 
     #[test]

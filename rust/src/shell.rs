@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::config::Config;
+use crate::util::{atomic_write, read_to_string_or_empty};
 use crate::workspace::{self, Template};
 
 pub const ZSH_BLOCK_START: &str = "# >>> Unlaw shell integration >>>";
@@ -135,7 +136,7 @@ fn managed_block() -> String {
 
 /// Insert or replace the managed block; returns whether the file changed.
 pub fn install_zsh_integration(zshrc: &Path) -> std::io::Result<bool> {
-    let existing = fs::read_to_string(zshrc).unwrap_or_default();
+    let existing = read_to_string_or_empty(zshrc)?;
     let block = managed_block();
     let replaced = existing.find(ZSH_BLOCK_START).and_then(|start| {
         let end = existing[start..].find(ZSH_BLOCK_END)? + start + ZSH_BLOCK_END.len();
@@ -154,10 +155,7 @@ pub fn install_zsh_integration(zshrc: &Path) -> std::io::Result<bool> {
     if updated == existing {
         return Ok(false);
     }
-    if let Some(parent) = zshrc.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(zshrc, updated)?;
+    atomic_write(zshrc, &updated, ".zshrc.")?;
     Ok(true)
 }
 
@@ -235,5 +233,29 @@ mod tests {
     fn missing_project_directories_are_not_launched() {
         let template = Template { name: "gone".into(), path: "/nonexistent/project".into(), app: "zed".into(), ai: true };
         assert!(launch(&template, None).unwrap_err().0.contains("does not exist"));
+    }
+
+    #[test]
+    fn an_unreadable_zshrc_is_never_overwritten() {
+        let directory = scratch("badzshrc");
+        let zshrc = directory.join(".zshrc");
+        fs::write(&zshrc, [b'a', 0xff, 0xfe, b'\n']).unwrap();
+        assert!(install_zsh_integration(&zshrc).is_err());
+        assert_eq!(fs::read(&zshrc).unwrap(), vec![b'a', 0xff, 0xfe, b'\n']);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_symlinked_zshrc_stays_a_symlink() {
+        let directory = scratch("linkzshrc");
+        let real = directory.join("dotfiles/zshrc");
+        fs::create_dir_all(real.parent().unwrap()).unwrap();
+        fs::write(&real, "export A=1\n").unwrap();
+        let link = directory.join(".zshrc");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert!(install_zsh_integration(&link).unwrap());
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(fs::read_to_string(&real).unwrap().contains(ZSH_BLOCK_START));
+        fs::remove_dir_all(directory).unwrap();
     }
 }

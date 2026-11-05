@@ -10,9 +10,30 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use sha2::{Digest, Sha256};
+
+/// Follow symlinks (also dangling ones) to the path that really holds the file.
+fn resolve_symlinks(path: &Path) -> io::Result<PathBuf> {
+    let mut current = path.to_path_buf();
+    for _ in 0..40 {
+        match fs::symlink_metadata(&current) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let target = fs::read_link(&current)?;
+                current = current.parent().unwrap_or(Path::new(".")).join(target);
+            }
+            _ => return Ok(current),
+        }
+    }
+    Err(io::Error::other(format!("too many levels of symbolic links: {}", path.display())))
+}
+
 /// Write through a temporary file in the same directory, fsync, then rename.
+/// A symlink is written through to its target and an existing file keeps its mode.
 pub fn atomic_write(destination: &Path, text: &str, prefix: &str) -> io::Result<()> {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let destination = resolve_symlinks(destination)?;
+    let destination = destination.as_path();
+    let mode = fs::metadata(destination).ok().map(|meta| meta.permissions().mode() & 0o7777);
     let directory = destination.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(directory)?;
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
@@ -30,6 +51,9 @@ pub fn atomic_write(destination: &Path, text: &str, prefix: &str) -> io::Result<
     };
     let result = (|| {
         handle.write_all(text.as_bytes())?;
+        if let Some(mode) = mode {
+            handle.set_permissions(fs::Permissions::from_mode(mode))?;
+        }
         handle.sync_all()?;
         fs::rename(&temporary, destination)
     })();
@@ -37,6 +61,28 @@ pub fn atomic_write(destination: &Path, text: &str, prefix: &str) -> io::Result<
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+/// Read a text file; a missing file is empty, any other failure (including
+/// non-UTF-8 content) is an error so callers never overwrite what they could not read.
+pub fn read_to_string_or_empty(path: &Path) -> io::Result<String> {
+    match fs::read_to_string(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(io::Error::new(error.kind(), format!("could not read {}: {error}", path.display()))),
+        Ok(text) => Ok(text),
+    }
+}
+
+/// Delete a file; one that is already gone (a concurrent first run) is fine.
+pub fn remove_file_if_exists(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
+
+pub fn sha256_hex(data: impl AsRef<[u8]>) -> String {
+    Sha256::digest(data.as_ref()).iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Create `destination` atomically, failing if it already exists.
@@ -355,5 +401,54 @@ mod tests {
         assert!((ratio(&chars("commands"), &chars("comands")) - 0.9333).abs() < 0.001);
         let names: Vec<String> = ["commands", "completion", "config"].iter().map(|s| s.to_string()).collect();
         assert_eq!(close_matches("comands", &names, 1, 0.55), vec!["commands"]);
+    }
+
+    #[test]
+    fn atomic_write_writes_through_a_symlink_and_keeps_the_mode() {
+        let directory = scratch("writelink");
+        let real = directory.join("real/.zshrc");
+        fs::create_dir_all(real.parent().unwrap()).unwrap();
+        fs::write(&real, "old").unwrap();
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o600)).unwrap();
+        let link = directory.join(".zshrc");
+        std::os::unix::fs::symlink("real/.zshrc", &link).unwrap();
+        atomic_write(&link, "new", ".zshrc.").unwrap();
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&real).unwrap(), "new");
+        assert_eq!(fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o600);
+        let plain = directory.join("plain");
+        fs::write(&plain, "a").unwrap();
+        fs::set_permissions(&plain, fs::Permissions::from_mode(0o640)).unwrap();
+        atomic_write(&plain, "b", ".plain.").unwrap();
+        assert_eq!(fs::metadata(&plain).unwrap().permissions().mode() & 0o777, 0o640);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn missing_files_read_as_empty_but_other_errors_are_kept() {
+        let directory = scratch("readempty");
+        assert_eq!(read_to_string_or_empty(&directory.join("none")).unwrap(), "");
+        let binary = directory.join("binary");
+        fs::write(&binary, [0xff, 0xfe, b'x']).unwrap();
+        assert_eq!(read_to_string_or_empty(&binary).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn remove_file_if_exists_ignores_only_a_missing_file() {
+        let directory = scratch("removefile");
+        let file = directory.join("a");
+        fs::write(&file, "x").unwrap();
+        remove_file_if_exists(&file).unwrap();
+        remove_file_if_exists(&file).unwrap();
+        assert!(remove_file_if_exists(&directory).is_err());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn sha256_hex_takes_text_or_bytes() {
+        let digest = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+        assert_eq!(sha256_hex("hello"), digest);
+        assert_eq!(sha256_hex(b"hello"), digest);
     }
 }

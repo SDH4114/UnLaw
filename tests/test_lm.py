@@ -528,6 +528,57 @@ class LmServerTests(LmTestCase):
         status, body = self.call("/ul/job", {"model": "mlx-community/Eye-4bit", "job": {"op": "chat", "messages": [{"role": "user", "content": "x"}]}}, headers={"X-Unlaw-CLI": "1"})
         self.assertIn('"text": "hmm local"'.replace(" ", ""), body.decode().replace(" ", ""))
 
+    def test_cross_origin_pages_cannot_drive_models(self) -> None:
+        chat = {"model": "tiny", "messages": [{"role": "user", "content": "x"}]}
+        for headers in ({"Origin": "https://evil.example"}, {"Sec-Fetch-Site": "cross-site"}, {"Origin": "http://127.0.0.1.evil.example"}):
+            for path, body in (("/v1/chat/completions", chat), ("/api/generate", {"model": "tiny", "prompt": "x"})):
+                status, answer = self.call(path, body, headers={"Content-Type": "text/plain", **headers})
+                self.assertEqual((status, json.loads(answer)["error"]["type"]), (403, "forbidden"), headers)
+        for origin in ("http://localhost:3000", "http://127.0.0.1:5173", "http://[::1]:8080"):
+            status, _ = self.call("/v1/chat/completions", chat, headers={"Origin": origin})
+            self.assertEqual(status, 200, origin)
+
+    def test_keep_alive_zero_unloads_instead_of_loading(self) -> None:
+        loaded = lambda: [m["name"] for m in json.loads(self.call("/api/ps")[1])["models"]]
+        self.assertEqual(loaded(), [])
+        status, body = self.call("/api/generate", {"model": "tiny", "keep_alive": "5m"})
+        self.assertEqual((status, json.loads(body)["done_reason"]), (200, "load"))
+        self.assertEqual(loaded(), ["mlx-community/Tiny-4bit"])
+        for keep in (0, "0"):
+            status, body = self.call("/api/generate", {"model": "tiny", "keep_alive": keep})
+            answer = json.loads(body)
+            self.assertEqual((status, answer["done"], answer["done_reason"]), (200, True, "unload"))
+            self.assertEqual(loaded(), [])
+            self.call("/api/generate", {"model": "tiny"})
+            self.assertEqual(loaded(), ["mlx-community/Tiny-4bit"])
+        status, body = self.call("/api/chat", {"model": "tiny", "messages": [], "keep_alive": 0})
+        self.assertEqual(json.loads(body)["done_reason"], "unload")
+        self.assertEqual(loaded(), [])
+        status, body = self.call("/api/generate", {"model": "tiny", "keep_alive": 0})
+        self.assertEqual(json.loads(body)["done_reason"], "unload")
+        self.assertEqual(loaded(), [])
+
+    def test_wrong_method_is_405_and_trailing_slash_video_id_works(self) -> None:
+        request = urllib.request.Request(f"http://127.0.0.1:{self.port}/v1/models", data=b"{}", method="DELETE")
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request, timeout=10)
+        self.assertEqual(caught.exception.code, 405)
+        status, body = self.call("/v1/videos/nope/")
+        self.assertEqual(status, 404)
+        self.assertIn("No video job nope", json.loads(body)["error"]["message"])
+
+    def test_expect_continue_is_answered_before_the_body(self) -> None:
+        payload = json.dumps({"model": "tiny", "messages": [{"role": "user", "content": "x"}]}).encode()
+        with socket.create_connection(("127.0.0.1", self.port), timeout=10) as client:
+            head = f"POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nExpect: 100-continue\r\nContent-Length: {len(payload)}\r\n\r\n"
+            client.sendall(head.encode())
+            self.assertEqual(client.recv(64), b"HTTP/1.1 100 Continue\r\n\r\n")
+            client.sendall(payload)
+            data = b""
+            while chunk := client.recv(65536):
+                data += chunk
+        self.assertTrue(data.startswith(b"HTTP/1.1 200"))
+
     def test_browser_cannot_submit_local_file_jobs(self) -> None:
         output = self.root / "outside-storage.png"
         output.write_text("keep")

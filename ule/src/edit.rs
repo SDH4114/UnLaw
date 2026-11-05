@@ -663,12 +663,18 @@ pub fn increment(ed: &mut Editor, delta: i64) {
     let text: String = chars[begin..end].iter().collect();
     let replacement = if hex {
         let digits = &text[2..];
-        let value = i64::from_str_radix(digits, 16).unwrap_or(0).wrapping_add(delta);
+        let Some(value) = i64::from_str_radix(digits, 16).ok().and_then(|value| value.checked_add(delta)) else {
+            ed.error("number too large");
+            return;
+        };
         let upper = digits.chars().any(|c| c.is_ascii_uppercase());
         let formatted = if upper { format!("{:X}", value.max(0)) } else { format!("{:x}", value.max(0)) };
         format!("{}{:0>width$}", &text[..2], formatted, width = digits.len())
     } else {
-        let value = text.parse::<i64>().unwrap_or(0).wrapping_add(delta);
+        let Some(value) = text.parse::<i64>().ok().and_then(|value| value.checked_add(delta)) else {
+            ed.error("number too large");
+            return;
+        };
         let digits = text.trim_start_matches('-');
         if digits.len() > 1 && digits.starts_with('0') {
             let sign = if value < 0 { "-" } else { "" };
@@ -705,13 +711,15 @@ pub fn move_lines(ed: &mut Editor, first: usize, last: usize, down: bool) -> boo
 
 /// Replaces text without touching the cursor's undo position; used for LSP edits.
 pub fn apply_edits(ed: &mut Editor, doc: usize, mut edits: Vec<(Pos, Pos, String)>) {
-    edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
+    // Back to front; at one position the later entry goes after the earlier one (LSP), so it is applied first.
+    let mut edits: Vec<_> = edits.drain(..).enumerate().collect();
+    edits.sort_by_key(|(index, edit)| (std::cmp::Reverse(edit.0), std::cmp::Reverse(*index)));
     let cursor = ed.views.values().find(|view| view.doc == doc).map_or(Pos::default(), |view| view.cursor);
     let Some(document) = ed.docs.get_mut(&doc) else {
         return;
     };
     document.commit(cursor);
-    for (start, end, text) in edits {
+    for (_, (start, end, text)) in edits {
         document.replace(start, end, &text, cursor);
     }
     document.commit(cursor);
@@ -739,6 +747,15 @@ mod tests {
         assert_eq!(ed.doc().text.to_string_lf(), "fn a() {\n    // one();\n\n    // two();\n}");
         toggle_comment(&mut ed, 1, 3);
         assert_eq!(ed.doc().text.to_string_lf(), "fn a() {\n    one();\n\n    two();\n}");
+    }
+
+    #[test]
+    fn inserts_at_one_position_keep_array_order() {
+        let mut ed = editor("ab");
+        let at = Pos::new(0, 1);
+        let doc = ed.doc().id;
+        apply_edits(&mut ed, doc, vec![(at, at, "1".into()), (at, at, "2".into()), (Pos::new(0, 0), at, "X".into())]);
+        assert_eq!(ed.doc().text.to_string_lf(), "X12b");
     }
 
     #[test]

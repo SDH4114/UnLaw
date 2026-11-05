@@ -73,6 +73,9 @@ fn route(service: &Arc<Service>, request: &Request, stream: &mut TcpStream) -> i
     if !http::local_host(request) {
         return http::respond_json(stream, 403, &json!({"error": {"message": "Only localhost may use this server", "type": "forbidden"}}));
     }
+    if !http::cors_enabled() && http::cross_origin(request) {
+        return http::respond_json(stream, 403, &json!({"error": {"message": "Cross-origin requests are not allowed (start with --cors for local web apps)", "type": "forbidden"}}));
+    }
     let path = request.path.trim_end_matches('/');
     let path = if path.is_empty() { "/" } else { path };
     match (request.method.as_str(), path) {
@@ -153,7 +156,10 @@ fn cli_job(service: &Service, request: &Request, stream: &mut TcpStream) -> io::
 
 fn handle(service: &Arc<Service>, mut stream: TcpStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
-    let request = match http::read_request(&mut stream) {
+    let interim = stream.try_clone();
+    let request = match http::read_request_with(&mut stream, || {
+        interim.and_then(|mut writer| writer.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").and_then(|_| writer.flush()))
+    }) {
         Ok(request) => request,
         Err(ReadError::Bad(status, message)) => {
             let _ = http::respond_json(&mut stream, status, &json!({"error": {"message": message, "type": "invalid_request"}}));
@@ -162,6 +168,8 @@ fn handle(service: &Arc<Service>, mut stream: TcpStream) {
         Err(ReadError::Io(_)) => return,
     };
     let _ = stream.set_read_timeout(None);
+    // A reader that stops reading must not pin a lane: a stalled write fails and cancels.
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| route(service, &request, &mut stream)));
     if outcome.is_err() {
         let _ = send_error(&mut stream, &Failure::new("internal_error", "Internal error; the server keeps running"));
@@ -171,7 +179,11 @@ fn handle(service: &Arc<Service>, mut stream: TcpStream) {
 
 fn accept(service: Arc<Service>, listener: TcpListener) {
     for connection in listener.incoming() {
-        let Ok(stream) = connection else { continue };
+        let Ok(stream) = connection else {
+            // Usually EMFILE: back off instead of spinning.
+            thread::sleep(Duration::from_millis(50));
+            continue;
+        };
         let service = service.clone();
         thread::spawn(move || handle(&service, stream));
     }

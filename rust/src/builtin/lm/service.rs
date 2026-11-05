@@ -398,6 +398,13 @@ impl Service {
         lane.call(job, Some(model), on_event)
     }
 
+    /// Unload `model` by stopping its lane when it holds the model and is idle.
+    /// Never starts a worker. True when a worker was stopped.
+    pub fn unload(&self, model: &Model) -> bool {
+        let lane = self.lanes.lock().unwrap_or_else(PoisonError::into_inner).get(&model.lane()).cloned();
+        lane.is_some_and(|lane| lane.loaded().contains(&model.id) && lane.stop_if_idle())
+    }
+
     /// Worker processes that exist: (lane, loaded models, jobs in flight).
     pub fn lanes(&self) -> Vec<(String, Vec<String>, usize)> {
         let lanes = self.lanes.lock().unwrap_or_else(PoisonError::into_inner);

@@ -89,8 +89,11 @@ fn from_document(name: &str, document: &DocumentMut) -> Result<Template> {
 }
 
 pub fn load(name: &str) -> Result<Template> {
-    let path = manifest_path(name)?;
-    let document = fs::read_to_string(&path)
+    read_template(name, &manifest_path(name)?)
+}
+
+fn read_template(name: &str, path: &Path) -> Result<Template> {
+    let document = fs::read_to_string(path)
         .map_err(|error| error.to_string())
         .and_then(|text| text.parse::<DocumentMut>().map_err(|error| error.to_string().trim_end().to_string()))
         .map_err(|error| TemplateError(format!("Could not read template {name}: {error}")))?;
@@ -101,9 +104,15 @@ pub fn exists(name: &str) -> bool {
     valid_name(name) && templates_projects_dir().join(format!("{name}.toml")).is_file()
 }
 
+/// All valid saved templates; an invalid one is skipped with a warning so it
+/// cannot break `ul <unknown>`, `ul list` or `ul templates` (`load` stays strict).
 pub fn discover() -> Result<BTreeMap<String, Template>> {
+    discover_in(&templates_projects_dir())
+}
+
+fn discover_in(directory: &Path) -> Result<BTreeMap<String, Template>> {
     let mut found = BTreeMap::new();
-    let Ok(entries) = fs::read_dir(templates_projects_dir()) else {
+    let Ok(entries) = fs::read_dir(directory) else {
         return Ok(found);
     };
     let mut names: Vec<String> = entries
@@ -113,9 +122,13 @@ pub fn discover() -> Result<BTreeMap<String, Template>> {
         .collect();
     names.sort();
     for name in names {
-        validate_name(&name)?;
-        let template = load(&name)?;
-        found.insert(name, template);
+        let loaded = validate_name(&name).and_then(|_| read_template(&name, &directory.join(format!("{name}.toml"))));
+        match loaded {
+            Ok(template) => {
+                found.insert(name, template);
+            }
+            Err(error) => eprintln!("unlaw: skipping template {name}: {error}"),
+        }
     }
     Ok(found)
 }
@@ -181,5 +194,18 @@ mod tests {
         assert!(create("demo", Path::new("/tmp"), "code", false).unwrap_err().0.contains("app must be zed or obsidian"));
         assert!(manifest_path("../x").is_err());
         assert!(!exists("Bad Name"));
+    }
+
+    #[test]
+    fn discovery_skips_invalid_templates_but_load_stays_strict() {
+        let directory = std::env::temp_dir().join(format!("unlaw-workspace-discover-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("good.toml"), "path = \"/tmp\"\napp = \"zed\"\nai = true\n").unwrap();
+        fs::write(directory.join("broken.toml"), "path = \n").unwrap();
+        fs::write(directory.join("wrong.toml"), "path = \"/tmp\"\n").unwrap();
+        let found = discover_in(&directory).unwrap();
+        assert_eq!(found.keys().collect::<Vec<_>>(), ["good"]);
+        fs::remove_dir_all(directory).unwrap();
     }
 }

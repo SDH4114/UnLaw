@@ -674,6 +674,39 @@ class BotTests(AgentCase):
             [update["message"]["text"] for update in bot.backlog], ["second message"]
         )
 
+    def failing_sends(self, bot, exception: Exception, only: str = "sendMessage", times: int = 1) -> None:
+        real, left = bot.telegram.call, [times]
+
+        def call(method, fields, *args, **kwargs):
+            if method == only and left[0] > 0:
+                left[0] -= 1
+                raise exception
+            return real(method, fields, *args, **kwargs)
+
+        bot.telegram.call = call
+
+    def test_a_network_error_while_answering_does_not_stop_the_server(self) -> None:
+        import urllib.error
+
+        bot, _ = self.bot([{"content": "second answer"}])
+        self.failing_sends(bot, urllib.error.URLError("network is down"), only="sendChatAction")
+        bot.backlog = [self.telegram.message("42", text="one"), self.telegram.message("42", text="two")]
+        self.assertEqual(bot.run(polls=1), 0)
+        self.assertEqual(self.telegram.sent()[-1]["text"], "second answer")
+
+    def test_a_timeout_in_one_due_job_does_not_lose_the_next_one(self) -> None:
+        from unlawful import agent
+
+        bot, _ = self.bot([])
+        past = (agent.now() - dt.timedelta(minutes=1)).isoformat()
+        agent.Schedule()._save(
+            [{"id": name, "prompt": name, "next": past, "repeat": "once", "kind": "reminder", "by": "terminal"} for name in ("first1", "second")]
+        )
+        self.failing_sends(bot, TimeoutError("timed out"))
+        bot.tick()
+        self.assertEqual([fields["text"] for fields in self.telegram.sent()], ["\u23f0 second"])
+        self.assertEqual(agent.Schedule().jobs(), [])
+
     def test_due_jobs_run_and_report(self) -> None:
         from unlawful import agent
 
@@ -781,6 +814,18 @@ class ScheduleParsingTests(CoreTestCase):
         self.assertEqual(parse_repeat("every 2h"), "every 120m")
         with self.assertRaises(ValueError):
             parse_repeat("hourly")
+
+    def test_huge_durations_are_a_clear_value_error(self) -> None:
+        from unlawful.agent import parse_repeat, parse_when
+
+        base = dt.datetime(2026, 10, 24, 12, 0)
+        for text in ("in 99999999999999999999 d", "in 10000001 m", "через 7000 д"):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, "too long"):
+                parse_when(text, base)
+        with self.assertRaisesRegex(ValueError, "too long"):
+            parse_repeat("every 99999999999999999999d")
+        self.assertEqual(parse_when("in 10000000m", base), base + dt.timedelta(minutes=10_000_000))
+        self.assertEqual(parse_when("через 700 д", base), base + dt.timedelta(days=700))
 
 
 class SetupTests(AgentCase):

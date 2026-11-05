@@ -255,5 +255,53 @@ class TelegramCommandTests(ConfiguredTestCase):
 
 
 
+class CaptureTimeTests(unittest.TestCase):
+    def test_times_accept_seconds_and_clock_forms_only(self) -> None:
+        from unlawful.capture import CaptureError, _seconds
+
+        self.assertEqual(_seconds("90"), 90)
+        self.assertEqual(_seconds("1:30"), 90)
+        self.assertEqual(_seconds("0:01:30.5"), 90.5)
+        for bad in ("nan", "inf", "-inf", "1e999", "1:-30", "-5", "1:nan", "1:2:3:4", ""):
+            with self.subTest(text=bad), self.assertRaises(CaptureError):
+                _seconds(bad)
+
+
+class TelegramConfigWriteTests(ConfiguredTestCase):
+    def config_path(self) -> Path:
+        return self.root / "config" / "unlaw" / "config.toml"
+
+    def test_chat_id_is_saved_through_ul_config_set_keeping_comments(self) -> None:
+        from tests import ulbin
+        from unlawful import telegram
+
+        path = self.config_path()
+        path.write_text("# my note\nunknown_key = 1\n" + path.read_text(encoding="utf-8"), encoding="utf-8")
+        with patch.dict(os.environ, {**self.env, "UNLAW_BIN": str(ulbin.binary())}, clear=False):
+            telegram._save_chat_id("555")
+            self.assertEqual(telegram._settings()["chat_id"], "555")
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("# my note", text)
+        self.assertIn("unknown_key = 1", text)
+
+    def test_without_ul_the_chat_id_is_still_saved(self) -> None:
+        from unlawful import telegram
+
+        with patch.dict(os.environ, self.env, clear=False):
+            os.environ.pop("UNLAW_BIN", None)
+            telegram._save_chat_id("777")
+            self.assertEqual(telegram._settings()["chat_id"], "777")
+
+    def test_a_failing_ul_reports_its_error(self) -> None:
+        from unlawful import telegram
+
+        fake = self.root / "fake-ul"
+        fake.write_text("#!/bin/sh\necho boom >&2\nexit 3\n", encoding="utf-8")
+        fake.chmod(0o755)
+        with patch.dict(os.environ, {**self.env, "UNLAW_BIN": str(fake)}, clear=False):
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                telegram._save_chat_id("1")
+
+
 if __name__ == "__main__":
     unittest.main()

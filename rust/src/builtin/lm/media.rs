@@ -57,7 +57,9 @@ pub fn readable_audio(input: &Path, scratch: &Path) -> Result<(PathBuf, bool), S
         return Ok((input.to_path_buf(), false));
     }
     fs::create_dir_all(scratch).map_err(|error| error.to_string())?;
-    let output = unique(&scratch.join(format!("audio-{}-{}.wav", std::process::id(), stamp())));
+    // API uploads already have unique names; the pid keeps terminal runs on the same file apart.
+    let name = input.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let output = unique(&scratch.join(format!("{name}.{}.conv.wav", std::process::id())));
     let quiet = |command: &mut Command| command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
     let converted = which("afconvert").is_some_and(|tool| {
         quiet(Command::new(tool).args(["-f", "WAVE", "-d", "LEI16@16000", "-c", "1"]).arg(input).arg(&output))

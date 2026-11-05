@@ -6,16 +6,17 @@
 
 use std::env;
 use std::fs;
+use std::io;
+use std::path::Path;
 use std::process::Command;
 
 use serde_json::Value as Json;
-use sha2::{Digest, Sha256};
 
 use crate::checklist::{self, Entry};
 use crate::config::{self, commands_dir};
 use crate::features;
 use crate::update;
-use crate::util::create_new_atomic;
+use crate::util::{create_new_atomic, sha256_hex};
 use crate::workspace;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,8 +72,15 @@ fn load() -> Result<(String, Vec<Item>), String> {
     Ok((base.clone(), parse_index(&String::from_utf8_lossy(&index))?))
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
+/// Reserve a new command folder and fill it; a folder this call created is
+/// removed again when filling fails, so no empty command folder is left behind.
+fn reserve_and_write(directory: &Path, write: impl FnOnce(&Path) -> io::Result<()>) -> Result<(), String> {
+    fs::create_dir(directory).map_err(|error| format!("could not create command folder (not overwritten): {error}"))?;
+    if let Err(error) = write(directory) {
+        let _ = fs::remove_dir_all(directory);
+        return Err(format!("could not write it: {error}"));
+    }
+    Ok(())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -237,13 +245,10 @@ pub fn get(names: &[String]) -> i32 {
         let directory = commands_dir().join(name);
         // Reserve the folder after downloading: a concurrent installer or user
         // may have created it since the initial status check.
-        if let Err(error) = fs::create_dir(&directory) {
-            eprintln!("{name}: could not create command folder (not overwritten): {error}");
-            code = code.max(1);
-            continue;
-        }
-        if let Err(error) = create_new_atomic(&directory.join("main.py"), &text, ".download.") {
-            eprintln!("{name}: could not write it: {error}");
+        if let Err(error) =
+            reserve_and_write(&directory, |directory| create_new_atomic(&directory.join("main.py"), &text, ".download."))
+        {
+            eprintln!("{name}: {error}");
             code = code.max(1);
             continue;
         }
@@ -313,5 +318,21 @@ mod tests {
         assert!(matches(&item, &["youtube"]));
         assert!(matches(&item, &["yt", "DOWN"]));
         assert!(!matches(&item, &["spotify"]));
+    }
+
+    #[test]
+    fn a_failed_write_removes_the_reserved_folder() {
+        let parent = std::env::temp_dir().join(format!("unlaw-catalog-reserve-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&parent);
+        fs::create_dir_all(&parent).unwrap();
+        let directory = parent.join("demo");
+        let error = reserve_and_write(&directory, |_| Err(io::Error::other("disk full"))).unwrap_err();
+        assert!(error.contains("disk full"), "{error}");
+        assert!(!directory.exists());
+        reserve_and_write(&directory, |directory| fs::write(directory.join("main.py"), "x")).unwrap();
+        assert!(directory.join("main.py").is_file());
+        assert!(reserve_and_write(&directory, |_| Ok(())).is_err());
+        assert!(directory.join("main.py").is_file(), "an existing folder is never removed");
+        fs::remove_dir_all(parent).unwrap();
     }
 }

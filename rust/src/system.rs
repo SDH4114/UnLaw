@@ -15,7 +15,7 @@ use crate::config::{self, commands_dir, config_dir, config_file, templates_dir, 
 use crate::help::{self, is_system, print_if_requested, system_names, system_summary};
 use crate::layout::{ensure_layout, STORAGE_SUBDIRECTORIES};
 use crate::shell;
-use crate::util::{create_new_atomic, home, shell_join, which, Json};
+use crate::util::{atomic_write, create_new_atomic, home, read_to_string_or_empty, shell_join, which, Json};
 use crate::workspace;
 
 const COMMAND_TEMPLATE: &str = include_str!("../assets/command_main.py");
@@ -766,16 +766,13 @@ fn bin_precedes_system(directory: &Path) -> bool {
 fn fix_shell_path(directory: &Path) -> io::Result<bool> {
     let line = format!("export PATH=\"{}:$PATH\"", display_home(directory));
     let zshrc = home().join(".zshrc");
-    let existing = fs::read_to_string(&zshrc).unwrap_or_default();
+    let existing = read_to_string_or_empty(&zshrc)?;
     if existing.contains(&line) || bin_precedes_system(directory) {
         return Ok(false);
     }
-    if let Some(parent) = zshrc.parent() {
-        fs::create_dir_all(parent)?;
-    }
     let separator = if existing.is_empty() || existing.ends_with('\n') { "" } else { "\n" };
-    let mut handle = fs::OpenOptions::new().create(true).append(true).open(&zshrc)?;
-    write!(handle, "{separator}\n# Unlaw CLI (managed by `unlaw doctor --fix`)\n{line}\n")?;
+    let updated = format!("{existing}{separator}\n# Unlaw CLI (managed by `unlaw doctor --fix`)\n{line}\n");
+    atomic_write(&zshrc, &updated, ".zshrc.")?;
     Ok(true)
 }
 

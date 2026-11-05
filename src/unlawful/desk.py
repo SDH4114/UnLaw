@@ -658,13 +658,18 @@ class Handler(BaseHTTPRequestHandler):
         if not self._allowed_host():
             self._send(403, b"Forbidden host", "text/plain; charset=utf-8")
             return False
-        if self.path.startswith("/media/"):
+        if not self.path.startswith("/"):
+            # An absolute-form target (`GET http://host/api/...`) would be routed by its URL path but skip a prefix check on the raw string.
+            self._send(400, b"Bad request target", "text/plain; charset=utf-8")
+            return False
+        url = urllib.parse.urlsplit(self.path)
+        if url.path.startswith("/media/"):
             # <video>/<img> cannot send headers, so media URLs carry the token.
-            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            query = urllib.parse.parse_qs(url.query)
             if not self._authorized(query.get("t", [None])[0]):
                 self._send(403, b"Forbidden", "text/plain; charset=utf-8")
                 return False
-        elif self.path.startswith("/api/") and not self._authorized(
+        elif url.path.startswith("/api/") and not self._authorized(
             self.headers.get("X-Desk-Token")
         ):
             self._json(
@@ -1139,7 +1144,7 @@ class Studio:
             for key in ("from", "to"):
                 value = body.get(key)
                 if value is not None:
-                    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+                    if isinstance(value, bool) or not isinstance(value, (int, float)) or (isinstance(value, float) and not math.isfinite(value)) or value < 0:
                         raise ValueError(f"{key} must be seconds")
                     args += [f"--{key}", f"{value:.3f}"]
             if len(args) == 2:

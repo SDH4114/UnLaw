@@ -4,12 +4,11 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
-
 use crate::assets::{RETIRED, SEEDS};
 use crate::commands::entry_point;
 use crate::config::{self, commands_dir, config_dir, configured_storage_root, templates_dir, write_defaults_if_missing};
 use crate::features;
+use crate::util::{remove_file_if_exists, sha256_hex};
 
 pub const TEMPLATE_NAMES: [&str; 5] = ["commands", "python", "rust", "cpp", "projects"];
 pub const STORAGE_SUBDIRECTORIES: [&[&str]; 4] =
@@ -20,10 +19,6 @@ fn is_legacy_wrapper(source: &str, name: &str) -> bool {
     let tail = "if __name__ == \"__main__\":\n    raise SystemExit(main())";
     let trimmed = source.trim();
     trimmed == format!("{import}\n\n\n{tail}") || trimmed == format!("{import}\n\n{tail}")
-}
-
-fn sha256_hex(text: &str) -> String {
-    Sha256::digest(text.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn without_blank_lines(source: &str) -> String {
@@ -76,7 +71,7 @@ fn remove_untouched_seed(name: &str, source: &str, hashes: &[&str], normalized: 
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(entry_point(&directory).is_none()),
         _ => return Ok(false),
     }
-    fs::remove_file(&script)?;
+    remove_file_if_exists(&script)?;
     let _ = fs::remove_file(directory.join(".DS_Store"));
     let _ = fs::remove_dir_all(directory.join("__pycache__"));
     // Anything else in the folder (help.txt, data) is the user's; the folder stays then.
@@ -172,12 +167,12 @@ fn retire_builtin_seeds() -> io::Result<()> {
         }
         let Ok(source) = fs::read_to_string(&script) else { continue };
         let untouched = is_replaceable(&source, name, hashes)
-            || normalized.contains(&sha256_hex(&without_blank_lines(&source)).as_str())
-            || normalized.contains(&sha256_hex(&normalized_source(&source)).as_str());
+            || normalized.contains(&sha256_hex(without_blank_lines(&source)).as_str())
+            || normalized.contains(&sha256_hex(normalized_source(&source)).as_str());
         if !untouched {
             continue;
         }
-        fs::remove_file(&script)?;
+        remove_file_if_exists(&script)?;
         let _ = fs::remove_file(directory.join(".DS_Store"));
         // Bytecode the old seed left behind; regenerated if anything needs it.
         let _ = fs::remove_dir_all(directory.join("__pycache__"));
@@ -232,7 +227,7 @@ mod tests {
     #[test]
     fn blank_lines_are_ignored_only_by_the_normalized_hash() {
         assert_eq!(without_blank_lines("a\n\n  \nb\n"), "a\nb");
-        assert_eq!(sha256_hex(&without_blank_lines("x\n\ny")), sha256_hex(&without_blank_lines("x\ny\n\n")));
+        assert_eq!(sha256_hex(without_blank_lines("x\n\ny")), sha256_hex(without_blank_lines("x\ny\n\n")));
         assert!(!is_replaceable("x\n\ny", "git", &[&sha256_hex("x\ny")]), "exact matching stays exact");
     }
 
@@ -241,7 +236,7 @@ mod tests {
         let seed = "# header\n\"\"\"Say \\\"hi\\\".\"\"\"\nimport os\n\nprint(1)\n";
         let copy = "# header\nimport os\nprint(1)\n\n";
         assert!(is_untouched_seed(copy, "x", seed, &[], &[]));
-        assert!(is_untouched_seed(copy, "x", "print(2)\n", &[], &[&sha256_hex(&normalized_source(copy))]));
+        assert!(is_untouched_seed(copy, "x", "print(2)\n", &[], &[&sha256_hex(normalized_source(copy))]));
         assert!(!is_untouched_seed("# header\nimport os\nprint(2)\n", "x", seed, &[], &[]), "a real edit is kept");
         assert_eq!(normalized_source(seed), "# header\nimport os\nprint(1)");
     }

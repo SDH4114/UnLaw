@@ -21,7 +21,7 @@ def _read() -> tuple[Path, KanbanBoard]:
     path = todo_path()
     if not path.is_file():
         raise FileNotFoundError(f"Kanban file not found: {path}")
-    return path, KanbanBoard.parse(path.read_text(encoding="utf-8"))
+    return path, KanbanBoard.parse(path.read_bytes().decode("utf-8"))
 
 
 def _write(path: Path, board: KanbanBoard) -> None:

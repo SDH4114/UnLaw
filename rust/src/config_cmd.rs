@@ -57,7 +57,7 @@ fn action(name: &str, rest: &[String]) -> Result<Option<i32>, ConfigError> {
         }
         ("set", [key, value @ ..]) if !value.is_empty() => {
             let raw = value.join(" ");
-            let item = config::parse_value(&raw);
+            let item = config::parse_value_for(key, &raw);
             config::set(key, item)?;
             let shown = config::load()?.get(key).map(|value| value.display()).unwrap_or(raw);
             println!("Set {key} = {shown}");

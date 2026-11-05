@@ -324,9 +324,19 @@ impl Scores {
 
     /// Reread the file: another `ul game` (terminal or desk) may have saved a best.
     pub fn reload(&mut self) {
-        let fresh = self.path.as_ref().and_then(|path| std::fs::read_to_string(path).ok()).and_then(|text| text.parse().ok());
-        if let Some(document) = fresh {
-            self.document = document;
+        let Some(path) = &self.path else { return };
+        let Ok(text) = std::fs::read_to_string(path) else { return };
+        match text.parse() {
+            Ok(document) => self.document = document,
+            Err(_) => {
+                // Corrupt: keep it for the player under a new name and start fresh, so the next
+                // record never overwrites it. Nothing is printed over the game screen.
+                let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |time| time.as_secs());
+                let mut name = path.as_os_str().to_os_string();
+                name.push(format!(".corrupt-{time}"));
+                let _ = std::fs::rename(path, name);
+                self.document = DocumentMut::new();
+            }
         }
     }
 
@@ -761,6 +771,29 @@ mod tests {
         assert_eq!(reloaded.best("tetris", Level::Easy), None);
         std::fs::remove_file(path).unwrap();
         assert_eq!(Scores::load(Some("/nonexistent/x.toml".into())).best("snake", Level::Easy), None);
+    }
+
+    #[test]
+    fn corrupt_scores_file_is_moved_aside_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("unlaw-arcade-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("arcade.toml");
+        let mut scores = Scores::load(Some(path.clone()));
+        assert!(scores.record("snake", Level::Easy, 5));
+        std::fs::write(&path, "snake = [ not toml").unwrap();
+        assert!(scores.record("tetris", Level::Easy, 9));
+        let aside: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.file_name().unwrap().to_string_lossy().starts_with("arcade.toml.corrupt-"))
+            .collect();
+        assert_eq!(aside.len(), 1, "the corrupt file is kept under a new name");
+        assert_eq!(std::fs::read_to_string(&aside[0]).unwrap(), "snake = [ not toml");
+        let saved = Scores::load(Some(path.clone()));
+        assert_eq!(saved.best("tetris", Level::Easy), Some(9));
+        assert_eq!(saved.best("snake", Level::Easy), None, "started fresh, not from the stale in-memory copy");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

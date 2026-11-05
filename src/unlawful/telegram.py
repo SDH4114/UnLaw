@@ -3,6 +3,7 @@ from __future__ import annotations
 import getpass
 import json
 import mimetypes
+import os
 import re
 import subprocess
 import sys
@@ -197,6 +198,17 @@ def discover_chat_id(client: TelegramClient) -> str:
     raise RuntimeError("send a message to the bot first, then run `ul tg setup` again")
 
 
+def _save_chat_id(chat_id: str) -> None:
+    """`ul config set`, which keeps comments and unknown keys; the direct write only when the ul binary is unknown."""
+    binary = os.environ.get("UNLAW_BIN")
+    if not binary:
+        set_config_value("telegram.chat_id", chat_id)
+        return
+    result = subprocess.run([binary, "config", "set", "telegram.chat_id", json.dumps(chat_id)], capture_output=True, text=True, timeout=60, check=False)
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout).strip() or f"ul config set failed ({result.returncode})")
+
+
 def _setup() -> int:
     token = getpass.getpass("Telegram bot token: ").strip()
     if not token:
@@ -206,7 +218,7 @@ def _setup() -> int:
     result = client.request("getMe", {})
     store_token(token, _settings()["keychain_service"])
     chat_id = chat_id or discover_chat_id(client)
-    set_config_value("telegram.chat_id", chat_id)
+    _save_chat_id(chat_id)
     username = result.get("result", {}).get("username", "unknown")
     print(f"Telegram connected: @{username}")
     return 0
@@ -327,7 +339,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _download(client, destination)
         if not chat_id:
             chat_id = discover_chat_id(client)
-            set_config_value("telegram.chat_id", chat_id)
+            _save_chat_id(chat_id)
         if args == ["capture"]:
             from .capture import latest_capture
 
