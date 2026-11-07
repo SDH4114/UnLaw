@@ -265,6 +265,14 @@ impl<W: Write> Screen for Stream<W> {
         }
     }
 
+    fn dim_all(&mut self) {
+        for cell in self.frame.iter_mut().flatten() {
+            if cell.text != ' ' {
+                cell.style.dim = true;
+            }
+        }
+    }
+
     fn present(&mut self) -> io::Result<()> {
         let line = encode(&self.frame, self.size.0, self.size.1);
         if line == self.last {

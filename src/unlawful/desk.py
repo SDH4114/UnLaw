@@ -1176,6 +1176,7 @@ GAMES = {
     "minesweeper": "Minesweeper",
     "invaders": "Space Invaders",
     "chomp": "Chomp",
+    "dash": "Dash",
 }
 LEVELS = ("easy", "normal", "hard")
 GAME_KEYS = {"up", "down", "left", "right", "enter", "esc"}

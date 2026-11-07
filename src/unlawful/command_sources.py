@@ -332,6 +332,9 @@ LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("2b6e0d78e44afc66b689ab84
 LEGACY_NORMALIZED_HASHES.setdefault("todo", set()).add("a8d7363778354760824790d3a32559f9c0267259ae5291bf44da99568648b2f1")
 LEGACY_NORMALIZED_HASHES.setdefault("capture", set()).add("502597fd439eda0db96ada615b8b2d36ef82af86535fe3b889f1b25e675a6de4")
 LEGACY_NORMALIZED_HASHES.setdefault("tg", set()).add("11d4d44aaf60e34c615cdfe2db6eec0597da3a37a6d2b7ad59f543e877b93ca3")
+# Official desk seed of release 3.12.3, before the Dash game was added to the Games tab. (The desk copy on the maintainer machine, 45089d12..., is registered above.)
+LEGACY_SOURCE_HASHES["desk"].add("578edc95043aa8fe07c5fb78b1d295cc6ca68d512af17d35ae42b4f175b9407f")
+LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("a3acb3f453de4b204da0aafd14889e78a267cf29259551d1ed30e549f26f157b")
 
 # Commands now built into the Rust core. Untouched seeds with these hashes are
 # removed so the built-in runs; edited copies stay and override it.

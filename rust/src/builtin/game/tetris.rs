@@ -5,7 +5,7 @@
 use std::collections::VecDeque;
 use std::io;
 
-use super::{finish, inputs_until, pause, too_small, After, Button, Color, Input, Key, Level, Played, Rng, Scores, Screen, Style, FRAME};
+use super::{center_block, finish, fits, inputs_until, pause, too_small, wait_for_room, After, Button, Color, Input, Key, Level, Played, Rng, Scores, Screen, Style, Ticker};
 
 pub const WIDTH: i32 = 10;
 pub const VISIBLE: i32 = 20;
@@ -392,11 +392,23 @@ impl Tetris {
     }
 }
 
+/// Side panel width, and the whole picture: panel, gap, board, gap, panel.
+const PANEL: i32 = 12;
+const CONTENT: i32 = PANEL + 1 + WIDTH * 2 + 2 + 1 + PANEL;
+/// The board, the banner row under it, the HUD above and the controls line below.
+const NEEDED_HEIGHT: i32 = VISIBLE + 5;
+
 struct Layout {
     top: i32,
     board_left: i32,
     left_panel: i32,
     right_panel: i32,
+}
+
+fn layout_for(size: (i32, i32)) -> Layout {
+    let (top, left) = center_block(size, VISIBLE + 3, CONTENT);
+    let board_left = left + PANEL + 1;
+    Layout { top, board_left, left_panel: left, right_panel: board_left + WIDTH * 2 + 3 }
 }
 
 fn draw_mini(screen: &mut dyn Screen, y: i32, x: i32, kind: Kind, style_dim: bool) {
@@ -410,7 +422,14 @@ fn draw_mini(screen: &mut dyn Screen, y: i32, x: i32, kind: Kind, style_dim: boo
 
 fn draw(screen: &mut dyn Screen, game: &Tetris, layout: &Layout, level: Level, best: Option<u64>) {
     screen.clear();
-    screen.centered(0, &format!("TETRIS · {}", level.name()), Style::fg(Color::Yellow).bold());
+    let (_, width) = screen.size();
+    let span = width.min(64);
+    let stats = [
+        ("SCORE", game.score.to_string()),
+        ("LEVEL", game.level().to_string()),
+        ("BEST", best.map(|best| best.to_string()).unwrap_or_else(|| "—".into())),
+    ];
+    screen.hud(layout.top - 1, (width - span) / 2, span, &format!("TETRIS · {}", level.name()), &stats);
     let (top, left) = (layout.top, layout.board_left);
     screen.frame_box(top, left, VISIBLE + 2, WIDTH * 2 + 2, Style::fg(Color::White));
     for row in HIDDEN..ROWS {
@@ -436,50 +455,46 @@ fn draw(screen: &mut dyn Screen, game: &Tetris, layout: &Layout, level: Level, b
         }
     }
     let panel = layout.left_panel;
-    let label = Style::fg(Color::Gray);
-    let value = Style::fg(Color::White).bold();
+    let frame = Style::fg(Color::Gray);
     if game.rules.hold {
-        screen.put(top, panel, "HOLD", label);
+        screen.panel(top, panel, 6, PANEL, "HOLD", frame);
         if let Some(kind) = game.held {
-            draw_mini(screen, top + 2, panel, kind, !game.can_hold);
+            draw_mini(screen, top + 2, panel + 2, kind, !game.can_hold);
         }
     }
-    let stats = [
-        ("SCORE", game.score.to_string()),
-        ("LEVEL", game.level().to_string()),
-        ("LINES", game.lines.to_string()),
-        ("BEST", best.map(|best| best.to_string()).unwrap_or_else(|| "—".into())),
-    ];
-    for (index, (name, text)) in stats.iter().enumerate() {
-        let y = top + 6 + index as i32 * 3;
-        screen.put(y, panel, name, label);
-        screen.put(y + 1, panel, text, value);
-    }
-    screen.put(top, layout.right_panel, "NEXT", label);
+    screen.panel(top + 7, panel, 3, PANEL, "LINES", frame);
+    screen.put(top + 8, panel + 2, &game.lines.to_string(), Style::fg(Color::White).bold());
+    let previews = game.rules.previews as i32;
+    screen.panel(top, layout.right_panel, previews * 3 + 3, PANEL, "NEXT", frame);
     for (index, kind) in game.queue.iter().take(game.rules.previews).enumerate() {
-        draw_mini(screen, top + 2 + index as i32 * 3, layout.right_panel, *kind, false);
+        draw_mini(screen, top + 2 + index as i32 * 3, layout.right_panel + 2, *kind, false);
     }
     if let Some((text, _)) = &game.banner {
         screen.centered(top + VISIBLE + 2, text, Style::fg(Color::Yellow).bold());
     }
     let hold = if game.rules.hold { "C hold · " } else { "" };
-    screen.controls(&format!("←→ move · ↑/X rotate · Z back · ↓ soft · Space drop · {hold}P pause · mouse: move, click drop, right-click rotate"));
+    screen.controls(&format!("←→ move · ↑ rotate · Z back · ↓ soft · Space drop · {hold}P pause · Q quit"));
 }
 
 pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u64>, scores: Option<&mut Scores>) -> io::Result<Played> {
-    let (height, width) = screen.size();
-    let total = 12 + WIDTH * 2 + 2 + 2 + 12;
-    if height < VISIBLE + 5 || width < total {
-        return too_small(screen, total, VISIBLE + 5);
+    if !fits(screen, CONTENT, NEEDED_HEIGHT) {
+        return too_small(screen, CONTENT, NEEDED_HEIGHT);
     }
-    let board_left = (width - (WIDTH * 2 + 2)) / 2;
-    let layout = Layout { top: 1, board_left, left_panel: board_left - 13, right_panel: board_left + WIDTH * 2 + 4 };
     let mut game = Tetris::new(level, rng);
     let mut last = screen.now();
+    let mut ticker = Ticker::new(last);
     loop {
+        if !fits(screen, CONTENT, NEEDED_HEIGHT) {
+            if !wait_for_room(screen, CONTENT, NEEDED_HEIGHT)? {
+                return Ok(Played { score: None, after: After::Leave });
+            }
+            last = screen.now();
+            ticker.reset(last);
+        }
+        let layout = layout_for(screen.size());
         draw(screen, &game, &layout, level, best);
         screen.present()?;
-        let deadline = screen.now() + FRAME;
+        let deadline = ticker.deadline(screen.now());
         for input in inputs_until(screen, deadline)? {
             match input {
                 Input::Key(Key::Left | Key::Char('a' | 'A')) => {
@@ -514,6 +529,7 @@ pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u
                         return Ok(Played { score: None, after: After::Leave });
                     }
                     last = screen.now();
+                    ticker.reset(last);
                 }
                 input if input.is_leave() => return Ok(Played { score: None, after: After::Leave }),
                 _ => {}

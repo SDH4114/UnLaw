@@ -560,7 +560,7 @@ token in the printed address. Keys: `n` new card, `/` search, `space` timer,
 `1`–`5` views, `?` all shortcuts. Only the Python standard library is used.
 
 **Games** plays the `ul game` arcade (Tetris, Snake, Minesweeper, Space Invaders,
-Chomp) in the page with keyboard and mouse. The desk runs `ul game --stream`, so
+Chomp, Dash) in the page with keyboard and mouse. The desk runs `ul game --stream`, so
 these are the same Rust games, and best scores are shared with the terminal in
 `storage.root/runtime/arcade.toml`. Leaving the tab pauses a game.
 
@@ -688,6 +688,7 @@ ul game snake easy
 ul game minesweeper normal
 ul game invaders hard
 ul game chomp
+ul game dash
 ```
 
 The games are built into the Rust core and support keyboard and mouse. Each screen
@@ -702,13 +703,15 @@ Enter or a click plays again, Esc returns to the menu. Best scores are stored in
 | Minesweeper | Beginner 9×9/10, Intermediate 16×16/40, Expert 30×16/99, safe first click, chording on numbers, classic colors, timer | left — reveal or chord, right — flag |
 | Space Invaders | 5×11 formation, three alien types, speeds up as they fall, only the bottom row shoots, one player bullet on screen, bunkers, UFO, lives and waves, extra life at 1500 | cannon follows the cursor, click — fire |
 | Chomp | original maze chase: a new symmetric maze every level, pellets and power pellets, four hunters with their own habits (Hound chases, Fox cuts off the junction ahead, Owl goes where it heard you eat, Moth guards the power pellets), rest/hunt phases, 200→1600 combo, bonus items, extra life at 10 000 | click — turn toward the click |
+| Dash | original endless runner with the mechanics of the browser offline game (a fox, not a dinosaur): auto-run on the left, fixed-height gravity jump (`Space`/`↑`/`W`/click), duck (`↓`/`S`, ~0.35 s, key repeat extends it; `↓` in the air drops fast), cacti of three sizes in groups of 1–3, birds with a wing flap at three heights (jump the low one, duck or jump the middle one, run under the high one), speed rising to a maximum with gaps that grow with it, score ≈10/s with a flash every 100 and night from 700, parallax clouds and scrolling ground | click — jump |
 
 Difficulty: `easy` — slow start and assists (Tetris has a ghost piece and 3 pieces
 in Next, the snake passes through walls, 5 lives in Invaders and Chomp); `normal` — classic;
 `hard` — genuinely hard: Tetris starts at level 12 without ghost or Hold, with
 garbage rising from below, the snake gets obstacles and double growth, Minesweeper
 is Expert without a guaranteed opening, aliens fire nonstop and you have 2 lives, Chomp hunters are as fast as you and
-fright lasts 2 s (gone from level 5).
+fright lasts 2 s (gone from level 5), Dash starts fast with tight gaps, mixed cacti and birds from the first obstacle
+(`easy`: slower, wider gaps, no high birds).
 Set the default with `ul config set games.difficulty hard`.
 
 ## Telegram

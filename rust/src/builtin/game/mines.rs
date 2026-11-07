@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 use std::io;
 
-use super::{finish, inputs_until, pause, too_small, After, Button, Color, Input, Key, Level, Played, Rng, Scores, Screen, Style};
+use super::{center_block, finish, fits, inputs_until, pause, too_small, wait_for_room, After, Button, Color, Input, Key, Level, Played, Rng, Scores, Screen, Style};
 
 type Cell = (i32, i32);
 
@@ -185,9 +185,15 @@ impl Layout {
 
 fn draw(screen: &mut dyn Screen, game: &Mines, layout: &Layout, level: Level, seconds: u64, best: Option<u64>) {
     screen.clear();
-    let best = best.map(|best| format!(" · Best {best}s")).unwrap_or_default();
-    let title = format!("MINESWEEPER · {} · Mines {} · Time {seconds}s{best}", level.name(), game.flags_left());
-    screen.centered(0, &title, Style::fg(Color::Yellow).bold());
+    let stats = [
+        ("MINES", game.flags_left().to_string()),
+        ("TIME", format!("{seconds}s")),
+        ("BEST", best.map(|best| format!("{best}s")).unwrap_or_else(|| "—".into())),
+    ];
+    // The Easy board is narrower than its own HUD: let the HUD reach past the frame.
+    let (_, width) = screen.size();
+    let span = (game.columns * 2 + 2).max(52).min(width);
+    screen.hud(layout.top - 1, layout.left + (game.columns * 2 + 2 - span) / 2, span, &format!("MINESWEEPER · {}", level.name()), &stats);
     screen.frame_box(layout.top, layout.left, game.rows + 2, game.columns * 2 + 2, Style::fg(Color::White));
     let lost = game.exploded.is_some();
     let won = game.won();
@@ -218,7 +224,7 @@ fn draw(screen: &mut dyn Screen, game: &Mines, layout: &Layout, level: Level, se
             screen.put(layout.top + 1 + y, layout.left + 1 + x * 2, &text, style);
         }
     }
-    screen.controls("click / Space open · right-click / F flag · click a number to clear around it · arrows move · P pause · Esc quit");
+    screen.controls("click / Space open · right-click / F flag · P pause · Q quit");
 }
 
 pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u64>, scores: Option<&mut Scores>) -> io::Result<Played> {
@@ -228,10 +234,19 @@ pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u
     if width < need_width || height < need_height {
         return too_small(screen, need_width, need_height);
     }
-    let layout = Layout { top: ((height - game.rows - 3) / 2).max(1), left: (width - (game.columns * 2 + 2)) / 2 };
     let mut started_at: Option<f64> = None;
     let elapsed = |screen: &dyn Screen, started_at: Option<f64>| started_at.map(|start| (screen.now() - start) as u64).unwrap_or(0);
     loop {
+        if !fits(screen, need_width, need_height) {
+            // The clock stops while the terminal is too small, as it does in the pause box.
+            let stopped_at = screen.now();
+            if !wait_for_room(screen, need_width, need_height)? {
+                return Ok(Played { score: None, after: After::Leave });
+            }
+            started_at = started_at.map(|start| start + screen.now() - stopped_at);
+        }
+        let (top, left) = center_block(screen.size(), game.rows + 2, game.columns * 2 + 2);
+        let layout = Layout { top, left };
         let seconds = elapsed(screen, started_at);
         draw(screen, &game, &layout, level, seconds, best);
         screen.present()?;
@@ -390,8 +405,7 @@ mod tests {
     #[test]
     fn plays_with_the_mouse_until_a_mine_then_shows_the_field() {
         let mut screen = Fake::new((24, 60));
-        let layout_top = (24 - 9 - 3) / 2;
-        let layout_left = (60 - 20) / 2;
+        let (layout_top, layout_left) = center_block((24, 60), 9 + 2, 9 * 2 + 2);
         let at = |row: i32, col: i32| (layout_top + 1 + row, layout_left + 1 + col * 2);
         let (y, x) = at(4, 4);
         let mut inputs = vec![click(y, x, Button::Left)];

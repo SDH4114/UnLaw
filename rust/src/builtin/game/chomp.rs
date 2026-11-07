@@ -8,7 +8,7 @@
 use std::collections::VecDeque;
 use std::io;
 
-use super::{finish, inputs_until, pause, too_small, After, Button, Color, Input, Key, Level, Played, Rng, Scores, Screen, Style, FRAME};
+use super::{center_block, finish, fits, inputs_until, pause, too_small, wait_for_room, After, Button, Color, Input, Key, Level, Played, Rng, Scores, Screen, Style, Ticker, FRAME};
 
 pub type Cell = (i32, i32);
 
@@ -886,9 +886,12 @@ fn mouth(dir: Cell) -> &'static str {
 
 fn draw(screen: &mut dyn Screen, game: &Chomp, layout: &Layout, best: Option<u64>) {
     screen.clear();
-    let best = best.map(|best| format!(" · Best {best}")).unwrap_or_default();
-    let title = format!("CHOMP · {} · Score {}{best} · Level {}", game.difficulty.name(), game.score, game.number);
-    screen.centered(0, &title, Style::fg(Color::Yellow).bold());
+    let stats = [
+        ("SCORE", game.score.to_string()),
+        ("LEVEL", game.number.to_string()),
+        ("BEST", best.map(|best| best.to_string()).unwrap_or_else(|| "—".into())),
+    ];
+    screen.hud(layout.top - 1, layout.left, COLUMNS * 2, &format!("CHOMP · {}", game.difficulty.name()), &stats);
     let at = |(y, x): Cell| (layout.top + y, layout.left + x * 2);
     let blink = |rate: f64| (game.time * rate) as i64 % 2 == 0;
     let wall = Style::fg(if game.clear > 0.0 && blink(4.0) { Color::White } else { Color::DarkBlue });
@@ -947,9 +950,7 @@ fn draw(screen: &mut dyn Screen, game: &Chomp, layout: &Layout, best: Option<u64
     let status = layout.top + ROWS;
     let lives = format!("Lives {}", "C ".repeat(game.lives as usize));
     screen.put(status, layout.left, lives.trim_end(), Style::fg(Color::Yellow));
-    let level = format!("Level {}", game.number);
-    screen.put(status, layout.left + COLUMNS * 2 - level.chars().count() as i32, &level, Style::fg(Color::Gray));
-    screen.controls("←↑↓→ / WASD move · click to steer · P pause · Esc quit");
+    screen.controls("←↑↓→ / WASD move · click to steer · P pause · Q quit");
 }
 
 pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u64>, scores: Option<&mut Scores>) -> io::Result<Played> {
@@ -957,13 +958,22 @@ pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u
     if height < ROWS + 3 || width < COLUMNS * 2 + 2 {
         return too_small(screen, COLUMNS * 2 + 2, ROWS + 3);
     }
-    let layout = Layout { top: 1, left: (width - COLUMNS * 2) / 2 };
     let mut game = Chomp::new(level);
     let mut last = screen.now();
+    let mut ticker = Ticker::new(last);
     loop {
+        if !fits(screen, COLUMNS * 2 + 2, ROWS + 3) {
+            if !wait_for_room(screen, COLUMNS * 2 + 2, ROWS + 3)? {
+                return Ok(Played { score: None, after: After::Leave });
+            }
+            last = screen.now();
+            ticker.reset(last);
+        }
+        let (top, left) = center_block(screen.size(), ROWS + 1, COLUMNS * 2);
+        let layout = Layout { top, left };
         draw(screen, &game, &layout, best);
         screen.present()?;
-        let deadline = screen.now() + FRAME;
+        let deadline = ticker.deadline(screen.now());
         for input in inputs_until(screen, deadline)? {
             match input {
                 Input::Key(Key::Up | Key::Char('w' | 'W')) => game.turn(UP),
@@ -976,6 +986,7 @@ pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u
                         return Ok(Played { score: None, after: After::Leave });
                     }
                     last = screen.now();
+                    ticker.reset(last);
                 }
                 input if input.is_leave() => return Ok(Played { score: None, after: After::Leave }),
                 _ => {}

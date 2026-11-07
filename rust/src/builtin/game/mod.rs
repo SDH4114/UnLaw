@@ -1,10 +1,11 @@
-//! `ul game`: Tetris, Snake, Minesweeper, Space Invaders and Chomp in the terminal,
+//! `ul game`: Tetris, Snake, Minesweeper, Space Invaders, Chomp and Dash in the terminal,
 //! playable with keyboard or mouse.
 //!
 //! Every game is a state machine (input → update → draw) that talks only to
 //! the [`Screen`] trait, so it runs on a real terminal and headless in tests.
 
 mod chomp;
+mod dash;
 mod invaders;
 mod mines;
 mod snake;
@@ -22,7 +23,7 @@ use toml_edit::DocumentMut;
 use crate::config::Config;
 
 pub const HELP: &str = "Play a terminal arcade game; no arguments opens the game menu.
-Usage: ul game [tetris|snake|minesweeper|invaders|chomp] [easy|normal|hard]
+Usage: ul game [tetris|snake|minesweeper|invaders|chomp|dash] [easy|normal|hard]
        ul game --stream [--size ROWSxCOLS] [game] [difficulty]
 Games:
   tetris        7-bag pieces, next/hold, ghost, wall kicks, levels every 10 lines
@@ -31,17 +32,24 @@ Games:
   invaders      5x11 formation, shields, UFO, waves; one shot on screen at a time
   chomp         maze chase: eat every pellet, power pellets make the 4 hunters
                 edible; a new maze each level
+  dash          endless runner: a fox jumps cacti and low birds, ducks under
+                middle ones; the world speeds up, day turns to night
 Controls (shown in every game): arrows/WASD, Space, P pause, Q or Esc leaves.
+Dash: Space/Up/W jump (fixed height), Down/S duck (~0.35 s, key repeat extends it)
+or drop fast in the air.
 Mouse: click menus; Tetris follows the pointer (left click drops, right rotates);
 Snake steers toward a click; Minesweeper left reveals, right flags;
-Invaders follow the pointer and click to fire; Chomp steers toward a click.
+Invaders follow the pointer and click to fire; Chomp steers toward a click;
+Dash jumps on a left click.
 Difficulty (default: games.difficulty):
   easy     slow start, extra help (Tetris ghost + 3 previews, Snake wraps, 5 lives)
   normal   the classic game
   hard     really hard: Tetris starts at level 12 without ghost/hold, Snake has
            obstacles and doubles growth, Minesweeper is Expert with no safe
            opening, Invaders fire constantly and you have 2 lives, Chomp
-           hunters are as fast as you and fright lasts 2 s (none from level 5)
+           hunters are as fast as you and fright lasts 2 s (none from level 5),
+           Dash starts fast with tight gaps, mixed cacti and birds from the start
+           (easy: slower, wider gaps, no high birds)
 Best scores: storage.root/runtime/arcade.toml, shared by the terminal and
 `ul desk` (Games tab); every finished game rereads the file first.
 --stream plays without a terminal for `ul desk`: JSON-line input on stdin
@@ -50,8 +58,8 @@ stdin ends the game. --size sets the grid (default 30x100).
 Examples: ul game snake hard; ul game --stream --size 40x120 tetris
 ";
 
-pub const GAMES: [(&str, &str); 5] =
-    [("tetris", "Tetris"), ("snake", "Snake"), ("minesweeper", "Minesweeper"), ("invaders", "Space Invaders"), ("chomp", "Chomp")];
+pub const GAMES: [(&str, &str); 6] =
+    [("tetris", "Tetris"), ("snake", "Snake"), ("minesweeper", "Minesweeper"), ("invaders", "Space Invaders"), ("chomp", "Chomp"), ("dash", "Dash")];
 
 /// Seconds per frame of the real-time games.
 pub const FRAME: f64 = 1.0 / 30.0;
@@ -166,11 +174,50 @@ pub trait Screen {
             return;
         }
         let inner = "─".repeat((width - 2) as usize);
-        self.put(top, left, &format!("┌{inner}┐"), style);
-        self.put(top + height - 1, left, &format!("└{inner}┘"), style);
+        self.put(top, left, &format!("╭{inner}╮"), style);
+        self.put(top + height - 1, left, &format!("╰{inner}╯"), style);
         for y in top + 1..top + height - 1 {
             self.put(y, left, "│", style);
             self.put(y, left + width - 1, "│", style);
+        }
+    }
+
+    /// Fade everything drawn so far (the backdrop of an overlay); nothing where that is impossible.
+    fn dim_all(&mut self) {}
+
+    /// Remember the frame drawn so far / bring it back, so an overlay can be redrawn after a
+    /// resize without the game. Nothing where the screen cannot do it.
+    fn save_frame(&mut self) {}
+    fn load_frame(&mut self) {}
+
+    /// Rounded box with `title` set into its top border.
+    fn panel(&mut self, top: i32, left: i32, height: i32, width: i32, title: &str, style: Style) {
+        self.frame_box(top, left, height, width, style);
+        if !title.is_empty() && width > 6 {
+            let title: String = title.chars().take((width - 6) as usize).collect();
+            self.put(top, left + 2, &format!(" {title} "), style.bold());
+        }
+    }
+
+    /// One HUD line over a block `width` wide at `left`: the title on the left, `(label, value)`
+    /// stats on the right. Stats are listed by importance; the last ones are dropped when the
+    /// block is too narrow.
+    fn hud(&mut self, y: i32, left: i32, width: i32, title: &str, stats: &[(&str, String)]) {
+        let measure = |stats: &[(&str, String)]| -> i32 {
+            stats.iter().map(|(label, value)| (label.chars().count() + 1 + value.chars().count()) as i32).sum::<i32>() + 2 * stats.len().saturating_sub(1) as i32
+        };
+        let title_width = title.chars().count() as i32;
+        let mut shown = stats.len();
+        while shown > 0 && title_width + 2 + measure(&stats[..shown]) > width {
+            shown -= 1;
+        }
+        self.put(y, left, title, Style::fg(Color::Yellow).bold());
+        let mut x = left + width - measure(&stats[..shown]);
+        for (label, value) in &stats[..shown] {
+            self.put(y, x, label, Style::fg(Color::Gray));
+            x += label.chars().count() as i32 + 1;
+            self.put(y, x, value, Style::fg(Color::White).bold());
+            x += value.chars().count() as i32 + 2;
         }
     }
 
@@ -197,10 +244,75 @@ pub fn inputs_until(screen: &mut dyn Screen, deadline: f64) -> io::Result<Vec<In
             return Ok(inputs);
         }
         match screen.input(Some(Duration::from_secs_f64(remaining)))? {
+            Some(input @ Input::Hover { .. }) if matches!(inputs.last(), Some(Input::Hover { .. })) => {
+                *inputs.last_mut().expect("checked above") = input;
+            }
             Some(input) => inputs.push(input),
             None => return Ok(inputs),
         }
     }
+}
+
+/// Fixed cadence for the real-time games. Waiting `FRAME` after every draw would stretch the
+/// period to `FRAME` plus the drawing time; this schedules frames on a grid instead and
+/// resynchronizes after a stall (a pause, a slow terminal) instead of firing a burst.
+pub struct Ticker {
+    next: f64,
+}
+
+impl Ticker {
+    pub fn new(now: f64) -> Ticker {
+        Ticker { next: now }
+    }
+
+    /// Call right after drawing a frame at `now`: when the frame must end.
+    pub fn deadline(&mut self, now: f64) -> f64 {
+        let due = self.next + FRAME;
+        self.next = if due > now + 1e-4 && due <= now + FRAME + 1e-9 { due } else { now + FRAME };
+        self.next
+    }
+
+    /// Forget the schedule (after a pause).
+    pub fn reset(&mut self, now: f64) {
+        self.next = now;
+    }
+}
+
+/// Top row and left column of a block `height` x `width` cells centered on the screen, leaving
+/// the row above it for the HUD (`top - 1`) and the last row for the controls line.
+pub fn center_block(size: (i32, i32), height: i32, width: i32) -> (i32, i32) {
+    let (rows, columns) = size;
+    let spare = (rows - 2 - height).max(0);
+    (spare / 2 + 1, ((columns - width) / 2).max(0))
+}
+
+/// Does the screen still have `need_width` x `need_height` cells?
+pub fn fits(screen: &dyn Screen, need_width: i32, need_height: i32) -> bool {
+    let (height, width) = screen.size();
+    width >= need_width && height >= need_height
+}
+
+fn size_notice(screen: &mut dyn Screen, need_width: i32, need_height: i32) {
+    screen.clear();
+    let (height, width) = screen.size();
+    let lines = [
+        (format!("This game needs a {need_width}x{need_height} terminal"), Style::fg(Color::Yellow).bold()),
+        (format!("(now {width}x{height}) — enlarge it or press a key"), Style::PLAIN),
+    ];
+    overlay(screen, &lines);
+}
+
+/// Mid-game resize below the board: show why the game stopped and wait for the terminal to
+/// grow back (`true`) or for the player to leave (`false`).
+pub fn wait_for_room(screen: &mut dyn Screen, need_width: i32, need_height: i32) -> io::Result<bool> {
+    while !fits(screen, need_width, need_height) {
+        size_notice(screen, need_width, need_height);
+        screen.present()?;
+        if matches!(screen.input(None)?, Some(input) if input.is_leave()) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Small xorshift generator; `constant` makes every choice predictable in tests.
@@ -383,18 +495,24 @@ impl Scores {
     }
 }
 
-/// Darken the screen behind a centered box with `lines`; the first is the title.
+/// Centered box with `lines` (the first is the title) over the dimmed game, with a drop shadow.
 pub fn overlay(screen: &mut dyn Screen, lines: &[(String, Style)]) {
     let (height, width) = screen.size();
-    let inner = lines.iter().map(|(text, _)| text.chars().count()).max().unwrap_or(0) as i32 + 4;
+    let inner = lines.iter().map(|(text, _)| text.chars().count()).max().unwrap_or(0) as i32 + 6;
     let box_width = inner.min(width).max(10);
     let box_height = lines.len() as i32 + 2;
     let top = ((height - box_height) / 2).max(0);
     let left = ((width - box_width) / 2).max(0);
+    screen.dim_all();
+    let shadow = Style::fg(Color::Gray).dim();
+    for y in top + 1..top + box_height {
+        screen.put(y, left + box_width, "▒▒", shadow);
+    }
+    screen.put(top + box_height, left + 2, &"▒".repeat(box_width as usize), shadow);
     for y in top..top + box_height {
         screen.put(y, left, &" ".repeat(box_width as usize), Style::PLAIN);
     }
-    screen.frame_box(top, left, box_height, box_width, Style::fg(Color::White).bold());
+    screen.frame_box(top, left, box_height, box_width, Style::fg(Color::Cyan));
     for (index, (text, style)) in lines.iter().enumerate() {
         let x = left + ((box_width - text.chars().count() as i32) / 2).max(1);
         screen.put(top + 1 + index as i32, x, text, *style);
@@ -420,11 +538,18 @@ pub fn finish(screen: &mut dyn Screen, title: &str, details: &[String], score: O
     }
     lines.push((String::new(), Style::PLAIN));
     lines.push(("Enter / click: play again    Esc: leave".into(), Style::fg(Color::Cyan)));
+    screen.save_frame();
     overlay(screen, &lines);
     screen.present()?;
     let ready = screen.now() + 0.5;
     loop {
-        let Some(input) = screen.input(None)? else { continue };
+        let Some(input) = screen.input(None)? else {
+            // Resized: bring the game picture back and center the box again.
+            screen.load_frame();
+            overlay(screen, &lines);
+            screen.present()?;
+            continue;
+        };
         if screen.now() < ready {
             continue;
         }
@@ -439,17 +564,21 @@ pub fn finish(screen: &mut dyn Screen, title: &str, details: &[String], score: O
 
 /// Paused box; returns `true` if the player chose to leave.
 pub fn pause(screen: &mut dyn Screen) -> io::Result<bool> {
-    overlay(
-        screen,
-        &[
-            ("PAUSED".into(), Style::fg(Color::Yellow).bold()),
-            (String::new(), Style::PLAIN),
-            ("P / Enter / click: resume    Esc: leave".into(), Style::fg(Color::Cyan)),
-        ],
-    );
+    let lines = [
+        ("PAUSED".to_string(), Style::fg(Color::Yellow).bold()),
+        (String::new(), Style::PLAIN),
+        ("P / Enter / click: resume    Esc: leave".to_string(), Style::fg(Color::Cyan)),
+    ];
+    screen.save_frame();
+    overlay(screen, &lines);
     screen.present()?;
     loop {
         match screen.input(None)? {
+            None => {
+                screen.load_frame();
+                overlay(screen, &lines);
+                screen.present()?;
+            }
             Some(input) if input.is_pause() => return Ok(false),
             Some(Input::Key(Key::Enter) | Input::Click { .. }) => return Ok(false),
             Some(input) if input.is_leave() => return Ok(true),
@@ -458,41 +587,114 @@ pub fn pause(screen: &mut dyn Screen) -> io::Result<bool> {
     }
 }
 
-/// Shown when the terminal is too small for a game.
+/// Shown when the terminal is too small for a game: a key leaves; growing the terminal
+/// enough starts the game (`Again`).
 pub fn too_small(screen: &mut dyn Screen, need_width: i32, need_height: i32) -> io::Result<Played> {
-    screen.clear();
-    let (height, width) = screen.size();
-    screen.centered(height / 2, &format!("This game needs a {need_width}x{need_height} terminal"), Style::fg(Color::Yellow));
-    screen.centered(height / 2 + 1, &format!("(now {width}x{height}) — enlarge it or press a key"), Style::PLAIN);
-    screen.present()?;
-    screen.input(None)?;
-    Ok(Played { score: None, after: After::Leave })
+    loop {
+        size_notice(screen, need_width, need_height);
+        screen.present()?;
+        match screen.input(None)? {
+            Some(_) => return Ok(Played { score: None, after: After::Leave }),
+            None if fits(screen, need_width, need_height) => return Ok(Played { score: None, after: After::Again }),
+            None => {}
+        }
+    }
 }
 
-fn menu(screen: &mut dyn Screen, title: &str, labels: &[String], mut selected: usize, footer: &str) -> io::Result<Option<usize>> {
+/// One-line description of a game for the menu; unknown names get none.
+fn describe(name: &str) -> &'static str {
+    match name {
+        "tetris" => "7-bag pieces, hold, ghost, wall kicks",
+        "snake" => "eat, grow and speed up; bonus stars",
+        "minesweeper" => "safe first click, flags, chording",
+        "invaders" => "5x11 formation, shields, UFO, waves",
+        "chomp" => "maze chase with 4 hunters",
+        _ => "",
+    }
+}
+
+struct Item {
+    label: String,
+    detail: String,
+    note: String,
+}
+
+/// First item row of a menu with `count` items: a 3-row banner, a subtitle and a gap above it.
+fn menu_first_row(height: i32, count: usize) -> i32 {
+    ((height - 1 - (count as i32 + 5)) / 2).max(0) + 5
+}
+
+fn banner(screen: &mut dyn Screen, top: i32, title: &str) {
+    let (_, width) = screen.size();
+    let count = title.chars().count() as i32;
+    let box_width = (count + 6).min(width);
+    let left = ((width - box_width) / 2).max(0);
+    screen.frame_box(top, left, 3, box_width, Style::fg(Color::DarkCyan));
+    let colors = [Color::Cyan, Color::Green, Color::Yellow, Color::DarkYellow, Color::Magenta, Color::Red];
+    screen.put(top + 1, left + 3, title, Style::fg(Color::Cyan).bold());
+    let mut letter = 0;
+    for (offset, character) in title.chars().enumerate() {
+        if character != ' ' {
+            letter += 1;
+        }
+        let style = Style::fg(colors[letter % colors.len()]).bold();
+        screen.put(top + 1, left + 3 + offset as i32, &character.to_string(), style);
+    }
+}
+
+fn menu(screen: &mut dyn Screen, title: &str, subtitle: &str, items: &[Item], mut selected: usize, footer: &str) -> io::Result<Option<usize>> {
     loop {
         screen.clear();
         let (height, width) = screen.size();
-        let top = (height / 2 - labels.len() as i32 / 2 - 3).max(0);
-        screen.centered(top, title, Style::fg(Color::Yellow).bold());
-        let label_width = labels.iter().map(|label| label.chars().count()).max().unwrap_or(0) as i32 + 6;
-        let left = ((width - label_width) / 2).max(0);
-        for (index, label) in labels.iter().enumerate() {
-            let text = format!(" {}. {label:<width$} ", index + 1, width = (label_width - 6) as usize);
-            let style = if index == selected { Style::fg(Color::Cyan).bold().reverse() } else { Style::PLAIN };
-            screen.put(top + 2 + index as i32, left, &text, style);
+        let first = menu_first_row(height, items.len());
+        banner(screen, first - 5, title);
+        screen.centered(first - 2, subtitle, Style::fg(Color::Gray));
+        let widest = |text: fn(&Item) -> &str| items.iter().map(|item| text(item).chars().count()).max().unwrap_or(0);
+        let (label_width, detail_width, note_width) = (widest(|item| &item.label), widest(|item| &item.detail), widest(|item| &item.note));
+        // Row: marker, number, label, then the description and best score if the terminal is wide enough.
+        let base = 5 + label_width as i32;
+        let with_detail = base + 2 + detail_width as i32;
+        let with_note = with_detail + 2 + note_width as i32;
+        let (show_detail, show_note) = (with_detail < width, with_note < width);
+        let row_width = if show_note { with_note } else if show_detail { with_detail } else { base } + 1;
+        let left = ((width - row_width) / 2).max(0);
+        for (index, item) in items.iter().enumerate() {
+            let y = first + index as i32;
+            let chosen = index == selected;
+            let marker = if chosen { "▸" } else { " " };
+            let mut text = format!("{marker} {}  {:<lw$}", index + 1, item.label, lw = label_width);
+            if show_detail {
+                text.push_str(&format!("  {:<dw$}", item.detail, dw = detail_width));
+            }
+            if show_note {
+                text.push_str(&format!("  {:>nw$}", item.note, nw = note_width));
+            }
+            text.push(' ');
+            if chosen {
+                screen.put(y, left, &text, Style::fg(Color::Cyan).bold().reverse());
+                continue;
+            }
+            screen.put(y, left + 2, &(index + 1).to_string(), Style::fg(Color::Gray));
+            screen.put(y, left + 5, &item.label, Style::fg(Color::White).bold());
+            if show_detail {
+                screen.put(y, left + 5 + label_width as i32 + 2, &item.detail, Style::fg(Color::Gray));
+            }
+            if show_note {
+                let x = left + with_detail + 2;
+                screen.put(y, x, &format!("{:>nw$}", item.note, nw = note_width), Style::fg(Color::Yellow));
+            }
         }
         screen.controls(footer);
         screen.present()?;
-        let row_of = |y: i32| (y - top - 2).try_into().ok().filter(|row: &usize| *row < labels.len());
+        let row_of = |y: i32| (y - first).try_into().ok().filter(|row: &usize| *row < items.len());
         match screen.input(None)? {
             Some(input) if input.is_leave() => return Ok(None),
-            Some(Input::Key(Key::Up | Key::Char('k' | 'w'))) => selected = (selected + labels.len() - 1) % labels.len(),
-            Some(Input::Key(Key::Down | Key::Char('j' | 's'))) => selected = (selected + 1) % labels.len(),
+            Some(Input::Key(Key::Up | Key::Char('k' | 'w'))) => selected = (selected + items.len() - 1) % items.len(),
+            Some(Input::Key(Key::Down | Key::Char('j' | 's'))) => selected = (selected + 1) % items.len(),
             Some(Input::Key(Key::Enter | Key::Char(' '))) => return Ok(Some(selected)),
             Some(Input::Key(Key::Char(digit))) if digit.is_ascii_digit() => {
                 let index = (digit as usize).wrapping_sub('1' as usize);
-                if index < labels.len() {
+                if index < items.len() {
                     return Ok(Some(index));
                 }
             }
@@ -508,29 +710,37 @@ fn menu(screen: &mut dyn Screen, title: &str, labels: &[String], mut selected: u
 }
 
 pub fn game_menu(screen: &mut dyn Screen, scores: &Scores, level: Level) -> io::Result<Option<&'static str>> {
-    let labels: Vec<String> = GAMES
+    let items: Vec<Item> = GAMES
         .iter()
-        .map(|(name, label)| match scores.best(name, level) {
-            Some(best) if lower_is_better(name) => format!("{label:<16} best {best}s"),
-            Some(best) => format!("{label:<16} best {best}"),
-            None => label.to_string(),
+        .map(|(name, label)| Item {
+            label: label.to_string(),
+            detail: describe(name).to_string(),
+            note: match scores.best(name, level) {
+                Some(best) if lower_is_better(name) => format!("best {best}s"),
+                Some(best) => format!("best {best}"),
+                None => String::new(),
+            },
         })
         .collect();
-    let footer = "↑/↓ or mouse select · Enter / click play · Q quit";
-    Ok(menu(screen, "U N L A W   A R C A D E", &labels, 0, footer)?.map(|index| GAMES[index].0))
+    let subtitle = format!("{} games · best scores for {}", GAMES.len(), level.name());
+    let footer = "↑/↓ or mouse select · Enter / click play · 1-9 jump · Q quit";
+    Ok(menu(screen, "U N L A W   A R C A D E", &subtitle, &items, 0, footer)?.map(|index| GAMES[index].0))
 }
 
 pub fn difficulty_menu(screen: &mut dyn Screen, default: Level) -> io::Result<Option<Level>> {
-    let labels: Vec<String> = [
-        "Easy     slow start, extra help",
-        "Normal   the classic game",
-        "Hard     really hard",
-    ]
-    .map(String::from)
-    .to_vec();
-    let start = [Level::Easy, Level::Normal, Level::Hard].iter().position(|level| *level == default).unwrap_or(1);
-    let footer = "↑/↓ or mouse select · Enter / click start · Esc back";
-    Ok(menu(screen, "SELECT DIFFICULTY", &labels, start, footer)?.map(|index| [Level::Easy, Level::Normal, Level::Hard][index]))
+    let levels = [Level::Easy, Level::Normal, Level::Hard];
+    let details = ["slow start, extra help", "the classic game", "really hard"];
+    let items: Vec<Item> = levels
+        .iter()
+        .zip(details)
+        .map(|(level, detail)| {
+            let name = level.name();
+            Item { label: format!("{}{}", name[..1].to_uppercase(), &name[1..]), detail: detail.to_string(), note: if *level == default { "default".into() } else { String::new() } }
+        })
+        .collect();
+    let start = levels.iter().position(|level| *level == default).unwrap_or(1);
+    let footer = "↑/↓ or mouse select · Enter / click start · 1-3 jump · Esc back";
+    Ok(menu(screen, "S E L E C T   D I F F I C U L T Y", "how hard should it be?", &items, start, footer)?.map(|index| levels[index]))
 }
 
 pub fn play_once(screen: &mut dyn Screen, game: &str, level: Level, rng: &mut Rng, best: Option<u64>, scores: Option<&mut Scores>) -> io::Result<Played> {
@@ -539,6 +749,7 @@ pub fn play_once(screen: &mut dyn Screen, game: &str, level: Level, rng: &mut Rn
         "snake" => snake::play(screen, level, rng, best, scores),
         "minesweeper" => mines::play(screen, level, rng, best, scores),
         "chomp" => chomp::play(screen, level, rng, best, scores),
+        "dash" => dash::play(screen, level, rng, best, scores),
         _ => invaders::play(screen, level, rng, best, scores),
     }
 }
@@ -565,7 +776,7 @@ pub fn arcade(screen: &mut dyn Screen, default: Level, rng: &mut Rng, scores: &m
 }
 
 fn usage() -> i32 {
-    eprintln!("Usage: ul game [--stream [--size ROWSxCOLS]] [tetris|snake|minesweeper|invaders|chomp] [easy|normal|hard]");
+    eprintln!("Usage: ul game [--stream [--size ROWSxCOLS]] [tetris|snake|minesweeper|invaders|chomp|dash] [easy|normal|hard]");
     2
 }
 
@@ -654,12 +865,13 @@ pub mod testing {
         pub text: Vec<(i32, i32, String, Style)>,
         pub frames: Vec<Vec<(i32, i32, String, Style)>>,
         pub clock: f64,
+        saved: Vec<(i32, i32, String, Style)>,
         reads: usize,
     }
 
     impl Fake {
         pub fn new(size: (i32, i32)) -> Fake {
-            Fake { inputs: VecDeque::new(), size, text: Vec::new(), frames: Vec::new(), clock: 0.0, reads: 0 }
+            Fake { inputs: VecDeque::new(), size, text: Vec::new(), frames: Vec::new(), clock: 0.0, saved: Vec::new(), reads: 0 }
         }
 
         pub fn keys(mut self, keys: &[Option<Input>]) -> Fake {
@@ -687,9 +899,15 @@ pub mod testing {
         fn put(&mut self, y: i32, x: i32, text: &str, style: Style) {
             self.text.push((y, x, text.to_string(), style));
         }
+        fn save_frame(&mut self) {
+            self.saved = self.text.clone();
+        }
+        fn load_frame(&mut self) {
+            self.text = self.saved.clone();
+        }
         fn present(&mut self) -> io::Result<()> {
             self.frames.push(self.text.clone());
-            if self.frames.len() > 400 {
+            if self.frames.len() > 4000 {
                 self.frames.remove(0);
             }
             Ok(())
@@ -740,13 +958,13 @@ mod tests {
         let scores = Scores::load(None);
         let pick = |inputs: &[Option<Input>]| game_menu(&mut Fake::new((40, 120)).keys(inputs), &scores, Level::Normal).unwrap();
         assert_eq!(pick(&[special(Key::Down), key('j'), special(Key::Enter)]), Some("minesweeper"));
-        assert_eq!(pick(&[key('k'), special(Key::Enter)]), Some("chomp"));
+        assert_eq!(pick(&[key('k'), special(Key::Enter)]), Some("dash"));
+        assert_eq!(pick(&[key('6')]), Some("dash"));
         assert_eq!(pick(&[key('2')]), Some("snake"));
         assert_eq!(pick(&[key('9'), special(Key::Esc)]), None);
-        // Rows start two lines under the title, which sits at height/2 - 2 - 3.
-        let top = 40 / 2 - 5 / 2 - 3;
-        assert_eq!(pick(&[click(top + 2 + 3, 60, Button::Left)]), Some("invaders"));
-        assert_eq!(pick(&[Some(Input::Hover { y: top + 3, x: 60 }), special(Key::Enter)]), Some("snake"));
+        let first = menu_first_row(40, GAMES.len());
+        assert_eq!(pick(&[click(first + 3, 60, Button::Left)]), Some("invaders"));
+        assert_eq!(pick(&[Some(Input::Hover { y: first + 1, x: 60 }), special(Key::Enter)]), Some("snake"));
         assert_eq!(pick(&[click(0, 0, Button::Left), key('q')]), None);
         let level = |inputs: &[Option<Input>], default| difficulty_menu(&mut Fake::new((40, 120)).keys(inputs), default).unwrap();
         assert_eq!(level(&[special(Key::Enter)], Level::Hard), Some(Level::Hard));
@@ -893,5 +1111,140 @@ mod tests {
         let mut screen = Fake::new((10, 30)).keys(&[key('x')]);
         assert_eq!(too_small(&mut screen, 60, 24).unwrap().after, After::Leave);
         assert!(screen.drew("needs a 60x24 terminal"));
+    }
+
+    #[test]
+    fn the_ticker_keeps_a_fixed_cadence_whatever_the_drawing_costs() {
+        let mut ticker = Ticker::new(10.0);
+        // Drawing took 5 ms each time: deadlines stay on the 1/30 s grid instead of drifting.
+        let mut deadlines = Vec::new();
+        for frame in 1..=3 {
+            let drawn_at = 10.0 + (frame - 1) as f64 * FRAME + 0.005;
+            deadlines.push(ticker.deadline(drawn_at));
+        }
+        for (index, deadline) in deadlines.iter().enumerate() {
+            assert!((deadline - (10.0 + (index + 1) as f64 * FRAME)).abs() < 1e-9, "{deadlines:?}");
+        }
+        // A stall (pause, slow terminal) resynchronizes instead of firing a burst of frames.
+        assert!((ticker.deadline(20.0) - (20.0 + FRAME)).abs() < 1e-9);
+        // Leaving a frame early (Snake's step) does not leave the schedule running ahead.
+        assert!((ticker.deadline(20.0 + FRAME / 3.0) - (20.0 + FRAME / 3.0 + FRAME)).abs() < 1e-9);
+        ticker.reset(30.0);
+        assert!((ticker.deadline(30.001) - (30.0 + FRAME)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_hover_flood_collapses_to_the_last_position() {
+        let hover = |y, x| Some(Input::Hover { y, x });
+        let mut screen = Fake::new((30, 80)).keys(&[hover(1, 1), hover(2, 2), key('a'), hover(3, 3), hover(4, 4), hover(5, 5)]).idle(1);
+        let inputs = inputs_until(&mut screen, 100.0).unwrap();
+        assert_eq!(inputs, vec![Input::Hover { y: 2, x: 2 }, Input::Key(Key::Char('a')), Input::Hover { y: 5, x: 5 }]);
+    }
+
+    #[test]
+    fn blocks_are_centered_with_room_for_the_hud_and_controls() {
+        // 40 rows: HUD, 20-row board, controls; the 18 spare rows are split around it.
+        assert_eq!(center_block((40, 100), 20, 30), (10, 35));
+        // Exactly enough room: HUD on row 0, board from row 1, controls on the last row.
+        assert_eq!(center_block((22, 30), 20, 30), (1, 0));
+        // Never negative on a terminal that is too small.
+        assert_eq!(center_block((5, 10), 20, 30), (1, 0));
+    }
+
+    #[test]
+    fn the_hud_drops_the_least_important_stats_when_narrow() {
+        let stats = [("SCORE", "120".to_string()), ("LEVEL", "3".to_string()), ("BEST", "900".to_string())];
+        let mut wide = Fake::new((30, 80));
+        wide.hud(0, 0, 60, "SNAKE · easy", &stats);
+        assert!(wide.drew("SNAKE · easy") && wide.drew("BEST") && wide.drew("900"));
+        // Right aligned to the end of the block.
+        let (_, x, text, _) = wide.text.last().unwrap();
+        assert_eq!(x + text.chars().count() as i32, 60);
+        let mut narrow = Fake::new((30, 80));
+        narrow.hud(0, 0, 32, "SNAKE · easy", &stats);
+        assert!(narrow.drew("SCORE") && narrow.drew("LEVEL"));
+        assert!(!narrow.drew("BEST"), "the last stat goes first");
+        let mut tiny = Fake::new((30, 80));
+        tiny.hud(0, 0, 10, "SNAKE · easy", &stats);
+        assert!(tiny.drew("SNAKE") && !tiny.drew("SCORE"));
+    }
+
+    /// A fake screen that also counts `dim_all` calls and can grow on its second read.
+    struct Probe {
+        fake: Fake,
+        dims: usize,
+        reads: usize,
+        grow: bool,
+    }
+
+    impl Screen for Probe {
+        fn size(&self) -> (i32, i32) {
+            self.fake.size()
+        }
+        fn clear(&mut self) {
+            self.fake.clear()
+        }
+        fn put(&mut self, y: i32, x: i32, text: &str, style: Style) {
+            self.fake.put(y, x, text, style)
+        }
+        fn dim_all(&mut self) {
+            self.dims += 1;
+        }
+        fn present(&mut self) -> io::Result<()> {
+            self.fake.present()
+        }
+        fn input(&mut self, timeout: Option<Duration>) -> io::Result<Option<Input>> {
+            self.reads += 1;
+            if self.grow && self.reads == 2 {
+                self.fake.size = (40, 120);
+                return Ok(None);
+            }
+            self.fake.input(timeout)
+        }
+        fn now(&self) -> f64 {
+            self.fake.now()
+        }
+    }
+
+    fn probe(size: (i32, i32), grow: bool) -> Probe {
+        Probe { fake: Fake::new(size), dims: 0, reads: 0, grow }
+    }
+
+    #[test]
+    fn overlays_are_rounded_with_a_shadow_over_a_dimmed_game() {
+        let mut screen = probe((20, 60), false);
+        overlay(&mut screen, &[("PAUSED".into(), Style::PLAIN)]);
+        assert_eq!(screen.dims, 1, "the game behind is dimmed once");
+        assert!(screen.fake.drew("╭") && screen.fake.drew("╯") && screen.fake.drew("▒"));
+        assert!(!screen.fake.drew("┌"));
+    }
+
+    #[test]
+    fn a_game_waits_for_the_terminal_to_grow_instead_of_leaving() {
+        let mut screen = probe((10, 30), true);
+        screen.fake = screen.fake.keys(&[None]);
+        assert!(wait_for_room(&mut screen, 60, 24).unwrap());
+        assert!(screen.fake.drew("needs a 60x24 terminal"));
+        let mut leaving = Fake::new((10, 30)).keys(&[key('q')]);
+        assert!(!wait_for_room(&mut leaving, 60, 24).unwrap());
+        // Before the game starts, growing the terminal starts it (Again) and a key still leaves.
+        let mut screen = probe((10, 30), true);
+        screen.fake = screen.fake.keys(&[None]);
+        assert_eq!(too_small(&mut screen, 60, 24).unwrap().after, After::Again);
+    }
+
+    #[test]
+    fn the_menu_lists_descriptions_and_bests_when_it_fits_and_degrades_when_narrow() {
+        let mut scores = Scores::load(None);
+        scores.document["tetris"] = toml_edit::Item::Table(toml_edit::Table::new());
+        scores.document["tetris"]["normal"] = toml_edit::value(1200);
+        let mut wide = Fake::new((40, 120)).keys(&[key('q')]);
+        game_menu(&mut wide, &scores, Level::Normal).unwrap();
+        assert!(wide.drew("A R C A D E") && wide.drew("best 1200") && wide.drew(describe("snake")));
+        assert!(wide.drew("best scores for normal"));
+        let mut narrow = Fake::new((24, 40)).keys(&[key('q')]);
+        game_menu(&mut narrow, &scores, Level::Normal).unwrap();
+        assert!(narrow.drew("Tetris") && !narrow.drew(describe("snake")), "descriptions go first on a narrow terminal");
+        assert_eq!(describe("a-game-from-the-future"), "");
     }
 }

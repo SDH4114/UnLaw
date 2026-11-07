@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use std::io;
 
-use super::{finish, inputs_until, pause, too_small, After, Button, Color, Input, Key, Level, Played, Rng, Scores, Screen, Style, FRAME};
+use super::{center_block, finish, fits, inputs_until, pause, too_small, wait_for_room, After, Button, Color, Input, Key, Level, Played, Rng, Scores, Screen, Style, Ticker};
 
 pub const COLUMNS: i32 = 11;
 pub const ROWS: i32 = 5;
@@ -319,11 +319,16 @@ struct Layout {
 
 fn draw(screen: &mut dyn Screen, game: &Invaders, layout: &Layout, level: Level, best: Option<u64>) {
     screen.clear();
-    let lives = "♥".repeat(game.lives as usize);
-    let best = best.map(|best| format!(" · Best {best}")).unwrap_or_default();
-    let title = format!("SPACE INVADERS · {} · Score {} · Lives {lives} · Wave {}{best}", level.name(), game.score, game.wave);
-    screen.centered(0, &title, Style::fg(Color::Yellow).bold());
+    let stats = [
+        ("SCORE", game.score.to_string()),
+        ("WAVE", game.wave.to_string()),
+        ("BEST", best.map(|best| best.to_string()).unwrap_or_else(|| "—".into())),
+    ];
+    screen.hud(layout.top - 1, layout.left, game.width + 2, &format!("SPACE INVADERS · {}", level.name()), &stats);
     screen.frame_box(layout.top, layout.left, game.height + 2, game.width + 2, Style::fg(Color::Gray));
+    // Lives sit in the bottom border, like the lives under Chomp's maze.
+    let lives = format!(" {} ", "♥".repeat(game.lives as usize));
+    screen.put(layout.top + game.height + 1, layout.left + game.width + 1 - lives.chars().count() as i32, &lives, Style::fg(Color::Red).bold());
     let at = |y: i32, x: i32| (layout.top + 1 + y, layout.left + 1 + x);
     for &(y, x) in &game.shields {
         let (sy, sx) = at(y, x);
@@ -350,7 +355,7 @@ fn draw(screen: &mut dyn Screen, game: &Invaders, layout: &Layout, level: Level,
     if !blink {
         screen.put(y, x, "▄█▄", Style::fg(Color::Green).bold());
     }
-    screen.controls("←→ / A D move · Space / click fire · mouse moves the cannon · P pause · Esc quit");
+    screen.controls("←→ / A D move · Space / click fire · mouse aims · P pause · Q quit");
 }
 
 pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u64>, scores: Option<&mut Scores>) -> io::Result<Played> {
@@ -360,13 +365,23 @@ pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u
     if field_height < 20 || field_width < 56 {
         return too_small(screen, 58, 24);
     }
-    let layout = Layout { top: 1, left: (width - field_width - 2) / 2 };
+    let (need_width, need_height) = (field_width + 2, field_height + 4);
     let mut game = Invaders::new(level, field_height, field_width);
     let mut last = screen.now();
+    let mut ticker = Ticker::new(last);
     loop {
+        if !fits(screen, need_width, need_height) {
+            if !wait_for_room(screen, need_width, need_height)? {
+                return Ok(Played { score: None, after: After::Leave });
+            }
+            last = screen.now();
+            ticker.reset(last);
+        }
+        let (top, left) = center_block(screen.size(), field_height + 2, field_width + 2);
+        let layout = Layout { top, left };
         draw(screen, &game, &layout, level, best);
         screen.present()?;
-        let deadline = screen.now() + FRAME;
+        let deadline = ticker.deadline(screen.now());
         for input in inputs_until(screen, deadline)? {
             match input {
                 Input::Key(Key::Left | Key::Char('a' | 'A')) => game.move_player(-2),
@@ -380,6 +395,7 @@ pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u
                         return Ok(Played { score: None, after: After::Leave });
                     }
                     last = screen.now();
+                    ticker.reset(last);
                 }
                 input if input.is_leave() => return Ok(Played { score: None, after: After::Leave }),
                 _ => {}
@@ -400,6 +416,7 @@ pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u
 #[cfg(test)]
 mod tests {
     use super::super::testing::*;
+    use super::super::FRAME;
     use super::*;
 
     fn game(level: Level) -> Invaders {

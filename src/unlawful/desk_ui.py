@@ -711,6 +711,7 @@ const GAME_INFO = {
   minesweeper: "First click is safe; lowest time wins",
   invaders: "Formation, shields, UFO, waves",
   chomp: "Maze chase with four hunters; new maze each level",
+  dash: "Endless runner: jump, duck, faster and faster",
 };
 const PALETTE = { red: "#ff5f57", green: "#3ed67a", yellow: "#ffd84d", blue: "#4d8dff", magenta: "#d77bff", cyan: "#4fd8e8", white: "#f4f5f7", gray: "#8b8f98", darkred: "#c0392b", darkyellow: "#c9971c", darkblue: "#3159c9", darkcyan: "#1f9aa8" };
 const SCREEN_BG = "#0e1014", SCREEN_FG = "#d9dce3";

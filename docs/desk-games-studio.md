@@ -8,7 +8,7 @@ for the next session; `AGENTS.md` keeps the short rules.
 ## 1. Games in `ul desk` (3.11.0)
 
 Goal: every `ul game` arcade game (Tetris, Snake, Minesweeper, Space Invaders,
-Chomp) playable in the browser with the same best scores as the terminal.
+Chomp, Dash) playable in the browser with the same best scores as the terminal.
 
 - **No second implementation.** The page never reimplements a game. `ul game
   --stream [--size RxC]` (`rust/src/builtin/game/stream.rs`) is a `Screen`

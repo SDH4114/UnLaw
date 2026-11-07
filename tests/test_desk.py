@@ -575,7 +575,7 @@ class DeskGameTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(data["available"])
         games = {game["name"]: game for game in data["games"]}
-        self.assertEqual(list(games), ["tetris", "snake", "minesweeper", "invaders", "chomp"])
+        self.assertEqual(list(games), ["tetris", "snake", "minesweeper", "invaders", "chomp", "dash"])
         self.assertEqual(games["snake"]["best"], {"normal": 12})
         self.assertEqual(games["minesweeper"]["best"], {"easy": 40})
         self.assertTrue(games["minesweeper"]["lower"])

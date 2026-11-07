@@ -5,7 +5,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::io;
 
-use super::{finish, inputs_until, pause, too_small, After, Button, Color, Input, Key, Level, Played, Rng, Scores, Screen, Style, FRAME};
+use super::{center_block, finish, fits, inputs_until, pause, too_small, wait_for_room, After, Button, Color, Input, Key, Level, Played, Rng, Scores, Screen, Style, Ticker};
 
 type Cell = (i32, i32);
 
@@ -221,9 +221,12 @@ struct Layout {
 
 fn draw(screen: &mut dyn Screen, snake: &Snake, layout: &Layout, level: Level, best: Option<u64>) {
     screen.clear();
-    let best = best.map(|best| format!(" · Best {best}")).unwrap_or_default();
-    let title = format!("SNAKE · {} · Score {}{best} · Length {}", level.name(), snake.score, snake.body.len());
-    screen.centered(0, &title, Style::fg(Color::Yellow).bold());
+    let stats = [
+        ("SCORE", snake.score.to_string()),
+        ("LENGTH", snake.body.len().to_string()),
+        ("BEST", best.map(|best| best.to_string()).unwrap_or_else(|| "—".into())),
+    ];
+    screen.hud(layout.top - 1, layout.left, snake.columns * 2 + 2, &format!("SNAKE · {}", level.name()), &stats);
     let (top, left) = (layout.top, layout.left);
     let wall = if snake.rules.wrap { Style::fg(Color::Gray).dim() } else { Style::fg(Color::White) };
     screen.frame_box(top, left, snake.rows + 2, snake.columns * 2 + 2, wall);
@@ -244,7 +247,7 @@ fn draw(screen: &mut dyn Screen, snake: &Snake, layout: &Layout, level: Level, b
         let style = if index == 0 { Style::fg(Color::Yellow).bold() } else { Style::fg(Color::Green) };
         screen.put(y, x, if index == 0 { "██" } else { "▓▓" }, style);
     }
-    screen.controls("←↑↓→ / WASD move · click to steer · P pause · Esc quit");
+    screen.controls("←↑↓→ / WASD move · click to steer · P pause · Q quit");
 }
 
 pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u64>, scores: Option<&mut Scores>) -> io::Result<Played> {
@@ -254,13 +257,23 @@ pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u
     if rows < 12 || columns < 20 {
         return too_small(screen, 42, 16);
     }
-    let layout = Layout { top: 1, left: (width - (columns * 2 + 2)) / 2 };
+    let (need_width, need_height) = (columns * 2 + 2, rows + 4);
     let mut snake = Snake::new(level, rows, columns, rng);
     let mut next_step = screen.now() + 1.0 / snake.speed;
+    let mut ticker = Ticker::new(screen.now());
     loop {
+        if !fits(screen, need_width, need_height) {
+            if !wait_for_room(screen, need_width, need_height)? {
+                return Ok(Played { score: None, after: After::Leave });
+            }
+            next_step = screen.now() + 1.0 / snake.speed;
+            ticker.reset(screen.now());
+        }
+        let (top, left) = center_block(screen.size(), rows + 2, columns * 2 + 2);
+        let layout = Layout { top, left };
         draw(screen, &snake, &layout, level, best);
         screen.present()?;
-        let deadline = (screen.now() + FRAME).min(next_step);
+        let deadline = ticker.deadline(screen.now()).min(next_step);
         for input in inputs_until(screen, deadline)? {
             match input {
                 Input::Key(Key::Up | Key::Char('w' | 'W')) => snake.turn(UP),
@@ -275,6 +288,7 @@ pub fn play(screen: &mut dyn Screen, level: Level, rng: &mut Rng, best: Option<u
                         return Ok(Played { score: None, after: After::Leave });
                     }
                     next_step = screen.now() + 1.0 / snake.speed;
+                    ticker.reset(screen.now());
                 }
                 input if input.is_leave() => return Ok(Played { score: None, after: After::Leave }),
                 _ => {}

@@ -223,7 +223,7 @@ Actions:
 Page: Board (drag cards between columns, double-click to edit), Today (overdue,
   due today, in progress, next 7 days), Stats, Games. Keys: n new card,
   / search, space start/pause timer, 1 2 3 4 views, Esc clear filters, ? keys.
-Games: Tetris, Snake, Minesweeper, Space Invaders and Chomp from `ul game`,
+Games: Tetris, Snake, Minesweeper, Space Invaders, Chomp and Dash from `ul game`,
   played in the page with keyboard and mouse at easy/normal/hard. The page
   runs `ul game --stream` (the same Rust games), so best scores are the ones
   in storage.root/runtime/arcade.toml that the terminal arcade shows too.

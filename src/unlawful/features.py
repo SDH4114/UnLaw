@@ -33,7 +33,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("mac", "System", "Control macOS apps through macos-harness"),
     ("steam", "System", "Open Steam"),
     ("minecraft", "System", "Open Prism Launcher"),
-    ("game", "Fun", "Terminal arcade: Tetris, Snake, Minesweeper, Invaders, Chomp"),
+    ("game", "Fun", "Terminal arcade: Tetris, Snake, Minesweeper, Invaders, Chomp, Dash"),
 )
 # Cargo features of the Rust core; `agent` only gates the ula/unlawagent shortcuts.
 CARGO = ("lm", "agent", "game")

@@ -47,7 +47,7 @@ FEATURES = [
     ("mac", "System", "Control macOS apps through macos-harness"),
     ("steam", "System", "Open Steam"),
     ("minecraft", "System", "Open Prism Launcher"),
-    ("game", "Fun", "Terminal arcade: Tetris, Snake, Minesweeper, Invaders, Chomp"),
+    ("game", "Fun", "Terminal arcade: Tetris, Snake, Minesweeper, Invaders, Chomp, Dash"),
 ]
 REQUIRES = {"agent": ("lm",)}
 CARGO = ("lm", "agent", "game")

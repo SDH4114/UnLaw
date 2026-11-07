@@ -247,7 +247,7 @@ class GameTests(CoreTestCase):
         process = subprocess.Popen([str(binary()), "game"], stdin=slave, stdout=slave, stderr=slave, env=self.env, cwd=self.root)
         os.close(slave)
         seen = b""
-        while b"A R C A D E" not in seen and process.poll() is None:
+        while b"Minesweeper" not in seen and process.poll() is None:
             if select.select([master], [], [], 5)[0]:
                 seen += os.read(master, 65536)
             else:
@@ -263,7 +263,7 @@ class GameTests(CoreTestCase):
                     break
         process.wait(timeout=5)
         os.close(master)
-        self.assertIn(b"A R C A D E", seen)
+        self.assertIn(b"Minesweeper", seen)
         self.assertEqual(process.returncode, 0)
 
 
