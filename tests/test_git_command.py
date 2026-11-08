@@ -862,6 +862,22 @@ class OpenAndPrTests(GitCommandCase):
         self.assertEqual(self.subjects(bare), ["first"])
         self.assertEqual(self.calls(), [])
 
+    def test_pr_without_new_commits_explains_and_pushes_nothing(self) -> None:
+        # Haos's case: a new branch with edits but no commit yet; gh only said
+        # "could not compute title or body defaults" after a useless push.
+        bare = self.make_repo()
+        self.github()
+        self.git("checkout", "-q", "-b", "feature")
+        self.change("main.py", "edited\n")
+        code, _, err = self.ul("pr")
+        self.assertEqual(code, 1)
+        self.assertIn("no commits", err)
+        self.assertIn("ul git commit", err)
+        self.assertIn("uncommitted", err)
+        self.assertNotIn("feature", self.git("branch", "-r"))
+        self.assertEqual(self.subjects(bare), ["first"])
+        self.assertEqual(self.calls(), [])
+
     def test_pr_without_any_page_is_an_error(self) -> None:
         self.feature_branch()
         (self.bin / "gh").unlink()

@@ -357,6 +357,9 @@ LEGACY_NORMALIZED_HASHES["git"].update({
     "5213fd6920cd2a19ab86237bf848273178b845d2f1c11c54c556fefab03e0063",
     "0707c755fac220e9d4512a471b1b1534f326e11359f1cc03c398278cb099550e",
 })
+# 3.15.0-beta.2 with the security fixes (c5fc5c5, installed on the maintainer machine), before the pr check.
+LEGACY_SOURCE_HASHES["git"].add("1613173bad034ed10a92f7a47f43299913d22eae0faa5a8f8cf829e7a2b0d7d8")
+LEGACY_NORMALIZED_HASHES["git"].add("5e23131727a584a46136fcb6f4fd7efd4b71db0f48b0441233c91a0d3f6c47cd")
 
 # Commands now built into the Rust core. Untouched seeds with these hashes are
 # removed so the built-in runs; edited copies stay and override it.

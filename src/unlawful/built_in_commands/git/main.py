@@ -610,6 +610,18 @@ def _git_pr(args: list[str]) -> int:
     origin = _git_remote_url("origin")
     if origin is None:
         return _git_fail("no origin remote; run `ul git connect` first.")
+    # A branch with nothing on top of the base cannot become a pull request: say so before
+    # pushing, instead of gh's "could not compute title or body defaults".
+    for ref in (f"origin/{base}", base):
+        if not _git_out("rev-parse", "--verify", "-q", f"{ref}^{{commit}}").returncode:
+            if _git_out("rev-list", "--count", f"{ref}..HEAD").stdout.strip() == "0":
+                dirty = _git_out("status", "--porcelain").stdout.strip()
+                hint = " You have uncommitted changes:" if dirty else ""
+                return _git_fail(
+                    f"{branch} has no commits that are not on {base}.{hint} "
+                    f'run `ul git commit "message"` first, then `ul git pr`.'
+                )
+            break
     code = _git_push_all(upstream_branch=branch)
     if code:
         return code

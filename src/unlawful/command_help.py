@@ -143,7 +143,8 @@ Actions:
                               twice, so it never appears in argv (`ps`)
   open                        Open the origin page of the current branch in the browser
   pr                          Push the current branch, then open a pull request (GitHub with
-                              gh when installed, otherwise the host's compare page)
+                              gh when installed, otherwise the host's compare page). Commit
+                              first: a branch with no commits beyond the base is refused
   undo                        Undo the last commit, keeping its changes staged
   undo --list                 Show the commits of this branch, newest first; (local) marks the
                               ones not pushed yet
