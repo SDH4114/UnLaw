@@ -261,6 +261,20 @@ canvas.wave.strip { position: absolute; left: 0; right: 0; bottom: 0; height: 64
   .screen { min-height: 360px; }
   .search input { width: 170px; }
 }
+.cv { display: flex; flex-direction: column; height: 100%; min-height: 420px; }
+.cvbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.cvbar .group { display: flex; align-items: center; gap: 2px; background: var(--column); border-radius: 9px; padding: 2px; }
+.cvbar .group button { border: none; background: transparent; padding: 3px 9px; border-radius: 7px; color: var(--muted); font-size: 13px; }
+.cvbar .group button:hover { color: var(--text); }
+.cvbar .group button.on { background: var(--panel); box-shadow: var(--shadow); color: var(--text); }
+.cvbar .group button.swatch { width: 18px; height: 18px; padding: 0; border-radius: 50%; margin: 0 3px; border: 2px solid var(--line); }
+.cvbar .group button.swatch.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.cvbar .cvpick { max-width: 220px; border-color: transparent; background: var(--column); font-weight: 550; }
+.cvzoom, .cvstatus { font: 12px var(--mono); color: var(--muted); min-width: 40px; text-align: center; }
+.cvstage { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+.cvcanvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+.cvedit { position: absolute; display: none; resize: none; border: 2px solid var(--accent); border-radius: 6px; background: var(--panel); color: var(--text); padding: 4px 6px; outline: none; z-index: 3; line-height: 1.3; overflow: auto; }
+.cvempty { position: absolute; inset: 0; display: none; place-content: center; justify-items: center; gap: 10px; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -273,6 +287,7 @@ canvas.wave.strip { position: absolute; left: 0; right: 0; bottom: 0; height: 64
     <button data-view="stats" title="Stats (3)">Stats</button>
     <button data-view="games" title="Games (4)">Games</button>
     <button data-view="studio" title="Studio: record and screenshots (5)">Studio</button>
+    <button data-view="canvas" title="Canvas: whiteboard (6)">Canvas</button>
   </div>
   <span class="spacer"></span>
   <button id="recPill" class="rec-pill" title="Recording: open the Studio"></button>
@@ -304,11 +319,12 @@ canvas.wave.strip { position: absolute; left: 0; right: 0; bottom: 0; height: 64
     <dt><kbd>n</kbd></dt><dd>New card (Today: quick add)</dd>
     <dt><kbd>/</kbd></dt><dd>Search cards</dd>
     <dt><kbd>space</kbd></dt><dd>Start / pause the focus timer</dd>
-    <dt><kbd>1</kbd> … <kbd>5</kbd></dt><dd>Board, Today, Stats, Games, Studio</dd>
+    <dt><kbd>1</kbd> … <kbd>6</kbd></dt><dd>Board, Today, Stats, Games, Studio, Canvas</dd>
     <dt><kbd>Esc</kbd></dt><dd>Clear search and tag filter</dd>
     <dt>double-click</dt><dd>Edit a card; drag cards between columns</dd>
     <dt>Games</dt><dd>While a game runs every key goes to it: arrows/WASD, Space, P pause, Esc leaves. Mouse works as in the terminal.</dd>
     <dt>Studio</dt><dd><kbd>r</kbd> start / stop recording, <kbd>p</kbd> pause / resume. Recording runs <code>ul capture</code>, so it keeps going when the page is closed.</dd>
+    <dt>Canvas</dt><dd>Tools: <kbd>v</kbd> select, <kbd>h</kbd> hand (or hold <kbd>space</kbd>), <kbd>t</kbd> card, <kbd>r</kbd> <kbd>o</kbd> <kbd>d</kbd> shapes, <kbd>l</kbd> line, <kbd>a</kbd> arrow, <kbd>p</kbd> pen, <kbd>x</kbd> text, <kbd>e</kbd> eraser. <kbd>g</kbd> group, <kbd>f</kbd> fit, <kbd>Del</kbd> delete, arrows nudge, <kbd>Cmd/Ctrl</kbd>+<kbd>Z</kbd> <kbd>C</kbd> <kbd>V</kbd> <kbd>D</kbd> <kbd>A</kbd>. Wheel pans, <kbd>Ctrl</kbd>+wheel or pinch zooms, double-click edits text, drag a side dot of a card to connect.</dd>
     <dt><kbd>?</kbd></dt><dd>This list</dd>
   </dl>
 </div></div>
@@ -322,7 +338,7 @@ if (params.get("token")) {
   history.replaceState(null, "", location.pathname + location.hash);
 }
 const TOKEN = sessionStorage.getItem("desk-token") || "";
-const VIEWS = ["board", "today", "stats", "games", "studio"];
+const VIEWS = ["board", "today", "stats", "games", "studio", "canvas"];
 const state = { board: null, view: VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : localStorage.getItem("desk-view") || "board", query: "", tag: "", timer: null, timerAt: 0, editing: null, dragging: null, stats: null };
 if (!VIEWS.includes(state.view)) state.view = "board";
 const $ = (id) => document.getElementById(id);
@@ -382,7 +398,7 @@ async function loadBoard(force) {
 function setBoard(board) {
   state.board = board;
   document.title = board.name + " · Desk";
-  if (!state.editing && !["games", "studio"].includes(state.view)) render();
+  if (!state.editing && !["games", "studio", "canvas"].includes(state.view)) render();
 }
 
 function findCard(board, line, hint) {
@@ -671,13 +687,14 @@ async function renderStats(main) {
 function render() {
   const main = $("main");
   for (const button of $("tabs").children) button.classList.toggle("on", button.dataset.view === state.view);
-  $("toolbar").classList.toggle("hidden", ["games", "stats", "studio"].includes(state.view));
+  $("toolbar").classList.toggle("hidden", ["games", "stats", "studio", "canvas"].includes(state.view));
   const filter = $("filter");
   filter.classList.toggle("on", Boolean(state.tag));
   filter.textContent = state.tag ? "#" + state.tag + " ✕" : "";
   renderSummary();
   if (state.view === "games") { renderGames(main); return; }
   if (state.view === "studio") { renderStudio(main); return; }
+  if (state.view === "canvas") { renderCanvas(main); return; }
   if (!state.board) return;
   if (state.view === "stats") { renderStats(main); return; }
   const scroll = main.scrollLeft;
@@ -693,6 +710,7 @@ function setView(view) {
   if (view === state.view) return;
   if (state.view === "games") pauseGame();
   if (state.view === "studio") leaveStudio();
+  if (state.view === "canvas") leaveCanvas();
   state.view = view;
   localStorage.setItem("desk-view", view);
   history.replaceState(null, "", location.pathname + "#" + view);
@@ -1658,7 +1676,7 @@ async function timer(action, card) {
   state.timerAt = Date.now();
   drawTimer();
   if (card && card !== linkedBefore) toast("Focus: " + card);
-  if (state.board && !["stats", "games", "studio"].includes(state.view)) render();
+  if (state.board && !["stats", "games", "studio", "canvas"].includes(state.view)) render();
 }
 
 function remaining() {
@@ -1712,6 +1730,1607 @@ $("helpButton").addEventListener("click", () => $("help").classList.toggle("on")
 $("help").addEventListener("click", (event) => { if (event.target === $("help")) $("help").classList.remove("on"); });
 for (const button of $("tabs").children) button.addEventListener("click", () => setView(button.dataset.view));
 
+// ---- canvas: JSON Canvas cards and edges plus our own drawn elements ----
+// The pure helpers (geometry, hit-testing, rough strokes, edits, history) come first so the tests can call them.
+const CV_TOOLS = { select: "v", hand: "h", card: "t", rectangle: "r", ellipse: "o", diamond: "d", line: "l", arrow: "a", freedraw: "p", text: "x", eraser: "e" };
+const CV_LABELS = { select: "Select", hand: "Hand", card: "Card", rectangle: "Rect", ellipse: "Ellipse", diamond: "Diamond", line: "Line", arrow: "Arrow", freedraw: "Pen", text: "Text", eraser: "Eraser" };
+const CV_BY_KEY = Object.fromEntries(Object.entries(CV_TOOLS).map(([tool, key]) => [key, tool]));
+const CV_INK = ["#1d1d1f", "#e5484d", "#f08c3a", "#e8b520", "#30a46c", "#3a6df0", "#8e4ec6", "#f2f2f5"];
+const CV_WIDTHS = [2, 4, 8];
+const CV_PRESETS = { "1": "#e5484d", "2": "#f08c3a", "3": "#e8b520", "4": "#30a46c", "5": "#2aa9bd", "6": "#8e4ec6" };
+const CV_FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif';
+const CV_MONO = '"SF Mono", ui-monospace, Menlo, monospace';
+const CV_HAND = '"Bradley Hand", "Marker Felt", "Comic Sans MS", cursive';
+const CV_MIN_ZOOM = 0.1, CV_MAX_ZOOM = 4, CV_HISTORY = 100, CV_MIN_BOX = 8;
+const CV_SIDES = { top: [0, -1], right: [1, 0], bottom: [0, 1], left: [-1, 0] };
+const CV_SIDE_NAMES = Object.keys(CV_SIDES);
+const CV_SHAPES = new Set(["rectangle", "ellipse", "diamond", "line", "arrow", "freedraw", "text"]);
+const CV_HEX = /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/;
+
+const cvNum = (value, fallback) => (typeof value === "number" && Number.isFinite(value) ? value : fallback);
+const cvClone = (value) => JSON.parse(JSON.stringify(value));
+const cvId = () => Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+const cvSeed = () => Math.floor(Math.random() * 2147483647);
+
+function nodeColor(color) {
+  if (typeof color !== "string") return null;
+  if (Object.prototype.hasOwnProperty.call(CV_PRESETS, color)) return CV_PRESETS[color];
+  return CV_HEX.test(color) ? color : null;
+}
+
+function luminance(color) {
+  if (typeof color !== "string" || !CV_HEX.test(color)) return null;
+  let hex = color.slice(1);
+  if (hex.length === 3) hex = hex.split("").map((c) => c + c).join("");
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+// Stored ink never changes with the theme; only what is painted does, so near-black stays visible on dark.
+function adaptInk(color, dark) {
+  const light = luminance(color);
+  if (light === null) return dark ? "#ececee" : "#1d1d1f";
+  if (dark && light < 0.18) return "#ececee";
+  if (!dark && light > 0.88) return "#1d1d1f";
+  return color;
+}
+
+function noteName(file) {
+  return typeof file === "string" && /\.md$/i.test(file) ? file.split("/").pop().replace(/\.md$/i, "") : null;
+}
+
+// Small seeded PRNG (mulberry32): the same seed always draws the same wobble.
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// ---- view transforms: screen = world * z + (x, y) ----
+const toScreen = (view, x, y) => ({ x: x * view.z + view.x, y: y * view.z + view.y });
+const toWorld = (view, x, y) => ({ x: (x - view.x) / view.z, y: (y - view.y) / view.z });
+const clampZoom = (z) => Math.min(CV_MAX_ZOOM, Math.max(CV_MIN_ZOOM, z));
+
+function zoomAt(view, sx, sy, factor) {
+  const z = clampZoom(view.z * factor);
+  const k = z / view.z;
+  return { x: sx - (sx - view.x) * k, y: sy - (sy - view.y) * k, z };
+}
+
+function fitView(bounds, width, height, pad = 60) {
+  if (!bounds) return { x: width / 2, y: height / 2, z: 1 };
+  const z = Math.min(1.5, clampZoom(Math.min((width - 2 * pad) / Math.max(1, bounds.width), (height - 2 * pad) / Math.max(1, bounds.height))));
+  return { x: width / 2 - (bounds.x + bounds.width / 2) * z, y: height / 2 - (bounds.y + bounds.height / 2) * z, z };
+}
+
+// ---- boxes and distances ----
+function normRect(x0, y0, x1, y1) {
+  return { x: Math.min(x0, x1), y: Math.min(y0, y1), width: Math.abs(x1 - x0), height: Math.abs(y1 - y0) };
+}
+function rectsIntersect(a, b) {
+  return a.x <= b.x + b.width && b.x <= a.x + a.width && a.y <= b.y + b.height && b.y <= a.y + a.height;
+}
+function boxContains(box, x, y, pad = 0) {
+  return x >= box.x - pad && x <= box.x + box.width + pad && y >= box.y - pad && y <= box.y + box.height + pad;
+}
+function boxInside(inner, outer) {
+  return inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.width <= outer.x + outer.width && inner.y + inner.height <= outer.y + outer.height;
+}
+function unionBox(boxes) {
+  if (!boxes.length) return null;
+  const x0 = Math.min(...boxes.map((b) => b.x)), y0 = Math.min(...boxes.map((b) => b.y));
+  const x1 = Math.max(...boxes.map((b) => b.x + b.width)), y1 = Math.max(...boxes.map((b) => b.y + b.height));
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+function segDist(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay, len = dx * dx + dy * dy;
+  const t = len ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len)) : 0;
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+function polyDist(pts, x, y, closed) {
+  if (!pts.length) return Infinity;
+  if (pts.length === 1) return Math.hypot(x - pts[0][0], y - pts[0][1]);
+  let best = Infinity;
+  const count = closed ? pts.length : pts.length - 1;
+  for (let i = 0; i < count; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    best = Math.min(best, segDist(x, y, a[0], a[1], b[0], b[1]));
+  }
+  return best;
+}
+function pointInPoly(pts, x, y) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i], [xj, yj] = pts[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+// ---- document access: lists are read defensively, but the raw objects are what gets saved ----
+function cvList(doc, kind) {
+  const list = kind === "n" ? doc.nodes : kind === "e" ? doc.edges : doc.unlaw && doc.unlaw.elements;
+  return Array.isArray(list) ? list : [];
+}
+function cvLookup(doc, key) {
+  const id = key.slice(2);
+  return cvList(doc, key[0]).find((item) => item && item.id === id) || null;
+}
+const cvKey = (kind, item) => kind + ":" + item.id;
+function validBox(item) {
+  return Boolean(item) && typeof item === "object" && typeof item.id === "string" && Number.isFinite(item.x) && Number.isFinite(item.y) && Number.isFinite(item.width) && Number.isFinite(item.height);
+}
+const docNodes = (doc) => cvList(doc, "n").filter(validBox);
+const docElements = (doc) => cvList(doc, "x").filter((el) => validBox(el) && CV_SHAPES.has(el.type));
+const docEdges = (doc) => cvList(doc, "e").filter((e) => e && typeof e === "object" && typeof e.id === "string" && typeof e.fromNode === "string" && typeof e.toNode === "string");
+function ensureList(doc, name) {
+  if (!Array.isArray(doc[name])) doc[name] = [];
+  return doc[name];
+}
+function ensureElements(doc) {
+  if (!doc.unlaw || typeof doc.unlaw !== "object" || Array.isArray(doc.unlaw)) doc.unlaw = {};
+  if (doc.unlaw.version === undefined) doc.unlaw.version = 1;
+  return ensureList(doc.unlaw, "elements");
+}
+function sceneBounds(doc) {
+  const boxes = [...docNodes(doc), ...docElements(doc)].map((item) => {
+    const pad = (cvNum(item.strokeWidth, 0) || 0) / 2;
+    const lift = item.type === "group" ? 28 : 0;
+    return { x: item.x - pad, y: item.y - pad - lift, width: item.width + 2 * pad, height: item.height + 2 * pad + lift };
+  });
+  return unionBox(boxes);
+}
+
+// ---- elements: outline, hit-test, rough strokes ----
+function elementPoints(el) {
+  if (!Array.isArray(el.points)) return [];
+  return el.points.filter((p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1])).map((p) => [el.x + p[0], el.y + p[1]]);
+}
+
+function elementOutline(el) {
+  const { x, y, width, height } = el;
+  if (el.type === "diamond") return [[x + width / 2, y], [x + width, y + height / 2], [x + width / 2, y + height], [x, y + height / 2]];
+  if (el.type === "ellipse") {
+    const out = [];
+    for (let i = 0; i < 48; i++) {
+      const a = (i / 48) * Math.PI * 2;
+      out.push([x + width / 2 + (width / 2) * Math.cos(a), y + height / 2 + (height / 2) * Math.sin(a)]);
+    }
+    return out;
+  }
+  return [[x, y], [x + width, y], [x + width, y + height], [x, y + height]];
+}
+
+function hitElement(el, x, y, tol) {
+  if (el.angle) {
+    const cx = el.x + el.width / 2, cy = el.y + el.height / 2, cos = Math.cos(-el.angle), sin = Math.sin(-el.angle);
+    const dx = x - cx, dy = y - cy;
+    x = cx + dx * cos - dy * sin;
+    y = cy + dx * sin + dy * cos;
+  }
+  if (el.type === "text") return boxContains(el, x, y, tol);
+  const reach = tol + cvNum(el.strokeWidth, 2) / 2;
+  if (el.type === "line" || el.type === "arrow" || el.type === "freedraw") return polyDist(elementPoints(el), x, y, false) <= reach;
+  const outline = elementOutline(el);
+  if (el.fill && pointInPoly(outline, x, y)) return true;
+  return polyDist(outline, x, y, true) <= reach;
+}
+
+function hitGroup(node, x, y, tol) {
+  if (boxContains({ x: node.x, y: node.y - 26, width: Math.min(node.width, 220), height: 26 }, x, y)) return true;
+  const roomy = node.width > 2 * tol && node.height > 2 * tol;
+  return boxContains(node, x, y, tol) && !(roomy && boxContains(node, x, y, -tol));
+}
+
+// ---- edges: a cubic curve leaving each node through a side ----
+function sideAnchor(box, side) {
+  if (side === "top") return { x: box.x + box.width / 2, y: box.y };
+  if (side === "bottom") return { x: box.x + box.width / 2, y: box.y + box.height };
+  if (side === "left") return { x: box.x, y: box.y + box.height / 2 };
+  return { x: box.x + box.width, y: box.y + box.height / 2 };
+}
+function nearestSide(box, x, y) {
+  const dx = (x - (box.x + box.width / 2)) / (box.width / 2 || 1), dy = (y - (box.y + box.height / 2)) / (box.height / 2 || 1);
+  if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? "right" : "left";
+  return dy > 0 ? "bottom" : "top";
+}
+function edgeCurve(a, sideA, b, sideB) {
+  const p0 = sideAnchor(a, sideA), p3 = sideAnchor(b, sideB);
+  const reach = Math.max(40, Math.min(200, Math.hypot(p3.x - p0.x, p3.y - p0.y) / 2));
+  const v0 = CV_SIDES[sideA], v1 = CV_SIDES[sideB];
+  return { p0, c1: { x: p0.x + v0[0] * reach, y: p0.y + v0[1] * reach }, c2: { x: p3.x + v1[0] * reach, y: p3.y + v1[1] * reach }, p3 };
+}
+function bezierPoint(c, t) {
+  const u = 1 - t;
+  const f = (a, b, d, e) => u * u * u * a + 3 * u * u * t * b + 3 * u * t * t * d + t * t * t * e;
+  return { x: f(c.p0.x, c.c1.x, c.c2.x, c.p3.x), y: f(c.p0.y, c.c1.y, c.c2.y, c.p3.y) };
+}
+function hitEdge(curve, x, y, tol) {
+  const pts = [];
+  for (let i = 0; i <= 32; i++) { const p = bezierPoint(curve, i / 32); pts.push([p.x, p.y]); }
+  return polyDist(pts, x, y, false) <= tol + 1;
+}
+function edgeCurveFor(map, edge) {
+  const a = map.get(edge.fromNode), b = map.get(edge.toNode);
+  if (!a || !b) return null;
+  const ca = { x: a.x + a.width / 2, y: a.y + a.height / 2 }, cb = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  const from = CV_SIDE_NAMES.includes(edge.fromSide) ? edge.fromSide : nearestSide(a, cb.x, cb.y);
+  const to = CV_SIDE_NAMES.includes(edge.toSide) ? edge.toSide : nearestSide(b, ca.x, ca.y);
+  return edgeCurve(a, from, b, to);
+}
+const nodeMap = (doc) => new Map(docNodes(doc).map((n) => [n.id, n]));
+
+// Topmost thing at a world point: drawings, cards, edges, then groups (only their label and border).
+function hitTest(doc, x, y, zoom) {
+  const tol = 6 / (zoom || 1);
+  const elements = docElements(doc), nodes = docNodes(doc);
+  for (let i = elements.length - 1; i >= 0; i--) if (hitElement(elements[i], x, y, tol)) return cvKey("x", elements[i]);
+  for (let i = nodes.length - 1; i >= 0; i--) if (nodes[i].type !== "group" && boxContains(nodes[i], x, y)) return cvKey("n", nodes[i]);
+  const map = nodeMap(doc);
+  for (const edge of docEdges(doc).reverse()) {
+    const curve = edgeCurveFor(map, edge);
+    if (curve && hitEdge(curve, x, y, tol)) return cvKey("e", edge);
+  }
+  for (let i = nodes.length - 1; i >= 0; i--) if (nodes[i].type === "group" && hitGroup(nodes[i], x, y, tol)) return cvKey("n", nodes[i]);
+  return null;
+}
+
+// Two slightly different passes per shape, wobble drawn from the element's own seed.
+function roughLine(rng, a, b, rough) {
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const amp = rough * Math.min(2.2, 0.6 + len / 150);
+  const jitter = () => (rng() - 0.5) * 2 * amp;
+  const nx = len ? -(b[1] - a[1]) / len : 0, ny = len ? (b[0] - a[0]) / len : 0;
+  const bow = jitter();
+  return [
+    [a[0] + jitter(), a[1] + jitter()],
+    [(a[0] + b[0]) / 2 + nx * bow + jitter() * 0.4, (a[1] + b[1]) / 2 + ny * bow + jitter() * 0.4],
+    [b[0] + jitter(), b[1] + jitter()],
+  ];
+}
+
+function roughStrokes(el) {
+  if (!CV_SHAPES.has(el.type) || el.type === "text") return [];
+  const rough = Math.max(0, Math.min(2, cvNum(el.roughness, 1)));
+  const rng = mulberry32(cvNum(el.seed, 1));
+  const passes = rough > 0 ? 2 : 1;
+  const out = [];
+  if (el.type === "freedraw") {
+    const pts = elementPoints(el);
+    return pts.length ? [{ pts, smooth: true }] : [];
+  }
+  if (el.type === "line" || el.type === "arrow") {
+    const pts = elementPoints(el);
+    if (pts.length < 2) return pts.length ? [{ pts, smooth: false }] : [];
+    for (let pass = 0; pass < passes; pass++) {
+      if (!rough) { out.push({ pts, smooth: false }); continue; }
+      const stroke = [];
+      for (let i = 0; i < pts.length - 1; i++) {
+        const seg = roughLine(rng, pts[i], pts[i + 1], rough);
+        stroke.push(...(i ? seg.slice(1) : seg));
+      }
+      out.push({ pts: stroke, smooth: true });
+    }
+    return out;
+  }
+  const outline = elementOutline(el);
+  for (let pass = 0; pass < passes; pass++) {
+    if (!rough) { out.push({ pts: [...outline, outline[0]], smooth: false }); continue; }
+    if (el.type === "ellipse") {
+      const amp = rough * Math.min(2.2, 0.6 + (el.width + el.height) / 300), start = rng() * Math.PI * 2, steps = 40;
+      const pts = [];
+      for (let i = 0; i <= steps; i++) {
+        const a = start + (i / steps) * Math.PI * 2;
+        pts.push([el.x + el.width / 2 + (el.width / 2 + (rng() - 0.5) * 2 * amp) * Math.cos(a), el.y + el.height / 2 + (el.height / 2 + (rng() - 0.5) * 2 * amp) * Math.sin(a)]);
+      }
+      out.push({ pts, smooth: true });
+      continue;
+    }
+    for (let i = 0; i < outline.length; i++) out.push({ pts: roughLine(rng, outline[i], outline[(i + 1) % outline.length], rough), smooth: true });
+  }
+  return out;
+}
+
+function arrowHead(from, to, size) {
+  const angle = Math.atan2(to[1] - from[1], to[0] - from[0]);
+  return [-0.45, 0.45].map((turn) => [to[0] - size * Math.cos(angle + turn), to[1] - size * Math.sin(angle + turn)]);
+}
+
+// ---- resize ----
+function resizeBox(box, handle, dx, dy) {
+  let x0 = box.x, y0 = box.y, x1 = box.x + box.width, y1 = box.y + box.height;
+  if (handle.includes("w")) x0 = Math.min(x0 + dx, x1 - CV_MIN_BOX); else x1 = Math.max(x1 + dx, x0 + CV_MIN_BOX);
+  if (handle.includes("n")) y0 = Math.min(y0 + dy, y1 - CV_MIN_BOX); else y1 = Math.max(y1 + dy, y0 + CV_MIN_BOX);
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+function handleAt(box, sx, sy, view, radius = 8) {
+  const corners = { nw: [box.x, box.y], ne: [box.x + box.width, box.y], sw: [box.x, box.y + box.height], se: [box.x + box.width, box.y + box.height] };
+  for (const [name, [x, y]] of Object.entries(corners)) {
+    const p = toScreen(view, x, y);
+    if (Math.hypot(p.x - sx, p.y - sy) <= radius) return name;
+  }
+  return null;
+}
+// Sets the box on item from the copy taken when the drag began, scaling points and font with it.
+function applyBox(item, orig, box) {
+  item.x = box.x; item.y = box.y; item.width = box.width; item.height = box.height;
+  if (Array.isArray(orig.points)) {
+    const kx = orig.width ? box.width / orig.width : 1, ky = orig.height ? box.height / orig.height : 1;
+    item.points = orig.points.map((p) => (Array.isArray(p) ? [p[0] * kx, p[1] * ky] : p));
+  }
+  if (typeof orig.fontSize === "number" && orig.height > 0) item.fontSize = Math.max(8, Math.min(200, Math.round(orig.fontSize * box.height / orig.height)));
+}
+
+// ---- text ----
+function wrapText(measure, text, maxWidth) {
+  const lines = [];
+  for (const paragraph of String(text).split("\n")) {
+    let line = "";
+    for (const word of paragraph.split(" ")) {
+      const trial = line ? line + " " + word : word;
+      if (measure(trial) <= maxWidth) { line = trial; continue; }
+      if (line) lines.push(line);
+      let rest = word;
+      while (measure(rest) > maxWidth && rest.length > 1) {
+        let n = rest.length - 1;
+        while (n > 1 && measure(rest.slice(0, n)) > maxWidth) n--;
+        lines.push(rest.slice(0, n));
+        rest = rest.slice(n);
+      }
+      line = rest;
+    }
+    lines.push(line);
+  }
+  return lines;
+}
+
+// ---- creating shapes ----
+function cvStyleFields(style, closed) {
+  return { stroke: style.stroke, fill: closed && style.fill ? style.stroke : null, strokeWidth: style.width, roughness: style.rough };
+}
+function makeShape(type, x0, y0, x1, y1, style, seed) {
+  const box = normRect(x0, y0, x1, y1);
+  return { id: cvId(), type, x: box.x, y: box.y, width: box.width, height: box.height, ...cvStyleFields(style, true), seed };
+}
+function makeLinear(type, x0, y0, x1, y1, style, seed) {
+  const x = Math.min(x0, x1), y = Math.min(y0, y1);
+  return { id: cvId(), type, x, y, width: Math.abs(x1 - x0), height: Math.abs(y1 - y0), points: [[x0 - x, y0 - y], [x1 - x, y1 - y]], ...cvStyleFields(style, false), seed };
+}
+function makeFreedraw(points, style, seed) {
+  const x = Math.min(...points.map((p) => p[0])), y = Math.min(...points.map((p) => p[1]));
+  const width = Math.max(...points.map((p) => p[0])) - x, height = Math.max(...points.map((p) => p[1])) - y;
+  return { id: cvId(), type: "freedraw", x, y, width, height, points: points.map((p) => [p[0] - x, p[1] - y]), ...cvStyleFields(style, false), seed };
+}
+function snapAngle(dx, dy) {
+  const len = Math.hypot(dx, dy);
+  const step = Math.PI / 4, angle = Math.round(Math.atan2(dy, dx) / step) * step;
+  return { dx: len * Math.cos(angle), dy: len * Math.sin(angle) };
+}
+
+// ---- edits: all of them mutate the loaded objects, so keys the page does not know survive ----
+function applyStyle(doc, keys, patch) {
+  for (const key of keys) {
+    const item = cvLookup(doc, key);
+    if (!item) continue;
+    if (key[0] === "x") {
+      if (patch.stroke !== undefined) item.stroke = patch.stroke;
+      if (patch.fill !== undefined) item.fill = patch.fill;
+      if (patch.strokeWidth !== undefined) item.strokeWidth = patch.strokeWidth;
+      if (patch.roughness !== undefined) item.roughness = patch.roughness;
+    } else if (patch.stroke !== undefined) {
+      item.color = patch.stroke;
+    }
+  }
+}
+function moveItems(doc, keys, dx, dy) {
+  for (const key of keys) {
+    if (key[0] === "e") continue;
+    const item = cvLookup(doc, key);
+    if (!item) continue;
+    item.x += dx;
+    item.y += dy;
+  }
+}
+function containedIds(doc, group) {
+  const keys = [];
+  for (const node of docNodes(doc)) if (node.id !== group.id && boxInside(node, group)) keys.push(cvKey("n", node));
+  for (const el of docElements(doc)) if (boxInside(el, group)) keys.push(cvKey("x", el));
+  return keys;
+}
+function groupAround(doc, keys, id) {
+  const box = unionBox(keys.filter((k) => k[0] !== "e").map((k) => cvLookup(doc, k)).filter(validBox));
+  if (!box) return null;
+  const pad = 24;
+  ensureList(doc, "nodes").unshift({ id, type: "group", label: "Group", x: box.x - pad, y: box.y - pad, width: box.width + 2 * pad, height: box.height + 2 * pad });
+  return "n:" + id;
+}
+function removeItems(doc, keys) {
+  const gone = { n: new Set(), e: new Set(), x: new Set() };
+  for (const key of keys) if (gone[key[0]]) gone[key[0]].add(key.slice(2));
+  let count = 0;
+  const keep = (kind, list) => list.filter((item) => {
+    const drop = Boolean(item) && gone[kind].has(item.id);
+    if (drop) count++;
+    return !drop;
+  });
+  if (Array.isArray(doc.nodes)) doc.nodes = keep("n", doc.nodes);
+  if (Array.isArray(doc.edges)) {
+    doc.edges = keep("e", doc.edges).filter((e) => !e || (!gone.n.has(e.fromNode) && !gone.n.has(e.toNode)));
+  }
+  if (doc.unlaw && Array.isArray(doc.unlaw.elements)) doc.unlaw.elements = keep("x", doc.unlaw.elements);
+  return count;
+}
+function copyItems(doc, keys) {
+  const nodes = [], elements = [];
+  for (const key of keys) {
+    const item = cvLookup(doc, key);
+    if (!item) continue;
+    if (key[0] === "n") nodes.push(cvClone(item));
+    else if (key[0] === "x") elements.push(cvClone(item));
+  }
+  const ids = new Set(nodes.map((n) => n.id));
+  const edges = cvList(doc, "e").filter((e) => e && ids.has(e.fromNode) && ids.has(e.toNode)).map(cvClone);
+  return { nodes, edges, elements };
+}
+function pasteItems(doc, bundle, offset, newId) {
+  const ids = new Map(), keys = [];
+  for (const node of bundle.nodes) {
+    const copy = cvClone(node);
+    copy.id = newId();
+    ids.set(node.id, copy.id);
+    copy.x += offset;
+    copy.y += offset;
+    ensureList(doc, "nodes").push(copy);
+    keys.push("n:" + copy.id);
+  }
+  for (const edge of bundle.edges) {
+    const copy = cvClone(edge);
+    copy.id = newId();
+    copy.fromNode = ids.get(edge.fromNode);
+    copy.toNode = ids.get(edge.toNode);
+    ensureList(doc, "edges").push(copy);
+    keys.push("e:" + copy.id);
+  }
+  for (const el of bundle.elements) {
+    const copy = cvClone(el);
+    copy.id = newId();
+    copy.x += offset;
+    copy.y += offset;
+    ensureElements(doc).push(copy);
+    keys.push("x:" + copy.id);
+  }
+  return keys;
+}
+
+// ---- history: JSON snapshots of the whole document ----
+function makeHistory(cap, snapshot) { return { cap, cur: snapshot, undo: [], redo: [] }; }
+function histCommit(hist, snapshot, merge) {
+  if (snapshot === hist.cur) return false;
+  if (!merge || !hist.undo.length) {
+    hist.undo.push(hist.cur);
+    if (hist.undo.length > hist.cap) hist.undo.shift();
+  }
+  hist.redo = [];
+  hist.cur = snapshot;
+  return true;
+}
+function histUndo(hist) {
+  if (!hist.undo.length) return null;
+  hist.redo.push(hist.cur);
+  hist.cur = hist.undo.pop();
+  return hist.cur;
+}
+function histRedo(hist) {
+  if (!hist.redo.length) return null;
+  hist.undo.push(hist.cur);
+  hist.cur = hist.redo.pop();
+  return hist.cur;
+}
+
+// ---- canvas state, loading and saving ----
+const cv = {
+  path: "", name: "", version: "", doc: null, items: [], tool: "select", view: { x: 0, y: 0, z: 1 }, sel: [],
+  style: { stroke: CV_INK[0], fill: false, width: 4, rough: 1 }, hist: null, drag: null, editing: null, space: false,
+  dirty: false, saving: null, saveTimer: 0, clip: null, pasted: 0, hover: null, pointer: null, lastLabel: "", lastAt: 0,
+  drawPending: false, el: null, ctx: null, w: 0, h: 0, dpr: 1, ui: {}, gesture: 1,
+};
+
+function cvLoad(shape) {
+  cv.path = shape.path;
+  cv.name = shape.name || "";
+  cv.version = shape.version;
+  const doc = shape.canvas && typeof shape.canvas === "object" && !Array.isArray(shape.canvas) ? shape.canvas : {};
+  ensureList(doc, "nodes");
+  ensureList(doc, "edges");
+  cv.doc = doc;
+  cv.hist = makeHistory(CV_HISTORY, JSON.stringify(doc));
+  cv.sel = cv.sel.filter((key) => cvLookup(doc, key));
+  cv.drag = null;
+  cv.hover = null;
+  cv.dirty = false;
+  cv.lastLabel = "";
+  clearTimeout(cv.saveTimer);
+  cv.saveTimer = 0;
+  cvStatus("Saved");
+  cvSync();
+  cvDraw();
+}
+
+function cvStatus(text) {
+  if (cv.ui.status) cv.ui.status.textContent = text;
+}
+
+function cvChanged() {
+  cv.dirty = true;
+  cvStatus("Unsaved");
+  clearTimeout(cv.saveTimer);
+  cv.saveTimer = setTimeout(saveCanvas, 800);
+  cvSync();
+  cvDraw();
+}
+
+// Records the document as one undo step; repeated edits with the same label inside 700 ms (arrow-key nudges) share a step.
+function cvCommit(label) {
+  const now = Date.now();
+  const merge = Boolean(label) && label === cv.lastLabel && now - cv.lastAt < 700;
+  cv.lastLabel = label || "";
+  cv.lastAt = now;
+  if (histCommit(cv.hist, JSON.stringify(cv.doc), merge)) cvChanged();
+}
+
+function cvRestore(snapshot) {
+  cv.doc = JSON.parse(snapshot);
+  cv.sel = cv.sel.filter((key) => cvLookup(cv.doc, key));
+  cv.lastLabel = "";
+  cvChanged();
+}
+function cvUndo() { const snapshot = histUndo(cv.hist); if (snapshot !== null) cvRestore(snapshot); }
+function cvRedo() { const snapshot = histRedo(cv.hist); if (snapshot !== null) cvRestore(snapshot); }
+
+async function sendCanvas() {
+  const sent = cv.hist.cur;
+  cvStatus("Saving…");
+  const { status, data } = await api("POST", "/api/canvas", { path: cv.path, version: cv.version, canvas: cv.doc });
+  if (status === 200) {
+    if (typeof data.version === "string") cv.version = data.version;
+    if (cv.hist.cur === sent) { cv.dirty = false; cvStatus("Saved"); }
+    else cv.saveTimer = setTimeout(saveCanvas, 800);
+  } else if (status === 409 && data.canvas) {
+    cvLoad(data.canvas);
+    toast("Canvas changed elsewhere; reloaded");
+  } else {
+    cvStatus("Save failed");
+    toast(data.error || "Could not save the canvas");
+    cv.saveTimer = setTimeout(saveCanvas, 4000);
+  }
+}
+
+async function saveCanvas() {
+  clearTimeout(cv.saveTimer);
+  cv.saveTimer = 0;
+  while (cv.saving) await cv.saving;
+  if (!cv.doc || !cv.dirty) return;
+  // A drag or an open editor holds changes that are not an undo step yet; they are never written half-done.
+  if (cv.drag || cv.editing) { cv.saveTimer = setTimeout(saveCanvas, 300); return; }
+  cv.saving = sendCanvas();
+  try { await cv.saving; } finally { cv.saving = null; }
+}
+
+async function pollCanvas() {
+  const idle = () => state.view === "canvas" && !document.hidden && cv.doc && !cv.drag && !cv.editing && !cv.saving && !cv.dirty;
+  if (!idle()) return;
+  const path = cv.path;
+  const { status, data } = await api("GET", "/api/canvas?path=" + encodeURIComponent(path));
+  if (status !== 200 || path !== cv.path || !idle()) return;
+  if (data.version !== cv.version) { cvLoad(data); toast("Canvas updated from the file"); }
+}
+
+async function loadCanvasList() {
+  const { status, data } = await api("GET", "/api/canvases");
+  if (status !== 200) { toast(data.error || "Could not list the canvases"); return null; }
+  cv.items = Array.isArray(data.items) ? data.items : [];
+  cvFillPick();
+  return data;
+}
+
+async function cvOpen(path, create) {
+  await saveCanvas();
+  const { status, data } = await api("POST", "/api/canvases", { path, create });
+  if (status !== 200) { toast(data.error || "Could not open the canvas"); cvFillPick(); return false; }
+  cvLoad(data);
+  localStorage.setItem("desk-canvas", data.path);
+  cvFit();
+  await loadCanvasList();
+  return true;
+}
+
+async function cvStart() {
+  const list = await loadCanvasList();
+  if (!list) return;
+  let target = null;
+  const read = async (query) => { const { status, data } = await api("GET", "/api/canvas" + query); return status === 200 ? data : null; };
+  if (cv.path) target = await read("?path=" + encodeURIComponent(cv.path));
+  if (!target && list.current) target = await read("");
+  if (!target) {
+    const remembered = localStorage.getItem("desk-canvas");
+    const item = cv.items.find((i) => i.path === remembered) || cv.items[0];
+    if (item) target = await read("?path=" + encodeURIComponent(item.path));
+  }
+  if (state.view !== "canvas" || !cv.el) return;
+  if (target) {
+    const fresh = target.path !== cv.path;
+    cvLoad(target);
+    if (fresh) cvFit();
+  }
+  cvFillPick();
+  cvSync();
+}
+
+function leaveCanvas() {
+  cvCancelDrag();
+  cvEndEdit();
+  saveCanvas();
+  cv.el = null;
+  cv.ctx = null;
+  cv.ui = {};
+  cv.space = false;
+}
+
+// ---- painting ----
+function cvPalette() {
+  const css = getComputedStyle(document.documentElement);
+  const get = (name) => css.getPropertyValue(name).trim();
+  return { dark: document.documentElement.dataset.theme === "dark", bg: get("--bg"), panel: get("--panel"), text: get("--text"), muted: get("--muted"), line: get("--line"), accent: get("--accent"), soft: get("--accent-soft") };
+}
+
+function roundPath(ctx, x, y, w, h, r) {
+  const radius = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + w, y, x + w, y + h, radius);
+  ctx.arcTo(x + w, y + h, x, y + h, radius);
+  ctx.arcTo(x, y + h, x, y, radius);
+  ctx.arcTo(x, y, x + w, y, radius);
+  ctx.closePath();
+}
+
+function strokePath(ctx, stroke) {
+  const pts = stroke.pts;
+  if (!pts.length) return;
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  if (!stroke.smooth || pts.length < 3) {
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  } else {
+    for (let i = 1; i < pts.length - 1; i++) ctx.quadraticCurveTo(pts[i][0], pts[i][1], (pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2);
+    ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
+  }
+  ctx.stroke();
+}
+
+function fillTriangle(ctx, tip, angle, size) {
+  ctx.beginPath();
+  ctx.moveTo(tip.x, tip.y);
+  ctx.lineTo(tip.x - size * Math.cos(angle - 0.45), tip.y - size * Math.sin(angle - 0.45));
+  ctx.lineTo(tip.x - size * Math.cos(angle + 0.45), tip.y - size * Math.sin(angle + 0.45));
+  ctx.closePath();
+  ctx.fill();
+}
+
+function paintElement(ctx, el, pal, hideText) {
+  const ink = adaptInk(el.stroke, pal.dark);
+  ctx.save();
+  if (el.angle) {
+    ctx.translate(el.x + el.width / 2, el.y + el.height / 2);
+    ctx.rotate(el.angle);
+    ctx.translate(-(el.x + el.width / 2), -(el.y + el.height / 2));
+  }
+  if (el.type === "text") {
+    const size = Math.max(8, Math.min(200, cvNum(el.fontSize, 24)));
+    if (!hideText) {
+      ctx.font = size + "px " + CV_HAND;
+      ctx.textBaseline = "top";
+      ctx.fillStyle = ink;
+      String(el.text || "").split("\n").forEach((line, i) => ctx.fillText(line, el.x, el.y + i * size * 1.25));
+    }
+    ctx.restore();
+    return;
+  }
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = Math.max(1, Math.min(20, cvNum(el.strokeWidth, 2)));
+  if (el.fill && (el.type === "rectangle" || el.type === "ellipse" || el.type === "diamond")) {
+    ctx.globalAlpha = 0.22;
+    ctx.fillStyle = adaptInk(el.fill, pal.dark);
+    strokePathFill(ctx, elementOutline(el));
+    ctx.globalAlpha = 1;
+  }
+  for (const stroke of roughStrokes(el)) strokePath(ctx, stroke);
+  if (el.type === "arrow") {
+    const pts = elementPoints(el);
+    if (pts.length >= 2) {
+      const size = 12 + ctx.lineWidth * 2;
+      const [a, b] = arrowHead(pts[pts.length - 2], pts[pts.length - 1], size);
+      ctx.beginPath();
+      ctx.moveTo(a[0], a[1]);
+      ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
+      ctx.lineTo(b[0], b[1]);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function strokePathFill(ctx, outline) {
+  ctx.beginPath();
+  outline.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
+  ctx.closePath();
+  ctx.fill();
+}
+
+function paintLines(ctx, node, lines, font, color, lineHeight, cursor) {
+  ctx.font = font;
+  ctx.fillStyle = color;
+  for (const line of lines) {
+    ctx.fillText(line, node.x + 12, cursor.y);
+    cursor.y += lineHeight;
+  }
+}
+
+function paintNode(ctx, node, pal, hideText) {
+  const color = nodeColor(node.color);
+  ctx.save();
+  roundPath(ctx, node.x, node.y, node.width, node.height, 8);
+  ctx.fillStyle = pal.panel;
+  ctx.fill();
+  if (color) { ctx.globalAlpha = 0.14; ctx.fillStyle = color; ctx.fill(); ctx.globalAlpha = 1; }
+  ctx.lineWidth = color ? 2 : 1.5;
+  ctx.strokeStyle = color || pal.line;
+  ctx.stroke();
+  if (!hideText) {
+    ctx.beginPath();
+    ctx.rect(node.x + 4, node.y + 4, node.width - 8, node.height - 8);
+    ctx.clip();
+    ctx.textBaseline = "top";
+    const cursor = { y: node.y + 12 }, room = Math.max(10, node.width - 24);
+    const wrapped = (text, font) => { ctx.font = font; return wrapText((s) => ctx.measureText(s).width, String(text).slice(0, 4000), room); };
+    if (node.type === "text") {
+      paintLines(ctx, node, wrapped(node.text ?? "", "15px " + CV_FONT), "15px " + CV_FONT, pal.text, 21, cursor);
+    } else if (node.type === "file") {
+      const file = String(node.file ?? "");
+      paintLines(ctx, node, ["File"], "11px " + CV_FONT, pal.muted, 16, cursor);
+      paintLines(ctx, node, wrapped(file.split("/").pop(), "600 15px " + CV_FONT), "600 15px " + CV_FONT, pal.text, 21, cursor);
+      if (file.includes("/")) paintLines(ctx, node, wrapped(file, "12px " + CV_FONT), "12px " + CV_FONT, pal.muted, 17, cursor);
+    } else if (node.type === "link") {
+      paintLines(ctx, node, ["Link"], "11px " + CV_FONT, pal.muted, 16, cursor);
+      paintLines(ctx, node, wrapped(node.url ?? "", "13px " + CV_MONO), "13px " + CV_MONO, pal.accent, 18, cursor);
+    } else {
+      paintLines(ctx, node, [String(node.type)], "12px " + CV_FONT, pal.muted, 16, cursor);
+    }
+  }
+  ctx.restore();
+}
+
+function paintGroup(ctx, node, pal, hideLabel) {
+  const color = nodeColor(node.color) || pal.accent;
+  ctx.save();
+  roundPath(ctx, node.x, node.y, node.width, node.height, 12);
+  ctx.globalAlpha = 0.06;
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.globalAlpha = 0.7;
+  ctx.setLineDash([8, 6]);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = color;
+  ctx.stroke();
+  ctx.setLineDash([]);
+  if (!hideLabel && node.label) {
+    ctx.globalAlpha = 1;
+    ctx.font = "600 13px " + CV_FONT;
+    ctx.textBaseline = "bottom";
+    ctx.fillStyle = pal.text;
+    ctx.fillText(String(node.label).slice(0, 80), node.x + 4, node.y - 6, Math.max(20, node.width - 8));
+  }
+  ctx.restore();
+}
+
+function paintEdge(ctx, curve, edge, pal, selected, hideLabel) {
+  const color = selected ? pal.accent : nodeColor(edge.color) || pal.muted;
+  ctx.save();
+  ctx.lineWidth = selected ? 3 : 2;
+  ctx.lineCap = "round";
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(curve.p0.x, curve.p0.y);
+  ctx.bezierCurveTo(curve.c1.x, curve.c1.y, curve.c2.x, curve.c2.y, curve.p3.x, curve.p3.y);
+  ctx.stroke();
+  const toward = (from, tip) => Math.atan2(tip.y - from.y, tip.x - from.x);
+  if (edge.toEnd !== "none") fillTriangle(ctx, curve.p3, toward(curve.c2, curve.p3), 12);
+  if (edge.fromEnd === "arrow") fillTriangle(ctx, curve.p0, toward(curve.c1, curve.p0), 12);
+  if (edge.label && !hideLabel) {
+    const mid = bezierPoint(curve, 0.5), text = String(edge.label).slice(0, 120);
+    ctx.font = "13px " + CV_FONT;
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "center";
+    const width = ctx.measureText(text).width + 12;
+    ctx.fillStyle = pal.bg;
+    roundPath(ctx, mid.x - width / 2, mid.y - 11, width, 22, 6);
+    ctx.fill();
+    ctx.fillStyle = pal.text;
+    ctx.fillText(text, mid.x, mid.y);
+  }
+  ctx.restore();
+}
+
+function paintGrid(ctx, view, width, height, pal) {
+  let step = 24 * view.z;
+  if (step < 10) step *= 4;
+  if (step < 10) return;
+  ctx.fillStyle = pal.line;
+  const x0 = ((view.x % step) + step) % step, y0 = ((view.y % step) + step) % step;
+  for (let x = x0; x < width; x += step) for (let y = y0; y < height; y += step) ctx.fillRect(x - 0.75, y - 0.75, 1.5, 1.5);
+}
+
+function singleBox(doc, sel) {
+  if (sel.length !== 1 || sel[0][0] === "e") return null;
+  const item = cvLookup(doc, sel[0]);
+  return validBox(item) ? item : null;
+}
+
+function paintOverlay(o) {
+  const { ctx, view, pal, ui, doc } = o;
+  ctx.setTransform(o.scale, 0, 0, o.scale, 0, 0);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = pal.accent;
+  for (const key of ui.sel) {
+    const item = cvLookup(doc, key);
+    if (key[0] === "e" || !validBox(item)) continue;
+    const a = toScreen(view, item.x, item.y);
+    ctx.setLineDash([5, 4]);
+    ctx.strokeRect(a.x - 3, a.y - 3, item.width * view.z + 6, item.height * view.z + 6);
+    ctx.setLineDash([]);
+  }
+  const solo = ui.tool === "select" && !ui.drag ? singleBox(doc, [...ui.sel]) : null;
+  if (solo) {
+    for (const [x, y] of [[solo.x, solo.y], [solo.x + solo.width, solo.y], [solo.x, solo.y + solo.height], [solo.x + solo.width, solo.y + solo.height]]) {
+      const p = toScreen(view, x, y);
+      ctx.fillStyle = pal.panel;
+      ctx.fillRect(p.x - 4, p.y - 4, 8, 8);
+      ctx.strokeRect(p.x - 4, p.y - 4, 8, 8);
+    }
+  }
+  const handleKeys = ui.tool === "select" && (!ui.drag || ui.drag.mode === "connect") ? [ui.hover, ui.sel.size === 1 ? [...ui.sel][0] : null] : [];
+  for (const key of new Set(handleKeys)) {
+    const node = key && key[0] === "n" ? cvLookup(doc, key) : null;
+    if (!validBox(node)) continue;
+    for (const side of CV_SIDE_NAMES) {
+      const anchor = sideAnchor(node, side), p = toScreen(view, anchor.x, anchor.y);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+      ctx.fillStyle = pal.accent;
+      ctx.fill();
+    }
+  }
+  const drag = ui.drag;
+  if (drag && drag.mode === "marquee" && drag.s2) {
+    const box = normRect(drag.s.x, drag.s.y, drag.s2.x, drag.s2.y);
+    ctx.globalAlpha = 0.12;
+    ctx.fillStyle = pal.accent;
+    ctx.fillRect(box.x, box.y, box.width, box.height);
+    ctx.globalAlpha = 1;
+    ctx.strokeRect(box.x, box.y, box.width, box.height);
+  }
+  if (drag && drag.mode === "connect" && drag.s2) {
+    const from = toScreen(view, sideAnchor(drag.from, drag.side).x, sideAnchor(drag.from, drag.side).y);
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(drag.s2.x, drag.s2.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  if (drag && drag.mode === "shape" && drag.tool === "card") {
+    const a = toScreen(view, drag.x0, drag.y0), b = toScreen(view, drag.x1, drag.y1), box = normRect(a.x, a.y, b.x, b.y);
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(box.x, box.y, box.width, box.height);
+    ctx.setLineDash([]);
+  }
+}
+
+// o: {ctx, doc, view, w, h, pal, scale, ui}; ui is null for export (no grid, handles or selection).
+function paintScene(o) {
+  const { ctx, doc, view, pal, ui } = o;
+  const k = o.scale;
+  ctx.setTransform(k, 0, 0, k, 0, 0);
+  ctx.fillStyle = pal.bg;
+  ctx.fillRect(0, 0, o.w, o.h);
+  if (ui) paintGrid(ctx, view, o.w, o.h, pal);
+  ctx.setTransform(k * view.z, 0, 0, k * view.z, k * view.x, k * view.y);
+  const vis = { x: -view.x / view.z - 40, y: -view.y / view.z - 40, width: o.w / view.z + 80, height: o.h / view.z + 80 };
+  const editing = ui && ui.editing;
+  const nodes = docNodes(doc), map = new Map(nodes.map((n) => [n.id, n]));
+  for (const node of nodes) if (node.type === "group" && rectsIntersect(node, vis)) paintGroup(ctx, node, pal, editing === cvKey("n", node));
+  for (const edge of docEdges(doc)) {
+    const curve = edgeCurveFor(map, edge);
+    if (curve) paintEdge(ctx, curve, edge, pal, Boolean(ui && ui.sel.has(cvKey("e", edge))), editing === cvKey("e", edge));
+  }
+  for (const node of nodes) if (node.type !== "group" && rectsIntersect(node, vis)) paintNode(ctx, node, pal, editing === cvKey("n", node));
+  for (const el of docElements(doc)) if (rectsIntersect(el, vis)) paintElement(ctx, el, pal, editing === cvKey("x", el));
+  if (ui && ui.draft) paintElement(ctx, ui.draft, pal, false);
+  if (ui) paintOverlay({ ...o, ui });
+}
+
+function cvDraw() {
+  if (cv.drawPending || !cv.ctx) return;
+  cv.drawPending = true;
+  requestAnimationFrame(() => {
+    cv.drawPending = false;
+    if (!cv.ctx) return;
+    const pal = cvPalette();
+    if (!cv.doc) {
+      cv.ctx.setTransform(cv.dpr, 0, 0, cv.dpr, 0, 0);
+      cv.ctx.fillStyle = pal.bg;
+      cv.ctx.fillRect(0, 0, cv.w, cv.h);
+      return;
+    }
+    const ui = { sel: new Set(cv.sel), hover: cv.hover, drag: cv.drag, editing: cv.editing && cv.editing.key, tool: cv.tool, draft: cvDraft() };
+    paintScene({ ctx: cv.ctx, doc: cv.doc, view: cv.view, w: cv.w, h: cv.h, pal, scale: cv.dpr, ui });
+  });
+}
+
+function cvResize() {
+  const el = cv.el;
+  if (!el) return;
+  const box = el.getBoundingClientRect();
+  cv.w = Math.max(1, Math.floor(box.width));
+  cv.h = Math.max(1, Math.floor(box.height));
+  cv.dpr = window.devicePixelRatio || 1;
+  el.width = Math.round(cv.w * cv.dpr);
+  el.height = Math.round(cv.h * cv.dpr);
+  cvDraw();
+}
+
+function cvZoomLabel() {
+  if (cv.ui.zoom) cv.ui.zoom.textContent = Math.round(cv.view.z * 100) + "%";
+}
+
+function cvSetView(view) {
+  cv.view = view;
+  cvZoomLabel();
+  cvDraw();
+}
+
+function cvFit() {
+  if (!cv.el || !cv.doc) return;
+  cvSetView(fitView(sceneBounds(cv.doc), cv.w, cv.h));
+}
+
+function cvExport() {
+  const bounds = cv.doc && sceneBounds(cv.doc);
+  if (!bounds) { toast("Nothing to export"); return; }
+  const pad = 32, width = Math.ceil(bounds.width + pad * 2), height = Math.ceil(bounds.height + pad * 2);
+  const scale = Math.max(0.25, Math.min(2, 8000 / Math.max(width, height)));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(width * scale);
+  canvas.height = Math.round(height * scale);
+  paintScene({ ctx: canvas.getContext("2d"), doc: cv.doc, view: { x: pad - bounds.x, y: pad - bounds.y, z: 1 }, w: width, h: height, pal: cvPalette(), scale, ui: null });
+  canvas.toBlob((blob) => {
+    if (!blob) { toast("Could not export the image"); return; }
+    const url = URL.createObjectURL(blob);
+    const link = h("a", { href: url, download: (cv.name || "canvas") + ".png" });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }, "image/png");
+}
+
+// ---- canvas interaction ----
+function cvSelect(keys) {
+  cv.sel = keys;
+  const only = keys.length === 1 && keys[0][0] === "x" ? cvLookup(cv.doc, keys[0]) : null;
+  if (only && only.type !== "text") {
+    cv.style = {
+      stroke: typeof only.stroke === "string" ? only.stroke : cv.style.stroke,
+      fill: Boolean(only.fill),
+      width: cvNum(only.strokeWidth, cv.style.width),
+      rough: cvNum(only.roughness, cv.style.rough),
+    };
+  }
+  cvSync();
+  cvDraw();
+}
+
+function cvSetTool(tool) {
+  cv.tool = tool;
+  cv.hover = null;
+  cvSync();
+  cvCursor();
+  cvDraw();
+}
+
+function cvCursor() {
+  if (!cv.el) return;
+  const panning = cv.space || cv.tool === "hand";
+  cv.el.style.cursor = panning ? (cv.drag && cv.drag.mode === "pan" ? "grabbing" : "grab") : cv.tool === "select" ? (cv.hover ? "move" : "default") : "crosshair";
+}
+
+function cvSync() {
+  const ui = cv.ui;
+  if (!ui.tools) return;
+  for (const [tool, button] of Object.entries(ui.tools)) button.classList.toggle("on", tool === cv.tool);
+  CV_INK.forEach((color, i) => ui.ink[i].classList.toggle("on", color === cv.style.stroke));
+  ui.fill.classList.toggle("on", cv.style.fill);
+  CV_WIDTHS.forEach((width, i) => ui.widths[i].classList.toggle("on", width === cv.style.width));
+  ui.rough.forEach((button, i) => button.classList.toggle("on", i === cv.style.rough));
+  ui.undo.disabled = !cv.hist || !cv.hist.undo.length;
+  ui.redo.disabled = !cv.hist || !cv.hist.redo.length;
+  cvZoomLabel();
+  if (ui.empty) ui.empty.style.display = cv.doc ? "none" : "grid";
+}
+
+// Changing the style also restyles the selection.
+function cvStyle(patch) {
+  Object.assign(cv.style, patch);
+  if (cv.doc && cv.sel.length) {
+    applyStyle(cv.doc, cv.sel, {
+      stroke: patch.stroke, strokeWidth: patch.width, roughness: patch.rough,
+      fill: patch.fill !== undefined || patch.stroke !== undefined ? (cv.style.fill ? cv.style.stroke : null) : undefined,
+    });
+    cvCommit("style");
+  }
+  cvSync();
+  cvDraw();
+}
+
+function cvPoint(event) {
+  const box = cv.el.getBoundingClientRect();
+  const s = { x: event.clientX - box.left, y: event.clientY - box.top };
+  return { s, w: toWorld(cv.view, s.x, s.y) };
+}
+
+function cvDraftGeometry(d) {
+  let x1 = d.x1, y1 = d.y1;
+  if (d.shift) {
+    const dx = x1 - d.x0, dy = y1 - d.y0;
+    if (d.tool === "line" || d.tool === "arrow") {
+      const snapped = snapAngle(dx, dy);
+      x1 = d.x0 + snapped.dx;
+      y1 = d.y0 + snapped.dy;
+    } else {
+      const size = Math.max(Math.abs(dx), Math.abs(dy));
+      x1 = d.x0 + (dx < 0 ? -size : size);
+      y1 = d.y0 + (dy < 0 ? -size : size);
+    }
+  }
+  return { x1, y1 };
+}
+
+function cvDraft() {
+  return cv.drag ? cvDraftOf(cv.drag) : null;
+}
+
+function cvDraftOf(d) {
+  if (d.mode === "pen" && d.pts.length > 1) return makeFreedraw(d.pts, cv.style, d.seed);
+  if (d.mode !== "shape" || d.tool === "card") return null;
+  const { x1, y1 } = cvDraftGeometry(d);
+  return d.tool === "line" || d.tool === "arrow" ? makeLinear(d.tool, d.x0, d.y0, x1, y1, cv.style, d.seed) : makeShape(d.tool, d.x0, d.y0, x1, y1, cv.style, d.seed);
+}
+
+function cvHoverKey(w) {
+  if (cv.tool !== "select") return null;
+  const nodes = docNodes(cv.doc), pad = 12 / cv.view.z;
+  for (let i = nodes.length - 1; i >= 0; i--) if (nodes[i].type !== "group" && boxContains(nodes[i], w.x, w.y, pad)) return cvKey("n", nodes[i]);
+  return null;
+}
+
+function cvNodeAt(w) {
+  const nodes = docNodes(cv.doc);
+  for (let i = nodes.length - 1; i >= 0; i--) if (nodes[i].type !== "group" && boxContains(nodes[i], w.x, w.y)) return nodes[i];
+  for (let i = nodes.length - 1; i >= 0; i--) if (boxContains(nodes[i], w.x, w.y)) return nodes[i];
+  return null;
+}
+
+// The four side dots of the hovered or selected card; dragging one draws an edge.
+function cvSideHandle(s) {
+  const keys = [cv.hover, cv.sel.length === 1 ? cv.sel[0] : null];
+  for (const key of keys) {
+    const node = key && key[0] === "n" ? cvLookup(cv.doc, key) : null;
+    if (!validBox(node)) continue;
+    for (const side of CV_SIDE_NAMES) {
+      const a = sideAnchor(node, side), p = toScreen(cv.view, a.x, a.y);
+      if (Math.hypot(p.x - s.x, p.y - s.y) <= 9) return { node, side };
+    }
+  }
+  return null;
+}
+
+function cvDown(event) {
+  if (!cv.doc || (event.button !== 0 && event.button !== 1)) return;
+  event.preventDefault();
+  if (cv.editing) cvEndEdit();
+  cv.el.focus();
+  if (cv.el.setPointerCapture) cv.el.setPointerCapture(event.pointerId);
+  const { s, w } = cvPoint(event);
+  if (event.button === 1 || cv.tool === "hand" || cv.space) { cv.drag = { mode: "pan", s, view: { ...cv.view } }; cvCursor(); return; }
+  if (cv.tool === "select") { cvDownSelect(event, s, w); return; }
+  if (cv.tool === "eraser") { cv.drag = { mode: "erase", removed: 0 }; cvErase(w); return; }
+  if (cv.tool === "freedraw") { cv.drag = { mode: "pen", pts: [[w.x, w.y]], seed: cvSeed() }; return; }
+  if (cv.tool === "text") { cvNewText(w); return; }
+  cv.drag = { mode: "shape", tool: cv.tool, x0: w.x, y0: w.y, x1: w.x, y1: w.y, shift: event.shiftKey, seed: cvSeed() };
+}
+
+function cvDownSelect(event, s, w) {
+  const solo = singleBox(cv.doc, cv.sel);
+  const handle = solo && handleAt(solo, s.x, s.y, cv.view);
+  if (handle) { cv.drag = { mode: "resize", handle, key: cv.sel[0], orig: cvClone(solo), start: w, moved: false }; return; }
+  const side = cvSideHandle(s);
+  if (side) { cv.drag = { mode: "connect", from: side.node, side: side.side, s, s2: null }; return; }
+  const key = hitTest(cv.doc, w.x, w.y, cv.view.z);
+  if (!key) {
+    if (!event.shiftKey) cvSelect([]);
+    cv.drag = { mode: "marquee", s, s2: null, w, base: event.shiftKey ? cv.sel.slice() : [] };
+    return;
+  }
+  const wasSole = cv.sel.length === 1 && cv.sel[0] === key;
+  if (event.shiftKey) {
+    if (cv.sel.includes(key)) { cvSelect(cv.sel.filter((k) => k !== key)); return; }
+    cvSelect([...cv.sel, key]);
+  } else if (!cv.sel.includes(key)) {
+    cvSelect([key]);
+  }
+  const keys = new Set(cv.sel.filter((k) => k[0] !== "e"));
+  for (const k of cv.sel) {
+    const item = cvLookup(cv.doc, k);
+    if (k[0] === "n" && item && item.type === "group") for (const inner of containedIds(cv.doc, item)) keys.add(inner);
+  }
+  cv.drag = { mode: "move", keys: [...keys], s, last: w, armed: false, key, wasSole };
+}
+
+function cvMove(event) {
+  if (!cv.doc) return;
+  const { s, w } = cvPoint(event);
+  const d = cv.drag;
+  if (!d) {
+    const key = cvHoverKey(w);
+    if (key !== cv.hover) { cv.hover = key; cvCursor(); cvDraw(); }
+    return;
+  }
+  if (d.mode === "pan") {
+    cvSetView({ ...d.view, x: d.view.x + s.x - d.s.x, y: d.view.y + s.y - d.s.y });
+    return;
+  }
+  if (d.mode === "move") {
+    if (!d.armed) {
+      if (Math.hypot(s.x - d.s.x, s.y - d.s.y) < 3) return;
+      d.armed = true;
+    }
+    moveItems(cv.doc, d.keys, w.x - d.last.x, w.y - d.last.y);
+    d.last = w;
+  } else if (d.mode === "resize") {
+    const item = cvLookup(cv.doc, d.key);
+    if (!item) return;
+    applyBox(item, d.orig, resizeBox(d.orig, d.handle, w.x - d.start.x, w.y - d.start.y));
+    d.moved = true;
+  } else if (d.mode === "marquee" || d.mode === "connect") {
+    d.s2 = s;
+    d.w2 = w;
+  } else if (d.mode === "shape") {
+    d.x1 = w.x;
+    d.y1 = w.y;
+    d.shift = event.shiftKey;
+  } else if (d.mode === "pen") {
+    const last = d.pts[d.pts.length - 1];
+    if (Math.hypot(w.x - last[0], w.y - last[1]) * cv.view.z > 1.5) d.pts.push([w.x, w.y]);
+  } else if (d.mode === "erase") {
+    cvErase(w);
+  }
+  cvDraw();
+}
+
+function cvUp(event) {
+  const d = cv.drag;
+  if (!d) return;
+  cv.drag = null;
+  const { w } = cvPoint(event);
+  if (d.mode === "move") {
+    if (d.armed) cvCommit("move");
+    else if (d.wasSole && !event.shiftKey) cvOpenFile(d.key);
+  } else if (d.mode === "resize") {
+    if (d.moved) cvCommit("resize");
+  } else if (d.mode === "marquee") {
+    const box = normRect(d.w.x, d.w.y, w.x, w.y), picked = [];
+    for (const node of docNodes(cv.doc)) if (node.type === "group" ? boxInside(node, box) : rectsIntersect(node, box)) picked.push(cvKey("n", node));
+    for (const el of docElements(cv.doc)) if (rectsIntersect(el, box)) picked.push(cvKey("x", el));
+    cvSelect([...new Set([...d.base, ...picked])]);
+  } else if (d.mode === "connect") {
+    cvFinishConnect(d, w);
+  } else if (d.mode === "shape") {
+    d.x1 = w.x;
+    d.y1 = w.y;
+    d.shift = event.shiftKey;
+    cvFinishShape(d);
+  } else if (d.mode === "pen") {
+    if (d.pts.length > 1) {
+      ensureElements(cv.doc).push(makeFreedraw(d.pts, cv.style, d.seed));
+      cvCommit("draw");
+    }
+  } else if (d.mode === "erase") {
+    if (d.removed) cvCommit("erase");
+  }
+  cvCursor();
+  cvDraw();
+}
+
+function cvCancelDrag() {
+  if (!cv.drag) return;
+  const mode = cv.drag.mode;
+  cv.drag = null;
+  if ((mode === "move" || mode === "resize" || mode === "erase") && cv.hist) cv.doc = JSON.parse(cv.hist.cur);
+  cv.sel = cv.doc ? cv.sel.filter((key) => cvLookup(cv.doc, key)) : [];
+  cvCursor();
+  cvDraw();
+}
+
+function cvFinishShape(d) {
+  const { x1, y1 } = cvDraftGeometry(d);
+  const big = Math.hypot(x1 - d.x0, y1 - d.y0) * cv.view.z >= 4;
+  if (d.tool === "card") {
+    const box = big ? normRect(d.x0, d.y0, x1, y1) : { x: d.x0, y: d.y0, width: 260, height: 120 };
+    const node = { id: cvId(), type: "text", text: "", x: box.x, y: box.y, width: Math.max(80, box.width), height: Math.max(48, box.height) };
+    ensureList(cv.doc, "nodes").push(node);
+    cvSetTool("select");
+    cvSelect([cvKey("n", node)]);
+    cvStartEdit(cvKey("n", node));
+    return;
+  }
+  if (!big) return;
+  const el = cvDraftOf(d);
+  if (!el) return;
+  ensureElements(cv.doc).push(el);
+  cvSetTool("select");
+  cvSelect([cvKey("x", el)]);
+  cvCommit("draw");
+}
+
+function cvNewText(w) {
+  const size = 24;
+  const el = { id: cvId(), type: "text", x: w.x, y: w.y, width: 10, height: size * 1.25, stroke: cv.style.stroke, fill: null, strokeWidth: cv.style.width, roughness: cv.style.rough, seed: cvSeed(), text: "", fontSize: size };
+  ensureElements(cv.doc).push(el);
+  cvSetTool("select");
+  cvSelect([cvKey("x", el)]);
+  cvStartEdit(cvKey("x", el));
+}
+
+function cvFinishConnect(d, w) {
+  const target = cvNodeAt(w);
+  if (!target || target.id === d.from.id) return;
+  const edge = { id: cvId(), fromNode: d.from.id, fromSide: d.side, toNode: target.id, toSide: nearestSide(target, w.x, w.y), toEnd: "arrow" };
+  ensureList(cv.doc, "edges").push(edge);
+  cvSelect([cvKey("e", edge)]);
+  cvCommit("connect");
+}
+
+function cvErase(w) {
+  const key = hitTest(cv.doc, w.x, w.y, cv.view.z);
+  if (!key || !cv.drag) return;
+  if (removeItems(cv.doc, [key])) {
+    cv.drag.removed++;
+    cv.sel = cv.sel.filter((k) => cvLookup(cv.doc, k));
+    cvDraw();
+  }
+}
+
+// Clicking a file card that is already the only selection opens its note.
+function cvOpenFile(key) {
+  const node = cvLookup(cv.doc, key);
+  if (!node || node.type !== "file") return;
+  const name = noteName(node.file);
+  if (name) openNote(name);
+  else toast("Only Markdown notes can be opened");
+}
+
+function cvDouble(event) {
+  if (!cv.doc || cv.tool !== "select") return;
+  const { w } = cvPoint(event);
+  const key = hitTest(cv.doc, w.x, w.y, cv.view.z);
+  if (key) { cvSelect([key]); cvStartEdit(key); }
+}
+
+function cvWheel(event) {
+  event.preventDefault();
+  if (!cv.doc) return;
+  const box = cv.el.getBoundingClientRect(), unit = event.deltaMode === 1 ? 16 : 1;
+  if (event.ctrlKey || event.metaKey) {
+    cvSetView(zoomAt(cv.view, event.clientX - box.left, event.clientY - box.top, Math.exp(-event.deltaY * unit * (event.deltaMode === 1 ? 0.05 : 0.01))));
+  } else {
+    cvSetView({ ...cv.view, x: cv.view.x - event.deltaX * unit, y: cv.view.y - event.deltaY * unit });
+  }
+}
+
+// ---- text editing: one floating textarea on top of the card, label or text ----
+function cvMeasure(font) {
+  if (cv.ctx) return (text) => { cv.ctx.font = font; return cv.ctx.measureText(text).width; };
+  return (text) => text.length * parseFloat(font) * 0.55;
+}
+
+function cvStartEdit(key) {
+  const item = cvLookup(cv.doc, key);
+  if (!item || !cv.el || !cv.ui.editor) return;
+  cvEndEdit();
+  let box, text, font = "15px " + CV_FONT;
+  if (key[0] === "e") {
+    const curve = edgeCurveFor(nodeMap(cv.doc), item);
+    if (!curve) return;
+    const mid = bezierPoint(curve, 0.5);
+    box = { x: mid.x - 80, y: mid.y - 14, width: 160, height: 28 };
+    text = item.label ?? "";
+  } else if (key[0] === "x") {
+    if (item.type !== "text") return;
+    box = item;
+    text = item.text ?? "";
+    font = cvNum(item.fontSize, 24) + "px " + CV_HAND;
+  } else if (item.type === "group") {
+    box = { x: item.x, y: item.y - 30, width: Math.min(item.width, 260), height: 28 };
+    text = item.label ?? "";
+  } else if (item.type === "text") {
+    box = item;
+    text = item.text ?? "";
+  } else {
+    return;
+  }
+  cv.editing = { key };
+  const z = cv.view.z, at = toScreen(cv.view, box.x, box.y), editor = cv.ui.editor;
+  editor.value = String(text);
+  Object.assign(editor.style, {
+    display: "block", left: at.x + "px", top: at.y + "px", width: Math.max(box.width * z, 140) + "px", height: Math.max(box.height * z, 30) + "px",
+    font: font.replace(/^[\d.]+px/, (px) => parseFloat(px) * z + "px"), color: key[0] === "x" ? adaptInk(item.stroke, cvPalette().dark) : "",
+  });
+  editor.focus();
+  editor.select();
+  cvDraw();
+}
+
+function cvEndEdit() {
+  const editing = cv.editing;
+  if (!editing) return;
+  cv.editing = null;
+  const editor = cv.ui.editor, value = editor ? editor.value : "";
+  if (editor) editor.style.display = "none";
+  const item = cv.doc && cvLookup(cv.doc, editing.key);
+  if (item) {
+    const kind = editing.key[0];
+    if (kind === "e") {
+      if (value) item.label = value; else delete item.label;
+    } else if (kind === "x") {
+      if (!value.trim()) {
+        removeItems(cv.doc, [editing.key]);
+        cv.sel = cv.sel.filter((key) => key !== editing.key);
+      } else {
+        item.text = value;
+        const size = cvNum(item.fontSize, 24), measure = cvMeasure(size + "px " + CV_HAND), lines = value.split("\n");
+        item.width = Math.max(10, ...lines.map((line) => measure(line)));
+        item.height = lines.length * size * 1.25;
+      }
+    } else if (item.type === "group") {
+      item.label = value;
+    } else {
+      item.text = value;
+    }
+    cvCommit("text");
+  }
+  if (cv.el) cv.el.focus();
+  cvDraw();
+}
+
+// ---- actions ----
+function cvDelete() {
+  if (!cv.sel.length) return;
+  removeItems(cv.doc, cv.sel);
+  cv.sel = [];
+  cvCommit("delete");
+  cvSync();
+}
+
+function cvGroup() {
+  if (!cv.doc || !cv.sel.length) { toast("Select something to group"); return; }
+  const key = groupAround(cv.doc, cv.sel, cvId());
+  if (!key) { toast("Select a card or drawing to group"); return; }
+  cvSelect([key]);
+  cvCommit("group");
+}
+
+function cvCopy() {
+  if (!cv.sel.length) return;
+  cv.clip = copyItems(cv.doc, cv.sel);
+  cv.pasted = 0;
+}
+
+function cvPaste(bundle) {
+  if (!bundle || !(bundle.nodes.length + bundle.elements.length)) return;
+  cv.pasted++;
+  cvSelect(pasteItems(cv.doc, bundle, 20 * cv.pasted, cvId));
+  cvCommit("paste");
+}
+
+function cvDuplicate() {
+  if (!cv.sel.length) return;
+  cv.pasted = 0;
+  cvPaste(copyItems(cv.doc, cv.sel));
+  cv.pasted = 0;
+}
+
+function cvNudge(dx, dy) {
+  const keys = new Set(cv.sel.filter((k) => k[0] !== "e"));
+  for (const k of cv.sel) {
+    const item = cvLookup(cv.doc, k);
+    if (k[0] === "n" && item && item.type === "group") for (const inner of containedIds(cv.doc, item)) keys.add(inner);
+  }
+  if (!keys.size) return;
+  moveItems(cv.doc, [...keys], dx, dy);
+  cvCommit("nudge");
+}
+
+function cvSelectAll() {
+  cvSelect([...docNodes(cv.doc).map((n) => cvKey("n", n)), ...docEdges(cv.doc).map((e) => cvKey("e", e)), ...docElements(cv.doc).map((el) => cvKey("x", el))]);
+}
+
+const CV_ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+
+// Returns true when the key was a canvas shortcut; the page's own keys never run in this view.
+function canvasKey(event) {
+  if (!cv.doc) return false;
+  const key = event.key, mod = event.metaKey || event.ctrlKey;
+  if (key === " " && !mod) { event.preventDefault(); cv.space = true; cvCursor(); return true; }
+  if (key === "Escape") {
+    if ($("help").classList.contains("on")) return false;
+    if (cv.drag) { cvCancelDrag(); return true; }
+    if (cv.sel.length) { cvSelect([]); return true; }
+    if (cv.tool !== "select") { cvSetTool("select"); return true; }
+    return false;
+  }
+  if (mod) {
+    const letter = key.length === 1 ? key.toLowerCase() : "";
+    if (!letter || !"zyacvd".includes(letter)) return false;
+    event.preventDefault();
+    if (letter === "z") { if (event.shiftKey) cvRedo(); else cvUndo(); }
+    else if (letter === "y") cvRedo();
+    else if (letter === "a") cvSelectAll();
+    else if (letter === "c") cvCopy();
+    else if (letter === "v") cvPaste(cv.clip);
+    else cvDuplicate();
+    return true;
+  }
+  if (event.altKey) return false;
+  if (key === "Delete" || key === "Backspace") { event.preventDefault(); cvDelete(); return true; }
+  if (CV_ARROWS[key]) {
+    if (!cv.sel.length) return false;
+    event.preventDefault();
+    const step = event.shiftKey ? 10 : 1;
+    cvNudge(CV_ARROWS[key][0] * step, CV_ARROWS[key][1] * step);
+    return true;
+  }
+  const letter = key.length === 1 ? key.toLowerCase() : "";
+  if (CV_BY_KEY[letter]) { cvSetTool(CV_BY_KEY[letter]); return true; }
+  if (letter === "g") { cvGroup(); return true; }
+  if (letter === "f") { cvFit(); return true; }
+  return false;
+}
+
+// ---- toolbar and view ----
+function cvFillPick() {
+  const pick = cv.ui.pick;
+  if (!pick) return;
+  pick.textContent = "";
+  const items = cv.items.some((item) => item.path === cv.path) || !cv.path ? cv.items : [...cv.items, { path: cv.path, name: cv.name || cv.path }];
+  for (const item of items) pick.append(h("option", { value: item.path, text: item.name, selected: item.path === cv.path }));
+  pick.append(h("option", { value: "__new", text: "New canvas…" }), h("option", { value: "__open", text: "Open another…" }));
+  if (!cv.path) pick.value = items.length ? "" : "__new";
+}
+
+async function cvPickChanged() {
+  const value = cv.ui.pick.value;
+  if (value === "__new" || value === "__open") {
+    const answer = prompt(value === "__new" ? "Name of the new canvas" : "Path or name of the canvas to open");
+    cvFillPick();
+    if (answer && answer.trim()) await cvOpen(answer.trim(), value === "__new");
+  } else if (value && value !== cv.path) {
+    await cvOpen(value, false);
+  }
+}
+
+function cvBuildBar() {
+  const ui = { tools: {}, ink: [], widths: [], rough: [] };
+  const press = (button, action) => () => { action(); button.blur(); };
+  const toolButtons = Object.keys(CV_TOOLS).map((tool) => {
+    const button = h("button", { title: CV_LABELS[tool] + " (" + CV_TOOLS[tool].toUpperCase() + ")", text: CV_LABELS[tool] });
+    button.addEventListener("click", press(button, () => cvSetTool(tool)));
+    ui.tools[tool] = button;
+    return button;
+  });
+  const swatches = CV_INK.map((color) => {
+    const button = h("button", { class: "swatch", title: color, style: "background:" + color });
+    button.addEventListener("click", press(button, () => cvStyle({ stroke: color })));
+    ui.ink.push(button);
+    return button;
+  });
+  ui.fill = h("button", { title: "Fill shapes with the stroke color", text: "Fill" });
+  ui.fill.addEventListener("click", press(ui.fill, () => cvStyle({ fill: !cv.style.fill })));
+  const widths = CV_WIDTHS.map((width, i) => {
+    const button = h("button", { title: ["Thin", "Medium", "Thick"][i] + " stroke", text: ["S", "M", "L"][i] });
+    button.addEventListener("click", press(button, () => cvStyle({ width })));
+    ui.widths.push(button);
+    return button;
+  });
+  const roughs = [0, 1, 2].map((rough) => {
+    const button = h("button", { title: ["Clean lines", "Light sketch", "Rough sketch"][rough] + " (roughness " + rough + ")", text: String(rough) });
+    button.addEventListener("click", press(button, () => cvStyle({ rough })));
+    ui.rough.push(button);
+    return button;
+  });
+  const action = (text, title, run) => { const button = h("button", { title, text }); button.addEventListener("click", press(button, run)); return button; };
+  ui.undo = action("Undo", "Undo (Cmd/Ctrl+Z)", cvUndo);
+  ui.redo = action("Redo", "Redo (Shift+Cmd/Ctrl+Z)", cvRedo);
+  ui.pick = h("select", { class: "cvpick", title: "Canvas" });
+  ui.pick.addEventListener("change", cvPickChanged);
+  ui.zoom = h("span", { class: "cvzoom", title: "Zoom" });
+  ui.status = h("span", { class: "cvstatus" });
+  ui.root = h("div", { class: "cvbar" },
+    ui.pick,
+    h("div", { class: "group" }, toolButtons),
+    h("div", { class: "group" }, swatches),
+    h("div", { class: "group" }, ui.fill, widths, roughs),
+    h("div", { class: "group" }, action("Group", "Group the selection (G)", cvGroup), ui.undo, ui.redo),
+    h("div", { class: "group" }, action("Fit", "Fit everything in view (F)", cvFit), ui.zoom),
+    h("div", { class: "group" }, action("PNG", "Export the canvas as a PNG image", cvExport)),
+    ui.status);
+  return ui;
+}
+
+function renderCanvas(main) {
+  if (main.querySelector(".cv")) { cvResize(); return; }
+  main.textContent = "";
+  const ui = cvBuildBar();
+  const canvas = h("canvas", { class: "cvcanvas", tabindex: "0" });
+  ui.editor = h("textarea", { class: "cvedit", spellcheck: "false" });
+  ui.empty = h("div", { class: "cvempty" }, h("div", { text: "No canvas yet" }), h("button", { class: "primary", text: "New canvas…", onclick: () => { cv.ui.pick.value = "__new"; cvPickChanged(); } }));
+  main.append(h("div", { class: "cv" }, ui.root, h("div", { class: "cvstage" }, canvas, ui.editor, ui.empty)));
+  cv.el = canvas;
+  cv.ctx = canvas.getContext("2d");
+  cv.ui = ui;
+  canvas.addEventListener("pointerdown", cvDown);
+  canvas.addEventListener("pointermove", cvMove);
+  canvas.addEventListener("pointerup", cvUp);
+  canvas.addEventListener("pointercancel", cvCancelDrag);
+  canvas.addEventListener("dblclick", cvDouble);
+  canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+  canvas.addEventListener("wheel", cvWheel, { passive: false });
+  canvas.addEventListener("gesturestart", (event) => { event.preventDefault(); cv.gesture = cv.view.z; });
+  canvas.addEventListener("gesturechange", (event) => {
+    event.preventDefault();
+    const box = canvas.getBoundingClientRect();
+    cvSetView(zoomAt(cv.view, event.clientX - box.left, event.clientY - box.top, (cv.gesture * event.scale) / cv.view.z));
+  });
+  ui.editor.addEventListener("blur", cvEndEdit);
+  cvResize();
+  cvSync();
+  cvCursor();
+  cvFillPick();
+  cvStart();
+}
+
+window.addEventListener("resize", () => { if (state.view === "canvas") cvResize(); });
+document.addEventListener("keyup", (event) => { if (event.key === " " && cv.space) { cv.space = false; cvCursor(); } });
+document.addEventListener("visibilitychange", () => { if (document.hidden && state.view === "canvas") saveCanvas(); });
+$("theme").addEventListener("click", () => { if (state.view === "canvas") cvDraw(); });
+
 // ---- theme, search, keys ----
 function applyTheme(theme) {
   const dark = theme ? theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
@@ -1729,6 +3348,7 @@ $("search").addEventListener("input", (event) => { state.query = event.target.va
 document.addEventListener("keydown", (event) => {
   if (gameKey(event)) return;
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
+  if (state.view === "canvas" && !typing && canvasKey(event)) return;
   if (event.key === "Escape") {
     $("help").classList.remove("on");
     closeViewer();
@@ -1738,6 +3358,10 @@ document.addEventListener("keydown", (event) => {
   }
   if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.key === "?") { $("help").classList.toggle("on"); return; }
+  if (state.view === "canvas") {
+    if (event.key >= "1" && event.key <= "6") setView(VIEWS[Number(event.key) - 1]);
+    return;
+  }
   if (event.key === "/") { event.preventDefault(); if (state.view === "games" || state.view === "stats") setView("board"); $("search").focus(); }
   else if (event.key === "n") {
     event.preventDefault();
@@ -1745,7 +3369,7 @@ document.addEventListener("keydown", (event) => {
     else { if (state.view !== "board") setView("board"); document.querySelector(".add input")?.focus(); }
   }
   else if (event.key === " ") { event.preventDefault(); togglePlay(); }
-  else if (event.key >= "1" && event.key <= "5") setView(VIEWS[Number(event.key) - 1]);
+  else if (event.key >= "1" && event.key <= "6") setView(VIEWS[Number(event.key) - 1]);
   else if (state.view === "studio" && event.key === "r") toggleRecord();
   else if (state.view === "studio" && event.key === "p") pauseRecord();
 });
@@ -1755,7 +3379,8 @@ async function start() {
   if (!TOKEN) { document.body.textContent = "Open the desk with `ul desk`: this page needs its token."; return; }
   await Promise.all([loadBoard(true), loadBoards(), loadTimer(), loadGames(), loadStudioInfo()]);
   render();
-  setInterval(() => { if (!document.hidden && !state.dragging && !state.editing && !["games", "studio"].includes(state.view)) loadBoard(false); }, 2000);
+  setInterval(() => { if (!document.hidden && !state.dragging && !state.editing && !["games", "studio", "canvas"].includes(state.view)) loadBoard(false); }, 2000);
+  setInterval(pollCanvas, 3000);
   setInterval(() => { if (!document.hidden) loadTimer(); }, 10000);
   setInterval(() => { if (!document.hidden && state.view === "games" && arcade.session) loadGames(); }, 5000);
   setInterval(drawTimer, 500);
