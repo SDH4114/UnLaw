@@ -189,13 +189,32 @@ class ZipTests(CoreTestCase):
     def test_password_round_trip_through_a_terminal(self) -> None:
         def run_with_tty(args: list[str], answers: list[bytes]) -> tuple[int, bytes]:
             master, slave = pty.openpty()
+
+            def own_terminal() -> None:
+                # Like a person's shell: the pty is the controlling terminal (/dev/tty), so a tool
+                # that asks on /dev/tty instead of reading the piped password would hang here.
+                os.setsid()
+                fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
             process = subprocess.Popen(
-                [str(binary()), "zip", *args], stdin=slave, stdout=subprocess.PIPE, stderr=slave, env=self.env, cwd=self.root
+                [str(binary()), "zip", *args],
+                stdin=slave,
+                stdout=subprocess.PIPE,
+                stderr=slave,
+                env=self.env,
+                cwd=self.root,
+                preexec_fn=own_terminal,
             )
             os.close(slave)
             seen = b""
             pending = list(answers)
+            deadline = time.monotonic() + 60
             while process.poll() is None:
+                if time.monotonic() > deadline:
+                    process.kill()
+                    process.wait()
+                    os.close(master)
+                    self.fail(f"ul zip {args} hung waiting for input: {seen!r}")
                 ready, _, _ = select.select([master], [], [], 0.2)
                 if ready:
                     try:

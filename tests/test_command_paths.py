@@ -213,7 +213,10 @@ class CaptureTests(ToolTestCase):
         return out
 
     def test_usage_and_argument_errors(self) -> None:
-        code, out, _ = self.run_main(capture.main, [])
+        # No arguments opens the menu in a terminal; without one it prints the usage. Stdin is
+        # pinned so the result does not depend on whether the suite runs in a terminal.
+        with patch.object(capture.sys, "stdin", io.StringIO()):
+            code, out, _ = self.run_main(capture.main, [])
         self.assertEqual(code, 2)
         self.assertIn("Usage", out)
         self.assertEqual(self.run_main(capture.main, ["--help"])[0], 0)

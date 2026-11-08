@@ -7,7 +7,8 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::os::unix::process::CommandExt;
+use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::commands::{exit_code, shield, spawn_shielded, status_shielded};
@@ -601,16 +602,50 @@ fn command_for(words: &[String]) -> Command {
     command
 }
 
+/// Run without a controlling terminal. p7zip asks for a password on /dev/tty whenever one
+/// exists and ignores the password piped to it, so in a real terminal it asked again (or hung).
+fn without_terminal(command: &mut Command) -> &mut Command {
+    unsafe {
+        command.pre_exec(|| if libc::setsid() == -1 { Err(io::Error::last_os_error()) } else { Ok(()) });
+    }
+    command
+}
+
+/// The detached child that a Ctrl-C must reach: in its own session it no longer gets the
+/// terminal's signals itself.
+static FED_CHILD: AtomicI32 = AtomicI32::new(0);
+
+extern "C" fn forward_signal(signal: libc::c_int) {
+    let pid = FED_CHILD.load(Ordering::SeqCst);
+    if pid > 0 {
+        // The whole group: /opt/homebrew/bin/7z is a shell wrapper, and the shell alone would
+        // wait for 7z to finish. setsid made the child the leader of its own group.
+        unsafe {
+            libc::kill(-pid, signal);
+        }
+    }
+}
+
 fn feed(command: &mut Command, input: Option<&str>) -> io::Result<i32> {
     match input {
         None => status_shielded(command).map(exit_code),
         Some(text) => {
             let _guard = shield();
-            let mut child = spawn_shielded(command.stdin(Stdio::piped()))?;
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(text.as_bytes())?;
+            let mut child = spawn_shielded(without_terminal(command.stdin(Stdio::piped())))?;
+            FED_CHILD.store(child.id() as i32, Ordering::SeqCst);
+            unsafe {
+                // Replaced only while it runs; the guard restores the original handlers.
+                libc::signal(libc::SIGINT, forward_signal as *const () as libc::sighandler_t);
+                libc::signal(libc::SIGQUIT, forward_signal as *const () as libc::sighandler_t);
             }
-            child.wait().map(exit_code)
+            let written = match child.stdin.take() {
+                Some(mut stdin) => stdin.write_all(text.as_bytes()),
+                None => Ok(()),
+            };
+            let status = child.wait();
+            FED_CHILD.store(0, Ordering::SeqCst);
+            written?;
+            status.map(exit_code)
         }
     }
 }
@@ -825,7 +860,8 @@ fn detect(path: &Path) -> io::Result<Kind> {
 }
 
 fn encrypted(seven: &Path, archive: &Path) -> bool {
-    let Ok(output) = Command::new(seven).args(["l", "-slt"]).arg(archive).stdin(Stdio::null()).output() else {
+    // Without a terminal: listing an archive with encrypted names would otherwise ask on /dev/tty.
+    let Ok(output) = without_terminal(Command::new(seven).args(["l", "-slt"]).arg(archive).stdin(Stdio::null())).output() else {
         return false;
     };
     let text = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
