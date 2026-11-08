@@ -2,7 +2,7 @@
 """Stage, commit and push the current Git project, or run a Git action."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Stage, commit and push the current Git project, or run a Git action.\nUsage: ul git [message]\n       ul git push [message] | commit [message] | sync [message]\n       ul git init [--connect SPEC] [--public] [--name NAME]\n       ul git connect SPEC [--public] [--name NAME] [--url BASE] [--force]\n       ul git mirror add SPEC [--name N] | list | remove NAME\n       ul git token HOST | open | pr [--base BRANCH] | undo [--list | COMMIT]\nActions:\n  no arguments / <message>    git add ., commit, then push (prompts "Commit message:" when\n                              missing; with nothing to commit it only pushes)\n  push [message]              Same as above. A branch without an upstream is published on\n                              origin (-u). `ul git status` and `ul git pull` were removed:\n                              use git status / git pull\n  commit [message]            Stage and commit without pushing\n  sync [message]              Pull with rebase, then stage, commit and push\n  init                        Create a repository on branch main (refuses inside one), merge a\n                              .gitignore for the detected project types (pyproject.toml or\n                              requirements.txt = python, Cargo.toml = rust, CMakeLists.txt = cpp,\n                              package.json = node; only missing lines are added, yours are kept\n                              and .env, keys and .DS_Store are always ignored), then make the\n                              first commit "Initial commit"\n  connect SPEC                Set origin and push the current branch with -u\n  mirror add|list|remove      Extra remotes named mirror-*; every push also pushes to them\n  token HOST                  Save an API token (read hidden from the terminal, never from argv)\n  open                        Open the origin page of the current branch in the browser\n  pr                          Push the current branch, then open a pull request (GitHub with\n                              gh when installed, otherwise the host\'s compare page)\n  undo                        Undo the last commit, keeping its changes staged\n  undo --list                 Show the commits of this branch, newest first; (local) marks the\n                              ones not pushed yet\n  undo COMMIT                 Go back to COMMIT (a hash, or its message or a unique part of it):\n                              it stays, every later commit is undone and their changes stay\n                              staged. Refused when any undone commit is already on a remote\n                              branch (use git revert)\nOptions:\n  --connect SPEC     (init) run connect afterwards\n  --public           Create the repository public (default: private)\n  --name NAME        Repository name to create (default: the folder name); for mirror add with a\n                     URL it is the mirror name (remote mirror-NAME)\n  --url BASE         Server for gitea or a self-hosted gitlab, for example https://git.example.com\n  --force            Replace an origin that points somewhere else\n  --base BRANCH      (pr) target branch, default main\n  --allow-secrets    Commit even when secrets or files over 50 MB are staged\n  -h, --help         Show this help\nSPEC is a host name (github, gitlab, codeberg, gitea: creates the repository through its API),\n  a short form (gh:owner/repo, gl:..., cb:...) or a full URL or path. Short forms become SSH URLs.\nSecrets guard: every commit path unstages .env and .env.* (not .env.example), *.pem, *.key,\n  id_rsa*, id_ed25519* (not .pub), *.p12 and files over 50 MB, explains why and stops with exit 1.\n  Fix it with .gitignore, or pass --allow-secrets. Deleting such a file is always allowed.\nMirrors: they exist only as Git remotes named mirror-* in the repository. A failing mirror is\n  reported as a warning and does not fail the push when origin succeeded.\nSSH: for SSH remotes of a known host connect checks the login. When it fails it offers to\n  create ~/.ssh/id_ed25519, prints the public key and opens the host\'s key page; add the key\n  and run the command again.\nTokens: stored in the macOS Keychain, service unlaw.git.<host>. Scopes: gitlab and gitea or\n  codeberg need an access token that can create repositories (gitlab: api; gitea/codeberg:\n  write:repository and write:user). GitHub uses `gh auth login` instead of a token.\nDependencies: git; ssh; gh (optional, for GitHub pull requests); the macOS `open` command.\nExamples: ul git "Fix downloader"\n  ul git init --connect github\n  ul git connect gh:me/project --force\n  ul git mirror add codeberg\n  ul git token gitlab\n  ul git pr --base develop\n  ul git undo --list\n  ul git undo "add parser"\n'
+COMMAND_HELP = 'Stage, commit and push the current Git project, or run a Git action.\nUsage: ul git [message]\n       ul git push [message] | commit [message] | sync [message]\n       ul git init [--connect SPEC] [--public] [--name NAME]\n       ul git connect SPEC [--public] [--name NAME] [--url BASE] [--force]\n       ul git mirror add SPEC [--name N] | list | remove NAME\n       ul git token HOST | open | pr [--base BRANCH] | undo [--list | COMMIT]\nActions:\n  no arguments / <message>    git add ., commit, then push (prompts "Commit message:" when\n                              missing; with nothing to commit it only pushes)\n  push [message]              Same as above. A branch without an upstream is published on\n                              origin (-u). `ul git status` and `ul git pull` were removed:\n                              use git status / git pull\n  commit [message]            Stage and commit without pushing\n  sync [message]              Pull with rebase, then stage, commit and push\n  init                        Create a repository on branch main (refuses inside one), merge a\n                              .gitignore for the detected project types (pyproject.toml or\n                              requirements.txt = python, Cargo.toml = rust, CMakeLists.txt = cpp,\n                              package.json = node; only missing lines are added, yours are kept\n                              and .env, keys and .DS_Store are always ignored), then make the\n                              first commit "Initial commit"\n  connect SPEC                Set origin and push the current branch with -u\n  mirror add|list|remove      Extra remotes named mirror-*; every push also pushes to them\n  token HOST [--url BASE]     Save an API token: the Keychain\'s own hidden prompt asks for it\n                              twice, so it never appears in argv (`ps`)\n  open                        Open the origin page of the current branch in the browser\n  pr                          Push the current branch, then open a pull request (GitHub with\n                              gh when installed, otherwise the host\'s compare page)\n  undo                        Undo the last commit, keeping its changes staged\n  undo --list                 Show the commits of this branch, newest first; (local) marks the\n                              ones not pushed yet\n  undo COMMIT                 Go back to COMMIT (a hash, or its message or a unique part of it):\n                              it stays, every later commit is undone and their changes stay\n                              staged. Refused when any undone commit is already on a remote\n                              branch (use git revert)\nOptions:\n  --connect SPEC     (init) run connect afterwards\n  --public           Create the repository public (default: private)\n  --name NAME        Repository name to create (default: the folder name); for mirror add with a\n                     URL it is the mirror name (remote mirror-NAME)\n  --url BASE         Server for gitea or a self-hosted gitlab, for example https://git.example.com\n                     (also for token: the token is saved for that server only)\n  --force            Replace an origin that points somewhere else\n  --base BRANCH      (pr) target branch, default main\n  --allow-secrets    Commit even when secrets or files over 50 MB are staged\n  -h, --help         Show this help\nSPEC is a host name (github, gitlab, codeberg, gitea: creates the repository through its API),\n  a short form (gh:owner/repo, gl:..., cb:...) or a full URL or path. Short forms become SSH URLs.\nSecrets guard: every commit path unstages .env and .env.* (not .env.example), .netrc, .pypirc,\n  *.pem, *.key, *.p8, *.p12, *.pfx, *.jks, *.keystore, id_rsa*, id_ed25519*, id_ecdsa*, id_dsa*\n  (not .pub; names compared ignoring case) and files over 50 MB, explains why and stops with\n  exit 1. Fix it with .gitignore, or pass --allow-secrets. Deleting such a file is always allowed.\n  init never writes through a .gitignore that is a symlink.\nMirrors: they exist only as Git remotes named mirror-* in the repository. A failing mirror is\n  reported as a warning and does not fail the push when origin succeeded.\nSSH: for SSH remotes of a known host connect checks the login. When it fails it offers to\n  create ~/.ssh/id_ed25519, prints the public key and opens the host\'s key page; add the key\n  and run the command again. An unknown host key is never accepted silently: check the\n  fingerprint and accept it once with `ssh -T git@HOST`.\nTokens: stored in the macOS Keychain per server, service unlaw.git.<server> (for example\n  unlaw.git.gitlab.com), and only ever sent to that server. Scopes: gitlab and gitea or\n  codeberg need an access token that can create repositories (gitlab: api; gitea/codeberg:\n  write:repository and write:user). GitHub uses `gh auth login` instead of a token.\nDependencies: git; ssh; gh (optional, for GitHub pull requests); the macOS `open` command.\nExamples: ul git "Fix downloader"\n  ul git init --connect github\n  ul git connect gh:me/project --force\n  ul git mirror add codeberg\n  ul git token codeberg\n  ul git token gitea --url https://git.example.com\n  ul git pr --base develop\n  ul git undo --list\n  ul git undo "add parser"\n'
 
 """Git hosting services: remote shortcuts, repository creation, tokens, SSH keys and web links."""
 
@@ -77,6 +77,8 @@ _HOSTNAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?")
 _SCP = re.compile(r"^(?:([^@/\s:]+)@)?([^@/\s:]+):(?!//)(.+)$")
 _URL_SCHEMES = ("https://", "http://", "ssh://", "git://", "file://")
 _API_TIMEOUT = 20
+# A hostile server could stream forever; real answers are a few kilobytes.
+_API_MAX_BYTES = 1_000_000
 _TOOL_TIMEOUT = 30
 _HINTS = {
     "gh": "install it with `brew install gh`, then run `gh auth login`",
@@ -119,8 +121,13 @@ def _hosts_scrub(text: str, *secrets: str) -> str:
     return text
 
 
+def _hosts_clean(text: str) -> str:
+    """Drop control characters (ESC sequences, BEL...) so server text cannot drive the terminal."""
+    return "".join(ch for ch in text if ch in "\t\n" or (ord(ch) >= 32 and ord(ch) != 127))
+
+
 def _hosts_last_line(text: str) -> str:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    lines = [line.strip() for line in _hosts_clean(text).splitlines() if line.strip()]
     return lines[-1][:300] if lines else ""
 
 
@@ -247,11 +254,18 @@ def _hosts_lookup(host: str) -> Host:
     return found
 
 
-def _hosts_service(host: str) -> str:
-    return f"unlaw.git.{_hosts_lookup(host).name}"
+def _hosts_service(host: str, base_url: str | None = None) -> str:
+    """Keychain service per API server (`unlaw.git.gitlab.com`), so a token only ever goes to the
+    server it was saved for: `--url https://elsewhere` finds no token instead of sending gitlab.com's."""
+    info = _hosts_lookup(host)
+    api = info.api if info.kind == "github" else _hosts_api_base(info, base_url)
+    server = (urllib.parse.urlsplit(api).hostname or "").lower()
+    if not _HOSTNAME.fullmatch(server):
+        raise HostError(f"not a valid server name: {server!r}")
+    return f"unlaw.git.{server}"
 
 
-def token(host: str) -> str | None:
+def token(host: str, base_url: str | None = None) -> str | None:
     result = _hosts_run(
         [
             "security",
@@ -259,7 +273,7 @@ def token(host: str) -> str | None:
             "-a",
             "unlaw",
             "-s",
-            _hosts_service(host),
+            _hosts_service(host, base_url),
             "-w",
         ]
     )
@@ -267,8 +281,8 @@ def token(host: str) -> str | None:
     return value if result.returncode == 0 and value else None
 
 
-def save_token(host: str, value: str) -> None:
-    service = _hosts_service(host)
+def save_token(host: str, value: str, base_url: str | None = None) -> None:
+    service = _hosts_service(host, base_url)
     value = value.strip()
     if not value or any(ch.isspace() or ord(ch) < 32 for ch in value):
         raise HostError("the token must be one word without spaces")
@@ -293,6 +307,21 @@ def save_token(host: str, value: str) -> None:
             if detail
             else "could not write the macOS Keychain"
         )
+
+
+
+def prompt_token(host: str, base_url: str | None = None) -> None:
+    """Save a token typed into `security`'s own hidden prompt (`-w` last, as `man security`
+    recommends): the token never appears in argv, where other accounts could see it with `ps`."""
+    service = _hosts_service(host, base_url)
+    if shutil.which("security") is None:
+        raise HostError(f"`security` was not found on PATH: {_HINTS.get('security', 'install it')}")
+    # The terminal is inherited on purpose: security asks for the token and its confirmation.
+    result = subprocess.run(
+        ["security", "add-generic-password", "-a", "unlaw", "-s", service, "-U", "-w"], check=False
+    )
+    if result.returncode != 0:
+        raise HostError("the token was not saved (cancelled, the two entries differ, or the Keychain is locked)")
 
 
 # ---------------------------------------------------------------- creating repositories
@@ -344,11 +373,11 @@ def _hosts_post(
     opener = urllib.request.build_opener(_NoRedirect)
     try:
         with opener.open(request, timeout=_API_TIMEOUT) as response:
-            body = response.read()
+            body = response.read(_API_MAX_BYTES + 1)
     except urllib.error.HTTPError as error:
-        raw = error.read().decode("utf-8", "replace") if error.fp else ""
+        raw = error.read(_API_MAX_BYTES).decode("utf-8", "replace") if error.fp else ""
         error.close()
-        detail = _hosts_scrub(" ".join(raw.split())[:200], secret)
+        detail = _hosts_scrub(" ".join(_hosts_clean(raw).split())[:200], secret)
         name = payload.get("name", "")
         if error.code in (401, 403):
             raise HostError(
@@ -363,6 +392,8 @@ def _hosts_post(
     except (urllib.error.URLError, OSError, TimeoutError) as error:
         reason = _hosts_scrub(str(getattr(error, "reason", error)), secret)
         raise HostError(f"could not reach {host}: {reason}") from None
+    if len(body) > _API_MAX_BYTES:
+        raise HostError(f"{host} returned an answer that is too large")
     try:
         data = json.loads(body)
     except ValueError:
@@ -422,11 +453,12 @@ def create_repo(
     if info.kind == "github":
         return _hosts_create_github(name, private, description)
     api = _hosts_api_base(info, base_url)
-    secret = token(info.name)
+    secret = token(info.name, base_url)
     if not secret:
-        page = info.keys_page or "the token page of your host"
+        server = _hosts_service(info.name, base_url).removeprefix("unlaw.git.")
+        save = f"ul git token {info.name}" + (f" --url {base_url}" if base_url else "")
         raise HostError(
-            f"no API token for {info.name}: create one ({page}) with repository write access and save it"
+            f"no API token for {server}: create one there with repository write access, then run `{save}`"
         )
     if info.kind == "gitlab":
         visibility = "private" if private else "public"
@@ -470,7 +502,8 @@ def ssh_check(ssh_host: str, timeout: float = 15) -> tuple[bool, str]:
         "-o",
         "ConnectTimeout=10",
         "-o",
-        "StrictHostKeyChecking=accept-new",
+        # Never accept an unknown host key silently: a first connection could be intercepted.
+        "StrictHostKeyChecking=yes",
         f"git@{ssh_host}",
     ]
     try:
@@ -483,6 +516,12 @@ def ssh_check(ssh_host: str, timeout: float = 15) -> tuple[bool, str]:
     lowered = output.lower()
     if "successfully authenticated" in lowered or "welcome to gitlab" in lowered:
         return True, _hosts_last_line(output)
+    if "host key verification failed" in lowered:
+        return (
+            False,
+            f"the host key of {ssh_host} is not trusted yet: check its fingerprint on the host's "
+            f"documentation page, then run `ssh -T git@{ssh_host}` once and accept it",
+        )
     if "permission denied" in lowered:
         return (
             False,
@@ -526,7 +565,6 @@ def ensure_ssh_key() -> Path:
         raise HostError("ssh-keygen finished but no public key was written")
     return public
 
-import getpass
 import os
 import re
 import shutil
@@ -618,12 +656,24 @@ def _run_all(commands: list[list[str]]) -> int:
     return 0
 
 
+def _git_clean(text: str) -> str:
+    """Drop control characters (ESC sequences, BEL...) so text from a server cannot drive the terminal."""
+    return "".join(ch for ch in text if ch in "\t\n" or (ord(ch) >= 32 and ord(ch) != 127))
+
+
+def _git_checked_remote(url: str) -> str:
+    """An address from a host's API must look like one: never an option, a helper transport or text with spaces."""
+    if not url or url.startswith("-") or "::" in url or any(ch.isspace() or ord(ch) < 32 for ch in url):
+        raise HostError(f"the host answered with an unusable repository address: {_git_clean(url)!r}")
+    return url
+
+
 def _git_fail(message: str) -> int:
     print(f"unlaw git: {message}", file=sys.stderr)
     return 1
 
 
-def _git_out(*args: str) -> subprocess.CompletedProcess[str]:
+def _git_out(*args: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
     """Run git quietly and return its text output; a missing git becomes exit code 127."""
     command = ["git", *args]
     try:
@@ -633,6 +683,7 @@ def _git_out(*args: str) -> subprocess.CompletedProcess[str]:
             capture_output=True,
             text=True,
             errors="surrogateescape",
+            input=stdin,
         )
     except OSError as error:
         return subprocess.CompletedProcess(command, 127, "", str(error))
@@ -752,15 +803,17 @@ def _has_staged_changes() -> bool | int:
 
 
 def _git_secret_reason(path: str, root: str) -> str | None:
-    name = path.rsplit("/", 1)[-1]
-    lower = name.lower()
+    # Case-folded: macOS disks ignore case, so `.ENV` is the file dotenv loads.
+    name = path.rsplit("/", 1)[-1].casefold()
     if name == ".env" or (name.startswith(".env.") and name != ".env.example"):
         return "environment file"
-    if lower.endswith((".pem", ".key")):
+    if name in {".netrc", ".pypirc"}:
+        return "credentials file"
+    if name.endswith((".pem", ".key", ".p8")):
         return "private key or certificate"
-    if lower.endswith(".p12"):
+    if name.endswith((".p12", ".pfx", ".jks", ".keystore")):
         return "key store"
-    if name.startswith(("id_rsa", "id_ed25519")) and not name.endswith(".pub"):
+    if name.startswith(("id_rsa", "id_ed25519", "id_ecdsa", "id_dsa")) and not name.endswith(".pub"):
         return "private SSH key"
     try:
         if os.path.getsize(os.path.join(root, path)) > _GIT_MAX_BYTES:
@@ -789,7 +842,14 @@ def _git_secrets_guard(allow: bool) -> int:
     ]
     if not found:
         return 0
-    _git_out("reset", "-q", "--", *[path for path, _ in found])
+    # Literal pathspecs from stdin: a file named `:(exclude)x` must not unstage everything else,
+    # and a long list cannot hit the argument limit.
+    reset = _git_out(
+        "--literal-pathspecs", "reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul",
+        stdin="\0".join(path for path, _ in found),
+    )
+    if reset.returncode:
+        return _git_fail(_git_clean(reset.stderr.strip()) or "could not unstage the files below.")
     lines = [
         "not committing, these staged files look like secrets or are too big (now unstaged):"
     ]
@@ -841,6 +901,10 @@ def _git_detect_types() -> list[str]:
 
 def _git_merge_gitignore(kinds: list[str]) -> None:
     """Append the missing ignore lines; existing lines are never changed or removed."""
+    # A .gitignore that is a symlink (e.g. from an unpacked archive) would make this append to
+    # whatever it points at (~/.zshrc, ~/.ssh/config): only a regular file is ever written.
+    if os.path.lexists(".gitignore") and (os.path.islink(".gitignore") or not os.path.isfile(".gitignore")):
+        raise OSError(".gitignore is not a regular file (a symlink?); fix it and run again")
     try:
         with open(".gitignore", encoding="utf-8") as handle:
             current = handle.read()
@@ -857,7 +921,8 @@ def _git_merge_gitignore(kinds: list[str]) -> None:
     if not wanted:
         return
     prefix = "" if not current or current.endswith("\n") else "\n"
-    with open(".gitignore", "a", encoding="utf-8") as handle:
+    descriptor = os.open(".gitignore", os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
         handle.write(prefix + "\n".join(wanted) + "\n")
 
 
@@ -905,7 +970,7 @@ def _git_resolve_remote(spec: str, options: dict[str, str]) -> str:
         created = create_repo(
             spec, name, private="--public" not in options, base_url=options.get("--url")
         )
-        return created.ssh_url
+        return _git_checked_remote(created.ssh_url)
     return expand_remote(spec)
 
 
@@ -936,10 +1001,11 @@ def _git_ssh_gate(url: str) -> int:
 
 
 def _git_verify_remote(target: str) -> int:
-    result = _git_out("ls-remote", target)
+    # --end-of-options: an address can never be read as an option such as --upload-pack.
+    result = _git_out("ls-remote", "--end-of-options", target)
     if result.returncode:
         return _git_fail(
-            f"cannot access {target}: {result.stderr.strip() or 'ls-remote failed'}"
+            f"cannot access {target}: {_git_clean(result.stderr.strip()) or 'ls-remote failed'}"
         )
     return 0
 
@@ -972,6 +1038,7 @@ def _git_connect(args: list[str]) -> int:
     if existing is None:
         code = _run_all([["git", "remote", "add", "origin", url]])
     elif existing != url:
+        print(f"Replacing origin (was {existing}).")
         code = _run_all([["git", "remote", "set-url", "origin", url]])
     else:
         code = 0
@@ -1050,20 +1117,13 @@ def _git_mirror(args: list[str]) -> int:
 
 
 def _git_token(args: list[str]) -> int:
-    _, positional = _git_parse(args)
+    options, positional = _git_parse(args, values=("--url",))
     if len(positional) != 1 or positional[0] not in HOSTS:
         raise _GitUsage(f"token needs a host: {', '.join(HOSTS)}")
     host = positional[0]
-    try:
-        value = getpass.getpass(f"{host} token (input hidden): ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print("\nunlaw git: cancelled.", file=sys.stderr)
-        return 2
-    if not value:
-        print("unlaw git: the token cannot be empty.", file=sys.stderr)
-        return 2
-    save_token(host, value)
-    print(f"Saved the {host} token in the macOS Keychain (service unlaw.git.{host}).")
+    print(f"Paste the {host} token when the Keychain asks (input hidden, asked twice).")
+    prompt_token(host, base_url=options.get("--url"))
+    print(f"Saved the {host} token in the macOS Keychain.")
     return 0
 
 

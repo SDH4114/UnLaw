@@ -81,7 +81,7 @@ class GitCommandCase(unittest.TestCase):
             "pr_url": MagicMock(return_value=None),
             "ssh_check": MagicMock(return_value=(True, "ok")),
             "ensure_ssh_key": MagicMock(return_value=self.tmp / "key.pub"),
-            "save_token": MagicMock(),
+            "prompt_token": MagicMock(),
         }
         defaults.update(overrides)
         for name, mock in defaults.items():
@@ -334,6 +334,29 @@ class SecretsGuardTests(GitCommandCase):
         self.assertEqual(self.git("log", "-1", "--format=%s"), "with env")
         self.assertIn(".env", self.git("show", "--name-only", "--format=", "HEAD"))
 
+    def test_secret_names_ignore_case_and_cover_more_kinds(self) -> None:
+        bare = self.make_repo()
+        for name in (".ENV", "ID_RSA", "id_ecdsa", "id_dsa", "cert.PFX", "key.p8", "app.jks", "release.keystore", ".netrc", ".pypirc"):
+            with self.subTest(name=name):
+                self.change(name, "secret\n")
+                code, _, err = self.ul("push", "add " + name)
+                self.assertEqual(code, 1)
+                self.assertIn(name, err)
+                (self.work / name).unlink()
+        self.assertEqual(self.subjects(bare), ["first"])
+
+    def test_pathspec_magic_in_a_file_name_only_unstages_that_file(self) -> None:
+        self.make_repo()
+        self.change("a.txt", "keep me staged\n")
+        self.git("add", "a.txt")
+        self.change(":(exclude)z.key", "secret\n")
+        self.git("add", "--", ":(literal):(exclude)z.key")
+        code, _, err = self.ul("commit", "x")
+        self.assertEqual(code, 1)
+        staged = self.git("diff", "--cached", "--name-only").splitlines()
+        self.assertIn("a.txt", staged, err)
+        self.assertNotIn(":(exclude)z.key", staged)
+
     def test_large_files_are_blocked(self) -> None:
         self.make_repo()
         self.change("big.bin", "x" * 11)
@@ -443,6 +466,17 @@ class InitTests(GitCommandCase):
         self.assertFalse(kwargs["private"])
 
 
+class InitSymlinkTests(GitCommandCase):
+    def test_a_symlinked_gitignore_is_never_written_through(self) -> None:
+        target = self.tmp / "home" / "zshrc"
+        target.write_text("export A=1\n", encoding="utf-8")
+        (self.work / ".gitignore").symlink_to(target)
+        code, _, err = self.ul("init")
+        self.assertEqual(code, 1)
+        self.assertIn(".gitignore", err)
+        self.assertEqual(target.read_text(encoding="utf-8"), "export A=1\n")
+
+
 class ConnectTests(GitCommandCase):
     def created(self, bare: Path) -> None:
         self.stubs["create_repo"].return_value = fake_git_hosts.Created(
@@ -525,6 +559,14 @@ class ConnectTests(GitCommandCase):
         self.stubs["expand_remote"].side_effect = lambda spec: str(bare)
         self.assertEqual(self.ul("connect", "somewhere", "--force")[0], 0)
         self.assertEqual(self.git("remote", "get-url", "origin"), str(bare))
+
+    def test_force_shows_the_old_origin(self) -> None:
+        old = self.make_repo()
+        new = self.tmp / "new.git"
+        self.git("init", "-q", "--bare", "-b", "main", str(new), cwd=self.tmp)
+        code, out, err = self.ul("connect", str(new), "--force")
+        self.assertEqual(code, 0, err)
+        self.assertIn(str(old), out + err)
 
     def test_same_origin_needs_no_force(self) -> None:
         bare = self.make_repo()
@@ -627,6 +669,18 @@ class MirrorTests(GitCommandCase):
         )
         self.assertEqual(self.git("remote", "get-url", "mirror-gitlab"), str(bare))
 
+    def test_a_hostile_api_address_is_never_run_as_an_option(self) -> None:
+        # The audit's ls-remote injection: a server answers with an option instead of an address.
+        self.make_repo()
+        pwn = self.tmp / "PWN"
+        self.stubs["create_repo"].return_value = fake_git_hosts.Created(
+            f"--upload-pack=touch {pwn};git-upload-pack", "https://x", "https://x"
+        )
+        code, _, err = self.ul("mirror", "add", "gitlab")
+        self.assertEqual(code, 1)
+        self.assertFalse(pwn.exists())
+        self.assertNotIn("mirror-gitlab", self.git("remote").split())
+
     def test_add_url_of_known_host_uses_host_name(self) -> None:
         self.make_repo()
         bare = self.tmp / "cb.git"
@@ -683,32 +737,31 @@ class MirrorTests(GitCommandCase):
         self.assertEqual(self.ul("mirror")[0], 2)
 
 
+class OutputTests(unittest.TestCase):
+    def test_server_text_loses_control_characters(self) -> None:
+        self.assertEqual(cmd._git_clean("bad \x1b[2J\x1b]0;t\x07 end\nnext"), "bad [2J]0;t end\nnext")
+
+
 class TokenTests(GitCommandCase):
-    def test_token_is_read_with_getpass_and_saved(self) -> None:
-        with patch.object(cmd.getpass, "getpass", return_value="s3cret") as ask:
-            code, out, err = self.ul("token", "gitlab")
-        self.assertEqual(code, 0)
-        ask.assert_called_once()
-        self.stubs["save_token"].assert_called_once_with("gitlab", "s3cret")
-        self.assertNotIn("s3cret", out + err)
+    # The token is typed into `security`'s own hidden prompt, so it never passes through argv or Python.
+    def test_token_is_asked_by_the_keychain_prompt(self) -> None:
+        code, out, err = self.ul("token", "gitlab")
+        self.assertEqual(code, 0, err)
+        self.stubs["prompt_token"].assert_called_once_with("gitlab", base_url=None)
+        self.assertIn("Keychain", out)
+
+    def test_token_for_a_self_hosted_server(self) -> None:
+        code, _, err = self.ul("token", "gitea", "--url", "https://git.example.org")
+        self.assertEqual(code, 0, err)
+        self.stubs["prompt_token"].assert_called_once_with("gitea", base_url="https://git.example.org")
 
     def test_unknown_host_is_usage_error(self) -> None:
         self.assertEqual(self.ul("token", "bitbucket")[0], 2)
-        self.stubs["save_token"].assert_not_called()
-
-    def test_empty_token_is_rejected(self) -> None:
-        with patch.object(cmd.getpass, "getpass", return_value="  "):
-            self.assertEqual(self.ul("token", "gitea")[0], 2)
-        self.stubs["save_token"].assert_not_called()
+        self.stubs["prompt_token"].assert_not_called()
 
     def test_host_error_is_reported(self) -> None:
-        self.stubs["save_token"].side_effect = fake_git_hosts.HostError(
-            "Keychain locked"
-        )
-        with (
-            patch.object(cmd, "HostError", fake_git_hosts.HostError),
-            patch.object(cmd.getpass, "getpass", return_value="t"),
-        ):
+        self.stubs["prompt_token"].side_effect = fake_git_hosts.HostError("Keychain locked")
+        with patch.object(cmd, "HostError", fake_git_hosts.HostError):
             code, _, err = self.ul("token", "gitlab")
         self.assertEqual(code, 1)
         self.assertIn("Keychain locked", err)
@@ -955,7 +1008,7 @@ class HelpTests(GitCommandCase):
         self.assertFalse((self.work / ".git").exists())
         self.assertEqual(self.calls(), [])
         self.stubs["create_repo"].assert_not_called()
-        self.stubs["save_token"].assert_not_called()
+        self.stubs["prompt_token"].assert_not_called()
 
     def test_help_documents_every_feature(self) -> None:
         from unlawful.command_help import COMMAND_HELP

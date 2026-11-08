@@ -348,6 +348,15 @@ LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("f6f97db00a021b1931d7b2e0
 # Official git seed up to 3.15.0-beta.1 (also the copy on the maintainer machine), before init/connect/mirror/open/pr/undo.
 LEGACY_SOURCE_HASHES.setdefault("git", set()).add("37dd2b3ac4b7af14bfc7e51591a0f4cd6a1a5f9b5eaa18bf6ce6d8847cc2e112")
 LEGACY_NORMALIZED_HASHES.setdefault("git", set()).add("ee07e9474231b49b656aef06c674ef7e068260ba4a8013bbf27eeb90c08682a6")
+# Dev builds of 3.15.0-beta.2 (c77f7b6, and 30556d1 installed on the maintainer machine), before the security fixes.
+LEGACY_SOURCE_HASHES["git"].update({
+    "e07336ccd22c90d1c5758ce6d43b103cfa5ef12080b3fca620a8701c0b67472c",
+    "4c0807e2716579d8212276e254fab7a1055fd62ab251474b42c5870c5294a6c5",
+})
+LEGACY_NORMALIZED_HASHES["git"].update({
+    "5213fd6920cd2a19ab86237bf848273178b845d2f1c11c54c556fefab03e0063",
+    "0707c755fac220e9d4512a471b1b1534f326e11359f1cc03c398278cb099550e",
+})
 
 # Commands now built into the Rust core. Untouched seeds with these hashes are
 # removed so the built-in runs; edited copies stay and override it.

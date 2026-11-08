@@ -70,12 +70,16 @@ def create_repo(host, name, *, private=True, description="", base_url=None):
     raise AssertionError("tests must patch create_repo")
 
 
-def token(host):
+def token(host, base_url=None):
     return None
 
 
-def save_token(host, value):
+def save_token(host, value, base_url=None):
     raise AssertionError("tests must patch save_token")
+
+
+def prompt_token(host, base_url=None):
+    raise AssertionError("tests must patch prompt_token")
 
 
 def web_url(remote):

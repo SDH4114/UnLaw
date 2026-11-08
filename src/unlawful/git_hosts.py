@@ -72,6 +72,8 @@ _HOSTNAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?")
 _SCP = re.compile(r"^(?:([^@/\s:]+)@)?([^@/\s:]+):(?!//)(.+)$")
 _URL_SCHEMES = ("https://", "http://", "ssh://", "git://", "file://")
 _API_TIMEOUT = 20
+# A hostile server could stream forever; real answers are a few kilobytes.
+_API_MAX_BYTES = 1_000_000
 _TOOL_TIMEOUT = 30
 _HINTS = {
     "gh": "install it with `brew install gh`, then run `gh auth login`",
@@ -114,8 +116,13 @@ def _hosts_scrub(text: str, *secrets: str) -> str:
     return text
 
 
+def _hosts_clean(text: str) -> str:
+    """Drop control characters (ESC sequences, BEL...) so server text cannot drive the terminal."""
+    return "".join(ch for ch in text if ch in "\t\n" or (ord(ch) >= 32 and ord(ch) != 127))
+
+
 def _hosts_last_line(text: str) -> str:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    lines = [line.strip() for line in _hosts_clean(text).splitlines() if line.strip()]
     return lines[-1][:300] if lines else ""
 
 
@@ -242,11 +249,18 @@ def _hosts_lookup(host: str) -> Host:
     return found
 
 
-def _hosts_service(host: str) -> str:
-    return f"unlaw.git.{_hosts_lookup(host).name}"
+def _hosts_service(host: str, base_url: str | None = None) -> str:
+    """Keychain service per API server (`unlaw.git.gitlab.com`), so a token only ever goes to the
+    server it was saved for: `--url https://elsewhere` finds no token instead of sending gitlab.com's."""
+    info = _hosts_lookup(host)
+    api = info.api if info.kind == "github" else _hosts_api_base(info, base_url)
+    server = (urllib.parse.urlsplit(api).hostname or "").lower()
+    if not _HOSTNAME.fullmatch(server):
+        raise HostError(f"not a valid server name: {server!r}")
+    return f"unlaw.git.{server}"
 
 
-def token(host: str) -> str | None:
+def token(host: str, base_url: str | None = None) -> str | None:
     result = _hosts_run(
         [
             "security",
@@ -254,7 +268,7 @@ def token(host: str) -> str | None:
             "-a",
             "unlaw",
             "-s",
-            _hosts_service(host),
+            _hosts_service(host, base_url),
             "-w",
         ]
     )
@@ -262,8 +276,8 @@ def token(host: str) -> str | None:
     return value if result.returncode == 0 and value else None
 
 
-def save_token(host: str, value: str) -> None:
-    service = _hosts_service(host)
+def save_token(host: str, value: str, base_url: str | None = None) -> None:
+    service = _hosts_service(host, base_url)
     value = value.strip()
     if not value or any(ch.isspace() or ord(ch) < 32 for ch in value):
         raise HostError("the token must be one word without spaces")
@@ -288,6 +302,21 @@ def save_token(host: str, value: str) -> None:
             if detail
             else "could not write the macOS Keychain"
         )
+
+
+
+def prompt_token(host: str, base_url: str | None = None) -> None:
+    """Save a token typed into `security`'s own hidden prompt (`-w` last, as `man security`
+    recommends): the token never appears in argv, where other accounts could see it with `ps`."""
+    service = _hosts_service(host, base_url)
+    if shutil.which("security") is None:
+        raise HostError(f"`security` was not found on PATH: {_HINTS.get('security', 'install it')}")
+    # The terminal is inherited on purpose: security asks for the token and its confirmation.
+    result = subprocess.run(
+        ["security", "add-generic-password", "-a", "unlaw", "-s", service, "-U", "-w"], check=False
+    )
+    if result.returncode != 0:
+        raise HostError("the token was not saved (cancelled, the two entries differ, or the Keychain is locked)")
 
 
 # ---------------------------------------------------------------- creating repositories
@@ -339,11 +368,11 @@ def _hosts_post(
     opener = urllib.request.build_opener(_NoRedirect)
     try:
         with opener.open(request, timeout=_API_TIMEOUT) as response:
-            body = response.read()
+            body = response.read(_API_MAX_BYTES + 1)
     except urllib.error.HTTPError as error:
-        raw = error.read().decode("utf-8", "replace") if error.fp else ""
+        raw = error.read(_API_MAX_BYTES).decode("utf-8", "replace") if error.fp else ""
         error.close()
-        detail = _hosts_scrub(" ".join(raw.split())[:200], secret)
+        detail = _hosts_scrub(" ".join(_hosts_clean(raw).split())[:200], secret)
         name = payload.get("name", "")
         if error.code in (401, 403):
             raise HostError(
@@ -358,6 +387,8 @@ def _hosts_post(
     except (urllib.error.URLError, OSError, TimeoutError) as error:
         reason = _hosts_scrub(str(getattr(error, "reason", error)), secret)
         raise HostError(f"could not reach {host}: {reason}") from None
+    if len(body) > _API_MAX_BYTES:
+        raise HostError(f"{host} returned an answer that is too large")
     try:
         data = json.loads(body)
     except ValueError:
@@ -417,11 +448,12 @@ def create_repo(
     if info.kind == "github":
         return _hosts_create_github(name, private, description)
     api = _hosts_api_base(info, base_url)
-    secret = token(info.name)
+    secret = token(info.name, base_url)
     if not secret:
-        page = info.keys_page or "the token page of your host"
+        server = _hosts_service(info.name, base_url).removeprefix("unlaw.git.")
+        save = f"ul git token {info.name}" + (f" --url {base_url}" if base_url else "")
         raise HostError(
-            f"no API token for {info.name}: create one ({page}) with repository write access and save it"
+            f"no API token for {server}: create one there with repository write access, then run `{save}`"
         )
     if info.kind == "gitlab":
         visibility = "private" if private else "public"
@@ -465,7 +497,8 @@ def ssh_check(ssh_host: str, timeout: float = 15) -> tuple[bool, str]:
         "-o",
         "ConnectTimeout=10",
         "-o",
-        "StrictHostKeyChecking=accept-new",
+        # Never accept an unknown host key silently: a first connection could be intercepted.
+        "StrictHostKeyChecking=yes",
         f"git@{ssh_host}",
     ]
     try:
@@ -478,6 +511,12 @@ def ssh_check(ssh_host: str, timeout: float = 15) -> tuple[bool, str]:
     lowered = output.lower()
     if "successfully authenticated" in lowered or "welcome to gitlab" in lowered:
         return True, _hosts_last_line(output)
+    if "host key verification failed" in lowered:
+        return (
+            False,
+            f"the host key of {ssh_host} is not trusted yet: check its fingerprint on the host's "
+            f"documentation page, then run `ssh -T git@{ssh_host}` once and accept it",
+        )
     if "permission denied" in lowered:
         return (
             False,

@@ -384,7 +384,7 @@ class CreateRepoApiTests(HostTestCase):
         )
         self.assertEqual(
             self.tools.calls("security")[0],
-            ["find-generic-password", "-a", "unlaw", "-s", "unlaw.git.gitlab", "-w"],
+            ["find-generic-password", "-a", "unlaw", "-s", "unlaw.git.127.0.0.1", "-w"],
         )
 
     def test_gitlab_public(self) -> None:
@@ -517,6 +517,28 @@ class CreateRepoApiTests(HostTestCase):
             gh.create_repo("bitbucket", "proj")
 
 
+    def test_a_saved_token_never_goes_to_another_server(self) -> None:
+        # The audit's Medium: `connect gitlab --url https://evil` must not send the gitlab.com token.
+        self.tools.add(
+            "security",
+            f"""for a in "$@"; do [ "$a" = unlaw.git.gitlab.com ] && echo "{SECRET}" && exit 0; done
+exit 44""",
+        )
+        server = self.api(201, self.GITLAB)
+        with self.assertRaises(gh.HostError) as ctx:
+            gh.create_repo("gitlab", "proj", base_url=server.url)
+        self.assertEqual(server.requests, [], "nothing is sent to the other server")
+        self.assertIn("127.0.0.1", str(ctx.exception))
+        self.assertIn("ul git token gitlab --url", str(ctx.exception))
+
+    def test_huge_answers_are_refused(self) -> None:
+        self.with_token()
+        server = self.api(201, {**self.GITLAB, "padding": "x" * 1_100_000})
+        with self.assertRaises(gh.HostError) as ctx:
+            gh.create_repo("gitlab", "proj", base_url=server.url)
+        self.assertIn("too large", str(ctx.exception))
+
+
 class TokenTests(HostTestCase):
     def test_round_trip(self) -> None:
         store = self.root / "store"
@@ -539,17 +561,43 @@ exit 0""",
                 "-a",
                 "unlaw",
                 "-s",
-                "unlaw.git.gitlab",
+                "unlaw.git.gitlab.com",
                 "-w",
                 SECRET,
                 "-U",
             ],
         )
 
+    def test_tokens_are_kept_per_server(self) -> None:
+        self.tools.add("security", "exit 0")
+        gh.save_token("gitea", SECRET, base_url="https://git.example.org")
+        gh.save_token("codeberg", SECRET)
+        services = [call[4] for call in self.tools.calls("security")]
+        self.assertEqual(services, ["unlaw.git.git.example.org", "unlaw.git.codeberg.org"])
+        with self.assertRaises(gh.HostError):
+            gh.save_token("gitea", SECRET)  # self-hosted needs its address
+
+    def test_prompt_token_never_puts_the_token_in_argv(self) -> None:
+        self.tools.add("security", "exit 0")
+        gh.prompt_token("codeberg")
+        self.assertEqual(
+            self.tools.calls("security")[0],
+            ["add-generic-password", "-a", "unlaw", "-s", "unlaw.git.codeberg.org", "-U", "-w"],
+            "-w last without a value: security prompts for the token itself",
+        )
+
+    def test_prompt_token_failure_is_a_host_error(self) -> None:
+        self.tools.add("security", "exit 1")
+        with self.assertRaises(gh.HostError):
+            gh.prompt_token("codeberg")
+        self.empty_path()
+        with self.assertRaises(gh.HostError):
+            gh.prompt_token("codeberg")
+
     def test_host_names_are_validated_and_case_folded(self) -> None:
         self.tools.add("security", f'echo "{SECRET}"')
         self.assertEqual(gh.token("GitLab"), SECRET)
-        self.assertEqual(self.tools.calls("security")[0][4], "unlaw.git.gitlab")
+        self.assertEqual(self.tools.calls("security")[0][4], "unlaw.git.gitlab.com")
         with self.assertRaises(gh.HostError):
             gh.token("evil; rm")
         with self.assertRaises(gh.HostError):
@@ -596,10 +644,23 @@ class SshCheckTests(HostTestCase):
                 "-o",
                 "ConnectTimeout=10",
                 "-o",
-                "StrictHostKeyChecking=accept-new",
+                "StrictHostKeyChecking=yes",
                 "git@github.com",
             ],
         )
+
+    def test_an_unknown_host_key_is_not_accepted_silently(self) -> None:
+        ok, message = self.check('echo "Host key verification failed." >&2; exit 255')
+        self.assertFalse(ok)
+        self.assertIn("fingerprint", message)
+
+    def test_control_characters_from_the_server_are_dropped(self) -> None:
+        # A hostile server's banner must not drive the terminal (clear screen, set the title...).
+        ok, message = self.check("printf 'nope \\033[2J\\033]0;owned\\007 end\\n' >&2; exit 255")
+        self.assertFalse(ok)
+        self.assertNotIn("\x1b", message)
+        self.assertNotIn("\x07", message)
+        self.assertIn("nope", message)
 
     def test_gitlab_welcome(self) -> None:
         ok, _ = self.check('echo "Welcome to GitLab, @me!"; exit 0')

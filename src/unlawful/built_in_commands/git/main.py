@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import getpass
 import os
 import re
 import shutil
@@ -19,7 +18,7 @@ from unlawful.git_hosts import (
     host_of,
     is_host_name,
     pr_url,
-    save_token,
+    prompt_token,
     ssh_check,
     web_url,
 )
@@ -106,12 +105,24 @@ def _run_all(commands: list[list[str]]) -> int:
     return 0
 
 
+def _git_clean(text: str) -> str:
+    """Drop control characters (ESC sequences, BEL...) so text from a server cannot drive the terminal."""
+    return "".join(ch for ch in text if ch in "\t\n" or (ord(ch) >= 32 and ord(ch) != 127))
+
+
+def _git_checked_remote(url: str) -> str:
+    """An address from a host's API must look like one: never an option, a helper transport or text with spaces."""
+    if not url or url.startswith("-") or "::" in url or any(ch.isspace() or ord(ch) < 32 for ch in url):
+        raise HostError(f"the host answered with an unusable repository address: {_git_clean(url)!r}")
+    return url
+
+
 def _git_fail(message: str) -> int:
     print(f"unlaw git: {message}", file=sys.stderr)
     return 1
 
 
-def _git_out(*args: str) -> subprocess.CompletedProcess[str]:
+def _git_out(*args: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
     """Run git quietly and return its text output; a missing git becomes exit code 127."""
     command = ["git", *args]
     try:
@@ -121,6 +132,7 @@ def _git_out(*args: str) -> subprocess.CompletedProcess[str]:
             capture_output=True,
             text=True,
             errors="surrogateescape",
+            input=stdin,
         )
     except OSError as error:
         return subprocess.CompletedProcess(command, 127, "", str(error))
@@ -240,15 +252,17 @@ def _has_staged_changes() -> bool | int:
 
 
 def _git_secret_reason(path: str, root: str) -> str | None:
-    name = path.rsplit("/", 1)[-1]
-    lower = name.lower()
+    # Case-folded: macOS disks ignore case, so `.ENV` is the file dotenv loads.
+    name = path.rsplit("/", 1)[-1].casefold()
     if name == ".env" or (name.startswith(".env.") and name != ".env.example"):
         return "environment file"
-    if lower.endswith((".pem", ".key")):
+    if name in {".netrc", ".pypirc"}:
+        return "credentials file"
+    if name.endswith((".pem", ".key", ".p8")):
         return "private key or certificate"
-    if lower.endswith(".p12"):
+    if name.endswith((".p12", ".pfx", ".jks", ".keystore")):
         return "key store"
-    if name.startswith(("id_rsa", "id_ed25519")) and not name.endswith(".pub"):
+    if name.startswith(("id_rsa", "id_ed25519", "id_ecdsa", "id_dsa")) and not name.endswith(".pub"):
         return "private SSH key"
     try:
         if os.path.getsize(os.path.join(root, path)) > _GIT_MAX_BYTES:
@@ -277,7 +291,14 @@ def _git_secrets_guard(allow: bool) -> int:
     ]
     if not found:
         return 0
-    _git_out("reset", "-q", "--", *[path for path, _ in found])
+    # Literal pathspecs from stdin: a file named `:(exclude)x` must not unstage everything else,
+    # and a long list cannot hit the argument limit.
+    reset = _git_out(
+        "--literal-pathspecs", "reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul",
+        stdin="\0".join(path for path, _ in found),
+    )
+    if reset.returncode:
+        return _git_fail(_git_clean(reset.stderr.strip()) or "could not unstage the files below.")
     lines = [
         "not committing, these staged files look like secrets or are too big (now unstaged):"
     ]
@@ -329,6 +350,10 @@ def _git_detect_types() -> list[str]:
 
 def _git_merge_gitignore(kinds: list[str]) -> None:
     """Append the missing ignore lines; existing lines are never changed or removed."""
+    # A .gitignore that is a symlink (e.g. from an unpacked archive) would make this append to
+    # whatever it points at (~/.zshrc, ~/.ssh/config): only a regular file is ever written.
+    if os.path.lexists(".gitignore") and (os.path.islink(".gitignore") or not os.path.isfile(".gitignore")):
+        raise OSError(".gitignore is not a regular file (a symlink?); fix it and run again")
     try:
         with open(".gitignore", encoding="utf-8") as handle:
             current = handle.read()
@@ -345,7 +370,8 @@ def _git_merge_gitignore(kinds: list[str]) -> None:
     if not wanted:
         return
     prefix = "" if not current or current.endswith("\n") else "\n"
-    with open(".gitignore", "a", encoding="utf-8") as handle:
+    descriptor = os.open(".gitignore", os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
         handle.write(prefix + "\n".join(wanted) + "\n")
 
 
@@ -393,7 +419,7 @@ def _git_resolve_remote(spec: str, options: dict[str, str]) -> str:
         created = create_repo(
             spec, name, private="--public" not in options, base_url=options.get("--url")
         )
-        return created.ssh_url
+        return _git_checked_remote(created.ssh_url)
     return expand_remote(spec)
 
 
@@ -424,10 +450,11 @@ def _git_ssh_gate(url: str) -> int:
 
 
 def _git_verify_remote(target: str) -> int:
-    result = _git_out("ls-remote", target)
+    # --end-of-options: an address can never be read as an option such as --upload-pack.
+    result = _git_out("ls-remote", "--end-of-options", target)
     if result.returncode:
         return _git_fail(
-            f"cannot access {target}: {result.stderr.strip() or 'ls-remote failed'}"
+            f"cannot access {target}: {_git_clean(result.stderr.strip()) or 'ls-remote failed'}"
         )
     return 0
 
@@ -460,6 +487,7 @@ def _git_connect(args: list[str]) -> int:
     if existing is None:
         code = _run_all([["git", "remote", "add", "origin", url]])
     elif existing != url:
+        print(f"Replacing origin (was {existing}).")
         code = _run_all([["git", "remote", "set-url", "origin", url]])
     else:
         code = 0
@@ -538,20 +566,13 @@ def _git_mirror(args: list[str]) -> int:
 
 
 def _git_token(args: list[str]) -> int:
-    _, positional = _git_parse(args)
+    options, positional = _git_parse(args, values=("--url",))
     if len(positional) != 1 or positional[0] not in HOSTS:
         raise _GitUsage(f"token needs a host: {', '.join(HOSTS)}")
     host = positional[0]
-    try:
-        value = getpass.getpass(f"{host} token (input hidden): ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print("\nunlaw git: cancelled.", file=sys.stderr)
-        return 2
-    if not value:
-        print("unlaw git: the token cannot be empty.", file=sys.stderr)
-        return 2
-    save_token(host, value)
-    print(f"Saved the {host} token in the macOS Keychain (service unlaw.git.{host}).")
+    print(f"Paste the {host} token when the Keychain asks (input hidden, asked twice).")
+    prompt_token(host, base_url=options.get("--url"))
+    print(f"Saved the {host} token in the macOS Keychain.")
     return 0
 
 

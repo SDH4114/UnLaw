@@ -139,7 +139,8 @@ Actions:
                               first commit "Initial commit"
   connect SPEC                Set origin and push the current branch with -u
   mirror add|list|remove      Extra remotes named mirror-*; every push also pushes to them
-  token HOST                  Save an API token (read hidden from the terminal, never from argv)
+  token HOST [--url BASE]     Save an API token: the Keychain's own hidden prompt asks for it
+                              twice, so it never appears in argv (`ps`)
   open                        Open the origin page of the current branch in the browser
   pr                          Push the current branch, then open a pull request (GitHub with
                               gh when installed, otherwise the host's compare page)
@@ -156,21 +157,26 @@ Options:
   --name NAME        Repository name to create (default: the folder name); for mirror add with a
                      URL it is the mirror name (remote mirror-NAME)
   --url BASE         Server for gitea or a self-hosted gitlab, for example https://git.example.com
+                     (also for token: the token is saved for that server only)
   --force            Replace an origin that points somewhere else
   --base BRANCH      (pr) target branch, default main
   --allow-secrets    Commit even when secrets or files over 50 MB are staged
   -h, --help         Show this help
 SPEC is a host name (github, gitlab, codeberg, gitea: creates the repository through its API),
   a short form (gh:owner/repo, gl:..., cb:...) or a full URL or path. Short forms become SSH URLs.
-Secrets guard: every commit path unstages .env and .env.* (not .env.example), *.pem, *.key,
-  id_rsa*, id_ed25519* (not .pub), *.p12 and files over 50 MB, explains why and stops with exit 1.
-  Fix it with .gitignore, or pass --allow-secrets. Deleting such a file is always allowed.
+Secrets guard: every commit path unstages .env and .env.* (not .env.example), .netrc, .pypirc,
+  *.pem, *.key, *.p8, *.p12, *.pfx, *.jks, *.keystore, id_rsa*, id_ed25519*, id_ecdsa*, id_dsa*
+  (not .pub; names compared ignoring case) and files over 50 MB, explains why and stops with
+  exit 1. Fix it with .gitignore, or pass --allow-secrets. Deleting such a file is always allowed.
+  init never writes through a .gitignore that is a symlink.
 Mirrors: they exist only as Git remotes named mirror-* in the repository. A failing mirror is
   reported as a warning and does not fail the push when origin succeeded.
 SSH: for SSH remotes of a known host connect checks the login. When it fails it offers to
   create ~/.ssh/id_ed25519, prints the public key and opens the host's key page; add the key
-  and run the command again.
-Tokens: stored in the macOS Keychain, service unlaw.git.<host>. Scopes: gitlab and gitea or
+  and run the command again. An unknown host key is never accepted silently: check the
+  fingerprint and accept it once with `ssh -T git@HOST`.
+Tokens: stored in the macOS Keychain per server, service unlaw.git.<server> (for example
+  unlaw.git.gitlab.com), and only ever sent to that server. Scopes: gitlab and gitea or
   codeberg need an access token that can create repositories (gitlab: api; gitea/codeberg:
   write:repository and write:user). GitHub uses `gh auth login` instead of a token.
 Dependencies: git; ssh; gh (optional, for GitHub pull requests); the macOS `open` command.
@@ -178,7 +184,8 @@ Examples: ul git "Fix downloader"
   ul git init --connect github
   ul git connect gh:me/project --force
   ul git mirror add codeberg
-  ul git token gitlab
+  ul git token codeberg
+  ul git token gitea --url https://git.example.com
   ul git pr --base develop
   ul git undo --list
   ul git undo "add parser"
