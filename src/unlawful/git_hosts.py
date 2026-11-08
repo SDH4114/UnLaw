@@ -11,16 +11,17 @@ import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 
 class HostError(Exception):
     """A problem with a git host, worded for the user (no traceback)."""
 
 
-@dataclass(frozen=True)
-class Host:
+# NamedTuple, not a dataclass: the seed may be imported from a file outside sys.modules, where
+# dataclasses cannot resolve postponed annotations.
+class Host(NamedTuple):
     name: str
     kind: str  # "github" | "gitlab" | "gitea"
     web: str
@@ -29,8 +30,7 @@ class Host:
     keys_page: str
 
 
-@dataclass(frozen=True)
-class Created:
+class Created(NamedTuple):
     ssh_url: str
     https_url: str
     web_url: str
@@ -377,6 +377,11 @@ def _hosts_fields(data: dict, host: str, *keys: str) -> list[str]:
 def _hosts_create_github(name: str, private: bool, description: str) -> Created:
     if _hosts_run(["gh", "auth", "status"]).returncode != 0:
         raise HostError("gh is not logged in: run `gh auth login`")
+    # An explicit owner: `gh repo view NAME` alone is not documented to mean the logged-in user.
+    login = _hosts_run(["gh", "api", "user", "--jq", ".login"]).stdout.strip()
+    if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})", login):
+        raise HostError("could not read your GitHub login from gh (`gh api user`)")
+    name = f"{login}/{name}"
     argv = ["gh", "repo", "create", name, "--private" if private else "--public"]
     if description:
         argv += ["--description", description]

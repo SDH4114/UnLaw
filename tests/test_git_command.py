@@ -162,6 +162,35 @@ class CommitWorkflowTests(GitCommandCase):
         self.assertEqual(self.ul("add feature")[0], 0)
         self.assertEqual(self.subjects(bare)[0], "add feature")
 
+    def test_default_pushes_even_when_auto_push_is_off(self) -> None:
+        # Replaces the old mocked test: `ul git <message>` always pushes, git.auto_push does not matter.
+        from unlawful.config import ensure_layout, set_config_value
+
+        ensure_layout()
+        set_config_value("git.auto_push", False)
+        bare = self.make_repo()
+        self.change()
+        self.assertEqual(self.ul("always push")[0], 0)
+        self.assertEqual(self.subjects(bare)[0], "always push")
+
+    def test_deleting_a_tracked_secret_is_allowed(self) -> None:
+        bare = self.make_repo()
+        self.change(".env", "TOKEN=1\n")
+        self.assertEqual(self.ul("commit", "oops", "--allow-secrets")[0], 0)
+        (self.work / ".env").unlink()
+        code, _, err = self.ul("push", "remove the env file")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn(".env", self.git("ls-tree", "--name-only", "main", cwd=bare).splitlines())
+
+    def test_push_sets_the_upstream_of_a_new_branch(self) -> None:
+        bare = self.make_repo()
+        self.git("switch", "-q", "-c", "feat/x")
+        self.change()
+        code, _, err = self.ul("push", "on a branch")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.subjects(bare, "feat/x")[0], "on a branch")
+        self.assertEqual(self.git("rev-parse", "--abbrev-ref", "feat/x@{u}"), "origin/feat/x")
+
     def test_commit_does_not_push(self) -> None:
         bare = self.make_repo()
         self.change()
@@ -474,6 +503,15 @@ class ConnectTests(GitCommandCase):
         code, _, err = self.ul("connect", "github")
         self.assertEqual(code, 1)
         self.assertIn("--force", err)
+        self.stubs["create_repo"].assert_not_called()
+
+    def test_rerun_on_a_connected_host_reuses_origin(self) -> None:
+        # After a failed SSH check the user reruns the same command: nothing is created twice.
+        bare = self.make_repo()
+        self.stubs["host_of"].side_effect = lambda url: fake_git_hosts.HOSTS["github"] if url == str(bare) else None
+        self.stubs["host_of"].return_value = None
+        code, _, err = self.ul("connect", "github")
+        self.assertEqual(code, 0, err)
         self.stubs["create_repo"].assert_not_called()
 
     def test_different_origin_is_replaced_with_force(self) -> None:

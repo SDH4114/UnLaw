@@ -60,6 +60,12 @@ class ToolTestCase(unittest.TestCase):
     def lines(self, log: Path) -> list[str]:
         return log.read_text().splitlines() if log.exists() else []
 
+    # Read-only git queries of `ul git` (secrets guard, remotes, branch, upstream); they change nothing.
+    GIT_QUERIES = ("diff|--cached|--name-only", "rev-parse|", "config|--get", "remote", "symbolic-ref|")
+
+    def actions(self, log: Path) -> list[str]:
+        return [line for line in self.lines(log) if not line.startswith(self.GIT_QUERIES)]
+
     def run_main(self, main, args: list[str]) -> tuple[int, str, str]:
         with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
             code = main(args)
@@ -80,13 +86,13 @@ class GitTests(ToolTestCase):
         self.assertEqual(self.lines(log), ["pull"])
 
     def test_prompt_cancel_and_empty_message_stop_before_commit(self) -> None:
-        log = self.tool("git", body="if sys.argv[1:2] == ['diff']:\n    raise SystemExit(1)\n")
+        log = self.tool("git", body="if sys.argv[1:] == ['diff', '--cached', '--quiet']:\n    raise SystemExit(1)\n")
         for side_effect, message in ((EOFError, "commit cancelled"), (["  "], "cannot be empty"), (KeyboardInterrupt, "cancelled")):
             with self.subTest(message=message), patch("builtins.input", side_effect=side_effect):
                 code, _, error = self.run_main(git_command.main, [])
                 self.assertEqual(code, 2)
                 self.assertIn(message, error)
-        self.assertEqual(set(self.lines(log)), {"add|.", "diff|--cached|--quiet"})
+        self.assertEqual(set(self.actions(log)), {"add|.", "diff|--cached|--quiet"})
 
     def test_failures_stop_the_workflow(self) -> None:
         log = self.tool("git", exit_code=1)
@@ -98,9 +104,9 @@ class GitTests(ToolTestCase):
         self.assertIn("unlaw git:", error)
 
     def test_commit_message_tokens_are_joined(self) -> None:
-        log = self.tool("git", body="if sys.argv[1:2] == ['diff']:\n    raise SystemExit(1)\n")
+        log = self.tool("git", body="if sys.argv[1:] == ['diff', '--cached', '--quiet']:\n    raise SystemExit(1)\n")
         self.assertEqual(self.run_main(git_command.main, ["fix", "the", "bug"])[0], 0)
-        self.assertEqual(self.lines(log), ["add|.", "diff|--cached|--quiet", "commit|-m|fix the bug", "push"])
+        self.assertEqual(self.actions(log), ["add|.", "diff|--cached|--quiet", "commit|-m|fix the bug", "push"])
 
 
 FAKE_SCREENCAPTURE = """import os, signal, time

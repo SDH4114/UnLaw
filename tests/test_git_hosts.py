@@ -270,11 +270,12 @@ class UrlTests(unittest.TestCase):
 
 
 class CreateRepoGithubTests(HostTestCase):
-    def fake_gh(self, create_rc: int = 0, auth_rc: int = 0) -> None:
+    def fake_gh(self, create_rc: int = 0, auth_rc: int = 0, login: str = "me") -> None:
         self.tools.add(
             "gh",
             f"""case "$1 $2" in
   "auth status") echo "not logged" >&2; exit {auth_rc};;
+  "api user") echo "{login}";;
   "repo create") echo "GraphQL: Name already exists on this account" >&2; exit {create_rc};;
   "repo view") echo '{{"sshUrl":"git@github.com:me/proj.git","url":"https://github.com/me/proj"}}';;
 esac
@@ -294,18 +295,26 @@ exit 0""",
         )
         calls = self.tools.calls("gh")
         self.assertEqual(calls[0], ["auth", "status"])
+        # The owner is explicit: `gh repo view NAME` alone is not documented to mean the logged-in user.
+        self.assertEqual(calls[1], ["api", "user", "--jq", ".login"])
         self.assertEqual(
-            calls[1],
-            ["repo", "create", "proj", "--private", "--description", "my thing"],
+            calls[2],
+            ["repo", "create", "me/proj", "--private", "--description", "my thing"],
         )
-        self.assertEqual(calls[2], ["repo", "view", "proj", "--json", "sshUrl,url"])
+        self.assertEqual(calls[3], ["repo", "view", "me/proj", "--json", "sshUrl,url"])
 
     def test_public_repo_without_description(self) -> None:
         self.fake_gh()
         gh.create_repo("GitHub", "proj", private=False)
         self.assertEqual(
-            self.tools.calls("gh")[1], ["repo", "create", "proj", "--public"]
+            self.tools.calls("gh")[2], ["repo", "create", "me/proj", "--public"]
         )
+
+    def test_odd_login_is_refused_before_creating(self) -> None:
+        self.fake_gh(login="-rf me")
+        with self.assertRaises(gh.HostError):
+            gh.create_repo("github", "proj")
+        self.assertFalse([c for c in self.tools.calls("gh") if c[:2] == ["repo", "create"]])
 
     def test_gh_missing(self) -> None:
         self.empty_path()
@@ -331,7 +340,7 @@ exit 0""",
 
     def test_bad_view_output(self) -> None:
         self.tools.add(
-            "gh", 'case "$1 $2" in "repo view") echo "not json";; esac\nexit 0'
+            "gh", 'case "$1 $2" in "api user") echo me;; "repo view") echo "not json";; esac\nexit 0'
         )
         with self.assertRaises(gh.HostError):
             gh.create_repo("github", "proj")
@@ -500,7 +509,7 @@ class CreateRepoApiTests(HostTestCase):
         ):
             with self.subTest(name=name), self.assertRaises(gh.HostError):
                 gh.create_repo("github", name)
-        self.tools.add("gh", 'echo \'{"sshUrl":"s","url":"https://u"}\'')
+        self.tools.add("gh", 'if [ "$1 $2" = "api user" ]; then echo me; else echo \'{"sshUrl":"s","url":"https://u"}\'; fi')
         gh.create_repo("github", "A.b_c-1")
 
     def test_unknown_host(self) -> None:

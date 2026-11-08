@@ -30,14 +30,25 @@ class InTemporaryDirectory(unittest.TestCase):
 
 
 def git_results(staged: bool = True):
-    """Fake subprocess.run: `git diff --cached --quiet` exits 1 when something is staged."""
+    """Fake subprocess.run: `git diff --cached --quiet` exits 1 when something is staged.
 
-    def run(command, check=False):
+    Read-only queries (run with capture_output: the secrets guard's staged-file list, remotes,
+    branch) answer empty: nothing secret is staged, no mirrors.
+    """
+
+    def run(command, check=False, **kwargs):
+        if kwargs.get("capture_output"):
+            return subprocess.CompletedProcess(command, 0, "", "")
         if command[:2] == ["git", "diff"]:
             return subprocess.CompletedProcess(command, 1 if staged else 0)
         return subprocess.CompletedProcess(command, 0)
 
     return run
+
+
+def workflow(run) -> list:
+    """The calls that do something (add, the staged check, commit, push); read-only queries left out."""
+    return [entry for entry in run.call_args_list if not entry.kwargs.get("capture_output")]
 
 
 class GitCommandTests(unittest.TestCase):
@@ -56,7 +67,7 @@ class GitCommandTests(unittest.TestCase):
         with patch.object(git_command.subprocess, "run", side_effect=git_results()) as run:
             self.assertEqual(git_command.main(["fix", "parser"]), 0)
         self.assertEqual(
-            run.call_args_list,
+            workflow(run),
             [
                 call(["git", "add", "."], check=False),
                 call(["git", "diff", "--cached", "--quiet"], check=False),
@@ -83,7 +94,7 @@ class GitCommandTests(unittest.TestCase):
 
         prompt.assert_called_once_with("Commit message: ")
         self.assertEqual(
-            run.call_args_list,
+            workflow(run),
             [
                 call(["git", "add", "."], check=False),
                 call(["git", "diff", "--cached", "--quiet"], check=False),
@@ -101,7 +112,7 @@ class GitCommandTests(unittest.TestCase):
             self.assertEqual(git_command.main(["3.10.0"]), 0)
         prompt.assert_not_called()
         self.assertEqual(
-            run.call_args_list,
+            workflow(run),
             [
                 call(["git", "add", "."], check=False),
                 call(["git", "diff", "--cached", "--quiet"], check=False),
@@ -115,19 +126,20 @@ class GitCommandTests(unittest.TestCase):
         with patch.object(git_command.subprocess, "run", side_effect=git_results(staged=False)) as run:
             self.assertEqual(git_command.main(["commit", "docs"]), 0)
         self.assertEqual(
-            run.call_args_list,
+            workflow(run),
             [call(["git", "add", "."], check=False), call(["git", "diff", "--cached", "--quiet"], check=False)],
         )
 
     def test_git_outside_repository_stops_before_commit(self) -> None:
         from unlawful.built_in_commands.git import main as git_command
 
-        def run(command, check=False):
-            return subprocess.CompletedProcess(command, 128 if command[:2] == ["git", "diff"] else 0)
+        def run(command, check=False, **kwargs):
+            return subprocess.CompletedProcess(command, 128 if command[:2] == ["git", "diff"] else 0, "", "")
 
         with patch.object(git_command.subprocess, "run", side_effect=run) as fake:
             self.assertEqual(git_command.main(["msg"]), 128)
-        self.assertEqual(len(fake.call_args_list), 2)
+        # Stops right after `git add`: nothing is committed or pushed.
+        self.assertEqual(workflow(fake), [call(["git", "add", "."], check=False)])
 
     def test_git_stops_after_failed_step(self) -> None:
         from unlawful.built_in_commands.git import main as git_command

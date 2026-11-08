@@ -24,7 +24,7 @@
   {
    "name": "git",
    "summary": "Stage, commit and push the current Git project, or run a Git action.",
-   "sha256": "37dd2b3ac4b7af14bfc7e51591a0f4cd6a1a5f9b5eaa18bf6ce6d8847cc2e112"
+   "sha256": "e07336ccd22c90d1c5758ce6d43b103cfa5ef12080b3fca620a8701c0b67472c"
   },
   {
    "name": "gpt",

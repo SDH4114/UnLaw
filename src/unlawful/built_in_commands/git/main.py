@@ -189,6 +189,11 @@ def _git_open_url(url: str) -> int:
 
 def _git_push_all(*, upstream_branch: str | None = None) -> int:
     """Push origin, then every mirror; a failing mirror only warns."""
+    if upstream_branch is None and _git_remote_url("origin"):
+        # A branch without an upstream would make a plain `git push` fail: publish it on origin.
+        branch = _git_branch()
+        if branch and _git_out("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").returncode:
+            upstream_branch = branch
     command = (
         ["git", "push"]
         if upstream_branch is None
@@ -257,9 +262,12 @@ def _git_secrets_guard(allow: bool) -> int:
     """Unstage files that must not be committed; 0 when clear, 1 when something was held back."""
     if allow:
         return 0
-    staged = _git_out("diff", "--cached", "--name-only", "-z")
+    # Deletions are excluded: removing a committed secret must always be possible.
+    staged = _git_out("diff", "--cached", "--name-only", "--diff-filter=d", "-z")
     if staged.returncode:
-        return _git_fail(staged.stderr.strip() or "cannot list staged files.")
+        # Keep git's own exit code (128 outside a repository), as the workflow always did.
+        _git_fail(staged.stderr.strip() or "cannot list staged files.")
+        return staged.returncode
     paths = [path for path in staged.stdout.split("\0") if path]
     if not paths:
         return 0
@@ -435,11 +443,16 @@ def _git_connect(args: list[str]) -> int:
     if not _git_in_worktree():
         return _git_fail("not a Git repository; run `ul git init` first.")
     existing = _git_remote_url("origin")
-    if existing and not force and is_host_name(spec):
+    current_host = host_of(existing) if existing else None
+    if current_host is not None and is_host_name(spec) and current_host.name == spec.lower() and not force:
+        # Already connected to this host (e.g. a rerun after the SSH key step): reuse origin, create nothing.
+        url = existing
+    elif existing and not force and is_host_name(spec):
         return _git_fail(
             f"origin already points to {existing}; use --force to replace it."
         )
-    url = _git_resolve_remote(spec, options)
+    else:
+        url = _git_resolve_remote(spec, options)
     if existing and existing != url and not force:
         return _git_fail(
             f"origin already points to {existing}; use --force to replace it with {url}."
