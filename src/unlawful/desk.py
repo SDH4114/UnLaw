@@ -726,7 +726,10 @@ def board_file(raw: str, create: bool = False, boards_dir: Path | None = None) -
         if create:
             boards_dir.mkdir(parents=True, exist_ok=True)
         raw = str(boards_dir / f"{raw}.md")
-    path = Path(raw).expanduser().resolve()
+    try:
+        path = Path(raw).expanduser().resolve()
+    except RuntimeError as error:  # `~name` of a user that does not exist
+        raise ValueError(f"Cannot expand {raw}: {error}") from error
     if path.suffix.casefold() != ".md":
         raise ValueError(f"A board is a Markdown file (.md): {path}")
     if not path.exists():

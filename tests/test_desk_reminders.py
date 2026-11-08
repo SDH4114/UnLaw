@@ -240,6 +240,10 @@ class BoardsFolderTests(unittest.TestCase):
         self.assertIn("## To do", path.read_text(encoding="utf-8"))
         self.assertEqual(board_file("Work", boards_dir=folder), path)
 
+    def test_an_unknown_home_is_a_clear_error(self) -> None:
+        with self.assertRaises(ValueError):
+            board_file("~no-such-user-unlaw/x.md", boards_dir=self.root / "boards")
+
     def test_paths_and_md_names_keep_their_old_meaning(self) -> None:
         folder = self.root / "boards"
         with self.assertRaises(FileNotFoundError):

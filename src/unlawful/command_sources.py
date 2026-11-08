@@ -338,6 +338,9 @@ LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("a3acb3f453de4b204da0aafd
 # Official desk seed of release 3.13.0 (also the copy on the maintainer machine), before the Reminders layer and the boards folder.
 LEGACY_SOURCE_HASHES["desk"].add("48f1487d908b6df268d658a9137bb9f2faa3dedd590157e8d9637cb9808efb3d")
 LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("5ad640becd9dc1d413d0a4a03a39c62cabc9d1ca3135553354865c73f5f6b1a2")
+# Desk seed of the 3.14.0 Reminders build (7af1328, installed on the maintainer machine), before the Canvas tab.
+LEGACY_SOURCE_HASHES["desk"].add("9ccc7b80ec554df971227a24b05411ec420ea7398d713cec26948c3915d645e3")
+LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("8209386369c0883b8c60bf4ad3848d24a16ca4e42909b839becfdd08a4d9f891")
 
 # Commands now built into the Rust core. Untouched seeds with these hashes are
 # removed so the built-in runs; edited copies stay and override it.
