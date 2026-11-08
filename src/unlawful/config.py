@@ -44,6 +44,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "sound": True,
         "reminders": True,
         "boards_dir": "boards",
+        "canvas_dir": "canvas",
         "pomodoro": {"work": 25, "short_break": 5, "long_break": 15, "cycles": 4},
     },
     "capture": {
@@ -360,6 +361,7 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ("desk.sound", bool, None),
         ("desk.reminders", bool, None),
         ("desk.boards_dir", str, None),
+        ("desk.canvas_dir", str, None),
         ("desk.pomodoro.work", (int, float), None),
         ("desk.pomodoro.short_break", (int, float), None),
         ("desk.pomodoro.long_break", (int, float), None),

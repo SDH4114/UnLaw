@@ -464,6 +464,7 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
             "sound": True,
             "reminders": True,
             "boards_dir": "boards",
+            "canvas_dir": "canvas",
             "pomodoro": {"work": 25, "short_break": 5, "long_break": 15, "cycles": 4},
         },
         "games": {"difficulty": "normal"},
@@ -623,7 +624,7 @@ _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "steam": ("built_in_commands/steam/main.py",),
     "tg": ("telegram.py",),
     "todo": ("kanban.py", "todo.py"),
-    "desk": ("kanban.py", "reminders.py", "desk_ui.py", "desk.py"),
+    "desk": ("kanban.py", "reminders.py", "canvas.py", "desk_ui.py", "desk.py"),
     "work": ("desktop/work.py",),
     "yt": ("desktop/youtube.py",),
     "zed": ("built_in_commands/zed/main.py",),
@@ -658,6 +659,7 @@ def _clean_fragment(source: str, *, command: str) -> str:
         "from .kanban import ",
         "from .desk_ui import ",
         "from .reminders import ",
+        "from .canvas import ",
     )
     lines: list[str] = []
     skipping = False

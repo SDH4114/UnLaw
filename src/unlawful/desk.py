@@ -24,6 +24,7 @@ from pathlib import Path
 
 from unlawful.command_help import COMMAND_HELP
 
+from .canvas import NEW_CANVAS, read_canvas, render_canvas, write_canvas
 from .config import ConfigError, config_dir, load_config, storage_path
 from .desk_ui import PAGE
 from .kanban import (
@@ -54,6 +55,7 @@ PHASES = {
 }
 DOING_COLUMNS = {"doing", "in progress", "in work", "в работе", "делаю", "в процессе"}
 MAX_BODY = 64 * 1024
+MAX_CANVAS_BODY = 16 * 1024 * 1024
 MAX_TEXT = 500
 RECENT = 8
 
@@ -83,6 +85,7 @@ def desk_settings(config: dict) -> dict:
         "sound": desk.get("sound", True) is not False,
         "reminders": desk.get("reminders", True) is not False,
         "boards_dir": desk.get("boards_dir") if isinstance(desk.get("boards_dir"), str) and desk.get("boards_dir") else "boards",
+        "canvas_dir": desk.get("canvas_dir") if isinstance(desk.get("canvas_dir"), str) and desk.get("canvas_dir") else "canvas",
         "work": _number(pomodoro.get("work"), 25, 0.01),
         "short_break": _number(pomodoro.get("short_break"), 5, 0.01),
         "long_break": _number(pomodoro.get("long_break"), 15, 0.01),
@@ -397,6 +400,10 @@ class Conflict(Exception):
     """The board changed since the client read it."""
 
 
+class CanvasConflict(Exception):
+    """The canvas file changed since the client read it."""
+
+
 def _clean_text(value: object) -> str:
     if not isinstance(value, str):
         raise TypeError("text must be a string")
@@ -435,6 +442,9 @@ class Desk:
         self.settings = desk_settings(config)
         self.reminders = Reminders()
         self.boards_dir = boards_folder(self.settings["boards_dir"], config_dir())
+        self.canvas_dir = boards_folder(self.settings["canvas_dir"], config_dir())
+        self.canvas_current: Path | None = None
+        self.canvas_lock = threading.Lock()
         self.pomodoro = Pomodoro(directory, self.settings, clock)
         self.lock = threading.Lock()
         self.today: Callable[[], date] = lambda: datetime.now().astimezone().date()
@@ -633,6 +643,63 @@ class Desk:
         ][:RECENT]
         _write_json(self.directory / "recent.json", paths)
 
+    def canvas_recent(self) -> list[str]:
+        items = _read_json(self.directory / "recent-canvas.json", [])
+        paths = [item for item in items if isinstance(item, str)] if isinstance(items, list) else []
+        return [path for path in paths if Path(path).is_file()]
+
+    def canvases(self) -> dict:
+        """Canvases in desk.canvas_dir by name, then the recently opened ones elsewhere."""
+        try:
+            files = sorted(
+                (str(path.resolve()) for path in self.canvas_dir.glob("*.canvas") if path.is_file()),
+                key=lambda item: Path(item).stem.casefold(),
+            )
+        except OSError:
+            files = []
+        current = self.canvas_current
+        return {
+            "dir": str(self.canvas_dir),
+            "current": str(current) if current is not None and current.is_file() else None,
+            "items": [{"path": path, "name": Path(path).stem} for path in dict.fromkeys([*files, *self.canvas_recent()])],
+        }
+
+    def _canvas_json(self, path: Path, version: str, canvas: dict) -> dict:
+        return {"path": str(path), "name": path.stem, "version": version, "canvas": canvas}
+
+    def _canvas_shown(self, path: Path) -> None:
+        """Make `path` the current canvas and the newest recent one (the caller holds canvas_lock)."""
+        self.canvas_current = path
+        paths = [str(path), *[item for item in self.canvas_recent() if item != str(path)]][:RECENT]
+        _write_json(self.directory / "recent-canvas.json", paths)
+
+    def canvas_open(self, raw: object, create: bool = False) -> dict:
+        """Open a canvas by name or path (no argument: the current one); `create` makes a missing one."""
+        with self.canvas_lock:
+            if raw is None:
+                if self.canvas_current is None:
+                    raise FileNotFoundError("No canvas is open")
+                path = self.canvas_current
+            else:
+                path = canvas_file(raw, create=create, canvas_dir=self.canvas_dir)
+            version, canvas = read_canvas(path)
+            self._canvas_shown(path)
+        return self._canvas_json(path, version, canvas)
+
+    def canvas_save(self, body: dict) -> dict:
+        """Replace the whole canvas when the client still has the file's current version."""
+        version = body.get("version")
+        if not isinstance(version, str):
+            raise ValueError("version must be the text from the last read")
+        canvas = body.get("canvas")
+        with self.canvas_lock:
+            path = canvas_file(body.get("path"), create=False, canvas_dir=self.canvas_dir)
+            if version_of(path.read_bytes()) != version:
+                raise CanvasConflict
+            new_version = write_canvas(path, canvas)
+            self._canvas_shown(path)
+        return self._canvas_json(path, new_version, canvas)
+
     def switch(self, raw: object, create: bool) -> dict:
         text = _clean_text(raw)
         if text == REMINDERS:
@@ -677,12 +744,44 @@ def board_file(raw: str, create: bool = False, boards_dir: Path | None = None) -
     return path
 
 
-def _bare_name(raw: str) -> bool:
+def canvas_file(raw: object, create: bool, canvas_dir: Path) -> Path:
+    """A canvas chosen by the user: an existing .canvas file, or a new empty one.
+
+    A bare name (no folder, no .canvas) is a canvas in desk.canvas_dir, created with the folder when needed.
+    """
+    if not isinstance(raw, str):
+        raise TypeError("path must be a name or a .canvas file")
+    if _bare_name(raw, ".canvas"):
+        if create:
+            canvas_dir.mkdir(parents=True, exist_ok=True)
+        raw = str(canvas_dir / f"{raw}.canvas")
+    try:
+        path = Path(raw).expanduser().resolve()
+    except RuntimeError as error:
+        raise ValueError(f"Unknown home folder in {raw}") from error
+    if path.suffix.casefold() != ".canvas":
+        raise ValueError(f"A canvas is a .canvas file: {path}")
+    if not path.exists():
+        if not create:
+            raise FileNotFoundError(f"Canvas not found: {path}")
+        if not path.parent.is_dir():
+            raise FileNotFoundError(f"Folder not found: {path.parent}")
+        try:
+            with path.open("xb") as handle:
+                handle.write(render_canvas(NEW_CANVAS))
+        except FileExistsError:
+            pass
+    if not path.is_file():
+        raise ValueError(f"Not a file: {path}")
+    return path
+
+
+def _bare_name(raw: str, suffix: str = ".md") -> bool:
     return (
         bool(raw.strip())
         and "/" not in raw
         and not raw.startswith((".", "~"))
-        and Path(raw).suffix.casefold() != ".md"
+        and Path(raw).suffix.casefold() != suffix
         and not any(ord(char) < 32 for char in raw)
     )
 
@@ -755,9 +854,9 @@ class Handler(BaseHTTPRequestHandler):
     def _authorized(self, token: str | None) -> bool:
         return token is not None and token.isascii() and hmac.compare_digest(token, self.token)
 
-    def _body(self) -> dict:
+    def _body(self, limit: int = MAX_BODY) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
-        if length > MAX_BODY:
+        if length > limit:
             raise ValueError("request body is too large")
         data = json.loads(self.rfile.read(length) or b"{}")
         if not isinstance(data, dict):
@@ -836,6 +935,16 @@ class Handler(BaseHTTPRequestHandler):
                         "reminders": reminders_available(self.desk.settings["reminders"]),
                     },
                 )
+            elif url.path == "/api/canvases":
+                self._json(200, self.desk.canvases())
+            elif url.path == "/api/canvas":
+                try:
+                    wanted = urllib.parse.parse_qs(url.query).get("path", [None])[0]
+                    self._json(200, self.desk.canvas_open(wanted or None))
+                except FileNotFoundError as error:
+                    self._json(404, {"error": str(error), "missing": True})
+                except (ValueError, TypeError) as error:
+                    self._json(400, {"error": str(error)})
             elif url.path == "/api/games":
                 self._json(200, self.arcade.scores())
             elif url.path == "/api/studio":
@@ -936,7 +1045,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urllib.parse.urlsplit(self.path).path
         try:
-            body = self._body()
+            body = self._body(MAX_CANVAS_BODY if path == "/api/canvas" else MAX_BODY)
             if path == "/api/board":
                 self._json(200, self.desk.change(body))
             elif path == "/api/pomodoro":
@@ -960,6 +1069,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(
                     200, self.desk.switch(body.get("path"), bool(body.get("create")))
                 )
+            elif path == "/api/canvas":
+                try:
+                    self._json(200, self.desk.canvas_save(body))
+                except CanvasConflict:
+                    self._json(
+                        409,
+                        {
+                            "error": "the canvas changed; reloaded",
+                            "canvas": self.desk.canvas_open(body.get("path")),
+                        },
+                    )
+            elif path == "/api/canvases":
+                self._json(200, self.desk.canvas_open(body.get("path"), bool(body.get("create"))))
             elif path == "/api/game/start":
                 session = self.arcade.start(
                     body.get("game"), body.get("level"), body.get("rows"), body.get("cols")

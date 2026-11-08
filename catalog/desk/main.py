@@ -2,7 +2,7 @@
 """Kanban board, TODO list and pomodoro timer in the browser, on your Obsidian board file."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Kanban board, TODO list and pomodoro timer in the browser, on your Obsidian board file.\nUsage: ul desk [board.md|name] [--reminders] [--port N] [--no-open]\n       ul desk new <board.md|name> | path [board.md|name] | stats [board.md|name]\n       ul desk pomodoro [status|start [minutes] [--card <text>]|pause|resume|stop|skip]\nActions:\n  no arguments     Serve the todo board (todo.vault_path + todo.file) on 127.0.0.1\n                   and open it in the browser; Ctrl+C stops the server\n  board.md         Serve another Kanban Markdown file instead\n  name             A bare name (no folder, no .md) is a board in desk.boards_dir\n  --reminders      Start on the Apple Reminders layer (see Reminders below)\n  --port N         Use exactly this port (0 = any free one); default desk.port,\n                   or the next free port after it\n  --no-open        Print the address without opening the browser\n  new <board.md>   Create a board with To do / Doing / Done columns\n  new <name>       The same in desk.boards_dir (created when missing)\n  path [board.md]  Print the board\'s path\n  stats [board.md] Focus sessions, finished tasks, streak and busiest cards\n  pomodoro         Show or control the timer from the terminal; the page shows\n                   the same timer, and a macOS notification marks each phase end\nPage: Board (drag cards between columns, double-click to edit), Today (overdue,\n  due today, in progress, next 7 days), Stats, Games. Keys: n new card,\n  / search, space start/pause timer, 1 2 3 4 views, Esc clear filters, ? keys.\nGames: Tetris, Snake, Minesweeper, Space Invaders, Chomp and Dash from `ul game`,\n  played in the page with keyboard and mouse at easy/normal/hard. The page\n  runs `ul game --stream` (the same Rust games), so best scores are the ones\n  in storage.root/runtime/arcade.toml that the terminal arcade shows too.\n  Leaving the tab pauses a game; closing the page ends it.\nBoards: the board menu lists Apple Reminders, recent boards and the boards in\n  desk.boards_dir; "New board…" asks for a name and creates it there.\nReminders: a separate layer, never mixed into your .md boards. Each Reminders\n  list is a column, each open reminder a card (its notes as details). Changes\n  go straight to Reminders (and iCloud): add, edit, @date sets the due date,\n  drag to another column moves it to that list, done completes it, delete\n  removes it, a new column creates a list. Order inside a list stays the\n  Reminders app\'s own. Uses EventKit through osascript; the first use asks to\n  allow your terminal in System Settings > Privacy & Security > Reminders.\nCards: #tag filters, @{2026-11-01} due dates (quick add: @today @tomorrow\n  @сегодня @завтра @+3 @2026-11-01), [[note]] opens the note in Obsidian.\n  Done cards move to todo.completed_column (or the board\'s Done column).\nThe file stays the source of truth: ul todo, the agent and Obsidian see every\n  change, and edits made elsewhere appear on the page within two seconds.\nSecurity: listens on 127.0.0.1 only and needs the random token in the printed\n  address; it reads and writes only the open board, Reminders (when that\n  layer is open) and storage.root/desk.\nSettings: desk.port (8765), desk.open_browser (true), desk.sound (true),\n  desk.reminders (true; false hides the layer), desk.boards_dir ("boards":\n  a relative path is inside the Unlaw config directory, ~ works),\n  desk.pomodoro.work (25), short_break (5), long_break (15), cycles (4) in minutes;\n  todo.vault_path, todo.file, todo.completed_column, apps.lofi_url,\n  games.difficulty (default level on the Games tab).\nStorage: storage.root/desk (timer state, pomodoro.jsonl log, recent boards).\nDependencies: Python standard library; osascript for notifications and the\n  Reminders layer; the Games tab needs ul built with the `game` feature.\nExamples: ul desk\n          ul desk ~/notes/Project.md --no-open\n          ul desk new Work            (~/.config/unlaw/boards/Work.md by default)\n          ul desk --reminders\n          ul desk pomodoro start 50 --card "Write chapter 3"\n'
+COMMAND_HELP = 'Kanban board, TODO list and pomodoro timer in the browser, on your Obsidian board file.\nUsage: ul desk [board.md|name] [--reminders] [--port N] [--no-open]\n       ul desk new <board.md|name> | path [board.md|name] | stats [board.md|name]\n       ul desk pomodoro [status|start [minutes] [--card <text>]|pause|resume|stop|skip]\nActions:\n  no arguments     Serve the todo board (todo.vault_path + todo.file) on 127.0.0.1\n                   and open it in the browser; Ctrl+C stops the server\n  board.md         Serve another Kanban Markdown file instead\n  name             A bare name (no folder, no .md) is a board in desk.boards_dir\n  --reminders      Start on the Apple Reminders layer (see Reminders below)\n  --port N         Use exactly this port (0 = any free one); default desk.port,\n                   or the next free port after it\n  --no-open        Print the address without opening the browser\n  new <board.md>   Create a board with To do / Doing / Done columns\n  new <name>       The same in desk.boards_dir (created when missing)\n  path [board.md]  Print the board\'s path\n  stats [board.md] Focus sessions, finished tasks, streak and busiest cards\n  pomodoro         Show or control the timer from the terminal; the page shows\n                   the same timer, and a macOS notification marks each phase end\nPage: Board (drag cards between columns, double-click to edit), Today (overdue,\n  due today, in progress, next 7 days), Stats, Canvas, Games. Keys: n new card,\n  / search, space start/pause timer, 1 2 3 4 views, Esc clear filters, ? keys.\nGames: Tetris, Snake, Minesweeper, Space Invaders, Chomp and Dash from `ul game`,\n  played in the page with keyboard and mouse at easy/normal/hard. The page\n  runs `ul game --stream` (the same Rust games), so best scores are the ones\n  in storage.root/runtime/arcade.toml that the terminal arcade shows too.\n  Leaving the tab pauses a game; closing the page ends it.\nCanvas: a whiteboard in the page. Files are JSON Canvas (.canvas, jsoncanvas.org),\n  so Obsidian Canvas opens them: text, file, link and group nodes plus edges.\n  Freehand drawings and shapes (rectangle, ellipse, diamond, line, arrow, text)\n  are stored in the same file under the extra top-level key "unlaw", which\n  Obsidian ignores; every key Unlaw does not know is kept as it was. A bare\n  name opens or creates <desk.canvas_dir>/<name>.canvas; any other path must\n  end in .canvas. Saving replaces the file atomically and is refused (the page\n  reloads) when the file changed meanwhile. A new canvas is an empty\n  {"nodes": [], "edges": []}; an existing file is never overwritten on create.\nBoards: the board menu lists Apple Reminders, recent boards and the boards in\n  desk.boards_dir; "New board…" asks for a name and creates it there.\nReminders: a separate layer, never mixed into your .md boards. Each Reminders\n  list is a column, each open reminder a card (its notes as details). Changes\n  go straight to Reminders (and iCloud): add, edit, @date sets the due date,\n  drag to another column moves it to that list, done completes it, delete\n  removes it, a new column creates a list. Order inside a list stays the\n  Reminders app\'s own. Uses EventKit through osascript; the first use asks to\n  allow your terminal in System Settings > Privacy & Security > Reminders.\nCards: #tag filters, @{2026-11-01} due dates (quick add: @today @tomorrow\n  @сегодня @завтра @+3 @2026-11-01), [[note]] opens the note in Obsidian.\n  Done cards move to todo.completed_column (or the board\'s Done column).\nThe file stays the source of truth: ul todo, the agent and Obsidian see every\n  change, and edits made elsewhere appear on the page within two seconds.\nSecurity: listens on 127.0.0.1 only and needs the random token in the printed\n  address; it reads and writes only the open board, Reminders (when that\n  layer is open), canvas files you open and storage.root/desk.\nSettings: desk.port (8765), desk.open_browser (true), desk.sound (true),\n  desk.reminders (true; false hides the layer), desk.boards_dir ("boards":\n  a relative path is inside the Unlaw config directory, ~ works),\n  desk.canvas_dir ("canvas", the same rules),\n  desk.pomodoro.work (25), short_break (5), long_break (15), cycles (4) in minutes;\n  todo.vault_path, todo.file, todo.completed_column, apps.lofi_url,\n  games.difficulty (default level on the Games tab).\nStorage: storage.root/desk (timer state, pomodoro.jsonl log, recent boards,\n  recent-canvas.json with the last 8 canvases).\nDependencies: Python standard library; osascript for notifications and the\n  Reminders layer; the Games tab needs ul built with the `game` feature.\nExamples: ul desk\n          ul desk ~/notes/Project.md --no-open\n          ul desk new Work            (~/.config/unlaw/boards/Work.md by default)\n          ul desk --reminders\n          ul desk pomodoro start 50 --card "Write chapter 3"\n'
 
 import copy
 import os
@@ -19,6 +19,7 @@ DEFAULT_CONFIG = {'storage': {'root': 'data'},
           'sound': True,
           'reminders': True,
           'boards_dir': 'boards',
+          'canvas_dir': 'canvas',
           'pomodoro': {'work': 25, 'short_break': 5, 'long_break': 15, 'cycles': 4}},
  'games': {'difficulty': 'normal'},
  'apps': {'lofi_url': 'https://lofi-engine.vercel.app/'}}
@@ -636,6 +637,222 @@ def boards_folder(raw: object, config_directory: Path) -> Path:
     """desk.boards_dir: `~` expands, a relative path is inside the Unlaw config directory."""
     configured = Path(str(raw or "boards")).expanduser()
     return configured if configured.is_absolute() else config_directory / configured
+
+"""JSON Canvas files for `ul desk` (https://jsoncanvas.org/spec/1.0/).
+
+Nodes and edges are Obsidian Canvas's own. Freehand drawings and shapes live in the same file
+under the extra top-level key "unlaw", which Obsidian ignores. Every key that is not checked
+here (on nodes, edges, elements and the top level) is kept exactly as it was read.
+"""
+
+# ruff: noqa: TRY004  (every bad input is a ValueError for the HTTP layer)
+
+import json
+import math
+import os
+import re
+import tempfile
+from pathlib import Path
+
+
+NEW_CANVAS = {"nodes": [], "edges": []}
+NODE_TYPES = {"text", "file", "link", "group"}
+ELEMENT_TYPES = {"freedraw", "rectangle", "ellipse", "diamond", "line", "arrow", "text"}
+POINT_TYPES = {"freedraw", "line", "arrow"}
+MAX_ELEMENTS = 20000
+MAX_NODES = 20000
+MAX_EDGES = 20000
+MAX_POINTS = 200000
+MAX_TEXT = 20000
+COLOR = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def _number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _text(value: object, what: str) -> None:
+    if not isinstance(value, str):
+        raise ValueError(f"{what}: text must be a string")
+    if len(value) > MAX_TEXT:
+        raise ValueError(f"{what}: text is longer than {MAX_TEXT} characters")
+
+
+def _id(item: object, what: str, seen: set[str]) -> dict:
+    if not isinstance(item, dict):
+        raise ValueError(f"{what} must be an object")
+    key = item.get("id")
+    if not isinstance(key, str) or not key:
+        raise ValueError(f"{what}: id must be a non-empty string")
+    if key in seen:
+        raise ValueError(f"{what}: duplicate id {key!r}")
+    seen.add(key)
+    return item
+
+
+def _validate_node(node: dict) -> None:
+    what = f"node {node['id']!r}"
+    if node.get("type") not in NODE_TYPES:
+        raise ValueError(f"{what}: type must be one of {', '.join(sorted(NODE_TYPES))}")
+    for key in ("x", "y", "width", "height"):
+        if not _number(node.get(key)):
+            raise ValueError(f"{what}: {key} must be a number")
+    if "text" in node:
+        _text(node["text"], what)
+
+
+def _validate_edge(edge: dict) -> None:
+    what = f"edge {edge['id']!r}"
+    for key in ("fromNode", "toNode"):
+        if not isinstance(edge.get(key), str) or not edge[key]:
+            raise ValueError(f"{what}: {key} must be a non-empty string")
+    if "label" in edge:
+        _text(edge["label"], what)
+
+
+def _validate_element(element: dict) -> int:
+    """Check one drawing element; returns how many points it has."""
+    what = f"element {element['id']!r}"
+    kind = element.get("type")
+    if kind not in ELEMENT_TYPES:
+        raise ValueError(
+            f"{what}: type must be one of {', '.join(sorted(ELEMENT_TYPES))}"
+        )
+    for key in ("x", "y", "width", "height"):
+        if not _number(element.get(key)):
+            raise ValueError(f"{what}: {key} must be a number")
+    if "angle" in element and not _number(element["angle"]):
+        raise ValueError(f"{what}: angle must be a number")
+    if "stroke" in element and not (
+        isinstance(element["stroke"], str) and COLOR.fullmatch(element["stroke"])
+    ):
+        raise ValueError(f"{what}: stroke must look like #rrggbb")
+    fill = element.get("fill")
+    if fill is not None and not (isinstance(fill, str) and COLOR.fullmatch(fill)):
+        raise ValueError(f"{what}: fill must be #rrggbb or null")
+    width = element.get("strokeWidth")
+    if "strokeWidth" in element and not (_number(width) and 1 <= width <= 20):
+        raise ValueError(f"{what}: strokeWidth must be 1-20")
+    rough = element.get("roughness")
+    if "roughness" in element and not (_number(rough) and 0 <= rough <= 2):
+        raise ValueError(f"{what}: roughness must be 0-2")
+    if "seed" in element and (
+        isinstance(element["seed"], bool) or not isinstance(element["seed"], int)
+    ):
+        raise ValueError(f"{what}: seed must be an integer")
+    size = element.get("fontSize")
+    if "fontSize" in element and not (_number(size) and 8 <= size <= 200):
+        raise ValueError(f"{what}: fontSize must be 8-200")
+    if kind == "text" or "text" in element:
+        if "text" not in element:
+            raise ValueError(f"{what}: text is missing")
+        _text(element["text"], what)
+    count = 0
+    if kind in POINT_TYPES or "points" in element:
+        points = element.get("points")
+        if not isinstance(points, list):
+            raise ValueError(f"{what}: points must be a list of [x, y]")
+        for point in points:
+            if not (
+                isinstance(point, list)
+                and len(point) == 2
+                and all(_number(value) for value in point)
+            ):
+                raise ValueError(f"{what}: points must be a list of [x, y] numbers")
+        count = len(points)
+    return count
+
+
+def _validate_unlaw(extra: object) -> None:
+    if not isinstance(extra, dict):
+        raise ValueError("unlaw must be an object")
+    if extra.get("version") != 1 or isinstance(extra.get("version"), bool):
+        raise ValueError("unlaw.version must be 1")
+    elements = extra.get("elements")
+    if not isinstance(elements, list):
+        raise ValueError("unlaw.elements must be a list")
+    if len(elements) > MAX_ELEMENTS:
+        raise ValueError(f"unlaw.elements has more than {MAX_ELEMENTS} elements")
+    seen: set[str] = set()
+    points = 0
+    for element in elements:
+        points += _validate_element(_id(element, "element", seen))
+        if points > MAX_POINTS:
+            raise ValueError(f"unlaw.elements has more than {MAX_POINTS} points")
+
+
+def validate_canvas(data: object) -> dict:
+    """The document with `nodes` and `edges` present; ValueError says what is wrong."""
+    if not isinstance(data, dict):
+        raise ValueError("a canvas must be a JSON object")
+    for key, limit in (("nodes", MAX_NODES), ("edges", MAX_EDGES)):
+        if key not in data:
+            data[key] = []
+        if not isinstance(data[key], list):
+            raise ValueError(f"{key} must be a list")
+        if len(data[key]) > limit:
+            raise ValueError(f"{key} has more than {limit} entries")
+    seen: set[str] = set()
+    for node in data["nodes"]:
+        _validate_node(_id(node, "node", seen))
+    seen = set()
+    for edge in data["edges"]:
+        _validate_edge(_id(edge, "edge", seen))
+    if "unlaw" in data:
+        _validate_unlaw(data["unlaw"])
+    return data
+
+
+def render_canvas(data: dict) -> bytes:
+    """Obsidian's layout: tab indentation, real Unicode."""
+    return json.dumps(validate_canvas(data), indent="\t", ensure_ascii=False).encode(
+        "utf-8"
+    )
+
+
+def parse_canvas(raw: bytes) -> dict:
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError as error:
+        raise ValueError(f"the canvas is not UTF-8 text: {error}") from error
+    except (json.JSONDecodeError, RecursionError) as error:
+        raise ValueError(f"the canvas is not valid JSON: {error}") from error
+    return validate_canvas(data)
+
+
+def read_canvas(path: Path) -> tuple[str, dict]:
+    """(version, document) of a canvas file; the version is a hash of its bytes."""
+    raw = path.read_bytes()
+    return version_of(raw), parse_canvas(raw)
+
+
+def write_canvas(path: Path, data: dict) -> str:
+    """Replace the file atomically (temporary file next to it, then rename); returns the new version."""
+    raw = render_canvas(data)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "wb", dir=path.parent, prefix=".canvas.", suffix=".tmp", delete=False
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # The temporary file is created 0600; the canvas keeps the mode it had.
+        try:
+            os.chmod(temporary, path.stat().st_mode & 0o7777)
+        except FileNotFoundError:
+            pass
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+    return version_of(raw)
 
 """The `ul desk` page: one HTML document with inline CSS and JS, served by desk.py.
 
@@ -2448,6 +2665,7 @@ PHASES = {
 }
 DOING_COLUMNS = {"doing", "in progress", "in work", "в работе", "делаю", "в процессе"}
 MAX_BODY = 64 * 1024
+MAX_CANVAS_BODY = 16 * 1024 * 1024
 MAX_TEXT = 500
 RECENT = 8
 
@@ -2477,6 +2695,7 @@ def desk_settings(config: dict) -> dict:
         "sound": desk.get("sound", True) is not False,
         "reminders": desk.get("reminders", True) is not False,
         "boards_dir": desk.get("boards_dir") if isinstance(desk.get("boards_dir"), str) and desk.get("boards_dir") else "boards",
+        "canvas_dir": desk.get("canvas_dir") if isinstance(desk.get("canvas_dir"), str) and desk.get("canvas_dir") else "canvas",
         "work": _number(pomodoro.get("work"), 25, 0.01),
         "short_break": _number(pomodoro.get("short_break"), 5, 0.01),
         "long_break": _number(pomodoro.get("long_break"), 15, 0.01),
@@ -2791,6 +3010,10 @@ class Conflict(Exception):
     """The board changed since the client read it."""
 
 
+class CanvasConflict(Exception):
+    """The canvas file changed since the client read it."""
+
+
 def _clean_text(value: object) -> str:
     if not isinstance(value, str):
         raise TypeError("text must be a string")
@@ -2829,6 +3052,9 @@ class Desk:
         self.settings = desk_settings(config)
         self.reminders = Reminders()
         self.boards_dir = boards_folder(self.settings["boards_dir"], config_dir())
+        self.canvas_dir = boards_folder(self.settings["canvas_dir"], config_dir())
+        self.canvas_current: Path | None = None
+        self.canvas_lock = threading.Lock()
         self.pomodoro = Pomodoro(directory, self.settings, clock)
         self.lock = threading.Lock()
         self.today: Callable[[], date] = lambda: datetime.now().astimezone().date()
@@ -3027,6 +3253,63 @@ class Desk:
         ][:RECENT]
         _write_json(self.directory / "recent.json", paths)
 
+    def canvas_recent(self) -> list[str]:
+        items = _read_json(self.directory / "recent-canvas.json", [])
+        paths = [item for item in items if isinstance(item, str)] if isinstance(items, list) else []
+        return [path for path in paths if Path(path).is_file()]
+
+    def canvases(self) -> dict:
+        """Canvases in desk.canvas_dir by name, then the recently opened ones elsewhere."""
+        try:
+            files = sorted(
+                (str(path.resolve()) for path in self.canvas_dir.glob("*.canvas") if path.is_file()),
+                key=lambda item: Path(item).stem.casefold(),
+            )
+        except OSError:
+            files = []
+        current = self.canvas_current
+        return {
+            "dir": str(self.canvas_dir),
+            "current": str(current) if current is not None and current.is_file() else None,
+            "items": [{"path": path, "name": Path(path).stem} for path in dict.fromkeys([*files, *self.canvas_recent()])],
+        }
+
+    def _canvas_json(self, path: Path, version: str, canvas: dict) -> dict:
+        return {"path": str(path), "name": path.stem, "version": version, "canvas": canvas}
+
+    def _canvas_shown(self, path: Path) -> None:
+        """Make `path` the current canvas and the newest recent one (the caller holds canvas_lock)."""
+        self.canvas_current = path
+        paths = [str(path), *[item for item in self.canvas_recent() if item != str(path)]][:RECENT]
+        _write_json(self.directory / "recent-canvas.json", paths)
+
+    def canvas_open(self, raw: object, create: bool = False) -> dict:
+        """Open a canvas by name or path (no argument: the current one); `create` makes a missing one."""
+        with self.canvas_lock:
+            if raw is None:
+                if self.canvas_current is None:
+                    raise FileNotFoundError("No canvas is open")
+                path = self.canvas_current
+            else:
+                path = canvas_file(raw, create=create, canvas_dir=self.canvas_dir)
+            version, canvas = read_canvas(path)
+            self._canvas_shown(path)
+        return self._canvas_json(path, version, canvas)
+
+    def canvas_save(self, body: dict) -> dict:
+        """Replace the whole canvas when the client still has the file's current version."""
+        version = body.get("version")
+        if not isinstance(version, str):
+            raise ValueError("version must be the text from the last read")
+        canvas = body.get("canvas")
+        with self.canvas_lock:
+            path = canvas_file(body.get("path"), create=False, canvas_dir=self.canvas_dir)
+            if version_of(path.read_bytes()) != version:
+                raise CanvasConflict
+            new_version = write_canvas(path, canvas)
+            self._canvas_shown(path)
+        return self._canvas_json(path, new_version, canvas)
+
     def switch(self, raw: object, create: bool) -> dict:
         text = _clean_text(raw)
         if text == REMINDERS:
@@ -3071,12 +3354,44 @@ def board_file(raw: str, create: bool = False, boards_dir: Path | None = None) -
     return path
 
 
-def _bare_name(raw: str) -> bool:
+def canvas_file(raw: object, create: bool, canvas_dir: Path) -> Path:
+    """A canvas chosen by the user: an existing .canvas file, or a new empty one.
+
+    A bare name (no folder, no .canvas) is a canvas in desk.canvas_dir, created with the folder when needed.
+    """
+    if not isinstance(raw, str):
+        raise TypeError("path must be a name or a .canvas file")
+    if _bare_name(raw, ".canvas"):
+        if create:
+            canvas_dir.mkdir(parents=True, exist_ok=True)
+        raw = str(canvas_dir / f"{raw}.canvas")
+    try:
+        path = Path(raw).expanduser().resolve()
+    except RuntimeError as error:
+        raise ValueError(f"Unknown home folder in {raw}") from error
+    if path.suffix.casefold() != ".canvas":
+        raise ValueError(f"A canvas is a .canvas file: {path}")
+    if not path.exists():
+        if not create:
+            raise FileNotFoundError(f"Canvas not found: {path}")
+        if not path.parent.is_dir():
+            raise FileNotFoundError(f"Folder not found: {path.parent}")
+        try:
+            with path.open("xb") as handle:
+                handle.write(render_canvas(NEW_CANVAS))
+        except FileExistsError:
+            pass
+    if not path.is_file():
+        raise ValueError(f"Not a file: {path}")
+    return path
+
+
+def _bare_name(raw: str, suffix: str = ".md") -> bool:
     return (
         bool(raw.strip())
         and "/" not in raw
         and not raw.startswith((".", "~"))
-        and Path(raw).suffix.casefold() != ".md"
+        and Path(raw).suffix.casefold() != suffix
         and not any(ord(char) < 32 for char in raw)
     )
 
@@ -3149,9 +3464,9 @@ class Handler(BaseHTTPRequestHandler):
     def _authorized(self, token: str | None) -> bool:
         return token is not None and token.isascii() and hmac.compare_digest(token, self.token)
 
-    def _body(self) -> dict:
+    def _body(self, limit: int = MAX_BODY) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
-        if length > MAX_BODY:
+        if length > limit:
             raise ValueError("request body is too large")
         data = json.loads(self.rfile.read(length) or b"{}")
         if not isinstance(data, dict):
@@ -3230,6 +3545,16 @@ class Handler(BaseHTTPRequestHandler):
                         "reminders": reminders_available(self.desk.settings["reminders"]),
                     },
                 )
+            elif url.path == "/api/canvases":
+                self._json(200, self.desk.canvases())
+            elif url.path == "/api/canvas":
+                try:
+                    wanted = urllib.parse.parse_qs(url.query).get("path", [None])[0]
+                    self._json(200, self.desk.canvas_open(wanted or None))
+                except FileNotFoundError as error:
+                    self._json(404, {"error": str(error), "missing": True})
+                except (ValueError, TypeError) as error:
+                    self._json(400, {"error": str(error)})
             elif url.path == "/api/games":
                 self._json(200, self.arcade.scores())
             elif url.path == "/api/studio":
@@ -3330,7 +3655,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urllib.parse.urlsplit(self.path).path
         try:
-            body = self._body()
+            body = self._body(MAX_CANVAS_BODY if path == "/api/canvas" else MAX_BODY)
             if path == "/api/board":
                 self._json(200, self.desk.change(body))
             elif path == "/api/pomodoro":
@@ -3354,6 +3679,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(
                     200, self.desk.switch(body.get("path"), bool(body.get("create")))
                 )
+            elif path == "/api/canvas":
+                try:
+                    self._json(200, self.desk.canvas_save(body))
+                except CanvasConflict:
+                    self._json(
+                        409,
+                        {
+                            "error": "the canvas changed; reloaded",
+                            "canvas": self.desk.canvas_open(body.get("path")),
+                        },
+                    )
+            elif path == "/api/canvases":
+                self._json(200, self.desk.canvas_open(body.get("path"), bool(body.get("create"))))
             elif path == "/api/game/start":
                 session = self.arcade.start(
                     body.get("game"), body.get("level"), body.get("rows"), body.get("cols")

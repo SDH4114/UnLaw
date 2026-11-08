@@ -280,6 +280,7 @@ const CHECKS: &[(&str, Kind, &[&str])] = &[
     ("desk.sound", Kind::Bool, &[]),
     ("desk.reminders", Kind::Bool, &[]),
     ("desk.boards_dir", Kind::Str, &[]),
+    ("desk.canvas_dir", Kind::Str, &[]),
     ("desk.pomodoro.work", Kind::Number, &[]),
     ("desk.pomodoro.short_break", Kind::Number, &[]),
     ("desk.pomodoro.long_break", Kind::Number, &[]),

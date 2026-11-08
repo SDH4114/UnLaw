@@ -224,13 +224,22 @@ Actions:
   pomodoro         Show or control the timer from the terminal; the page shows
                    the same timer, and a macOS notification marks each phase end
 Page: Board (drag cards between columns, double-click to edit), Today (overdue,
-  due today, in progress, next 7 days), Stats, Games. Keys: n new card,
+  due today, in progress, next 7 days), Stats, Canvas, Games. Keys: n new card,
   / search, space start/pause timer, 1 2 3 4 views, Esc clear filters, ? keys.
 Games: Tetris, Snake, Minesweeper, Space Invaders, Chomp and Dash from `ul game`,
   played in the page with keyboard and mouse at easy/normal/hard. The page
   runs `ul game --stream` (the same Rust games), so best scores are the ones
   in storage.root/runtime/arcade.toml that the terminal arcade shows too.
   Leaving the tab pauses a game; closing the page ends it.
+Canvas: a whiteboard in the page. Files are JSON Canvas (.canvas, jsoncanvas.org),
+  so Obsidian Canvas opens them: text, file, link and group nodes plus edges.
+  Freehand drawings and shapes (rectangle, ellipse, diamond, line, arrow, text)
+  are stored in the same file under the extra top-level key "unlaw", which
+  Obsidian ignores; every key Unlaw does not know is kept as it was. A bare
+  name opens or creates <desk.canvas_dir>/<name>.canvas; any other path must
+  end in .canvas. Saving replaces the file atomically and is refused (the page
+  reloads) when the file changed meanwhile. A new canvas is an empty
+  {"nodes": [], "edges": []}; an existing file is never overwritten on create.
 Boards: the board menu lists Apple Reminders, recent boards and the boards in
   desk.boards_dir; "New board…" asks for a name and creates it there.
 Reminders: a separate layer, never mixed into your .md boards. Each Reminders
@@ -247,14 +256,16 @@ The file stays the source of truth: ul todo, the agent and Obsidian see every
   change, and edits made elsewhere appear on the page within two seconds.
 Security: listens on 127.0.0.1 only and needs the random token in the printed
   address; it reads and writes only the open board, Reminders (when that
-  layer is open) and storage.root/desk.
+  layer is open), canvas files you open and storage.root/desk.
 Settings: desk.port (8765), desk.open_browser (true), desk.sound (true),
   desk.reminders (true; false hides the layer), desk.boards_dir ("boards":
   a relative path is inside the Unlaw config directory, ~ works),
+  desk.canvas_dir ("canvas", the same rules),
   desk.pomodoro.work (25), short_break (5), long_break (15), cycles (4) in minutes;
   todo.vault_path, todo.file, todo.completed_column, apps.lofi_url,
   games.difficulty (default level on the Games tab).
-Storage: storage.root/desk (timer state, pomodoro.jsonl log, recent boards).
+Storage: storage.root/desk (timer state, pomodoro.jsonl log, recent boards,
+  recent-canvas.json with the last 8 canvases).
 Dependencies: Python standard library; osascript for notifications and the
   Reminders layer; the Games tab needs ul built with the `game` feature.
 Examples: ul desk
