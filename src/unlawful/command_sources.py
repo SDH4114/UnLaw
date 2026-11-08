@@ -621,7 +621,7 @@ _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "agent": ("agent_ui.py", "agent.py"),
     "capture": ("capture.py",),
     "cpp": ("project_templates.py", "built_in_commands/cpp/main.py"),
-    "git": ("built_in_commands/git/main.py",),
+    "git": ("git_hosts.py", "built_in_commands/git/main.py"),
     "gpt": ("built_in_commands/gpt/main.py",),
     "lofi": ("built_in_commands/lofi/main.py",),
     "mac": ("harness.py", "built_in_commands/mac/main.py"),
@@ -660,6 +660,7 @@ def _clean_fragment(source: str, *, command: str) -> str:
     removed_prefixes = (
         "from __future__ import annotations",
         "from unlawful.command_help import ",
+        "from unlawful.git_hosts import ",
         "from .config import ",
         "from unlawful.config import ",
         "from unlawful.project_templates import ",

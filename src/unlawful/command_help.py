@@ -117,14 +117,64 @@ Defaults: projects.cpp.standard and projects.cpp.initialize_git.
 Example: ul cpp demo --std 23 --git
 ''',
     "git": '''Stage, commit and push the current Git project, or run a Git action.
-Usage: ul git [message|status|pull|push|commit [message]|sync [message]]
+Usage: ul git [message]
+       ul git status | pull | push [message] | commit [message] | sync [message]
+       ul git init [--connect SPEC] [--public] [--name NAME]
+       ul git connect SPEC [--public] [--name NAME] [--url BASE] [--force]
+       ul git mirror add SPEC [--name N] | list | remove NAME
+       ul git token HOST | open | pr [--base BRANCH] | undo
 Actions:
-  no arguments / <message>    git add ., commit, then push (prompts for missing message;
-                              with nothing to commit it only pushes)
-  status / pull / push       Run the corresponding Git command
-  commit [message]           Stage and commit without pushing
-  sync [message]             Pull with rebase, then stage, commit and push
-Example: ul git commit "Fix downloader"
+  no arguments / <message>    git add ., commit, then push (prompts "Commit message:" when
+                              missing; with nothing to commit it only pushes)
+  push [message]              Same as above
+  status / pull               Run the corresponding Git command
+  commit [message]            Stage and commit without pushing
+  sync [message]              Pull with rebase, then stage, commit and push
+  init                        Create a repository on branch main (refuses inside one), merge a
+                              .gitignore for the detected project types (pyproject.toml or
+                              requirements.txt = python, Cargo.toml = rust, CMakeLists.txt = cpp,
+                              package.json = node; only missing lines are added, yours are kept
+                              and .env, keys and .DS_Store are always ignored), then make the
+                              first commit "Initial commit"
+  connect SPEC                Set origin and push the current branch with -u
+  mirror add|list|remove      Extra remotes named mirror-*; every push also pushes to them
+  token HOST                  Save an API token (read hidden from the terminal, never from argv)
+  open                        Open the origin page of the current branch in the browser
+  pr                          Push the current branch, then open a pull request (GitHub with
+                              gh when installed, otherwise the host's compare page)
+  undo                        Undo the last commit, keeping its changes staged; refused when the
+                              commit is already on a remote branch (use git revert HEAD)
+Options:
+  --connect SPEC     (init) run connect afterwards
+  --public           Create the repository public (default: private)
+  --name NAME        Repository name to create (default: the folder name); for mirror add with a
+                     URL it is the mirror name (remote mirror-NAME)
+  --url BASE         Server for gitea or a self-hosted gitlab, for example https://git.example.com
+  --force            Replace an origin that points somewhere else
+  --base BRANCH      (pr) target branch, default main
+  --allow-secrets    Commit even when secrets or files over 50 MB are staged
+  -h, --help         Show this help
+SPEC is a host name (github, gitlab, codeberg, gitea: creates the repository through its API),
+  a short form (gh:owner/repo, gl:..., cb:...) or a full URL or path. Short forms become SSH URLs.
+Secrets guard: every commit path unstages .env and .env.* (not .env.example), *.pem, *.key,
+  id_rsa*, id_ed25519* (not .pub), *.p12 and files over 50 MB, explains why and stops with exit 1.
+  Fix it with .gitignore, or pass --allow-secrets.
+Mirrors: they exist only as Git remotes named mirror-* in the repository. A failing mirror is
+  reported as a warning and does not fail the push when origin succeeded.
+SSH: for SSH remotes of a known host connect checks the login. When it fails it offers to
+  create ~/.ssh/id_ed25519, prints the public key and opens the host's key page; add the key
+  and run the command again.
+Tokens: stored in the macOS Keychain, service unlaw.git.<host>. Scopes: gitlab and gitea or
+  codeberg need an access token that can create repositories (gitlab: api; gitea/codeberg:
+  write:repository and write:user). GitHub uses `gh auth login` instead of a token.
+Dependencies: git; ssh; gh (optional, for GitHub pull requests); the macOS `open` command.
+Examples: ul git "Fix downloader"
+  ul git init --connect github
+  ul git connect gh:me/project --force
+  ul git mirror add codeberg
+  ul git token gitlab
+  ul git pr --base develop
+  ul git undo
 ''',
     "gpt": '''Open the ChatGPT macOS application.
 Usage: ul gpt
