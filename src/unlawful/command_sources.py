@@ -335,6 +335,9 @@ LEGACY_NORMALIZED_HASHES.setdefault("tg", set()).add("11d4d44aaf60e34c615cdfe2db
 # Official desk seed of release 3.12.3, before the Dash game was added to the Games tab. (The desk copy on the maintainer machine, 45089d12..., is registered above.)
 LEGACY_SOURCE_HASHES["desk"].add("578edc95043aa8fe07c5fb78b1d295cc6ca68d512af17d35ae42b4f175b9407f")
 LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("a3acb3f453de4b204da0aafd14889e78a267cf29259551d1ed30e549f26f157b")
+# Official desk seed of release 3.13.0 (also the copy on the maintainer machine), before the Reminders layer and the boards folder.
+LEGACY_SOURCE_HASHES["desk"].add("48f1487d908b6df268d658a9137bb9f2faa3dedd590157e8d9637cb9808efb3d")
+LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("5ad640becd9dc1d413d0a4a03a39c62cabc9d1ca3135553354865c73f5f6b1a2")
 
 # Commands now built into the Rust core. Untouched seeds with these hashes are
 # removed so the built-in runs; edited copies stay and override it.
@@ -459,6 +462,8 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
             "port": 8765,
             "open_browser": True,
             "sound": True,
+            "reminders": True,
+            "boards_dir": "boards",
             "pomodoro": {"work": 25, "short_break": 5, "long_break": 15, "cycles": 4},
         },
         "games": {"difficulty": "normal"},
@@ -618,7 +623,7 @@ _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "steam": ("built_in_commands/steam/main.py",),
     "tg": ("telegram.py",),
     "todo": ("kanban.py", "todo.py"),
-    "desk": ("kanban.py", "desk_ui.py", "desk.py"),
+    "desk": ("kanban.py", "reminders.py", "desk_ui.py", "desk.py"),
     "work": ("desktop/work.py",),
     "yt": ("desktop/youtube.py",),
     "zed": ("built_in_commands/zed/main.py",),
@@ -652,6 +657,7 @@ def _clean_fragment(source: str, *, command: str) -> str:
         "from .agent_ui import ",
         "from .kanban import ",
         "from .desk_ui import ",
+        "from .reminders import ",
     )
     lines: list[str] = []
     skipping = False

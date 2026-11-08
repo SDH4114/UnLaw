@@ -24,7 +24,7 @@ from pathlib import Path
 
 from unlawful.command_help import COMMAND_HELP
 
-from .config import ConfigError, load_config, storage_path
+from .config import ConfigError, config_dir, load_config, storage_path
 from .desk_ui import PAGE
 from .kanban import (
     DONE_COLUMNS,
@@ -40,9 +40,10 @@ from .kanban import (
     version_of,
     write_board,
 )
+from .reminders import REMINDERS, Reminders, boards_folder, reminders_available
 
 USAGE = (
-    "Usage: ul desk [board.md] [--port N] [--no-open] | new <board.md> | path [board.md] | "
+    "Usage: ul desk [board.md|name] [--reminders] [--port N] [--no-open] | new <board.md|name> | path [board.md] | "
     "stats [board.md] | pomodoro [status|start [minutes] [--card <text>]|pause|resume|stop|skip]"
 )
 PHASES = {
@@ -80,6 +81,8 @@ def desk_settings(config: dict) -> dict:
         else 8765,
         "open_browser": desk.get("open_browser", True) is not False,
         "sound": desk.get("sound", True) is not False,
+        "reminders": desk.get("reminders", True) is not False,
+        "boards_dir": desk.get("boards_dir") if isinstance(desk.get("boards_dir"), str) and desk.get("boards_dir") else "boards",
         "work": _number(pomodoro.get("work"), 25, 0.01),
         "short_break": _number(pomodoro.get("short_break"), 5, 0.01),
         "long_break": _number(pomodoro.get("long_break"), 15, 0.01),
@@ -416,15 +419,22 @@ class Desk:
 
     def __init__(
         self,
-        path: Path,
+        path: Path | None,
         config: dict,
         directory: Path,
         clock: Callable[[], float] = time.time,
+        layer: str | None = None,
     ) -> None:
+        if path is None and layer is None:
+            raise ValueError("a board file or the Reminders layer is needed")
         self.path = path
+        # The Reminders layer replaces the open file while it is shown; self.path keeps the last file board.
+        self.layer = layer
         self.config = config
         self.directory = directory
         self.settings = desk_settings(config)
+        self.reminders = Reminders()
+        self.boards_dir = boards_folder(self.settings["boards_dir"], config_dir())
         self.pomodoro = Pomodoro(directory, self.settings, clock)
         self.lock = threading.Lock()
         self.today: Callable[[], date] = lambda: datetime.now().astimezone().date()
@@ -433,7 +443,14 @@ class Desk:
     def completed_column(self) -> str:
         return str(self.config.get("todo", {}).get("completed_column", "Completed"))
 
+    @property
+    def current(self) -> str:
+        return REMINDERS if self.layer == REMINDERS or self.path is None else str(self.path)
+
     def read(self) -> tuple[str, KanbanBoard]:
+        if self.layer == REMINDERS or self.path is None:
+            version, board, _, _ = self.reminders.read()
+            return version, board
         data = self.path.read_bytes()
         return version_of(data), KanbanBoard.parse(data.decode("utf-8"))
 
@@ -442,14 +459,17 @@ class Desk:
         return self.render(version, board)
 
     def render(self, version: str, board: KanbanBoard) -> dict:
+        reminders = self.current == REMINDERS
         try:
-            done_name = completed_section(board, self.completed_column).name
+            # Completed reminders leave the board, so the layer has no Done column.
+            done_name = None if reminders else completed_section(board, self.completed_column).name
         except ValueError:
             done_name = None
         return {
             "version": version,
-            "path": str(self.path),
-            "name": self.path.stem,
+            "path": self.current,
+            "name": "Reminders" if reminders or self.path is None else self.path.stem,
+            "layer": "reminders" if reminders else "file",
             "today": self.today().isoformat(),
             "done_column": done_name,
             "columns": [
@@ -463,6 +483,16 @@ class Desk:
         }
 
     def change(self, request: dict) -> dict:
+        if self.current == REMINDERS:
+            with self.lock:
+                version, board, ids, lists = self.reminders.read(fresh=True)
+                if request.get("version") != version:
+                    raise Conflict
+                try:
+                    self.apply_reminders(board, ids, lists, request)
+                finally:
+                    self.reminders.invalidate()
+                return self.board_json()
         with self.lock:
             version, board = self.read()
             if request.get("version") != version:
@@ -541,6 +571,50 @@ class Desk:
         else:
             raise ValueError(f"Unknown operation: {op}")
 
+    def apply_reminders(
+        self, board: KanbanBoard, ids: list[list[str]], lists: list[str], request: dict
+    ) -> None:
+        """The board operations on Apple Reminders: a column is a list, a card a reminder."""
+        op = request.get("op")
+        today = self.today()
+        if op == "add":
+            column = _index(request.get("column"), len(board.sections), "column")
+            self.reminders.add(lists[column], quick_text(_clean_text(request.get("text")), today))
+        elif op == "column":
+            name = _clean_text(request.get("name"))
+            if any(section.name.casefold() == name.casefold() for section in board.sections):
+                raise ValueError(f"List '{name}' already exists")
+            self.reminders.new_list(name)
+        elif op in {"edit", "move", "done", "delete"}:
+            self._task(board, request)
+            column, index = request["column"], request["index"]
+            reminder = ids[column][index]
+            if op == "edit":
+                self.reminders.edit(reminder, quick_text(_clean_text(request.get("text")), today))
+            elif op == "move":
+                target = _index(request.get("to_column"), len(board.sections), "to_column")
+                # Reminders keeps no order that EventKit could set, so only a move to another list changes anything.
+                if target != column:
+                    self.reminders.move(reminder, lists[target])
+            elif op == "done":
+                self.reminders.complete(reminder)
+            else:
+                self.reminders.delete(reminder)
+        elif op == "reopen":
+            raise ValueError("Completed reminders are not shown; reopen them in Reminders")
+        else:
+            raise ValueError(f"Unknown operation: {op}")
+
+    def boards(self) -> list[str]:
+        """Boards in desk.boards_dir, by name."""
+        try:
+            return sorted(
+                (str(path.resolve()) for path in self.boards_dir.glob("*.md") if path.is_file()),
+                key=lambda item: Path(item).stem.casefold(),
+            )
+        except OSError:
+            return []
+
     def recent(self) -> list[str]:
         items = _read_json(self.directory / "recent.json", [])
         paths = (
@@ -551,6 +625,8 @@ class Desk:
         return [path for path in paths if Path(path).is_file()]
 
     def remember(self) -> None:
+        if self.path is None:
+            return
         paths = [
             str(self.path),
             *[path for path in self.recent() if path != str(self.path)],
@@ -558,15 +634,31 @@ class Desk:
         _write_json(self.directory / "recent.json", paths)
 
     def switch(self, raw: object, create: bool) -> dict:
-        path = board_file(_clean_text(raw), create=create)
+        text = _clean_text(raw)
+        if text == REMINDERS:
+            if not reminders_available(self.settings["reminders"]):
+                raise ValueError("The Reminders layer is off (desk.reminders) or not on macOS")
+            self.reminders.read(fresh=True)
+            with self.lock:
+                self.layer = REMINDERS
+            return self.board_json()
+        path = board_file(text, create=create, boards_dir=self.boards_dir)
         with self.lock:
             self.path = path
+            self.layer = None
             self.remember()
         return self.board_json()
 
 
-def board_file(raw: str, create: bool = False) -> Path:
-    """A board chosen by the user: an existing .md file, or a new one from the template."""
+def board_file(raw: str, create: bool = False, boards_dir: Path | None = None) -> Path:
+    """A board chosen by the user: an existing .md file, or a new one from the template.
+
+    A bare name (no folder, no .md) is a board in desk.boards_dir, created with the folder when needed.
+    """
+    if boards_dir is not None and _bare_name(raw):
+        if create:
+            boards_dir.mkdir(parents=True, exist_ok=True)
+        raw = str(boards_dir / f"{raw}.md")
     path = Path(raw).expanduser().resolve()
     if path.suffix.casefold() != ".md":
         raise ValueError(f"A board is a Markdown file (.md): {path}")
@@ -585,6 +677,16 @@ def board_file(raw: str, create: bool = False) -> Path:
     return path
 
 
+def _bare_name(raw: str) -> bool:
+    return (
+        bool(raw.strip())
+        and "/" not in raw
+        and not raw.startswith((".", "~"))
+        and Path(raw).suffix.casefold() != ".md"
+        and not any(ord(char) < 32 for char in raw)
+    )
+
+
 def default_board(config: dict) -> Path:
     path = configured_board(config["todo"])
     if not path.is_file():
@@ -592,6 +694,14 @@ def default_board(config: dict) -> Path:
             f"Kanban file not found: {path} (set todo.vault_path and todo.file, or pass a board.md)"
         )
     return path
+
+
+def _optional_board(config: dict) -> Path | None:
+    """The todo board when it exists: the Reminders layer can start without one."""
+    try:
+        return default_board(config)
+    except (FileNotFoundError, ValueError):
+        return None
 
 
 def _find_note(root: Path, name: str) -> Path | None:
@@ -717,7 +827,14 @@ class Handler(BaseHTTPRequestHandler):
                 )
             elif url.path == "/api/boards":
                 self._json(
-                    200, {"current": str(self.desk.path), "recent": self.desk.recent()}
+                    200,
+                    {
+                        "current": self.desk.current,
+                        "recent": self.desk.recent(),
+                        "boards": self.desk.boards(),
+                        "boards_dir": str(self.desk.boards_dir),
+                        "reminders": reminders_available(self.desk.settings["reminders"]),
+                    },
                 )
             elif url.path == "/api/games":
                 self._json(200, self.arcade.scores())
@@ -932,6 +1049,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _open_obsidian(self, note: object) -> bool:
         target = self.desk.path
+        if target is None:
+            return False
         if isinstance(note, str) and note.strip():
             found = _find_note(self.desk.path.parent, note.strip())
             if found is None:
@@ -1440,7 +1559,7 @@ def make_server(
 def _ticker(desk: Desk, stop: threading.Event) -> None:
     while not stop.wait(0.5):
         try:
-            event = desk.pomodoro.tick(str(desk.path))
+            event = desk.pomodoro.tick(desk.current)
         except OSError:
             continue
         if event:
@@ -1453,8 +1572,12 @@ def _ticker(desk: Desk, stop: threading.Event) -> None:
             notify("Unlaw desk", f"{ended}: {following}", desk.settings["sound"])
 
 
-def serve(path: Path, config: dict, port: int | None, open_browser: bool) -> int:
-    desk = Desk(path, config, storage_path("desk"))
+def serve(
+    path: Path | None, config: dict, port: int | None, open_browser: bool, layer: str | None = None
+) -> int:
+    desk = Desk(path, config, storage_path("desk"), layer=layer)
+    if layer == REMINDERS:
+        desk.reminders.read(fresh=True)
     desk.remember()
     token = secrets.token_urlsafe(18)
     settings = desk.settings
@@ -1463,7 +1586,7 @@ def serve(path: Path, config: dict, port: int | None, open_browser: bool) -> int
     )
     url = f"http://127.0.0.1:{server.server_address[1]}/?token={token}"
     print(f"Desk: {url}", flush=True)
-    print(f"Board: {path}", flush=True)
+    print(f"Board: {desk.current if layer else path}", flush=True)
     print("Ctrl+C stops it.", flush=True)
     stop = threading.Event()
     threading.Thread(target=_ticker, args=(desk, stop), daemon=True).start()
@@ -1542,15 +1665,18 @@ def _stats_cli(path: Path | None, config: dict) -> int:
     return 0
 
 
-def _parse_serve(args: list[str]) -> tuple[str | None, int | None, bool]:
+def _parse_serve(args: list[str]) -> tuple[str | None, int | None, bool, bool]:
     board: str | None = None
     port: int | None = None
     open_browser = True
+    reminders = False
     rest = list(args)
     while rest:
         arg = rest.pop(0)
         if arg == "--no-open":
             open_browser = False
+        elif arg == "--reminders":
+            reminders = True
         elif arg == "--port":
             if not rest or not rest[0].isdigit() or int(rest[0]) > 65535:
                 raise ValueError("--port needs a number from 0 to 65535")
@@ -1559,7 +1685,7 @@ def _parse_serve(args: list[str]) -> tuple[str | None, int | None, bool]:
             raise ValueError(f"Unexpected argument: {arg}")
         else:
             board = arg
-    return board, port, open_browser
+    return board, port, open_browser, reminders
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1572,24 +1698,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         action = args[0] if args else ""
         if action == "pomodoro":
             return _pomodoro_cli(args[1:], config)
+        boards_dir = boards_folder(desk_settings(config)["boards_dir"], config_dir())
         if action == "new" and len(args) == 2:
-            if Path(args[1]).expanduser().exists():
-                raise ValueError(f"{args[1]} already exists; open it with: ul desk {args[1]}")
-            path = board_file(args[1], create=True)
+            wanted = boards_dir / f"{args[1]}.md" if _bare_name(args[1]) else Path(args[1]).expanduser()
+            if wanted.exists():
+                raise ValueError(f"{wanted} already exists; open it with: ul desk {args[1]}")
+            path = board_file(args[1], create=True, boards_dir=boards_dir)
             print(f"Board: {path}")
             return 0
         if action == "path" and len(args) <= 2:
-            print(board_file(args[1]) if len(args) == 2 else default_board(config))
+            print(board_file(args[1], boards_dir=boards_dir) if len(args) == 2 else default_board(config))
             return 0
         if action == "stats" and len(args) <= 2:
             return _stats_cli(
-                board_file(args[1]) if len(args) == 2 else default_board(config), config
+                board_file(args[1], boards_dir=boards_dir) if len(args) == 2 else default_board(config), config
             )
         if action in {"new", "path", "stats"}:
             print(USAGE, file=sys.stderr)
             return 2
-        board, port, open_browser = _parse_serve(args)
-        path = board_file(board) if board else default_board(config)
+        board, port, open_browser, reminders = _parse_serve(args)
+        if reminders:
+            if not reminders_available(desk_settings(config)["reminders"]):
+                raise ValueError("The Reminders layer is off (desk.reminders) or not on macOS")
+            path = board_file(board, boards_dir=boards_dir) if board else _optional_board(config)
+            return serve(path, config, port, open_browser, REMINDERS)
+        path = board_file(board, boards_dir=boards_dir) if board else default_board(config)
         return serve(path, config, port, open_browser)
     except (ConfigError, FileNotFoundError, OSError, ValueError) as error:
         print(f"unlaw desk: {error}", file=sys.stderr)

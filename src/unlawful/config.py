@@ -42,6 +42,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "port": 8765,
         "open_browser": True,
         "sound": True,
+        "reminders": True,
+        "boards_dir": "boards",
         "pomodoro": {"work": 25, "short_break": 5, "long_break": 15, "cycles": 4},
     },
     "capture": {
@@ -356,6 +358,8 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ("desk.port", int, None),
         ("desk.open_browser", bool, None),
         ("desk.sound", bool, None),
+        ("desk.reminders", bool, None),
+        ("desk.boards_dir", str, None),
         ("desk.pomodoro.work", (int, float), None),
         ("desk.pomodoro.short_break", (int, float), None),
         ("desk.pomodoro.long_break", (int, float), None),

@@ -1589,29 +1589,50 @@ $("viewer").addEventListener("click", (event) => { if (event.target === $("viewe
 $("recPill").addEventListener("click", () => setView("studio"));
 
 // ---- boards ----
+const REMINDERS = "reminders:";
+const NEW_BOARD = "::new";
+let boardsDir = "";
+
+function boardOption(path, current) {
+  return h("option", { value: path, text: path.split("/").pop().replace(/\.md$/i, "") + "  —  " + path.split("/").slice(-2, -1)[0], selected: path === current });
+}
+
 async function loadBoards() {
   const { status, data } = await api("GET", "/api/boards");
   if (status !== 200) return;
   const select = $("boards");
   select.textContent = "";
-  for (const path of data.recent.length ? data.recent : [data.current]) {
-    select.append(h("option", { value: path, text: path.split("/").pop().replace(/\.md$/i, "") + "  —  " + path.split("/").slice(-2, -1)[0], selected: path === data.current }));
+  boardsDir = data.boards_dir || "";
+  if (data.reminders) {
+    select.append(h("optgroup", { label: "Apple Reminders" },
+      h("option", { value: REMINDERS, text: "Reminders  —  lists as columns", selected: data.current === REMINDERS })));
   }
+  const recent = data.recent.length || data.current === REMINDERS ? data.recent : [data.current];
+  if (recent.length) select.append(h("optgroup", { label: "Recent" }, recent.map((path) => boardOption(path, data.current))));
+  const own = (data.boards || []).filter((path) => !recent.includes(path));
+  if (own.length) select.append(h("optgroup", { label: "Boards folder" }, own.map((path) => boardOption(path, data.current))));
+  select.append(h("option", { value: NEW_BOARD, text: "New board…" }));
   select.append(h("option", { value: "", text: "Open another board…" }));
 }
 
 async function switchBoard(path, create) {
   const { status, data } = await api("POST", "/api/boards", { path, create: Boolean(create) });
   if (status === 200) { state.tag = ""; setBoard(data); loadBoards(); toast("Opened " + data.name); return; }
-  if (status === 404 && data.missing && !create && /\.md$/i.test(path) && confirm("No board at\n" + path + "\n\nCreate a new board there?")) return switchBoard(path, true);
+  if (status === 404 && data.missing && !create && (/\.md$/i.test(path) || !path.includes("/")) && confirm("No board at\n" + path + "\n\nCreate a new board there?")) return switchBoard(path, true);
   toast(data.error || "Could not open that board");
   loadBoards();
 }
 
 $("boards").addEventListener("change", (event) => {
   const value = event.target.value;
+  if (value === NEW_BOARD) {
+    const name = prompt("Name of the new board. It is saved in\n" + boardsDir + "\n(desk.boards_dir; a full path to a .md file works too)", "");
+    if (name && name.trim()) switchBoard(name.trim(), true);
+    else loadBoards();
+    return;
+  }
   if (value) { switchBoard(value); return; }
-  const path = prompt("Path to a Kanban board (.md). A missing file can be created.", "~/");
+  const path = prompt("Path to a Kanban board (.md), or the name of a board in " + boardsDir + ". A missing file can be created.", "~/");
   if (path && path.trim()) switchBoard(path.trim());
   else loadBoards();
 });

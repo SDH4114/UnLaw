@@ -205,17 +205,20 @@ Settings: todo.vault_path, todo.file, todo.completed_column.
 Example: ul todo add "Study Python" --column "To do"
 ''',
     "desk": '''Kanban board, TODO list and pomodoro timer in the browser, on your Obsidian board file.
-Usage: ul desk [board.md] [--port N] [--no-open]
-       ul desk new <board.md> | path [board.md] | stats [board.md]
+Usage: ul desk [board.md|name] [--reminders] [--port N] [--no-open]
+       ul desk new <board.md|name> | path [board.md|name] | stats [board.md|name]
        ul desk pomodoro [status|start [minutes] [--card <text>]|pause|resume|stop|skip]
 Actions:
   no arguments     Serve the todo board (todo.vault_path + todo.file) on 127.0.0.1
                    and open it in the browser; Ctrl+C stops the server
   board.md         Serve another Kanban Markdown file instead
+  name             A bare name (no folder, no .md) is a board in desk.boards_dir
+  --reminders      Start on the Apple Reminders layer (see Reminders below)
   --port N         Use exactly this port (0 = any free one); default desk.port,
                    or the next free port after it
   --no-open        Print the address without opening the browser
   new <board.md>   Create a board with To do / Doing / Done columns
+  new <name>       The same in desk.boards_dir (created when missing)
   path [board.md]  Print the board's path
   stats [board.md] Focus sessions, finished tasks, streak and busiest cards
   pomodoro         Show or control the timer from the terminal; the page shows
@@ -228,22 +231,36 @@ Games: Tetris, Snake, Minesweeper, Space Invaders, Chomp and Dash from `ul game`
   runs `ul game --stream` (the same Rust games), so best scores are the ones
   in storage.root/runtime/arcade.toml that the terminal arcade shows too.
   Leaving the tab pauses a game; closing the page ends it.
+Boards: the board menu lists Apple Reminders, recent boards and the boards in
+  desk.boards_dir; "New board…" asks for a name and creates it there.
+Reminders: a separate layer, never mixed into your .md boards. Each Reminders
+  list is a column, each open reminder a card (its notes as details). Changes
+  go straight to Reminders (and iCloud): add, edit, @date sets the due date,
+  drag to another column moves it to that list, done completes it, delete
+  removes it, a new column creates a list. Order inside a list stays the
+  Reminders app's own. Uses EventKit through osascript; the first use asks to
+  allow your terminal in System Settings > Privacy & Security > Reminders.
 Cards: #tag filters, @{2026-11-01} due dates (quick add: @today @tomorrow
   @сегодня @завтра @+3 @2026-11-01), [[note]] opens the note in Obsidian.
   Done cards move to todo.completed_column (or the board's Done column).
 The file stays the source of truth: ul todo, the agent and Obsidian see every
   change, and edits made elsewhere appear on the page within two seconds.
 Security: listens on 127.0.0.1 only and needs the random token in the printed
-  address; it reads and writes only the open board and storage.root/desk.
+  address; it reads and writes only the open board, Reminders (when that
+  layer is open) and storage.root/desk.
 Settings: desk.port (8765), desk.open_browser (true), desk.sound (true),
+  desk.reminders (true; false hides the layer), desk.boards_dir ("boards":
+  a relative path is inside the Unlaw config directory, ~ works),
   desk.pomodoro.work (25), short_break (5), long_break (15), cycles (4) in minutes;
   todo.vault_path, todo.file, todo.completed_column, apps.lofi_url,
   games.difficulty (default level on the Games tab).
 Storage: storage.root/desk (timer state, pomodoro.jsonl log, recent boards).
-Dependencies: Python standard library; osascript for notifications; the Games
-  tab needs ul built with the `game` feature.
+Dependencies: Python standard library; osascript for notifications and the
+  Reminders layer; the Games tab needs ul built with the `game` feature.
 Examples: ul desk
           ul desk ~/notes/Project.md --no-open
+          ul desk new Work            (~/.config/unlaw/boards/Work.md by default)
+          ul desk --reminders
           ul desk pomodoro start 50 --card "Write chapter 3"
 ''',
     "work": '''Open the configured lofi website and the current directory in your editor.

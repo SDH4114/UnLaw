@@ -2,7 +2,7 @@
 """Kanban board, TODO list and pomodoro timer in the browser, on your Obsidian board file."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Kanban board, TODO list and pomodoro timer in the browser, on your Obsidian board file.\nUsage: ul desk [board.md] [--port N] [--no-open]\n       ul desk new <board.md> | path [board.md] | stats [board.md]\n       ul desk pomodoro [status|start [minutes] [--card <text>]|pause|resume|stop|skip]\nActions:\n  no arguments     Serve the todo board (todo.vault_path + todo.file) on 127.0.0.1\n                   and open it in the browser; Ctrl+C stops the server\n  board.md         Serve another Kanban Markdown file instead\n  --port N         Use exactly this port (0 = any free one); default desk.port,\n                   or the next free port after it\n  --no-open        Print the address without opening the browser\n  new <board.md>   Create a board with To do / Doing / Done columns\n  path [board.md]  Print the board\'s path\n  stats [board.md] Focus sessions, finished tasks, streak and busiest cards\n  pomodoro         Show or control the timer from the terminal; the page shows\n                   the same timer, and a macOS notification marks each phase end\nPage: Board (drag cards between columns, double-click to edit), Today (overdue,\n  due today, in progress, next 7 days), Stats, Games. Keys: n new card,\n  / search, space start/pause timer, 1 2 3 4 views, Esc clear filters, ? keys.\nGames: Tetris, Snake, Minesweeper, Space Invaders, Chomp and Dash from `ul game`,\n  played in the page with keyboard and mouse at easy/normal/hard. The page\n  runs `ul game --stream` (the same Rust games), so best scores are the ones\n  in storage.root/runtime/arcade.toml that the terminal arcade shows too.\n  Leaving the tab pauses a game; closing the page ends it.\nCards: #tag filters, @{2026-11-01} due dates (quick add: @today @tomorrow\n  @сегодня @завтра @+3 @2026-11-01), [[note]] opens the note in Obsidian.\n  Done cards move to todo.completed_column (or the board\'s Done column).\nThe file stays the source of truth: ul todo, the agent and Obsidian see every\n  change, and edits made elsewhere appear on the page within two seconds.\nSecurity: listens on 127.0.0.1 only and needs the random token in the printed\n  address; it reads and writes only the open board and storage.root/desk.\nSettings: desk.port (8765), desk.open_browser (true), desk.sound (true),\n  desk.pomodoro.work (25), short_break (5), long_break (15), cycles (4) in minutes;\n  todo.vault_path, todo.file, todo.completed_column, apps.lofi_url,\n  games.difficulty (default level on the Games tab).\nStorage: storage.root/desk (timer state, pomodoro.jsonl log, recent boards).\nDependencies: Python standard library; osascript for notifications; the Games\n  tab needs ul built with the `game` feature.\nExamples: ul desk\n          ul desk ~/notes/Project.md --no-open\n          ul desk pomodoro start 50 --card "Write chapter 3"\n'
+COMMAND_HELP = 'Kanban board, TODO list and pomodoro timer in the browser, on your Obsidian board file.\nUsage: ul desk [board.md|name] [--reminders] [--port N] [--no-open]\n       ul desk new <board.md|name> | path [board.md|name] | stats [board.md|name]\n       ul desk pomodoro [status|start [minutes] [--card <text>]|pause|resume|stop|skip]\nActions:\n  no arguments     Serve the todo board (todo.vault_path + todo.file) on 127.0.0.1\n                   and open it in the browser; Ctrl+C stops the server\n  board.md         Serve another Kanban Markdown file instead\n  name             A bare name (no folder, no .md) is a board in desk.boards_dir\n  --reminders      Start on the Apple Reminders layer (see Reminders below)\n  --port N         Use exactly this port (0 = any free one); default desk.port,\n                   or the next free port after it\n  --no-open        Print the address without opening the browser\n  new <board.md>   Create a board with To do / Doing / Done columns\n  new <name>       The same in desk.boards_dir (created when missing)\n  path [board.md]  Print the board\'s path\n  stats [board.md] Focus sessions, finished tasks, streak and busiest cards\n  pomodoro         Show or control the timer from the terminal; the page shows\n                   the same timer, and a macOS notification marks each phase end\nPage: Board (drag cards between columns, double-click to edit), Today (overdue,\n  due today, in progress, next 7 days), Stats, Games. Keys: n new card,\n  / search, space start/pause timer, 1 2 3 4 views, Esc clear filters, ? keys.\nGames: Tetris, Snake, Minesweeper, Space Invaders, Chomp and Dash from `ul game`,\n  played in the page with keyboard and mouse at easy/normal/hard. The page\n  runs `ul game --stream` (the same Rust games), so best scores are the ones\n  in storage.root/runtime/arcade.toml that the terminal arcade shows too.\n  Leaving the tab pauses a game; closing the page ends it.\nBoards: the board menu lists Apple Reminders, recent boards and the boards in\n  desk.boards_dir; "New board…" asks for a name and creates it there.\nReminders: a separate layer, never mixed into your .md boards. Each Reminders\n  list is a column, each open reminder a card (its notes as details). Changes\n  go straight to Reminders (and iCloud): add, edit, @date sets the due date,\n  drag to another column moves it to that list, done completes it, delete\n  removes it, a new column creates a list. Order inside a list stays the\n  Reminders app\'s own. Uses EventKit through osascript; the first use asks to\n  allow your terminal in System Settings > Privacy & Security > Reminders.\nCards: #tag filters, @{2026-11-01} due dates (quick add: @today @tomorrow\n  @сегодня @завтра @+3 @2026-11-01), [[note]] opens the note in Obsidian.\n  Done cards move to todo.completed_column (or the board\'s Done column).\nThe file stays the source of truth: ul todo, the agent and Obsidian see every\n  change, and edits made elsewhere appear on the page within two seconds.\nSecurity: listens on 127.0.0.1 only and needs the random token in the printed\n  address; it reads and writes only the open board, Reminders (when that\n  layer is open) and storage.root/desk.\nSettings: desk.port (8765), desk.open_browser (true), desk.sound (true),\n  desk.reminders (true; false hides the layer), desk.boards_dir ("boards":\n  a relative path is inside the Unlaw config directory, ~ works),\n  desk.pomodoro.work (25), short_break (5), long_break (15), cycles (4) in minutes;\n  todo.vault_path, todo.file, todo.completed_column, apps.lofi_url,\n  games.difficulty (default level on the Games tab).\nStorage: storage.root/desk (timer state, pomodoro.jsonl log, recent boards).\nDependencies: Python standard library; osascript for notifications and the\n  Reminders layer; the Games tab needs ul built with the `game` feature.\nExamples: ul desk\n          ul desk ~/notes/Project.md --no-open\n          ul desk new Work            (~/.config/unlaw/boards/Work.md by default)\n          ul desk --reminders\n          ul desk pomodoro start 50 --card "Write chapter 3"\n'
 
 import copy
 import os
@@ -17,6 +17,8 @@ DEFAULT_CONFIG = {'storage': {'root': 'data'},
  'desk': {'port': 8765,
           'open_browser': True,
           'sound': True,
+          'reminders': True,
+          'boards_dir': 'boards',
           'pomodoro': {'work': 25, 'short_break': 5, 'long_break': 15, 'cycles': 4}},
  'games': {'difficulty': 'normal'},
  'apps': {'lofi_url': 'https://lofi-engine.vercel.app/'}}
@@ -337,6 +339,303 @@ def quick_text(text: str, today: date) -> str:
         return match.group(0)
 
     return re.sub(r"(?<![\w{])@([^\s{}]+)", replace, text).strip()
+
+"""Apple Reminders as a Kanban layer for `ul desk`: every list is a column, every open reminder a card.
+
+Seeded into the desk command's source. It talks to EventKit through `osascript -l JavaScript`
+(stdlib only): the Reminders app's Apple Events take 10-20 s on a list with hundreds of finished
+reminders, EventKit answers in a fraction of a second.
+"""
+
+
+import json
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+
+REMINDERS = "reminders:"
+DUE_TOKEN = re.compile(r"\s*@\{(\d{4}-\d{2}-\d{2})\}")
+MAX_NOTE_LINES = 20
+
+# One request per run: argv[0] is a JSON object with "op"; the answer is JSON on stdout.
+EVENTKIT_SCRIPT = r"""
+ObjC.import("EventKit");
+function wait(isDone) {
+  const until = Date.now() + 60000;
+  while (!isDone() && Date.now() < until) $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.02));
+  return isDone();
+}
+function text(value) { const s = ObjC.unwrap(value); return typeof s === "string" ? s : ""; }
+function day(components) {
+  if (!components || components.isNil()) return null;
+  const y = Number(components.year), m = Number(components.month), d = Number(components.day);
+  if (!(y > 0 && y < 10000 && m >= 1 && m <= 12 && d >= 1 && d <= 31)) return null;
+  return String(y).padStart(4, "0") + "-" + String(m).padStart(2, "0") + "-" + String(d).padStart(2, "0");
+}
+function check(ok, error, what) {
+  if (!ok) throw new Error(what + ": " + (error[0] && !error[0].isNil() ? text(error[0].localizedDescription) : "unknown error"));
+}
+function run(argv) {
+  try {
+    const request = JSON.parse(argv[0]);
+    const store = $.EKEventStore.alloc.init;
+    let status = Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder));
+    if (status === 0) {
+      let answered = false;
+      store.requestFullAccessToRemindersWithCompletion((granted) => { answered = true; });
+      wait(() => answered);
+      status = Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder));
+    }
+    if (status !== 3) return JSON.stringify({ error: "no access to Reminders: allow your terminal in System Settings > Privacy & Security > Reminders" });
+    const item = (id) => {
+      const found = store.calendarItemWithIdentifier(id);
+      if (!found || found.isNil() || !found.isKindOfClass($.EKReminder)) throw new Error("the reminder no longer exists");
+      return found;
+    };
+    const list = (id) => {
+      const found = store.calendarWithIdentifier(id);
+      if (!found || found.isNil()) throw new Error("the list no longer exists");
+      return found;
+    };
+    const setDue = (reminder, due) => {
+      if (due === undefined) return;
+      if (due === null) { reminder.setDueDateComponents($()); return; }
+      if (day(reminder.dueDateComponents) === due) return;  // keeps a time of day the reminder already had
+      const parts = due.split("-").map(Number);
+      const components = $.NSDateComponents.alloc.init;
+      components.setYear(parts[0]); components.setMonth(parts[1]); components.setDay(parts[2]);
+      reminder.setDueDateComponents(components);
+    };
+    const save = (reminder) => { const error = Ref(); check(store.saveReminderCommitError(reminder, true, error), error, "could not save the reminder"); };
+    const op = request.op;
+    if (op === "list") {
+      const calendars = store.calendarsForEntityType($.EKEntityTypeReminder);
+      const lists = [];
+      for (let i = 0; i < calendars.count; i++) {
+        const c = calendars.objectAtIndex(i);
+        lists.push({ id: text(c.calendarIdentifier), title: text(c.title), writable: Boolean(c.allowsContentModifications) });
+      }
+      let fetched = null;
+      store.fetchRemindersMatchingPredicateCompletion(store.predicateForIncompleteRemindersWithDueDateStartingEndingCalendars($(), $(), $()), (items) => { fetched = items; });
+      if (!wait(() => fetched !== null)) throw new Error("Reminders did not answer");
+      const items = [];
+      for (let i = 0; i < fetched.count; i++) {
+        const r = fetched.objectAtIndex(i);
+        const created = r.creationDate;
+        items.push({ id: text(r.calendarItemIdentifier), title: text(r.title), list: text(r.calendar.calendarIdentifier), due: day(r.dueDateComponents), notes: text(r.notes), created: created && !created.isNil() ? Number(created.timeIntervalSince1970) : 0 });
+      }
+      return JSON.stringify({ lists, items });
+    }
+    if (op === "add") {
+      const reminder = $.EKReminder.reminderWithEventStore(store);
+      reminder.setTitle(request.title);
+      reminder.setCalendar(list(request.list));
+      setDue(reminder, request.due);
+      save(reminder);
+      return JSON.stringify({ id: text(reminder.calendarItemIdentifier) });
+    }
+    if (op === "edit") { const r = item(request.id); r.setTitle(request.title); setDue(r, request.due); save(r); return "{}"; }
+    if (op === "move") { const r = item(request.id); r.setCalendar(list(request.list)); save(r); return "{}"; }
+    if (op === "done") { const r = item(request.id); r.setCompleted(true); save(r); return "{}"; }
+    if (op === "delete") { const error = Ref(); check(store.removeReminderCommitError(item(request.id), true, error), error, "could not delete the reminder"); return "{}"; }
+    if (op === "new_list") {
+      const source = store.defaultCalendarForNewReminders.source;
+      const calendar = $.EKCalendar.calendarForEntityTypeEventStore($.EKEntityTypeReminder, store);
+      calendar.setTitle(request.title);
+      calendar.setSource(source);
+      const error = Ref();
+      check(store.saveCalendarCommitError(calendar, true, error), error, "could not create the list");
+      return JSON.stringify({ id: text(calendar.calendarIdentifier) });
+    }
+    return JSON.stringify({ error: "unknown operation " + op });
+  } catch (error) {
+    return JSON.stringify({ error: String(error && error.message || error) });
+  }
+}
+"""
+
+
+class RemindersError(OSError):
+    """Reminders could not be read or changed (an OSError, so the desk reports it like a file error)."""
+
+
+def split_due(text: str) -> tuple[str, str | None]:
+    """`Buy milk @{2026-11-09}` -> ("Buy milk", "2026-11-09"); the first date wins, every token is removed."""
+    match = DUE_TOKEN.search(text)
+    title = " ".join(DUE_TOKEN.sub(" ", text).split())
+    if not title:
+        raise ValueError("text cannot be empty")
+    return title, match.group(1) if match else None
+
+
+def reminders_available(enabled: bool) -> bool:
+    return (
+        enabled and sys.platform == "darwin" and shutil.which("osascript") is not None
+    )
+
+
+class Reminders:
+    """A cached snapshot of the open reminders plus the writes; one osascript run per call."""
+
+    MAX_AGE = 1.5
+
+    def __init__(self, timeout: float = 60, clock=time.monotonic) -> None:
+        self.timeout = timeout
+        self.clock = clock
+        self.lock = threading.Lock()
+        self._snapshot: dict | None = None
+        self._read_at = 0.0
+
+    def call(self, request: dict) -> dict:
+        try:
+            done = subprocess.run(
+                [
+                    "osascript",
+                    "-l",
+                    "JavaScript",
+                    "-e",
+                    EVENTKIT_SCRIPT,
+                    json.dumps(request, ensure_ascii=False),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise RemindersError("Reminders did not answer in time") from error
+        except OSError as error:
+            raise RemindersError(f"could not run osascript: {error}") from error
+        if done.returncode != 0:
+            lines = done.stderr.strip().splitlines()
+            raise RemindersError(
+                f"osascript failed: {lines[-1] if lines else done.returncode}"
+            )
+        try:
+            data = json.loads(done.stdout)
+        except ValueError as error:
+            raise RemindersError(
+                "osascript returned something that is not JSON"
+            ) from error
+        if not isinstance(data, dict):
+            raise RemindersError("osascript returned something that is not an object")
+        if data.get("error"):
+            raise RemindersError(str(data["error"]))
+        return data
+
+    def snapshot(self, fresh: bool = False) -> dict:
+        with self.lock:
+            if (
+                fresh
+                or self._snapshot is None
+                or self.clock() - self._read_at > self.MAX_AGE
+            ):
+                self._snapshot = _normalized(self.call({"op": "list"}))
+                self._read_at = self.clock()
+            return self._snapshot
+
+    def invalidate(self) -> None:
+        with self.lock:
+            self._snapshot = None
+
+    def read(
+        self, fresh: bool = False
+    ) -> tuple[str, KanbanBoard, list[list[str]], list[str]]:
+        """(version, board, reminder ids per column, list ids) of the current snapshot."""
+        snapshot = self.snapshot(fresh)
+        version = version_of(
+            json.dumps(snapshot, sort_keys=True, ensure_ascii=False).encode()
+        )
+        sections: list[Section] = []
+        ids: list[list[str]] = []
+        column_of = {}
+        for position, item in enumerate(snapshot["lists"]):
+            column_of[item["id"]] = position
+            sections.append(Section(name=item["title"]))
+            ids.append([])
+        for reminder in snapshot["items"]:
+            position = column_of.get(reminder["list"])
+            if position is None:
+                continue
+            line = f"- [ ] {reminder['title']}" + (
+                f" @{{{reminder['due']}}}" if reminder["due"] else ""
+            )
+            notes = [
+                f"    {note}" for note in reminder["notes"].splitlines() if note.strip()
+            ][:MAX_NOTE_LINES]
+            sections[position].tasks.append([line, *notes])
+            ids[position].append(reminder["id"])
+        board = KanbanBoard(prefix=[], sections=sections, footer=[])
+        return version, board, ids, [item["id"] for item in snapshot["lists"]]
+
+    def add(self, list_id: str, text: str) -> None:
+        title, due = split_due(text)
+        self.call({"op": "add", "list": list_id, "title": title, "due": due})
+
+    def edit(self, reminder: str, text: str) -> None:
+        title, due = split_due(text)
+        self.call({"op": "edit", "id": reminder, "title": title, "due": due})
+
+    def move(self, reminder: str, list_id: str) -> None:
+        self.call({"op": "move", "id": reminder, "list": list_id})
+
+    def complete(self, reminder: str) -> None:
+        self.call({"op": "done", "id": reminder})
+
+    def delete(self, reminder: str) -> None:
+        self.call({"op": "delete", "id": reminder})
+
+    def new_list(self, title: str) -> None:
+        self.call({"op": "new_list", "title": title})
+
+
+def _normalized(data: dict) -> dict:
+    """Only well-formed lists and reminders, titles on one line, reminders in creation order."""
+    lists = [
+        {
+            "id": item["id"],
+            "title": " ".join(str(item.get("title", "")).split()) or "Untitled",
+        }
+        for item in data.get("lists", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]
+    ]
+    items = []
+    for item in data.get("items", []):
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("id"), str)
+            or not item["id"]
+        ):
+            continue
+        due = item.get("due")
+        created = item.get("created")
+        items.append(
+            {
+                "id": item["id"],
+                "title": " ".join(str(item.get("title", "")).split()) or "Untitled",
+                "list": str(item.get("list", "")),
+                "due": due
+                if isinstance(due, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", due)
+                else None,
+                "notes": str(item.get("notes") or ""),
+                "created": created
+                if isinstance(created, (int, float)) and not isinstance(created, bool)
+                else 0,
+            }
+        )
+    items.sort(key=lambda item: (item["created"], item["id"]))
+    return {"lists": lists, "items": items}
+
+
+def boards_folder(raw: object, config_directory: Path) -> Path:
+    """desk.boards_dir: `~` expands, a relative path is inside the Unlaw config directory."""
+    configured = Path(str(raw or "boards")).expanduser()
+    return configured if configured.is_absolute() else config_directory / configured
 
 """The `ul desk` page: one HTML document with inline CSS and JS, served by desk.py.
 
@@ -1929,29 +2228,50 @@ $("viewer").addEventListener("click", (event) => { if (event.target === $("viewe
 $("recPill").addEventListener("click", () => setView("studio"));
 
 // ---- boards ----
+const REMINDERS = "reminders:";
+const NEW_BOARD = "::new";
+let boardsDir = "";
+
+function boardOption(path, current) {
+  return h("option", { value: path, text: path.split("/").pop().replace(/\.md$/i, "") + "  —  " + path.split("/").slice(-2, -1)[0], selected: path === current });
+}
+
 async function loadBoards() {
   const { status, data } = await api("GET", "/api/boards");
   if (status !== 200) return;
   const select = $("boards");
   select.textContent = "";
-  for (const path of data.recent.length ? data.recent : [data.current]) {
-    select.append(h("option", { value: path, text: path.split("/").pop().replace(/\.md$/i, "") + "  —  " + path.split("/").slice(-2, -1)[0], selected: path === data.current }));
+  boardsDir = data.boards_dir || "";
+  if (data.reminders) {
+    select.append(h("optgroup", { label: "Apple Reminders" },
+      h("option", { value: REMINDERS, text: "Reminders  —  lists as columns", selected: data.current === REMINDERS })));
   }
+  const recent = data.recent.length || data.current === REMINDERS ? data.recent : [data.current];
+  if (recent.length) select.append(h("optgroup", { label: "Recent" }, recent.map((path) => boardOption(path, data.current))));
+  const own = (data.boards || []).filter((path) => !recent.includes(path));
+  if (own.length) select.append(h("optgroup", { label: "Boards folder" }, own.map((path) => boardOption(path, data.current))));
+  select.append(h("option", { value: NEW_BOARD, text: "New board…" }));
   select.append(h("option", { value: "", text: "Open another board…" }));
 }
 
 async function switchBoard(path, create) {
   const { status, data } = await api("POST", "/api/boards", { path, create: Boolean(create) });
   if (status === 200) { state.tag = ""; setBoard(data); loadBoards(); toast("Opened " + data.name); return; }
-  if (status === 404 && data.missing && !create && /\.md$/i.test(path) && confirm("No board at\n" + path + "\n\nCreate a new board there?")) return switchBoard(path, true);
+  if (status === 404 && data.missing && !create && (/\.md$/i.test(path) || !path.includes("/")) && confirm("No board at\n" + path + "\n\nCreate a new board there?")) return switchBoard(path, true);
   toast(data.error || "Could not open that board");
   loadBoards();
 }
 
 $("boards").addEventListener("change", (event) => {
   const value = event.target.value;
+  if (value === NEW_BOARD) {
+    const name = prompt("Name of the new board. It is saved in\n" + boardsDir + "\n(desk.boards_dir; a full path to a .md file works too)", "");
+    if (name && name.trim()) switchBoard(name.trim(), true);
+    else loadBoards();
+    return;
+  }
   if (value) { switchBoard(value); return; }
-  const path = prompt("Path to a Kanban board (.md). A missing file can be created.", "~/");
+  const path = prompt("Path to a Kanban board (.md), or the name of a board in " + boardsDir + ". A missing file can be created.", "~/");
   if (path && path.trim()) switchBoard(path.trim());
   else loadBoards();
 });
@@ -2117,7 +2437,7 @@ from pathlib import Path
 
 
 USAGE = (
-    "Usage: ul desk [board.md] [--port N] [--no-open] | new <board.md> | path [board.md] | "
+    "Usage: ul desk [board.md|name] [--reminders] [--port N] [--no-open] | new <board.md|name> | path [board.md] | "
     "stats [board.md] | pomodoro [status|start [minutes] [--card <text>]|pause|resume|stop|skip]"
 )
 PHASES = {
@@ -2155,6 +2475,8 @@ def desk_settings(config: dict) -> dict:
         else 8765,
         "open_browser": desk.get("open_browser", True) is not False,
         "sound": desk.get("sound", True) is not False,
+        "reminders": desk.get("reminders", True) is not False,
+        "boards_dir": desk.get("boards_dir") if isinstance(desk.get("boards_dir"), str) and desk.get("boards_dir") else "boards",
         "work": _number(pomodoro.get("work"), 25, 0.01),
         "short_break": _number(pomodoro.get("short_break"), 5, 0.01),
         "long_break": _number(pomodoro.get("long_break"), 15, 0.01),
@@ -2491,15 +2813,22 @@ class Desk:
 
     def __init__(
         self,
-        path: Path,
+        path: Path | None,
         config: dict,
         directory: Path,
         clock: Callable[[], float] = time.time,
+        layer: str | None = None,
     ) -> None:
+        if path is None and layer is None:
+            raise ValueError("a board file or the Reminders layer is needed")
         self.path = path
+        # The Reminders layer replaces the open file while it is shown; self.path keeps the last file board.
+        self.layer = layer
         self.config = config
         self.directory = directory
         self.settings = desk_settings(config)
+        self.reminders = Reminders()
+        self.boards_dir = boards_folder(self.settings["boards_dir"], config_dir())
         self.pomodoro = Pomodoro(directory, self.settings, clock)
         self.lock = threading.Lock()
         self.today: Callable[[], date] = lambda: datetime.now().astimezone().date()
@@ -2508,7 +2837,14 @@ class Desk:
     def completed_column(self) -> str:
         return str(self.config.get("todo", {}).get("completed_column", "Completed"))
 
+    @property
+    def current(self) -> str:
+        return REMINDERS if self.layer == REMINDERS or self.path is None else str(self.path)
+
     def read(self) -> tuple[str, KanbanBoard]:
+        if self.layer == REMINDERS or self.path is None:
+            version, board, _, _ = self.reminders.read()
+            return version, board
         data = self.path.read_bytes()
         return version_of(data), KanbanBoard.parse(data.decode("utf-8"))
 
@@ -2517,14 +2853,17 @@ class Desk:
         return self.render(version, board)
 
     def render(self, version: str, board: KanbanBoard) -> dict:
+        reminders = self.current == REMINDERS
         try:
-            done_name = completed_section(board, self.completed_column).name
+            # Completed reminders leave the board, so the layer has no Done column.
+            done_name = None if reminders else completed_section(board, self.completed_column).name
         except ValueError:
             done_name = None
         return {
             "version": version,
-            "path": str(self.path),
-            "name": self.path.stem,
+            "path": self.current,
+            "name": "Reminders" if reminders or self.path is None else self.path.stem,
+            "layer": "reminders" if reminders else "file",
             "today": self.today().isoformat(),
             "done_column": done_name,
             "columns": [
@@ -2538,6 +2877,16 @@ class Desk:
         }
 
     def change(self, request: dict) -> dict:
+        if self.current == REMINDERS:
+            with self.lock:
+                version, board, ids, lists = self.reminders.read(fresh=True)
+                if request.get("version") != version:
+                    raise Conflict
+                try:
+                    self.apply_reminders(board, ids, lists, request)
+                finally:
+                    self.reminders.invalidate()
+                return self.board_json()
         with self.lock:
             version, board = self.read()
             if request.get("version") != version:
@@ -2616,6 +2965,50 @@ class Desk:
         else:
             raise ValueError(f"Unknown operation: {op}")
 
+    def apply_reminders(
+        self, board: KanbanBoard, ids: list[list[str]], lists: list[str], request: dict
+    ) -> None:
+        """The board operations on Apple Reminders: a column is a list, a card a reminder."""
+        op = request.get("op")
+        today = self.today()
+        if op == "add":
+            column = _index(request.get("column"), len(board.sections), "column")
+            self.reminders.add(lists[column], quick_text(_clean_text(request.get("text")), today))
+        elif op == "column":
+            name = _clean_text(request.get("name"))
+            if any(section.name.casefold() == name.casefold() for section in board.sections):
+                raise ValueError(f"List '{name}' already exists")
+            self.reminders.new_list(name)
+        elif op in {"edit", "move", "done", "delete"}:
+            self._task(board, request)
+            column, index = request["column"], request["index"]
+            reminder = ids[column][index]
+            if op == "edit":
+                self.reminders.edit(reminder, quick_text(_clean_text(request.get("text")), today))
+            elif op == "move":
+                target = _index(request.get("to_column"), len(board.sections), "to_column")
+                # Reminders keeps no order that EventKit could set, so only a move to another list changes anything.
+                if target != column:
+                    self.reminders.move(reminder, lists[target])
+            elif op == "done":
+                self.reminders.complete(reminder)
+            else:
+                self.reminders.delete(reminder)
+        elif op == "reopen":
+            raise ValueError("Completed reminders are not shown; reopen them in Reminders")
+        else:
+            raise ValueError(f"Unknown operation: {op}")
+
+    def boards(self) -> list[str]:
+        """Boards in desk.boards_dir, by name."""
+        try:
+            return sorted(
+                (str(path.resolve()) for path in self.boards_dir.glob("*.md") if path.is_file()),
+                key=lambda item: Path(item).stem.casefold(),
+            )
+        except OSError:
+            return []
+
     def recent(self) -> list[str]:
         items = _read_json(self.directory / "recent.json", [])
         paths = (
@@ -2626,6 +3019,8 @@ class Desk:
         return [path for path in paths if Path(path).is_file()]
 
     def remember(self) -> None:
+        if self.path is None:
+            return
         paths = [
             str(self.path),
             *[path for path in self.recent() if path != str(self.path)],
@@ -2633,15 +3028,31 @@ class Desk:
         _write_json(self.directory / "recent.json", paths)
 
     def switch(self, raw: object, create: bool) -> dict:
-        path = board_file(_clean_text(raw), create=create)
+        text = _clean_text(raw)
+        if text == REMINDERS:
+            if not reminders_available(self.settings["reminders"]):
+                raise ValueError("The Reminders layer is off (desk.reminders) or not on macOS")
+            self.reminders.read(fresh=True)
+            with self.lock:
+                self.layer = REMINDERS
+            return self.board_json()
+        path = board_file(text, create=create, boards_dir=self.boards_dir)
         with self.lock:
             self.path = path
+            self.layer = None
             self.remember()
         return self.board_json()
 
 
-def board_file(raw: str, create: bool = False) -> Path:
-    """A board chosen by the user: an existing .md file, or a new one from the template."""
+def board_file(raw: str, create: bool = False, boards_dir: Path | None = None) -> Path:
+    """A board chosen by the user: an existing .md file, or a new one from the template.
+
+    A bare name (no folder, no .md) is a board in desk.boards_dir, created with the folder when needed.
+    """
+    if boards_dir is not None and _bare_name(raw):
+        if create:
+            boards_dir.mkdir(parents=True, exist_ok=True)
+        raw = str(boards_dir / f"{raw}.md")
     path = Path(raw).expanduser().resolve()
     if path.suffix.casefold() != ".md":
         raise ValueError(f"A board is a Markdown file (.md): {path}")
@@ -2660,6 +3071,16 @@ def board_file(raw: str, create: bool = False) -> Path:
     return path
 
 
+def _bare_name(raw: str) -> bool:
+    return (
+        bool(raw.strip())
+        and "/" not in raw
+        and not raw.startswith((".", "~"))
+        and Path(raw).suffix.casefold() != ".md"
+        and not any(ord(char) < 32 for char in raw)
+    )
+
+
 def default_board(config: dict) -> Path:
     path = configured_board(config["todo"])
     if not path.is_file():
@@ -2667,6 +3088,14 @@ def default_board(config: dict) -> Path:
             f"Kanban file not found: {path} (set todo.vault_path and todo.file, or pass a board.md)"
         )
     return path
+
+
+def _optional_board(config: dict) -> Path | None:
+    """The todo board when it exists: the Reminders layer can start without one."""
+    try:
+        return default_board(config)
+    except (FileNotFoundError, ValueError):
+        return None
 
 
 def _find_note(root: Path, name: str) -> Path | None:
@@ -2792,7 +3221,14 @@ class Handler(BaseHTTPRequestHandler):
                 )
             elif url.path == "/api/boards":
                 self._json(
-                    200, {"current": str(self.desk.path), "recent": self.desk.recent()}
+                    200,
+                    {
+                        "current": self.desk.current,
+                        "recent": self.desk.recent(),
+                        "boards": self.desk.boards(),
+                        "boards_dir": str(self.desk.boards_dir),
+                        "reminders": reminders_available(self.desk.settings["reminders"]),
+                    },
                 )
             elif url.path == "/api/games":
                 self._json(200, self.arcade.scores())
@@ -3007,6 +3443,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _open_obsidian(self, note: object) -> bool:
         target = self.desk.path
+        if target is None:
+            return False
         if isinstance(note, str) and note.strip():
             found = _find_note(self.desk.path.parent, note.strip())
             if found is None:
@@ -3515,7 +3953,7 @@ def make_server(
 def _ticker(desk: Desk, stop: threading.Event) -> None:
     while not stop.wait(0.5):
         try:
-            event = desk.pomodoro.tick(str(desk.path))
+            event = desk.pomodoro.tick(desk.current)
         except OSError:
             continue
         if event:
@@ -3528,8 +3966,12 @@ def _ticker(desk: Desk, stop: threading.Event) -> None:
             notify("Unlaw desk", f"{ended}: {following}", desk.settings["sound"])
 
 
-def serve(path: Path, config: dict, port: int | None, open_browser: bool) -> int:
-    desk = Desk(path, config, storage_path("desk"))
+def serve(
+    path: Path | None, config: dict, port: int | None, open_browser: bool, layer: str | None = None
+) -> int:
+    desk = Desk(path, config, storage_path("desk"), layer=layer)
+    if layer == REMINDERS:
+        desk.reminders.read(fresh=True)
     desk.remember()
     token = secrets.token_urlsafe(18)
     settings = desk.settings
@@ -3538,7 +3980,7 @@ def serve(path: Path, config: dict, port: int | None, open_browser: bool) -> int
     )
     url = f"http://127.0.0.1:{server.server_address[1]}/?token={token}"
     print(f"Desk: {url}", flush=True)
-    print(f"Board: {path}", flush=True)
+    print(f"Board: {desk.current if layer else path}", flush=True)
     print("Ctrl+C stops it.", flush=True)
     stop = threading.Event()
     threading.Thread(target=_ticker, args=(desk, stop), daemon=True).start()
@@ -3617,15 +4059,18 @@ def _stats_cli(path: Path | None, config: dict) -> int:
     return 0
 
 
-def _parse_serve(args: list[str]) -> tuple[str | None, int | None, bool]:
+def _parse_serve(args: list[str]) -> tuple[str | None, int | None, bool, bool]:
     board: str | None = None
     port: int | None = None
     open_browser = True
+    reminders = False
     rest = list(args)
     while rest:
         arg = rest.pop(0)
         if arg == "--no-open":
             open_browser = False
+        elif arg == "--reminders":
+            reminders = True
         elif arg == "--port":
             if not rest or not rest[0].isdigit() or int(rest[0]) > 65535:
                 raise ValueError("--port needs a number from 0 to 65535")
@@ -3634,7 +4079,7 @@ def _parse_serve(args: list[str]) -> tuple[str | None, int | None, bool]:
             raise ValueError(f"Unexpected argument: {arg}")
         else:
             board = arg
-    return board, port, open_browser
+    return board, port, open_browser, reminders
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -3647,24 +4092,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         action = args[0] if args else ""
         if action == "pomodoro":
             return _pomodoro_cli(args[1:], config)
+        boards_dir = boards_folder(desk_settings(config)["boards_dir"], config_dir())
         if action == "new" and len(args) == 2:
-            if Path(args[1]).expanduser().exists():
-                raise ValueError(f"{args[1]} already exists; open it with: ul desk {args[1]}")
-            path = board_file(args[1], create=True)
+            wanted = boards_dir / f"{args[1]}.md" if _bare_name(args[1]) else Path(args[1]).expanduser()
+            if wanted.exists():
+                raise ValueError(f"{wanted} already exists; open it with: ul desk {args[1]}")
+            path = board_file(args[1], create=True, boards_dir=boards_dir)
             print(f"Board: {path}")
             return 0
         if action == "path" and len(args) <= 2:
-            print(board_file(args[1]) if len(args) == 2 else default_board(config))
+            print(board_file(args[1], boards_dir=boards_dir) if len(args) == 2 else default_board(config))
             return 0
         if action == "stats" and len(args) <= 2:
             return _stats_cli(
-                board_file(args[1]) if len(args) == 2 else default_board(config), config
+                board_file(args[1], boards_dir=boards_dir) if len(args) == 2 else default_board(config), config
             )
         if action in {"new", "path", "stats"}:
             print(USAGE, file=sys.stderr)
             return 2
-        board, port, open_browser = _parse_serve(args)
-        path = board_file(board) if board else default_board(config)
+        board, port, open_browser, reminders = _parse_serve(args)
+        if reminders:
+            if not reminders_available(desk_settings(config)["reminders"]):
+                raise ValueError("The Reminders layer is off (desk.reminders) or not on macOS")
+            path = board_file(board, boards_dir=boards_dir) if board else _optional_board(config)
+            return serve(path, config, port, open_browser, REMINDERS)
+        path = board_file(board, boards_dir=boards_dir) if board else default_board(config)
         return serve(path, config, port, open_browser)
     except (ConfigError, FileNotFoundError, OSError, ValueError) as error:
         print(f"unlaw desk: {error}", file=sys.stderr)
