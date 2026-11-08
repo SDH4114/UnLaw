@@ -1,6 +1,6 @@
 [package]
 name = "ule"
-version = "3.15.0-beta.2"
+version = "3.15.0"
 edition = "2021"
 rust-version = "1.82"
 description = "Unlaw's modal code editor: vim keys, LSP, fuzzy pickers and ul built in"
