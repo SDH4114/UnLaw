@@ -25,12 +25,12 @@ from unlawful.git_hosts import (
 )
 
 USAGE = (
-    "Usage: ul git [message|status|pull|push [message]|commit [message]|sync [message]|init|"
-    "connect SPEC|mirror add|list|remove|token HOST|open|pr|undo]"
+    "Usage: ul git [message|push [message]|commit [message]|sync [message]|init|"
+    "connect SPEC|mirror add|list|remove|token HOST|open|pr|undo [--list|COMMIT]]"
 )
+# Removed actions: still refused, so the word never becomes a commit message by accident.
+_GIT_REMOVED = {"status", "pull"}
 _GIT_ACTIONS = {
-    "status",
-    "pull",
     "push",
     "commit",
     "sync",
@@ -601,21 +601,78 @@ def _git_pr(args: list[str]) -> int:
     return _git_open_url(page)
 
 
+def _git_branch_commits() -> list[tuple[str, str, str]]:
+    """(full hash, date, subject) of the current branch, newest first."""
+    out = _git_out("log", "--format=%H%x00%ad%x00%s", "--date=short", "HEAD").stdout
+    return [tuple(line.split("\0", 2)) for line in out.splitlines() if line.count("\0") == 2]  # type: ignore[misc]
+
+
+def _git_undo_list() -> int:
+    commits = _git_branch_commits()
+    if not commits:
+        return _git_fail("this branch has no commits yet.")
+    local = set(_git_out("rev-list", "HEAD", "--not", "--remotes").stdout.split())
+    print(f"Commits on {_git_branch() or 'HEAD'}, newest first; (local) = not pushed, can be undone:")
+    for full, date, subject in commits:
+        print(f"{full[:7]}  {date}  {subject}{'  (local)' if full in local else ''}")
+    print("Go back to one with: ul git undo <hash or part of its message>")
+    return 0
+
+
+def _git_find_commit(text: str) -> str | None:
+    """The commit of this branch named by a hash prefix or (part of) its message; None with an explanation."""
+    commits = _git_branch_commits()
+    if re.fullmatch(r"[0-9a-fA-F]{4,40}", text):
+        by_hash = [full for full, _, _ in commits if full.startswith(text.lower())]
+        if len(by_hash) == 1:
+            return by_hash[0]
+    wanted = text.casefold()
+    found = [entry for entry in commits if entry[2].casefold() == wanted] or [
+        entry for entry in commits if wanted in entry[2].casefold()
+    ]
+    if len(found) == 1:
+        return found[0][0]
+    if not found:
+        _git_fail(f"no commit in this branch matches `{text}`; see `ul git undo --list`.")
+        return None
+    lines = "\n".join(f"  {full[:7]}  {subject}" for full, _, subject in found[:10])
+    _git_fail(f"several commits match `{text}`; use the hash:\n{lines}")
+    return None
+
+
 def _git_undo(args: list[str]) -> int:
-    if args:
-        raise _GitUsage("undo takes no arguments")
-    if _git_out("rev-parse", "--verify", "-q", "HEAD~1").returncode:
-        return _git_fail("there is no earlier commit to go back to.")
-    remote_branches = _git_out("branch", "-r", "--contains", "HEAD").stdout.split()
-    if remote_branches:
+    options, positional = _git_parse(args, flags=("--list",))
+    if "--list" in options:
+        if positional:
+            raise _GitUsage("undo --list takes no commit")
+        return _git_undo_list()
+    if not _git_has_commits():
+        return _git_fail("this branch has no commits yet.")
+    if positional:
+        # Back to the named commit: it stays, every commit after it is undone.
+        target = _git_find_commit(" ".join(positional))
+        if target is None:
+            return 1
+    else:
+        parent = _git_out("rev-parse", "--verify", "-q", "HEAD~1")
+        if parent.returncode:
+            return _git_fail("there is no earlier commit to go back to.")
+        target = parent.stdout.strip()
+    undone = _git_out("rev-list", f"{target}..HEAD").stdout.split()
+    if not undone:
+        print("Already at that commit; nothing to undo.")
+        return 0
+    # The oldest undone commit is in every later one: if a remote has any of them, it has this one.
+    if _git_out("branch", "-r", "--contains", undone[-1]).stdout.split():
         return _git_fail(
-            "the last commit is already on a remote branch; undoing it would rewrite shared history.\n"
-            "Use `git revert HEAD` instead."
+            "some of these commits are already on a remote branch; undoing them would rewrite shared history.\n"
+            f"Use `git revert {'<commit>' if positional else 'HEAD'}` instead."
         )
-    subject = _git_out("log", "-1", "--format=%s").stdout.strip()
-    code = _run_all([["git", "reset", "--soft", "HEAD~1"]])
+    subjects = _git_out("log", "--format=%h  %s", f"{target}..HEAD").stdout.rstrip()
+    code = _run_all([["git", "reset", "--soft", target]])
     if not code:
-        print(f"Undid commit: {subject}\nIts changes are staged.")
+        count = len(undone)
+        print(f"Undid {count} commit{'s' if count > 1 else ''}:\n{subjects}\nTheir changes are staged.")
     return code
 
 
@@ -628,12 +685,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if action in _GIT_ACTIONS and any(arg in {"-h", "--help"} for arg in rest):
         print(COMMAND_HELP["git"], end="")
         return 0
+    if action in _GIT_REMOVED:
+        print(f"unlaw git: `ul git {action}` was removed; use `git {action}`.", file=sys.stderr)
+        return 2
     try:
-        if action in {"status", "pull"}:
-            if rest:
-                print(USAGE, file=sys.stderr)
-                return 2
-            return _run_all([["git", action]])
         if action in {"push", "commit", "sync"}:
             tokens, allow = _git_commit_args(rest)
             if action == "commit":

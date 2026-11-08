@@ -2,7 +2,7 @@
 """Stage, commit and push the current Git project, or run a Git action."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Stage, commit and push the current Git project, or run a Git action.\nUsage: ul git [message]\n       ul git status | pull | push [message] | commit [message] | sync [message]\n       ul git init [--connect SPEC] [--public] [--name NAME]\n       ul git connect SPEC [--public] [--name NAME] [--url BASE] [--force]\n       ul git mirror add SPEC [--name N] | list | remove NAME\n       ul git token HOST | open | pr [--base BRANCH] | undo\nActions:\n  no arguments / <message>    git add ., commit, then push (prompts "Commit message:" when\n                              missing; with nothing to commit it only pushes)\n  push [message]              Same as above\n  status / pull               Run the corresponding Git command\n  commit [message]            Stage and commit without pushing\n  sync [message]              Pull with rebase, then stage, commit and push\n  init                        Create a repository on branch main (refuses inside one), merge a\n                              .gitignore for the detected project types (pyproject.toml or\n                              requirements.txt = python, Cargo.toml = rust, CMakeLists.txt = cpp,\n                              package.json = node; only missing lines are added, yours are kept\n                              and .env, keys and .DS_Store are always ignored), then make the\n                              first commit "Initial commit"\n  connect SPEC                Set origin and push the current branch with -u\n  mirror add|list|remove      Extra remotes named mirror-*; every push also pushes to them\n  token HOST                  Save an API token (read hidden from the terminal, never from argv)\n  open                        Open the origin page of the current branch in the browser\n  pr                          Push the current branch, then open a pull request (GitHub with\n                              gh when installed, otherwise the host\'s compare page)\n  undo                        Undo the last commit, keeping its changes staged; refused when the\n                              commit is already on a remote branch (use git revert HEAD)\nOptions:\n  --connect SPEC     (init) run connect afterwards\n  --public           Create the repository public (default: private)\n  --name NAME        Repository name to create (default: the folder name); for mirror add with a\n                     URL it is the mirror name (remote mirror-NAME)\n  --url BASE         Server for gitea or a self-hosted gitlab, for example https://git.example.com\n  --force            Replace an origin that points somewhere else\n  --base BRANCH      (pr) target branch, default main\n  --allow-secrets    Commit even when secrets or files over 50 MB are staged\n  -h, --help         Show this help\nSPEC is a host name (github, gitlab, codeberg, gitea: creates the repository through its API),\n  a short form (gh:owner/repo, gl:..., cb:...) or a full URL or path. Short forms become SSH URLs.\nSecrets guard: every commit path unstages .env and .env.* (not .env.example), *.pem, *.key,\n  id_rsa*, id_ed25519* (not .pub), *.p12 and files over 50 MB, explains why and stops with exit 1.\n  Fix it with .gitignore, or pass --allow-secrets.\nMirrors: they exist only as Git remotes named mirror-* in the repository. A failing mirror is\n  reported as a warning and does not fail the push when origin succeeded.\nSSH: for SSH remotes of a known host connect checks the login. When it fails it offers to\n  create ~/.ssh/id_ed25519, prints the public key and opens the host\'s key page; add the key\n  and run the command again.\nTokens: stored in the macOS Keychain, service unlaw.git.<host>. Scopes: gitlab and gitea or\n  codeberg need an access token that can create repositories (gitlab: api; gitea/codeberg:\n  write:repository and write:user). GitHub uses `gh auth login` instead of a token.\nDependencies: git; ssh; gh (optional, for GitHub pull requests); the macOS `open` command.\nExamples: ul git "Fix downloader"\n  ul git init --connect github\n  ul git connect gh:me/project --force\n  ul git mirror add codeberg\n  ul git token gitlab\n  ul git pr --base develop\n  ul git undo\n'
+COMMAND_HELP = 'Stage, commit and push the current Git project, or run a Git action.\nUsage: ul git [message]\n       ul git push [message] | commit [message] | sync [message]\n       ul git init [--connect SPEC] [--public] [--name NAME]\n       ul git connect SPEC [--public] [--name NAME] [--url BASE] [--force]\n       ul git mirror add SPEC [--name N] | list | remove NAME\n       ul git token HOST | open | pr [--base BRANCH] | undo [--list | COMMIT]\nActions:\n  no arguments / <message>    git add ., commit, then push (prompts "Commit message:" when\n                              missing; with nothing to commit it only pushes)\n  push [message]              Same as above. A branch without an upstream is published on\n                              origin (-u). `ul git status` and `ul git pull` were removed:\n                              use git status / git pull\n  commit [message]            Stage and commit without pushing\n  sync [message]              Pull with rebase, then stage, commit and push\n  init                        Create a repository on branch main (refuses inside one), merge a\n                              .gitignore for the detected project types (pyproject.toml or\n                              requirements.txt = python, Cargo.toml = rust, CMakeLists.txt = cpp,\n                              package.json = node; only missing lines are added, yours are kept\n                              and .env, keys and .DS_Store are always ignored), then make the\n                              first commit "Initial commit"\n  connect SPEC                Set origin and push the current branch with -u\n  mirror add|list|remove      Extra remotes named mirror-*; every push also pushes to them\n  token HOST                  Save an API token (read hidden from the terminal, never from argv)\n  open                        Open the origin page of the current branch in the browser\n  pr                          Push the current branch, then open a pull request (GitHub with\n                              gh when installed, otherwise the host\'s compare page)\n  undo                        Undo the last commit, keeping its changes staged\n  undo --list                 Show the commits of this branch, newest first; (local) marks the\n                              ones not pushed yet\n  undo COMMIT                 Go back to COMMIT (a hash, or its message or a unique part of it):\n                              it stays, every later commit is undone and their changes stay\n                              staged. Refused when any undone commit is already on a remote\n                              branch (use git revert)\nOptions:\n  --connect SPEC     (init) run connect afterwards\n  --public           Create the repository public (default: private)\n  --name NAME        Repository name to create (default: the folder name); for mirror add with a\n                     URL it is the mirror name (remote mirror-NAME)\n  --url BASE         Server for gitea or a self-hosted gitlab, for example https://git.example.com\n  --force            Replace an origin that points somewhere else\n  --base BRANCH      (pr) target branch, default main\n  --allow-secrets    Commit even when secrets or files over 50 MB are staged\n  -h, --help         Show this help\nSPEC is a host name (github, gitlab, codeberg, gitea: creates the repository through its API),\n  a short form (gh:owner/repo, gl:..., cb:...) or a full URL or path. Short forms become SSH URLs.\nSecrets guard: every commit path unstages .env and .env.* (not .env.example), *.pem, *.key,\n  id_rsa*, id_ed25519* (not .pub), *.p12 and files over 50 MB, explains why and stops with exit 1.\n  Fix it with .gitignore, or pass --allow-secrets. Deleting such a file is always allowed.\nMirrors: they exist only as Git remotes named mirror-* in the repository. A failing mirror is\n  reported as a warning and does not fail the push when origin succeeded.\nSSH: for SSH remotes of a known host connect checks the login. When it fails it offers to\n  create ~/.ssh/id_ed25519, prints the public key and opens the host\'s key page; add the key\n  and run the command again.\nTokens: stored in the macOS Keychain, service unlaw.git.<host>. Scopes: gitlab and gitea or\n  codeberg need an access token that can create repositories (gitlab: api; gitea/codeberg:\n  write:repository and write:user). GitHub uses `gh auth login` instead of a token.\nDependencies: git; ssh; gh (optional, for GitHub pull requests); the macOS `open` command.\nExamples: ul git "Fix downloader"\n  ul git init --connect github\n  ul git connect gh:me/project --force\n  ul git mirror add codeberg\n  ul git token gitlab\n  ul git pr --base develop\n  ul git undo --list\n  ul git undo "add parser"\n'
 
 """Git hosting services: remote shortcuts, repository creation, tokens, SSH keys and web links."""
 
@@ -537,12 +537,12 @@ from urllib.parse import quote
 
 
 USAGE = (
-    "Usage: ul git [message|status|pull|push [message]|commit [message]|sync [message]|init|"
-    "connect SPEC|mirror add|list|remove|token HOST|open|pr|undo]"
+    "Usage: ul git [message|push [message]|commit [message]|sync [message]|init|"
+    "connect SPEC|mirror add|list|remove|token HOST|open|pr|undo [--list|COMMIT]]"
 )
+# Removed actions: still refused, so the word never becomes a commit message by accident.
+_GIT_REMOVED = {"status", "pull"}
 _GIT_ACTIONS = {
-    "status",
-    "pull",
     "push",
     "commit",
     "sync",
@@ -1113,21 +1113,78 @@ def _git_pr(args: list[str]) -> int:
     return _git_open_url(page)
 
 
+def _git_branch_commits() -> list[tuple[str, str, str]]:
+    """(full hash, date, subject) of the current branch, newest first."""
+    out = _git_out("log", "--format=%H%x00%ad%x00%s", "--date=short", "HEAD").stdout
+    return [tuple(line.split("\0", 2)) for line in out.splitlines() if line.count("\0") == 2]  # type: ignore[misc]
+
+
+def _git_undo_list() -> int:
+    commits = _git_branch_commits()
+    if not commits:
+        return _git_fail("this branch has no commits yet.")
+    local = set(_git_out("rev-list", "HEAD", "--not", "--remotes").stdout.split())
+    print(f"Commits on {_git_branch() or 'HEAD'}, newest first; (local) = not pushed, can be undone:")
+    for full, date, subject in commits:
+        print(f"{full[:7]}  {date}  {subject}{'  (local)' if full in local else ''}")
+    print("Go back to one with: ul git undo <hash or part of its message>")
+    return 0
+
+
+def _git_find_commit(text: str) -> str | None:
+    """The commit of this branch named by a hash prefix or (part of) its message; None with an explanation."""
+    commits = _git_branch_commits()
+    if re.fullmatch(r"[0-9a-fA-F]{4,40}", text):
+        by_hash = [full for full, _, _ in commits if full.startswith(text.lower())]
+        if len(by_hash) == 1:
+            return by_hash[0]
+    wanted = text.casefold()
+    found = [entry for entry in commits if entry[2].casefold() == wanted] or [
+        entry for entry in commits if wanted in entry[2].casefold()
+    ]
+    if len(found) == 1:
+        return found[0][0]
+    if not found:
+        _git_fail(f"no commit in this branch matches `{text}`; see `ul git undo --list`.")
+        return None
+    lines = "\n".join(f"  {full[:7]}  {subject}" for full, _, subject in found[:10])
+    _git_fail(f"several commits match `{text}`; use the hash:\n{lines}")
+    return None
+
+
 def _git_undo(args: list[str]) -> int:
-    if args:
-        raise _GitUsage("undo takes no arguments")
-    if _git_out("rev-parse", "--verify", "-q", "HEAD~1").returncode:
-        return _git_fail("there is no earlier commit to go back to.")
-    remote_branches = _git_out("branch", "-r", "--contains", "HEAD").stdout.split()
-    if remote_branches:
+    options, positional = _git_parse(args, flags=("--list",))
+    if "--list" in options:
+        if positional:
+            raise _GitUsage("undo --list takes no commit")
+        return _git_undo_list()
+    if not _git_has_commits():
+        return _git_fail("this branch has no commits yet.")
+    if positional:
+        # Back to the named commit: it stays, every commit after it is undone.
+        target = _git_find_commit(" ".join(positional))
+        if target is None:
+            return 1
+    else:
+        parent = _git_out("rev-parse", "--verify", "-q", "HEAD~1")
+        if parent.returncode:
+            return _git_fail("there is no earlier commit to go back to.")
+        target = parent.stdout.strip()
+    undone = _git_out("rev-list", f"{target}..HEAD").stdout.split()
+    if not undone:
+        print("Already at that commit; nothing to undo.")
+        return 0
+    # The oldest undone commit is in every later one: if a remote has any of them, it has this one.
+    if _git_out("branch", "-r", "--contains", undone[-1]).stdout.split():
         return _git_fail(
-            "the last commit is already on a remote branch; undoing it would rewrite shared history.\n"
-            "Use `git revert HEAD` instead."
+            "some of these commits are already on a remote branch; undoing them would rewrite shared history.\n"
+            f"Use `git revert {'<commit>' if positional else 'HEAD'}` instead."
         )
-    subject = _git_out("log", "-1", "--format=%s").stdout.strip()
-    code = _run_all([["git", "reset", "--soft", "HEAD~1"]])
+    subjects = _git_out("log", "--format=%h  %s", f"{target}..HEAD").stdout.rstrip()
+    code = _run_all([["git", "reset", "--soft", target]])
     if not code:
-        print(f"Undid commit: {subject}\nIts changes are staged.")
+        count = len(undone)
+        print(f"Undid {count} commit{'s' if count > 1 else ''}:\n{subjects}\nTheir changes are staged.")
     return code
 
 
@@ -1140,12 +1197,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if action in _GIT_ACTIONS and any(arg in {"-h", "--help"} for arg in rest):
         print(COMMAND_HELP, end="")
         return 0
+    if action in _GIT_REMOVED:
+        print(f"unlaw git: `ul git {action}` was removed; use `git {action}`.", file=sys.stderr)
+        return 2
     try:
-        if action in {"status", "pull"}:
-            if rest:
-                print(USAGE, file=sys.stderr)
-                return 2
-            return _run_all([["git", action]])
         if action in {"push", "commit", "sync"}:
             tokens, allow = _git_commit_args(rest)
             if action == "commit":

@@ -76,14 +76,14 @@ class ToolTestCase(unittest.TestCase):
 
 
 class GitTests(ToolTestCase):
-    def test_passthrough_rejects_extra_arguments(self) -> None:
+    def test_removed_status_and_pull_run_nothing(self) -> None:
+        # `ul git status` / `ul git pull` were removed: they point to git and never commit.
         log = self.tool("git")
-        code, _, error = self.run_main(git_command.main, ["status", "extra"])
-        self.assertEqual(code, 2)
-        self.assertIn("Usage: ul git", error)
+        for words in (["status", "extra"], ["pull"]):
+            code, _, error = self.run_main(git_command.main, words)
+            self.assertEqual(code, 2)
+            self.assertIn(f"git {words[0]}", error)
         self.assertEqual(self.lines(log), [])
-        self.assertEqual(self.run_main(git_command.main, ["pull"])[0], 0)
-        self.assertEqual(self.lines(log), ["pull"])
 
     def test_prompt_cancel_and_empty_message_stop_before_commit(self) -> None:
         log = self.tool("git", body="if sys.argv[1:] == ['diff', '--cached', '--quiet']:\n    raise SystemExit(1)\n")

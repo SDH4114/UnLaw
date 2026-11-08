@@ -118,16 +118,17 @@ Example: ul cpp demo --std 23 --git
 ''',
     "git": '''Stage, commit and push the current Git project, or run a Git action.
 Usage: ul git [message]
-       ul git status | pull | push [message] | commit [message] | sync [message]
+       ul git push [message] | commit [message] | sync [message]
        ul git init [--connect SPEC] [--public] [--name NAME]
        ul git connect SPEC [--public] [--name NAME] [--url BASE] [--force]
        ul git mirror add SPEC [--name N] | list | remove NAME
-       ul git token HOST | open | pr [--base BRANCH] | undo
+       ul git token HOST | open | pr [--base BRANCH] | undo [--list | COMMIT]
 Actions:
   no arguments / <message>    git add ., commit, then push (prompts "Commit message:" when
                               missing; with nothing to commit it only pushes)
-  push [message]              Same as above
-  status / pull               Run the corresponding Git command
+  push [message]              Same as above. A branch without an upstream is published on
+                              origin (-u). `ul git status` and `ul git pull` were removed:
+                              use git status / git pull
   commit [message]            Stage and commit without pushing
   sync [message]              Pull with rebase, then stage, commit and push
   init                        Create a repository on branch main (refuses inside one), merge a
@@ -142,8 +143,13 @@ Actions:
   open                        Open the origin page of the current branch in the browser
   pr                          Push the current branch, then open a pull request (GitHub with
                               gh when installed, otherwise the host's compare page)
-  undo                        Undo the last commit, keeping its changes staged; refused when the
-                              commit is already on a remote branch (use git revert HEAD)
+  undo                        Undo the last commit, keeping its changes staged
+  undo --list                 Show the commits of this branch, newest first; (local) marks the
+                              ones not pushed yet
+  undo COMMIT                 Go back to COMMIT (a hash, or its message or a unique part of it):
+                              it stays, every later commit is undone and their changes stay
+                              staged. Refused when any undone commit is already on a remote
+                              branch (use git revert)
 Options:
   --connect SPEC     (init) run connect afterwards
   --public           Create the repository public (default: private)
@@ -158,7 +164,7 @@ SPEC is a host name (github, gitlab, codeberg, gitea: creates the repository thr
   a short form (gh:owner/repo, gl:..., cb:...) or a full URL or path. Short forms become SSH URLs.
 Secrets guard: every commit path unstages .env and .env.* (not .env.example), *.pem, *.key,
   id_rsa*, id_ed25519* (not .pub), *.p12 and files over 50 MB, explains why and stops with exit 1.
-  Fix it with .gitignore, or pass --allow-secrets.
+  Fix it with .gitignore, or pass --allow-secrets. Deleting such a file is always allowed.
 Mirrors: they exist only as Git remotes named mirror-* in the repository. A failing mirror is
   reported as a warning and does not fail the push when origin succeeded.
 SSH: for SSH remotes of a known host connect checks the login. When it fails it offers to
@@ -174,7 +180,8 @@ Examples: ul git "Fix downloader"
   ul git mirror add codeberg
   ul git token gitlab
   ul git pr --base develop
-  ul git undo
+  ul git undo --list
+  ul git undo "add parser"
 ''',
     "gpt": '''Open the ChatGPT macOS application.
 Usage: ul gpt

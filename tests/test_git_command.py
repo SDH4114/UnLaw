@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -198,13 +199,17 @@ class CommitWorkflowTests(GitCommandCase):
         self.assertEqual(self.git("log", "-1", "--format=%s"), "local only")
         self.assertEqual(self.subjects(bare), ["first"])
 
-    def test_status_is_a_passthrough(self) -> None:
-        self.make_repo()
-        self.assertEqual(self.ul("status")[0], 0)
-
-    def test_status_with_extra_arguments_is_usage_error(self) -> None:
-        self.make_repo()
-        self.assertEqual(self.ul("status", "x")[0], 2)
+    def test_status_and_pull_were_removed_and_never_commit(self) -> None:
+        # Removed at Haos's request; the words must not become commit messages either.
+        bare = self.make_repo()
+        self.change()
+        for words in (["status"], ["pull"], ["status", "x"]):
+            with self.subTest(words=words):
+                code, _, err = self.ul(*words)
+                self.assertEqual(code, 2)
+                self.assertIn(f"git {words[0]}", err)
+        self.assertEqual(self.git("log", "-1", "--format=%s"), "first")
+        self.assertEqual(self.subjects(bare), ["first"])
 
     def test_push_with_message_commits_and_pushes(self) -> None:
         bare = self.make_repo()
@@ -848,9 +853,84 @@ class UndoTests(GitCommandCase):
         self.assertEqual(self.ul("undo")[0], 0)
         self.assertEqual(self.git("log", "-1", "--format=%s"), "pushed")
 
-    def test_undo_rejects_arguments(self) -> None:
+    def test_undo_of_an_unknown_commit_changes_nothing(self) -> None:
         self.make_repo()
-        self.assertEqual(self.ul("undo", "now")[0], 2)
+        self.commit("local")
+        code, _, err = self.ul("undo", "no such commit")
+        self.assertEqual(code, 1)
+        self.assertIn("no commit", err)
+        self.assertEqual(self.git("log", "-1", "--format=%s"), "local")
+
+    def test_undo_list_shows_the_branch_and_marks_local_commits(self) -> None:
+        self.make_repo()
+        self.commit("pushed one")
+        self.git("push", "-q")
+        self.commit("local one")
+        code, out, _ = self.ul("undo", "--list")
+        self.assertEqual(code, 0)
+        lines = [line for line in out.splitlines() if re.match(r"[0-9a-f]{7}  ", line)]
+        self.assertEqual([("local one" in l, "pushed one" in l, "first" in l) for l in lines][0], (True, False, False), "newest first")
+        self.assertIn(self.git("rev-parse", "--short=7", "HEAD"), out)
+        self.assertNotIn("(local)", next(l for l in lines if "pushed one" in l))
+        self.assertIn("(local)", next(l for l in lines if "local one" in l))
+        self.assertEqual(self.git("log", "-1", "--format=%s"), "local one", "listing changes nothing")
+
+    def test_undo_back_to_a_commit_by_hash(self) -> None:
+        self.make_repo()
+        self.commit("a")
+        target = self.git("rev-parse", "--short", "HEAD")
+        self.commit("b")
+        self.commit("c")
+        code, out, err = self.ul("undo", target)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.git("log", "-1", "--format=%s"), "a")
+        self.assertIn("b", out)
+        self.assertIn("c", out)
+        self.assertEqual(self.git("diff", "--cached", "--name-only"), "file.txt", "the undone changes stay staged")
+
+    def test_undo_back_to_a_commit_by_message(self) -> None:
+        self.make_repo()
+        self.commit("add parser")
+        self.commit("fix typo")
+        self.assertEqual(self.ul("undo", "add", "parser")[0], 0)
+        self.assertEqual(self.git("log", "-1", "--format=%s"), "add parser")
+
+    def test_undo_with_an_ambiguous_message_lists_candidates(self) -> None:
+        self.make_repo()
+        self.commit("fix one")
+        self.commit("fix two")
+        self.commit("last")
+        code, _, err = self.ul("undo", "fix")
+        self.assertEqual(code, 1)
+        self.assertIn("fix one", err)
+        self.assertIn("fix two", err)
+        self.assertEqual(self.git("log", "-1", "--format=%s"), "last")
+
+    def test_undo_back_past_a_pushed_commit_is_refused(self) -> None:
+        self.make_repo()
+        self.commit("a")
+        target = self.git("rev-parse", "HEAD")
+        self.commit("pushed")
+        self.git("push", "-q")
+        self.commit("local")
+        code, _, err = self.ul("undo", target)
+        self.assertEqual(code, 1)
+        self.assertIn("git revert", err)
+        self.assertEqual(self.git("log", "-1", "--format=%s"), "local")
+
+    def test_undo_to_the_current_commit_does_nothing(self) -> None:
+        self.make_repo()
+        self.commit("only")
+        code, out, _ = self.ul("undo", self.git("rev-parse", "HEAD"))
+        self.assertEqual(code, 0)
+        self.assertIn("nothing to undo", out)
+        self.assertEqual(self.git("log", "-1", "--format=%s"), "only")
+
+    def test_undo_refuses_option_like_names(self) -> None:
+        self.make_repo()
+        self.commit("x")
+        self.assertEqual(self.ul("undo", "--hard")[0], 2)
+        self.assertEqual(self.git("log", "-1", "--format=%s"), "x")
 
 
 class HelpTests(GitCommandCase):
@@ -866,8 +946,6 @@ class HelpTests(GitCommandCase):
             "push",
             "commit",
             "sync",
-            "status",
-            "pull",
         ):
             for flag in ("-h", "--help"):
                 with self.subTest(action=action, flag=flag):

@@ -28,14 +28,14 @@ class GitDoctorFeatureTests(unittest.TestCase):
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
 
-    def test_git_status_is_single_passthrough(self) -> None:
+    def test_git_status_was_removed_and_runs_nothing(self) -> None:
         fake_git_hosts.install()
         from unlawful.built_in_commands.git import main as git_command
 
         completed = subprocess.CompletedProcess([], 0)
         with patch.object(git_command.subprocess, "run", return_value=completed) as run:
-            self.assertEqual(git_command.main(["status"]), 0)
-        run.assert_called_once_with(["git", "status"], check=False)
+            self.assertEqual(git_command.main(["status"]), 2)
+        run.assert_not_called()
 
 
 if __name__ == "__main__":
