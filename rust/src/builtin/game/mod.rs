@@ -1,4 +1,4 @@
-//! `ul game`: Tetris, Snake, Minesweeper, Space Invaders, Chomp and Dash in the terminal,
+//! `ul game`: Tetris, Snake, Minesweeper, Space Invaders, Chomp, Dash and Ping Pong in the terminal,
 //! playable with keyboard or mouse.
 //!
 //! Every game is a state machine (input → update → draw) that talks only to
@@ -8,6 +8,7 @@ mod chomp;
 mod dash;
 mod invaders;
 mod mines;
+mod pingpong;
 mod snake;
 mod stream;
 mod tetris;
@@ -23,7 +24,7 @@ use toml_edit::DocumentMut;
 use crate::config::Config;
 
 pub const HELP: &str = "Play a terminal arcade game; no arguments opens the game menu.
-Usage: ul game [tetris|snake|minesweeper|invaders|chomp|dash] [easy|normal|hard]
+Usage: ul game [tetris|snake|minesweeper|invaders|chomp|dash|pingpong] [easy|normal|hard]
        ul game --stream [--size ROWSxCOLS] [game] [difficulty]
 Games:
   tetris        7-bag pieces, next/hold, ghost, wall kicks, levels every 10 lines
@@ -34,13 +35,21 @@ Games:
                 edible; a new maze each level
   dash          endless runner: a fox jumps cacti and low birds, ducks under
                 middle ones; the world speeds up, day turns to night
+  pingpong      old-arcade table tennis, first to 11: 1 player against the bot
+                or 2 players on one keyboard (chosen when it starts); where the
+                ball meets the paddle sets the angle, every hit speeds it up
 Controls (shown in every game): arrows/WASD, Space, P pause, Q or Esc leaves.
 Dash: Space/Up/W jump (fixed height), Down/S duck (~0.35 s, key repeat extends it)
 or drop fast in the air.
+Ping Pong: 1 player W/S or ↑/↓; 2 players: left W/S, right ↑/↓. Holding both
+sides at once needs a terminal with the kitty keyboard protocol (Ghostty, kitty,
+WezTerm, iTerm2 with CSI u) or the desk page; elsewhere each press moves the
+paddle briefly and key repeat keeps it going.
 Mouse: click menus; Tetris follows the pointer (left click drops, right rotates);
 Snake steers toward a click; Minesweeper left reveals, right flags;
 Invaders follow the pointer and click to fire; Chomp steers toward a click;
-Dash jumps on a left click.
+Dash jumps on a left click; Ping Pong paddles follow the pointer (the nearer
+one in a 2-player game).
 Difficulty (default: games.difficulty):
   easy     slow start, extra help (Tetris ghost + 3 previews, Snake wraps, 5 lives)
   normal   the classic game
@@ -49,17 +58,21 @@ Difficulty (default: games.difficulty):
            opening, Invaders fire constantly and you have 2 lives, Chomp
            hunters are as fast as you and fright lasts 2 s (none from level 5),
            Dash starts fast with tight gaps, mixed cacti and birds from the start
-           (easy: slower, wider gaps, no high birds)
+           (easy: slower, wider gaps, no high birds); Ping Pong: small
+           paddles, a fast ball and a bot that aims for steep returns
+           (easy: big paddles, a slow ball, a bot that misses often)
+Ping Pong records the winning margin against the bot (2-player games and
+losses record nothing).
 Best scores: storage.root/runtime/arcade.toml, shared by the terminal and
 `ul desk` (Games tab); every finished game rereads the file first.
 --stream plays without a terminal for `ul desk`: JSON-line input on stdin
-(keys, clicks, hover, resize), one JSON frame per change on stdout; closing
+(keys, key releases, clicks, hover, resize), one JSON frame per change on stdout; closing
 stdin ends the game. --size sets the grid (default 30x100).
 Examples: ul game snake hard; ul game --stream --size 40x120 tetris
 ";
 
-pub const GAMES: [(&str, &str); 6] =
-    [("tetris", "Tetris"), ("snake", "Snake"), ("minesweeper", "Minesweeper"), ("invaders", "Space Invaders"), ("chomp", "Chomp"), ("dash", "Dash")];
+pub const GAMES: [(&str, &str); 7] =
+    [("tetris", "Tetris"), ("snake", "Snake"), ("minesweeper", "Minesweeper"), ("invaders", "Space Invaders"), ("chomp", "Chomp"), ("dash", "Dash"), ("pingpong", "Ping Pong")];
 
 /// Seconds per frame of the real-time games.
 pub const FRAME: f64 = 1.0 / 30.0;
@@ -85,6 +98,8 @@ pub enum Button {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Input {
     Key(Key),
+    /// A key was let go. Only games that ask for it (`Screen::set_releases`) ever see one.
+    Release(Key),
     Click { y: i32, x: i32, button: Button },
     Hover { y: i32, x: i32 },
 }
@@ -168,6 +183,13 @@ pub trait Screen {
     fn input(&mut self, timeout: Option<Duration>) -> io::Result<Option<Input>>;
     /// Seconds on a monotonic clock.
     fn now(&self) -> f64;
+
+    /// Ask for `Input::Release` events (holding two keys at once, e.g. two players on one
+    /// keyboard). Returns whether they will really arrive; screens that cannot tell a release
+    /// keep sending presses only.
+    fn set_releases(&mut self, _on: bool) -> bool {
+        false
+    }
 
     fn frame_box(&mut self, top: i32, left: i32, height: i32, width: i32, style: Style) {
         if height < 2 || width < 2 {
@@ -609,6 +631,7 @@ fn describe(name: &str) -> &'static str {
         "minesweeper" => "safe first click, flags, chording",
         "invaders" => "5x11 formation, shields, UFO, waves",
         "chomp" => "maze chase with 4 hunters",
+        "pingpong" => "first to 11, vs bot or a friend",
         _ => "",
     }
 }
@@ -750,6 +773,7 @@ pub fn play_once(screen: &mut dyn Screen, game: &str, level: Level, rng: &mut Rn
         "minesweeper" => mines::play(screen, level, rng, best, scores),
         "chomp" => chomp::play(screen, level, rng, best, scores),
         "dash" => dash::play(screen, level, rng, best, scores),
+        "pingpong" => pingpong::play(screen, level, rng, best, scores),
         _ => invaders::play(screen, level, rng, best, scores),
     }
 }
@@ -776,7 +800,7 @@ pub fn arcade(screen: &mut dyn Screen, default: Level, rng: &mut Rng, scores: &m
 }
 
 fn usage() -> i32 {
-    eprintln!("Usage: ul game [--stream [--size ROWSxCOLS]] [tetris|snake|minesweeper|invaders|chomp|dash] [easy|normal|hard]");
+    eprintln!("Usage: ul game [--stream [--size ROWSxCOLS]] [tetris|snake|minesweeper|invaders|chomp|dash|pingpong] [easy|normal|hard]");
     2
 }
 
@@ -865,13 +889,17 @@ pub mod testing {
         pub text: Vec<(i32, i32, String, Style)>,
         pub frames: Vec<Vec<(i32, i32, String, Style)>>,
         pub clock: f64,
+        /// Whether this fake claims to report key releases.
+        pub releases: bool,
+        /// Every `set_releases` request, in order.
+        pub release_requests: Vec<bool>,
         saved: Vec<(i32, i32, String, Style)>,
         reads: usize,
     }
 
     impl Fake {
         pub fn new(size: (i32, i32)) -> Fake {
-            Fake { inputs: VecDeque::new(), size, text: Vec::new(), frames: Vec::new(), clock: 0.0, saved: Vec::new(), reads: 0 }
+            Fake { inputs: VecDeque::new(), size, text: Vec::new(), frames: Vec::new(), clock: 0.0, releases: false, release_requests: Vec::new(), saved: Vec::new(), reads: 0 }
         }
 
         pub fn keys(mut self, keys: &[Option<Input>]) -> Fake {
@@ -933,6 +961,10 @@ pub mod testing {
         fn now(&self) -> f64 {
             self.clock
         }
+        fn set_releases(&mut self, on: bool) -> bool {
+            self.release_requests.push(on);
+            on && self.releases
+        }
     }
 
     pub fn key(character: char) -> Option<Input> {
@@ -958,8 +990,9 @@ mod tests {
         let scores = Scores::load(None);
         let pick = |inputs: &[Option<Input>]| game_menu(&mut Fake::new((40, 120)).keys(inputs), &scores, Level::Normal).unwrap();
         assert_eq!(pick(&[special(Key::Down), key('j'), special(Key::Enter)]), Some("minesweeper"));
-        assert_eq!(pick(&[key('k'), special(Key::Enter)]), Some("dash"));
+        assert_eq!(pick(&[key('k'), special(Key::Enter)]), Some("pingpong"));
         assert_eq!(pick(&[key('6')]), Some("dash"));
+        assert_eq!(pick(&[key('7')]), Some("pingpong"));
         assert_eq!(pick(&[key('2')]), Some("snake"));
         assert_eq!(pick(&[key('9'), special(Key::Esc)]), None);
         let first = menu_first_row(40, GAMES.len());

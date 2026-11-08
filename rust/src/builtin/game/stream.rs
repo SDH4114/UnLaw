@@ -3,6 +3,7 @@
 //!
 //! Input, one object per line on stdin:
 //! `{"key":"up"}` (up/down/left/right/enter/esc or one character),
+//! `{"release":"up"}` (the same names; passed on only to a game that asked for releases),
 //! `{"click":{"y":3,"x":9,"button":"left"}}`, `{"hover":{"y":3,"x":9}}`,
 //! `{"resize":{"rows":40,"cols":120}}`.
 //! Output, one frame per line on stdout, only when the picture changed:
@@ -52,7 +53,12 @@ fn coordinate(value: &Value, name: &str) -> Option<i32> {
 /// One stdin line → a message; anything malformed is ignored.
 fn parse(line: &str) -> Option<Message> {
     let value: Value = serde_json::from_str(line).ok()?;
-    if let Some(key) = value.get("key").and_then(Value::as_str) {
+    let (name, release) = match (value.get("key"), value.get("release")) {
+        (Some(key), _) => (key.as_str(), false),
+        (None, Some(key)) => (key.as_str(), true),
+        (None, None) => (None, false),
+    };
+    if let Some(key) = name {
         let key = match key {
             "up" => Key::Up,
             "down" => Key::Down,
@@ -68,7 +74,7 @@ fn parse(line: &str) -> Option<Message> {
                 }
             }
         };
-        return Some(Message::Input(Input::Key(key)));
+        return Some(Message::Input(if release { Input::Release(key) } else { Input::Key(key) }));
     }
     if let Some(click) = value.get("click") {
         let button = match click
@@ -171,6 +177,8 @@ pub struct Stream<W: Write> {
     started: Instant,
     messages: Receiver<Message>,
     out: W,
+    /// A game asked for key releases (`Screen::set_releases`).
+    releases: bool,
 }
 
 /// Discards input up to and including the next newline (or the end of input).
@@ -231,6 +239,7 @@ impl<W: Write> Stream<W> {
             started: Instant::now(),
             messages,
             out,
+            releases: false,
         };
         stream.clear();
         stream
@@ -285,18 +294,26 @@ impl<W: Write> Screen for Stream<W> {
     }
 
     fn input(&mut self, timeout: Option<Duration>) -> io::Result<Option<Input>> {
-        let message = match timeout {
-            Some(timeout) => match self.messages.recv_timeout(timeout) {
-                Ok(message) => message,
-                Err(RecvTimeoutError::Timeout) => return Ok(None),
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err(io::Error::new(io::ErrorKind::Interrupted, "input closed"))
-                }
-            },
-            None => self
-                .messages
-                .recv()
-                .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "input closed"))?,
+        let deadline = timeout.map(|timeout| Instant::now() + timeout);
+        let message = loop {
+            let message = match deadline {
+                Some(deadline) => match self.messages.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                    Ok(message) => message,
+                    Err(RecvTimeoutError::Timeout) => return Ok(None),
+                    Err(RecvTimeoutError::Disconnected) => {
+                        return Err(io::Error::new(io::ErrorKind::Interrupted, "input closed"))
+                    }
+                },
+                None => self
+                    .messages
+                    .recv()
+                    .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "input closed"))?,
+            };
+            // The page sends every key release; only a game that asked sees them.
+            if matches!(message, Message::Input(Input::Release(_))) && !self.releases {
+                continue;
+            }
+            break message;
         };
         match message {
             Message::Input(input) => Ok(Some(input)),
@@ -312,6 +329,11 @@ impl<W: Write> Screen for Stream<W> {
 
     fn now(&self) -> f64 {
         self.started.elapsed().as_secs_f64()
+    }
+
+    fn set_releases(&mut self, on: bool) -> bool {
+        self.releases = on;
+        on
     }
 }
 
@@ -337,6 +359,15 @@ mod tests {
             parse(r#"{"key":" "}"#),
             Some(Message::Input(Input::Key(Key::Char(' '))))
         );
+        assert_eq!(
+            parse(r#"{"release":"up"}"#),
+            Some(Message::Input(Input::Release(Key::Up)))
+        );
+        assert_eq!(
+            parse(r#"{"release":"s"}"#),
+            Some(Message::Input(Input::Release(Key::Char('s'))))
+        );
+        assert_eq!(parse(r#"{"release":"ab"}"#), None);
         assert_eq!(parse(r#"{"key":"ab"}"#), None);
         assert_eq!(parse(r#"{"key":"\u0003"}"#), None);
         assert_eq!(
@@ -422,5 +453,15 @@ mod tests {
         assert_eq!(stream.size(), (30, 90));
         let error = stream.input(Some(Duration::from_secs(5))).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    }
+
+    #[test]
+    fn releases_reach_only_a_game_that_asked() {
+        let lines = b"{\"release\":\"up\"}\n{\"key\":\"w\"}\n{\"release\":\"w\"}\n".to_vec();
+        let mut stream = Stream::new(io::Cursor::new(lines), Vec::new(), (24, 80));
+        // Not asked: the first release is skipped, not reported as a timeout.
+        assert_eq!(stream.input(Some(Duration::from_secs(5))).unwrap(), Some(Input::Key(Key::Char('w'))));
+        assert!(stream.set_releases(true));
+        assert_eq!(stream.input(None).unwrap(), Some(Input::Release(Key::Char('w'))));
     }
 }

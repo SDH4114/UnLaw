@@ -311,6 +311,8 @@ pub struct Terminal {
     pending: VecDeque<Event>,
     started: Instant,
     out: io::Stdout,
+    /// A game asked for key releases (`Screen::set_releases`).
+    releases: bool,
 }
 
 impl Terminal {
@@ -340,6 +342,7 @@ impl Terminal {
                 out,
                 event::PushKeyboardEnhancementFlags(
                     KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
                 )
             )
             .is_ok()
@@ -361,6 +364,7 @@ impl Terminal {
             pending: VecDeque::new(),
             started: Instant::now(),
             out,
+            releases: false,
         })
     }
 
@@ -474,13 +478,19 @@ impl Screen for Terminal {
                     self.renderer.resize(rows, columns);
                     return Ok(None);
                 }
-                Event::Key(key) if key.kind != KeyEventKind::Release => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                Event::Key(key) => {
+                    // Releases are reported by the keyboard protocol but only passed on to a game that asked.
+                    let release = key.kind == KeyEventKind::Release;
+                    if release && !self.releases {
+                        continue;
+                    }
+                    if !release
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
                         && key.code == KeyCode::Char('c')
                     {
                         return Err(io::Error::new(io::ErrorKind::Interrupted, "interrupted"));
                     }
-                    Input::Key(match key.code {
+                    let key = match key.code {
                         KeyCode::Up => Key::Up,
                         KeyCode::Down => Key::Down,
                         KeyCode::Left => Key::Left,
@@ -489,7 +499,8 @@ impl Screen for Terminal {
                         KeyCode::Esc => Key::Esc,
                         KeyCode::Char(character) => Key::Char(character),
                         _ => continue,
-                    })
+                    };
+                    if release { Input::Release(key) } else { Input::Key(key) }
                 }
                 Event::Mouse(mouse) => {
                     let (y, x) = (mouse.row as i32, mouse.column as i32);
@@ -514,6 +525,12 @@ impl Screen for Terminal {
             };
             return Ok(Some(mapped));
         }
+    }
+
+    fn set_releases(&mut self, on: bool) -> bool {
+        // Only the kitty keyboard protocol reports releases; legacy terminals send presses only.
+        self.releases = on && KEYBOARD.load(Ordering::SeqCst);
+        self.releases
     }
 
     fn now(&self) -> f64 {

@@ -226,11 +226,12 @@ Actions:
 Page: Board (drag cards between columns, double-click to edit), Today (overdue,
   due today, in progress, next 7 days), Stats, Games, Studio, Canvas. Keys: n new
   card, / search, space start/pause timer, 1-6 views, Esc clear filters, ? keys.
-Games: Tetris, Snake, Minesweeper, Space Invaders, Chomp and Dash from `ul game`,
-  played in the page with keyboard and mouse at easy/normal/hard. The page
-  runs `ul game --stream` (the same Rust games), so best scores are the ones
-  in storage.root/runtime/arcade.toml that the terminal arcade shows too.
-  Leaving the tab pauses a game; closing the page ends it.
+Games: Tetris, Snake, Minesweeper, Space Invaders, Chomp, Dash and Ping Pong from
+  `ul game`, played in the page with keyboard and mouse at easy/normal/hard.
+  The page runs `ul game --stream` (the same Rust games), so best scores are
+  the ones in storage.root/runtime/arcade.toml that the terminal arcade shows
+  too. The page also sends key releases, so two Ping Pong players can hold
+  keys at once. Leaving the tab pauses a game; closing the page ends it.
 Canvas: a whiteboard in the page. Files are JSON Canvas (.canvas, jsoncanvas.org),
   so Obsidian Canvas opens them: text, file, link and group nodes plus edges.
   Freehand drawings and shapes (rectangle, ellipse, diamond, line, arrow, text)

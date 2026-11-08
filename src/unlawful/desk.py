@@ -1421,6 +1421,7 @@ GAMES = {
     "invaders": "Space Invaders",
     "chomp": "Chomp",
     "dash": "Dash",
+    "pingpong": "Ping Pong",
 }
 LEVELS = ("easy", "normal", "hard")
 GAME_KEYS = {"up", "down", "left", "right", "enter", "esc"}
@@ -1445,11 +1446,12 @@ def _game_event(event: object) -> dict | None:
             out[name] = number
         return out
 
-    key = event.get("key")
-    if isinstance(key, str):
-        if key in GAME_KEYS or (len(key) == 1 and key.isprintable()):
-            return {"key": key}
-        return None
+    for kind in ("key", "release"):
+        key = event.get(kind)
+        if isinstance(key, str):
+            if key in GAME_KEYS or (len(key) == 1 and key.isprintable()):
+                return {kind: key}
+            return None
     if "click" in event:
         click = cell(event["click"], ("y", "x"))
         button = event["click"].get("button", "left") if click else None

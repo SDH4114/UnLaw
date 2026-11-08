@@ -575,7 +575,7 @@ class DeskGameTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(data["available"])
         games = {game["name"]: game for game in data["games"]}
-        self.assertEqual(list(games), ["tetris", "snake", "minesweeper", "invaders", "chomp", "dash"])
+        self.assertEqual(list(games), ["tetris", "snake", "minesweeper", "invaders", "chomp", "dash", "pingpong"])
         self.assertEqual(games["snake"]["best"], {"normal": 12})
         self.assertEqual(games["minesweeper"]["best"], {"easy": 40})
         self.assertTrue(games["minesweeper"]["lower"])
@@ -600,9 +600,9 @@ class DeskGameTests(unittest.TestCase):
         self.assertIn("SNAKE · easy", self.screen(first))
         status, _ = self.call(port, token, "/api/game/stream", {"session": session})
         self.assertEqual(status, 410, "one reader per game")
-        events = [{"key": "up"}, {"hover": {"y": 1, "x": 2}}, {"click": {"y": 3, "x": 4, "button": "right"}}, {"resize": {"rows": 30, "cols": 90}}]
+        events = [{"key": "up"}, {"release": "up"}, {"hover": {"y": 1, "x": 2}}, {"click": {"y": 3, "x": 4, "button": "right"}}, {"resize": {"rows": 30, "cols": 90}}]
         self.assertEqual(self.call(port, token, "/api/game/input", {"session": session, "events": events})[0], 200)
-        for bad in ([{"key": "\u0003"}], [{"key": "up", "x": 1}, {"click": {"y": -1, "x": 0}}], "up", [{"run": "ls"}]):
+        for bad in ([{"key": "\u0003"}], [{"release": "ab"}], [{"key": "up", "x": 1}, {"click": {"y": -1, "x": 0}}], "up", [{"run": "ls"}]):
             self.assertEqual(self.call(port, token, "/api/game/input", {"session": session, "events": bad})[0], 400, bad)
         self.assertEqual(self.call(port, token, "/api/game/input", {"session": "nope", "events": []})[0], 410)
         resized = self.frames(reader, lambda frame: frame.get("cols") == 90)

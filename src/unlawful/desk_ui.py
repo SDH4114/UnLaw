@@ -730,6 +730,7 @@ const GAME_INFO = {
   invaders: "Formation, shields, UFO, waves",
   chomp: "Maze chase with four hunters; new maze each level",
   dash: "Endless runner: jump, duck, faster and faster",
+  pingpong: "Table tennis to 11: vs the bot or a friend (W/S and ↑/↓)",
 };
 const PALETTE = { red: "#ff5f57", green: "#3ed67a", yellow: "#ffd84d", blue: "#4d8dff", magenta: "#d77bff", cyan: "#4fd8e8", white: "#f4f5f7", gray: "#8b8f98", darkred: "#c0392b", darkyellow: "#c9971c", darkblue: "#3159c9", darkcyan: "#1f9aa8" };
 const SCREEN_BG = "#0e1014", SCREEN_FG = "#d9dce3";
@@ -1064,6 +1065,14 @@ function gameKey(event) {
   sendGame([{ key }]);
   return true;
 }
+
+// Key releases let two players hold keys at once (Ping Pong); games that did not ask ignore them.
+document.addEventListener("keyup", (event) => {
+  if (state.view !== "games" || !arcade.session || event.metaKey || event.ctrlKey || event.altKey) return;
+  if (/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
+  const key = GAME_KEYS[event.key] || (event.key.length === 1 ? event.key : null);
+  if (key) sendGame([{ release: key }]);
+});
 
 let resizeTimer = 0;
 window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.view === "games") fitScreen(); }, 150); });
