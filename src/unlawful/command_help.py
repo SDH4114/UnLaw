@@ -224,8 +224,8 @@ Actions:
   pomodoro         Show or control the timer from the terminal; the page shows
                    the same timer, and a macOS notification marks each phase end
 Page: Board (drag cards between columns, double-click to edit), Today (overdue,
-  due today, in progress, next 7 days), Stats, Canvas, Games. Keys: n new card,
-  / search, space start/pause timer, 1 2 3 4 views, Esc clear filters, ? keys.
+  due today, in progress, next 7 days), Stats, Games, Studio, Canvas. Keys: n new
+  card, / search, space start/pause timer, 1-6 views, Esc clear filters, ? keys.
 Games: Tetris, Snake, Minesweeper, Space Invaders, Chomp and Dash from `ul game`,
   played in the page with keyboard and mouse at easy/normal/hard. The page
   runs `ul game --stream` (the same Rust games), so best scores are the ones
@@ -240,6 +240,10 @@ Canvas: a whiteboard in the page. Files are JSON Canvas (.canvas, jsoncanvas.org
   end in .canvas. Saving replaces the file atomically and is refused (the page
   reloads) when the file changed meanwhile. A new canvas is an empty
   {"nodes": [], "edges": []}; an existing file is never overwritten on create.
+  Tools: v select, h hand (or Space/middle mouse), t card, r rectangle,
+  o ellipse, d diamond, l line, a arrow, p pen, x text, e eraser, g group,
+  f fit; drag a card's side dot onto another card to connect them; wheel pans,
+  Ctrl+wheel/pinch zooms; Cmd+Z/Shift+Cmd+Z, Cmd+C/V/D; PNG export button.
 Boards: the board menu lists Apple Reminders, recent boards and the boards in
   desk.boards_dir; "New board…" asks for a name and creates it there.
 Reminders: a separate layer, never mixed into your .md boards. Each Reminders

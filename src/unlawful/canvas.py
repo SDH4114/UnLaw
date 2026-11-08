@@ -25,11 +25,11 @@ MAX_ELEMENTS = 20000
 MAX_NODES = 20000
 MAX_EDGES = 20000
 MAX_POINTS = 200000
-MAX_TEXT = 20000
+MAX_CANVAS_TEXT = 20000
 COLOR = re.compile(r"#[0-9a-fA-F]{6}")
 
 
-def _number(value: object) -> bool:
+def _canvas_number(value: object) -> bool:
     return (
         isinstance(value, (int, float))
         and not isinstance(value, bool)
@@ -40,8 +40,8 @@ def _number(value: object) -> bool:
 def _text(value: object, what: str) -> None:
     if not isinstance(value, str):
         raise ValueError(f"{what}: text must be a string")
-    if len(value) > MAX_TEXT:
-        raise ValueError(f"{what}: text is longer than {MAX_TEXT} characters")
+    if len(value) > MAX_CANVAS_TEXT:
+        raise ValueError(f"{what}: text is longer than {MAX_CANVAS_TEXT} characters")
 
 
 def _id(item: object, what: str, seen: set[str]) -> dict:
@@ -61,7 +61,7 @@ def _validate_node(node: dict) -> None:
     if node.get("type") not in NODE_TYPES:
         raise ValueError(f"{what}: type must be one of {', '.join(sorted(NODE_TYPES))}")
     for key in ("x", "y", "width", "height"):
-        if not _number(node.get(key)):
+        if not _canvas_number(node.get(key)):
             raise ValueError(f"{what}: {key} must be a number")
     if "text" in node:
         _text(node["text"], what)
@@ -85,9 +85,9 @@ def _validate_element(element: dict) -> int:
             f"{what}: type must be one of {', '.join(sorted(ELEMENT_TYPES))}"
         )
     for key in ("x", "y", "width", "height"):
-        if not _number(element.get(key)):
+        if not _canvas_number(element.get(key)):
             raise ValueError(f"{what}: {key} must be a number")
-    if "angle" in element and not _number(element["angle"]):
+    if "angle" in element and not _canvas_number(element["angle"]):
         raise ValueError(f"{what}: angle must be a number")
     if "stroke" in element and not (
         isinstance(element["stroke"], str) and COLOR.fullmatch(element["stroke"])
@@ -97,17 +97,17 @@ def _validate_element(element: dict) -> int:
     if fill is not None and not (isinstance(fill, str) and COLOR.fullmatch(fill)):
         raise ValueError(f"{what}: fill must be #rrggbb or null")
     width = element.get("strokeWidth")
-    if "strokeWidth" in element and not (_number(width) and 1 <= width <= 20):
+    if "strokeWidth" in element and not (_canvas_number(width) and 1 <= width <= 20):
         raise ValueError(f"{what}: strokeWidth must be 1-20")
     rough = element.get("roughness")
-    if "roughness" in element and not (_number(rough) and 0 <= rough <= 2):
+    if "roughness" in element and not (_canvas_number(rough) and 0 <= rough <= 2):
         raise ValueError(f"{what}: roughness must be 0-2")
     if "seed" in element and (
         isinstance(element["seed"], bool) or not isinstance(element["seed"], int)
     ):
         raise ValueError(f"{what}: seed must be an integer")
     size = element.get("fontSize")
-    if "fontSize" in element and not (_number(size) and 8 <= size <= 200):
+    if "fontSize" in element and not (_canvas_number(size) and 8 <= size <= 200):
         raise ValueError(f"{what}: fontSize must be 8-200")
     if kind == "text" or "text" in element:
         if "text" not in element:
@@ -122,7 +122,7 @@ def _validate_element(element: dict) -> int:
             if not (
                 isinstance(point, list)
                 and len(point) == 2
-                and all(_number(value) for value in point)
+                and all(_canvas_number(value) for value in point)
             ):
                 raise ValueError(f"{what}: points must be a list of [x, y] numbers")
         count = len(points)

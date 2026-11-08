@@ -250,13 +250,13 @@ class ValidationTests(unittest.TestCase):
             "y": 0,
             "width": 1,
             "height": 1,
-            "text": "x" * (canvas.MAX_TEXT + 1),
+            "text": "x" * (canvas.MAX_CANVAS_TEXT + 1),
         }
         self.rejects({"unlaw": {"version": 1, "elements": [text]}}, "text")
         node = {
             "id": "n",
             "type": "text",
-            "text": "x" * (canvas.MAX_TEXT + 1),
+            "text": "x" * (canvas.MAX_CANVAS_TEXT + 1),
             "x": 0,
             "y": 0,
             "width": 1,
@@ -563,7 +563,7 @@ class ServerTests(unittest.TestCase):
     def test_big_canvas_posts_are_allowed_but_other_bodies_stay_small(self) -> None:
         opened = self.create("Plan")
         big = sample()
-        big["nodes"][0]["text"] = "x" * canvas.MAX_TEXT
+        big["nodes"][0]["text"] = "x" * canvas.MAX_CANVAS_TEXT
         big["nodes"] += [
             {
                 "id": f"n{i}",
@@ -605,3 +605,31 @@ class ServerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SeedNameCollisionTests(unittest.TestCase):
+    """Seeds concatenate several modules into one main.py: a top-level name defined twice silently wins for the later file."""
+
+    def test_no_top_level_name_is_defined_in_two_files_of_one_seed(self) -> None:
+        import ast
+
+        from unlawful.command_sources import _COMMAND_FILES
+
+        for command, files in _COMMAND_FILES.items():
+            owners: dict[str, str] = {}
+            for relative in files:
+                tree = ast.parse((SRC / "unlawful" / relative).read_text(encoding="utf-8"))
+                for node in tree.body:
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                        names = [node.name]
+                    elif isinstance(node, ast.Assign):
+                        names = [target.id for target in node.targets if isinstance(target, ast.Name)]
+                    elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                        names = [node.target.id]
+                    else:
+                        continue
+                    for name in names:
+                        if name in {"__all__"}:
+                            continue
+                        with self.subTest(command=command, name=name):
+                            self.assertIn(owners.setdefault(name, relative), {relative}, f"{name} is defined in {owners[name]} and {relative}")

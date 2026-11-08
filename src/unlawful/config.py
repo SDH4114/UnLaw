@@ -200,7 +200,8 @@ def _seed_default_commands() -> None:
         if selection is None and not destination.parent.exists():
             continue
         if existing is not None:
-            if not is_replaceable_command_source(existing, name):
+            # Already the current seed: nothing to rewrite (this runs on every load_config()).
+            if existing == command_source(name) or not is_replaceable_command_source(existing, name):
                 continue
         elif any((destination.parent / entry).exists() for entry in ("main.sh", "main.js", "Cargo.toml", "main")):
             continue

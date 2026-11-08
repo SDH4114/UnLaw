@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .command_help import COMMAND_HELP
 
+import functools
 import hashlib
 import pprint
 from pathlib import Path
@@ -691,6 +692,9 @@ def _summary_docstring(help_text: str) -> str:
     return f'"""{summary}"""'
 
 
+# The package's sources do not change while a process runs; load_config() calls ensure_layout(), which would
+# otherwise rebuild every seed (desk alone is ~280k characters) on each call.
+@functools.cache
 def command_source(name: str) -> str:
     """Return the complete focused source installed for one default command."""
     try:
