@@ -345,6 +345,9 @@ LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("8209386369c0883b8c60bf4a
 # Desk seed of 3.15.0 (00fc883: Canvas tab), before Ping Pong in the Games tab.
 LEGACY_SOURCE_HASHES["desk"].add("cc861b52e51cac22416ea8474c9eb9189c5799b310e62286352b4be021fd6b4a")
 LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("f6f97db00a021b1931d7b2e0177cd24a301a693b396fe61ec09dbaeefe886397")
+# Official git seed up to 3.15.0-beta.1 (also the copy on the maintainer machine), before init/connect/mirror/open/pr/undo.
+LEGACY_SOURCE_HASHES.setdefault("git", set()).add("37dd2b3ac4b7af14bfc7e51591a0f4cd6a1a5f9b5eaa18bf6ce6d8847cc2e112")
+LEGACY_NORMALIZED_HASHES.setdefault("git", set()).add("ee07e9474231b49b656aef06c674ef7e068260ba4a8013bbf27eeb90c08682a6")
 
 # Commands now built into the Rust core. Untouched seeds with these hashes are
 # removed so the built-in runs; edited copies stay and override it.
