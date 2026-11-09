@@ -94,7 +94,14 @@ pub const ZSH_INTEGRATION: &str = r#"ul() {
     _unlaw_path="$(command ul _template-path "$1" 2>/dev/null)"
     local _unlaw_status=$?
     if (( _unlaw_status == 0 )); then
-      if (( ${@[(Ie)--dry-run]} == 0 )); then
+      local _unlaw_arg _unlaw_cd=1
+      for _unlaw_arg in "${@:2}"; do
+        case "$_unlaw_arg" in
+          --focus|--no-focus) ;;
+          *) _unlaw_cd=0 ;;
+        esac
+      done
+      if (( _unlaw_cd )); then
         builtin cd -- "$_unlaw_path" || return $?
       fi
       command ul _template-launch "$@"

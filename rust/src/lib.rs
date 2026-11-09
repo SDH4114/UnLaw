@@ -105,7 +105,7 @@ fn hidden(name: &str, args: &[String]) -> Option<i32> {
             let [template] = args else {
                 return Some(usage("Usage: ul _template-path <name>"));
             };
-            if !workspace::exists(template) {
+            if !workspace::exists(template) || template_cmd::shadows_command(template) {
                 return Some(3);
             }
             match shell::template_path(template) {

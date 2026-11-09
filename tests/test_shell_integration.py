@@ -55,8 +55,8 @@ class ShellIntegrationTests(CoreTestCase):
         self.assertIn('command ul _template-launch "$@"', script)
         self.assertNotIn("Terminal", script)
         self.assertLess(script.index("builtin cd --"), script.index('command ul _template-launch "$@"'))
-        # --dry-run only shows the plan, so the shell stays where it is.
-        self.assertLess(script.index("(Ie)--dry-run"), script.index("builtin cd --"))
+        # --dry-run and invalid arguments leave the shell where it is.
+        self.assertLess(script.index("--focus|--no-focus) ;;"), script.index("builtin cd --"))
         self.assertEqual(self.ul("_shell-init", "bash").returncode, 2)
 
     def test_rendered_zsh_sources_venv_in_current_shell(self) -> None:

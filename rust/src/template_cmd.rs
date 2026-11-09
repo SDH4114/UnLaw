@@ -15,7 +15,7 @@ use crate::checklist::{self, Entry};
 use crate::config::{self, Config};
 use crate::help::print_if_requested;
 use crate::util::atomic_write;
-use crate::workspace::{self, tilde, Frame, Kind, Pane, Tab, Template, Window, BROWSER, TERMINAL_APP};
+use crate::workspace::{self, printable, tilde, Frame, Kind, Pane, Tab, Template, Window, BROWSER, TERMINAL_APP};
 
 const SCRIPT: &str = include_str!("desktop.js");
 /// Seconds to wait for each window before placing it.
@@ -62,8 +62,26 @@ fn state_file(config: Option<&Config>) -> PathBuf {
     root.join("runtime").join("templates.json")
 }
 
-fn read_state(path: &Path) -> BTreeMap<String, BTreeMap<String, String>> {
+/// template name -> window index -> `{id, pid, spec}`.
+type State = serde_json::Map<String, JsonValue>;
+
+fn read_state(path: &Path) -> State {
     fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+}
+
+fn write_state(path: &Path, state: &State) {
+    if let Ok(text) = serde_json::to_string_pretty(state) {
+        if let Err(error) = atomic_write(path, &format!("{text}\n"), ".templates.") {
+            eprintln!("unlaw: could not remember the template's windows: {error}");
+        }
+    }
+}
+
+/// What a window was opened from: a remembered window is reused only while the
+/// template still asks for the same thing (an edited template opens a new one).
+fn spec_of(window: &JsonValue) -> String {
+    let spec = json!([window["kind"], window["app"], window["tabs"], window["urls"]]);
+    crate::util::sha256_hex(spec.to_string())[..16].to_string()
 }
 
 // ---------------------------------------------------------------- plan
@@ -202,6 +220,18 @@ fn place_text(window: &Window) -> String {
 }
 
 pub fn describe(template: &Template) -> String {
+    printable_lines(&describe_raw(template))
+}
+
+/// Control characters of every line made visible (newlines kept).
+fn printable_lines(text: &str) -> String {
+    text.split_inclusive('\n').map(|line| match line.strip_suffix('\n') {
+        Some(body) => format!("{}\n", printable(body)),
+        None => printable(line),
+    }).collect()
+}
+
+fn describe_raw(template: &Template) -> String {
     let mut text = format!(
         "{}  {}  focus {}{}\n",
         template.name,
@@ -263,7 +293,7 @@ pub fn launch(template: &Template, config: Option<&Config>, options: &LaunchOpti
     let mut state = read_state(&state_path);
     if needs_script {
         let remembered = state.get(&template.name).cloned().unwrap_or_default();
-        let windows: Vec<JsonValue> = steps
+        let mut windows: Vec<JsonValue> = steps
             .iter()
             .filter(|step| outcomes[step.index].0)
             .map(|step| {
@@ -290,41 +320,52 @@ pub fn launch(template: &Template, config: Option<&Config>, options: &LaunchOpti
                     "screen": step.window.screen,
                     "urls": step.window.urls,
                     "tabs": tabs,
-                    "state": remembered.get(&step.index.to_string()),
                 })
             })
             .collect();
+        for window in &mut windows {
+            let saved = &remembered[window["index"].to_string().as_str()];
+            if saved["spec"].as_str() == Some(spec_of(window).as_str()) {
+                window["state"] = json!({"id": saved["id"], "pid": saved["pid"]});
+            }
+        }
+        let specs: BTreeMap<String, String> = windows.iter().map(|window| (window["index"].to_string(), spec_of(window))).collect();
+        // A window the script never answers for counts as failed, not as done.
+        for window in &windows {
+            if let Some(index) = window["index"].as_u64() {
+                outcomes[index as usize] = (false, vec!["no answer from osascript".into()]);
+            }
+        }
         let request = json!({"mode": "apply", "plan": {"focus": focus, "wait": WINDOW_WAIT, "windows": windows}});
         match osascript(&request) {
             Ok(answer) => {
                 let trusted = answer["trusted"].as_bool().unwrap_or(true);
-                let mut ids = BTreeMap::new();
+                let mut ids = serde_json::Map::new();
                 for result in answer["results"].as_array().into_iter().flatten() {
                     let Some(index) = result["index"].as_u64().map(|index| index as usize).filter(|index| *index < outcomes.len()) else {
                         continue;
                     };
                     let notes: Vec<String> = result["notes"].as_array().into_iter().flatten().filter_map(|note| note.as_str().map(str::to_string)).collect();
                     outcomes[index] = (result["ok"].as_bool().unwrap_or(false), notes);
-                    if let Some(id) = result["state"].as_str() {
-                        ids.insert(index.to_string(), id.to_string());
+                    let saved = &result["state"];
+                    if let (Some(id), Some(spec)) = (saved["id"].as_str(), specs.get(&index.to_string())) {
+                        ids.insert(index.to_string(), json!({"id": id, "pid": saved["pid"], "spec": spec}));
                     }
                 }
-                state.insert(template.name.clone(), ids);
-                if let Ok(text) = serde_json::to_string_pretty(&state) {
-                    if let Err(error) = atomic_write(&state_path, &format!("{text}\n"), ".templates.") {
-                        eprintln!("unlaw: could not remember the template's windows: {error}");
-                    }
-                }
+                state.insert(template.name.clone(), JsonValue::Object(ids));
+                write_state(&state_path, &state);
                 if !trusted && steps.iter().any(|step| step.window.frame.is_some()) {
                     eprintln!("unlaw: windows were opened but not placed. {ACCESSIBILITY_HINT}");
                 }
             }
             Err(error) => {
-                for step in &steps {
+                // Only windows handed to the script are affected; plain apps it was
+                // asked about (focus mode) did open.
+                for window in &windows {
+                    let Some(index) = window["index"].as_u64().map(|index| index as usize) else { continue };
+                    let step = &steps[index];
                     let scripted = step.window.kind() != Kind::App || step.window.frame.is_some();
-                    if scripted && outcomes[step.index].0 {
-                        outcomes[step.index] = (false, vec![error.clone()]);
-                    }
+                    outcomes[index] = if scripted { (false, vec![error.clone()]) } else { (true, Vec::new()) };
                 }
                 if focus && steps.iter().all(|step| step.window.kind() == Kind::App && step.window.frame.is_none()) {
                     eprintln!("unlaw: focus mode failed: {error}");
@@ -366,8 +407,9 @@ fn relative_frame(frame: [f64; 4], screens: &[([f64; 4], [f64; 4])]) -> (u32, Fr
     };
     let [vx, vy, vw, vh] = *visible;
     let clamp = |value: f64| (value.clamp(0.0, 1.0) * 1000.0).round() / 1000.0;
-    let x = clamp((frame[0] - vx) / vw);
-    let y = clamp((frame[1] - vy) / vh);
+    // A window parked off the display keeps at least 1% of it, so the frame stays valid.
+    let x = clamp((frame[0] - vx) / vw).min(0.99);
+    let y = clamp((frame[1] - vy) / vh).min(0.99);
     let w = clamp(frame[2] / vw).min(1.0 - x).max(0.01);
     let h = clamp(frame[3] / vh).min(1.0 - y).max(0.01);
     (index as u32 + 1, Frame { x, y, w, h })
@@ -376,6 +418,11 @@ fn relative_frame(frame: [f64; 4], screens: &[([f64; 4], [f64; 4])]) -> (u32, Fr
 fn rect(value: &JsonValue) -> Option<[f64; 4]> {
     let list: Vec<f64> = value.as_array()?.iter().filter_map(JsonValue::as_f64).collect();
     list.try_into().ok()
+}
+
+/// Snapshot text a template may keep: no control characters (the file would be refused).
+fn clean(text: &str) -> bool {
+    !text.is_empty() && !text.chars().any(char::is_control)
 }
 
 fn candidates(snapshot: &JsonValue, cwd: &Path) -> Vec<Candidate> {
@@ -388,7 +435,7 @@ fn candidates(snapshot: &JsonValue, cwd: &Path) -> Vec<Candidate> {
     let mut found = Vec::new();
     for app in snapshot["apps"].as_array().into_iter().flatten() {
         let name = app["name"].as_str().unwrap_or_default();
-        if name.is_empty() {
+        if name.is_empty() || name.chars().any(char::is_control) {
             continue;
         }
         let browser = app["browser"].as_bool().unwrap_or(false);
@@ -402,13 +449,14 @@ fn candidates(snapshot: &JsonValue, cwd: &Path) -> Vec<Candidate> {
             if browser {
                 window.app = BROWSER.into();
                 match raw["urls"].as_array() {
-                    Some(urls) => window.urls = urls.iter().filter_map(JsonValue::as_str).filter(|url| url.starts_with("http://") || url.starts_with("https://")).map(str::to_string).collect(),
+                    Some(urls) => window.urls = urls.iter().filter_map(JsonValue::as_str).filter(|url| clean(url) && (url.starts_with("http://") || url.starts_with("https://"))).map(str::to_string).collect(),
                     None => ask_urls = true,
                 }
             } else if terminal && raw["tabs"].is_array() {
                 window.app = TERMINAL_APP.into();
                 for tab in raw["tabs"].as_array().into_iter().flatten() {
-                    let dirs: Vec<&str> = tab.as_array().into_iter().flatten().filter_map(JsonValue::as_str).collect();
+                    let dirs: Vec<&str> =
+                        tab.as_array().into_iter().flatten().filter_map(JsonValue::as_str).filter(|dir| clean(dir)).collect();
                     if dirs.is_empty() {
                         continue;
                     }
@@ -420,7 +468,7 @@ fn candidates(snapshot: &JsonValue, cwd: &Path) -> Vec<Candidate> {
                         .collect();
                     window.tabs.push(Tab { panes });
                 }
-            } else if let Some(document) = raw["document"].as_str() {
+            } else if let Some(document) = raw["document"].as_str().filter(|document| clean(document)) {
                 window.open = Some(document.to_string());
             }
             found.push(Candidate { window, title: raw["title"].as_str().unwrap_or_default().to_string(), ask_urls, on });
@@ -519,7 +567,7 @@ fn ask_run(label: &str) -> Result<Option<String>, Cancelled> {
             "" => return Ok(None),
             "c" => return Ok(Some("claude".into())),
             "x" => return Ok(Some("codex".into())),
-            command if command.contains('\n') => eprintln!("One line, please."),
+            command if !clean(command) => eprintln!("One line without control characters, please."),
             command => return Ok(Some(command.to_string())),
         }
     }
@@ -529,12 +577,21 @@ fn ask_links() -> Result<Vec<String>, Cancelled> {
     loop {
         let answer = prompt("  Links for the browser window (space separated, Enter = none) > ")?;
         let links: Vec<String> = answer.split_whitespace().map(str::to_string).collect();
-        if let Some(bad) = links.iter().find(|link| !link.starts_with("https://") && !link.starts_with("http://")) {
-            eprintln!("Not an http(s) link: {bad}");
+        if let Some(bad) = links.iter().find(|link| !clean(link) || (!link.starts_with("https://") && !link.starts_with("http://"))) {
+            eprintln!("Not an http(s) link: {}", printable(bad));
             continue;
         }
         return Ok(links);
     }
+}
+
+/// A template file named like a system, built-in or installed command or an
+/// alias (copied in by hand) must never take `ul <name>` over from it.
+pub fn shadows_command(name: &str) -> bool {
+    crate::help::is_system(name)
+        || crate::builtin::is_builtin(name)
+        || crate::commands::resolve(name).is_some()
+        || config::load().ok().is_some_and(|config| config.alias(name).is_some())
 }
 
 fn name_taken(name: &str, config: &Config) -> bool {
@@ -629,7 +686,7 @@ fn build_from_snapshot(name: &str, snapshot: &JsonValue, cwd: &Path) -> Result<O
         .map(|candidate| {
             let detail = window_details(&candidate.window);
             let detail = if detail.is_empty() { candidate.title.clone() } else { detail };
-            (candidate.window.app.clone(), place_text(&candidate.window), clip(&detail, 60))
+            (printable(&candidate.window.app), place_text(&candidate.window), clip(&printable(&detail), 60))
         })
         .collect();
     let defaults: Vec<bool> = found.iter().map(|candidate| candidate.on).collect();
@@ -652,7 +709,7 @@ fn build_from_snapshot(name: &str, snapshot: &JsonValue, cwd: &Path) -> Result<O
             }
             Kind::Browser if !window.urls.is_empty() => {
                 let items: Vec<(String, String, String)> =
-                    window.urls.iter().map(|url| (String::new(), clip(short_url(url), 70), String::new())).collect();
+                    window.urls.iter().map(|url| (String::new(), clip(&printable(short_url(url)), 70), String::new())).collect();
                 let all = vec![true; items.len()];
                 let keep = choose("Sites to open", &items, &all, "Which sites? Numbers, all, none; Enter = all > ")?;
                 window.urls = window.urls.iter().zip(keep).filter(|(_, keep)| *keep).map(|(url, _)| url.clone()).collect();
@@ -661,7 +718,7 @@ fn build_from_snapshot(name: &str, snapshot: &JsonValue, cwd: &Path) -> Result<O
                 println!("Ghostty window ({}):", place_text(window));
                 for (number, tab) in window.tabs.iter_mut().enumerate() {
                     for (at, pane) in tab.panes.iter_mut().enumerate() {
-                        let folder = pane.dir.clone().unwrap_or_default();
+                        let folder = printable(pane.dir.as_deref().unwrap_or_default());
                         pane.run = ask_run(&format!("tab {}, pane {} ({folder})", number + 1, at + 1))?;
                     }
                 }
@@ -793,6 +850,12 @@ fn remove(args: &[String]) -> i32 {
     }
     match fs::remove_file(&manifest) {
         Ok(()) => {
+            let config = config::load().ok();
+            let state_path = state_file(config.as_ref());
+            let mut state = read_state(&state_path);
+            if state.remove(name).is_some() {
+                write_state(&state_path, &state);
+            }
             println!("Deleted template '{name}'.");
             0
         }
@@ -813,7 +876,7 @@ pub fn list(args: &[String]) -> i32 {
             for (name, template) in &templates {
                 let apps: Vec<&str> = template.windows.iter().map(|window| window.app.as_str()).collect();
                 let line = format!("{name:<width$}  {}  {}", tilde(&template.path), apps.join(", "));
-                println!("{}", line.trim_end());
+                println!("{}", printable(line.trim_end()));
             }
             0
         }

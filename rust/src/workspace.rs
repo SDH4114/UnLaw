@@ -215,9 +215,15 @@ pub fn tilde(path: &Path) -> String {
     }
 }
 
+/// Text for the terminal: control characters (escape sequences from window
+/// titles, file names or a shared template) are shown as `\u{..}`, never sent.
+pub fn printable(text: &str) -> String {
+    text.chars().map(|c| if c.is_control() { c.escape_unicode().to_string() } else { c.to_string() }).collect()
+}
+
 pub fn is_url(text: &str) -> bool {
     text.split_once("://").is_some_and(|(scheme, _)| {
-        !scheme.is_empty() && scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+        scheme.starts_with(|c: char| c.is_ascii_alphabetic()) && scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
     })
 }
 
@@ -269,6 +275,9 @@ fn string_field(table: &dyn TableLike, key: &str, name: &str, place: &str) -> Re
     match table.get_item(key) {
         None => Ok(None),
         Some(item) => match item.as_str() {
+            Some(text) if text.chars().any(char::is_control) => {
+                Err(invalid(name, &format!("{place}: {key} must not contain control characters")))
+            }
             Some(text) if !text.trim().is_empty() => Ok(Some(text.to_string())),
             _ => Err(invalid(name, &format!("{place}: {key} must be a non-empty string"))),
         },
@@ -360,9 +369,6 @@ fn parse_pane(value: &Value, first: bool, name: &str, place: &str) -> Result<Pan
             return Err(invalid(name, &format!("{place}: split must be right, down, left or up")));
         }
     }
-    if pane.run.as_deref().is_some_and(|run| run.contains('\n') || run.contains('\r')) {
-        return Err(invalid(name, &format!("{place}: run must be a single line")));
-    }
     Ok(pane)
 }
 
@@ -390,6 +396,9 @@ fn parse_window(table: &Table, index: usize, name: &str) -> Result<Window> {
         let array = urls.as_array().ok_or_else(|| invalid(name, &format!("{place}: urls must be a list of links")))?;
         for url in array.iter() {
             match url.as_str() {
+                Some(url) if url.chars().any(char::is_control) => {
+                    return Err(invalid(name, &format!("{place}: urls must not contain control characters")))
+                }
                 Some(url) if url.starts_with("https://") || url.starts_with("http://") => window.urls.push(url.to_string()),
                 _ => return Err(invalid(name, &format!("{place}: urls must be http:// or https:// links"))),
             }
@@ -433,6 +442,9 @@ fn from_v2(name: &str, document: &DocumentMut) -> Result<Template> {
     let Some(raw) = document.get("path").and_then(Item::as_str) else {
         return Err(invalid(name, "path is missing"));
     };
+    if raw.chars().any(char::is_control) {
+        return Err(invalid(name, "path must not contain control characters"));
+    }
     let path = expand_user(raw);
     if !path.is_absolute() {
         return Err(invalid(name, "path must be absolute or start with ~"));
@@ -510,7 +522,7 @@ fn path_text(raw: &str) -> String {
 
 /// The version 2 file for a template, with paths under the home folder written as `~/...`.
 pub fn render(template: &Template) -> String {
-    let quote = |text: &str| Json::str(text).render();
+    let quote = |text: &str| Json::str(text).render().replace('\u{7f}', "\\u007f");
     let mut text = format!(
         "# Unlaw template '{}'. Run: ul {}   Edit: ul template edit {}\n# Frames: a preset (left, right, full, top-left, left-third, ...) or [x, y, width, height]\n# in fractions of the screen; screen 1 is the main display.\nversion = 2\npath = {}\nfocus = {}\n",
         template.name,
@@ -670,6 +682,10 @@ urls = ["https://example.com", "http://localhost:8000"]
         assert_eq!(again, Template { name: "demo".into(), ..template });
         assert!(render(&again).contains("path = \"~/proj\""));
         assert!(render(&again).contains("frame = \"right\""));
+        // DEL is escaped (TOML forbids it raw), so the file reads and names the problem.
+        let odd = Template { path: PathBuf::from("/tmp/a\u{7f}b"), ..again.clone() };
+        assert!(!render(&odd).contains('\u{7f}'));
+        assert!(parse("demo", &render(&odd)).unwrap_err().0.contains("control characters"));
         let starter = parse_ok(&starter("demo", &home().join("x")));
         assert_eq!(starter.windows.len(), 2);
     }
@@ -697,7 +713,11 @@ urls = ["https://example.com", "http://localhost:8000"]
         assert!(with("[[window]]\napp = \"Ghostty\"\n[[window.tab]]\npanes = [{ split = \"down\" }]\n").contains("first pane"));
         assert!(with("[[window]]\napp = \"Ghostty\"\n[[window.tab]]\npanes = [{}, { split = \"diagonal\" }]\n").contains("split must be"));
         assert!(with("[[window]]\napp = \"Ghostty\"\n[[window.tab]]\npanes = [{ cmd = \"x\" }]\n").contains("unknown fields: cmd"));
-        assert!(with("[[window]]\napp = \"Ghostty\"\n[[window.tab]]\npanes = [{ run = \"a\\nb\" }]\n").contains("single line"));
+        assert!(with("[[window]]\napp = \"Ghostty\"\n[[window.tab]]\npanes = [{ run = \"a\\nb\" }]\n").contains("control characters"));
+        assert!(with("[[window]]\napp = \"Ghostty\"\n[[window.tab]]\npanes = [{ run = \"x\\u001b[2K\" }]\n").contains("control characters"));
+        assert!(with("[[window]]\napp = \"Z\\u001bed\"\n").contains("control characters"));
+        assert!(with("[[window]]\napp = \"browser\"\nurls = [\"https://a/\\u0007\"]\n").contains("control characters"));
+        assert!(error("version = 2\npath = \"/tmp/\\u001b\"\n").contains("control characters"));
         assert!(with("[[window]]\napp = \"Ghostty\"\n[[window.tab]]\npanes = [{ dir = \"\" }]\n").contains("non-empty"));
     }
 
@@ -717,6 +737,8 @@ urls = ["https://example.com", "http://localhost:8000"]
         assert_eq!(resolve_path("~/x", Path::new("/p")), home().join("x"));
         assert_eq!(tilde(&home().join("a/b")), "~/a/b");
         assert!(is_url("https://x") && is_url("obsidian://open?vault=a") && !is_url("/tmp/a") && !is_url("://x"));
+        assert!(!is_url("-n://x") && !is_url("+a://x") && !is_url("1a://x"));
+        assert_eq!(printable("a\u{1b}[2Kb"), "a\\u{1b}[2Kb");
     }
 
     #[test]

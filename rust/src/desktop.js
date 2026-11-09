@@ -132,23 +132,35 @@ function snapshot() {
 
 function delay_(seconds) { delay(seconds); }
 
+// With a `prefer` hint only a matching window is returned, so another window
+// of the same app (another Zed project, a user's browser window) is never moved.
 function waitForWindow(bundle, seconds, prefer) {
   const until = Date.now() + seconds * 1000;
   while (Date.now() < until) {
     const proc = processFor(bundle);
     if (proc) {
       const wins = standardWindows(proc);
-      if (wins.length) {
-        if (prefer) {
-          const hit = wins.find((w) => { try { return prefer(w); } catch (e) { return false; } });
-          if (hit) return hit;
-        }
+      if (prefer) {
+        const hit = wins.find((w) => { try { return prefer(w); } catch (e) { return false; } });
+        if (hit) return hit;
+      } else if (wins.length) {
         return wins[0];
       }
     }
     delay_(0.2);
   }
   return null;
+}
+
+function pidOf(bundle) {
+  const proc = processFor(bundle);
+  try { return proc ? proc.unixId() : null; } catch (e) { return null; }
+}
+
+// A remembered window counts only in the same app process: browser window ids
+// restart from 1 after a relaunch and could name an unrelated window.
+function remembered(item, bundle) {
+  return item.state && item.state.id && item.state.pid && item.state.pid === pidOf(bundle) ? item.state.id : null;
 }
 
 function place(win, frame, screenNumber, allScreens) {
@@ -162,11 +174,17 @@ function place(win, frame, screenNumber, allScreens) {
   const [vx, vy, vw, vh] = screen.visible;
   const x = Math.round(vx + frame[0] * vw), y = Math.round(vy + frame[1] * vh);
   const w = Math.round(frame[2] * vw), h = Math.round(frame[3] * vh);
-  // Position first (so the size fits the target display), size, then position
-  // again: some apps clamp the origin while the window is still large.
-  win.position = [x, y];
+  // Size first: a window touching the right edge of a display cannot be made
+  // narrower (measured with Ghostty: 650 stayed 650 at the edge, 575 elsewhere).
+  // Then move it, then size and move once more for apps that clamp to the
+  // display they were on.
   win.size = [w, h];
   win.position = [x, y];
+  const now = win.size();
+  if (now[0] !== w || now[1] !== h) {
+    win.size = [w, h];
+    win.position = [x, y];
+  }
   return note;
 }
 
@@ -179,11 +197,12 @@ function ghosttyConfig(pane) {
 
 function openTerminal(item) {
   const g = Application('Ghostty');
-  if (item.state) {
-    const existing = g.windows().find((w) => String(w.id()) === item.state);
+  const known = remembered(item, 'com.mitchellh.ghostty');
+  if (known) {
+    const existing = g.windows().find((w) => String(w.id()) === known);
     if (existing) {
       g.activateWindow(existing);
-      return { id: item.state, reused: true };
+      return { id: known, reused: true };
     }
   }
   let win = null;
@@ -205,42 +224,43 @@ function openTerminal(item) {
   return { id: String(win.id()), reused: false };
 }
 
-function openBrowser(item, browser) {
+function scriptable(app) {
+  try { app.windows.length; app.windows().forEach((w) => w.id()); return true; } catch (e) { return false; }
+}
+
+function openBrowser(item, browser, notes) {
   const app = Application(browser.bundle);
-  if (item.state) {
-    try {
-      const existing = app.windows().find((w) => String(w.id()) === item.state);
-      if (existing) {
-        existing.index = 1;
-        app.activate();
-        return { id: item.state, reused: true };
-      }
-    } catch (e) { /* not scriptable: open the links again */ }
+  if (!scriptable(app)) {
+    // Firefox, Zen, ...: open location is a synchronous Apple Event to the
+    // default browser; the browser decides where the links open.
+    const sa = Application.currentApplication();
+    sa.includeStandardAdditions = true;
+    item.urls.forEach((url) => sa.openLocation(url));
+    if (!item.urls.length) app.activate();
+    return { id: null, reused: false };
   }
-  if (item.urls.length) {
-    try {
+  const known = remembered(item, browser.bundle);
+  if (known) {
+    const existing = app.windows().find((w) => String(w.id()) === known);
+    if (existing) {
+      existing.index = 1;
       app.activate();
-      let win;
-      if (browser.bundle === 'com.apple.Safari') {
-        app.Document({ url: item.urls[0] }).make();
-        win = app.windows[0];
-      } else {
-        win = app.Window().make();
-        win.activeTab.url = item.urls[0];
-      }
-      item.urls.slice(1).forEach((url) => win.tabs.push(app.Tab({ url })));
-      return { id: String(win.id()), reused: false };
-    } catch (e) {
-      // Not scriptable (Firefox, Zen, ...): the browser decides where links open.
-      const urls = $.NSMutableArray.array;
-      item.urls.forEach((url) => urls.addObject($.NSURL.URLWithString(url)));
-      $.NSWorkspace.sharedWorkspace.openURLsWithApplicationAtURLConfigurationCompletionHandler(
-        urls, $.NSURL.fileURLWithPath(browser.path), $.NSWorkspaceOpenConfiguration.configuration, null);
-      return { id: null, reused: false };
+      return { id: known, reused: true };
     }
   }
   app.activate();
-  return { id: null, reused: false };
+  let win;
+  if (browser.bundle === 'com.apple.Safari') {
+    app.Document({ url: item.urls[0] || 'about:blank' }).make();
+    win = app.windows[0];
+  } else {
+    win = app.Window().make();
+    if (item.urls.length) win.activeTab.url = item.urls[0];
+  }
+  item.urls.slice(1).forEach((url) => {
+    try { win.tabs.push(app.Tab({ url })); } catch (e) { notes.push('could not open ' + url); }
+  });
+  return { id: String(win.id()), reused: false };
 }
 
 function apply(plan) {
@@ -254,19 +274,28 @@ function apply(plan) {
     results.push(result);
     try {
       let bundle, prefer = null;
-      if (item.kind === 'terminal') {
-        bundle = 'com.mitchellh.ghostty';
-        const opened = openTerminal(item);
-        result.state = opened.id;
+      if (item.kind === 'terminal' || item.kind === 'browser') {
+        let opened;
+        if (item.kind === 'terminal') {
+          bundle = 'com.mitchellh.ghostty';
+          opened = openTerminal(item);
+        } else {
+          if (!browser) throw new Error('no default browser');
+          bundle = browser.bundle;
+          opened = openBrowser(item, browser, result.notes);
+        }
+        if (opened.id) result.state = { id: opened.id, pid: pidOf(bundle) };
         if (opened.reused) result.notes.push('reused its window');
-        prefer = null;
-      } else if (item.kind === 'browser') {
-        if (!browser) throw new Error('no default browser');
-        bundle = browser.bundle;
-        const opened = openBrowser(item, browser);
-        result.state = opened.id;
-        if (opened.reused) result.notes.push('reused its window');
-        result.app = browser.name;
+        // The window just created or reused is the one to place. Its title
+        // changes (the shell sets the folder, a page loads), so read it fresh
+        // by id on every check.
+        if (opened.id) {
+          const app = Application(bundle), id = opened.id;
+          prefer = (w) => {
+            const own = app.windows().find((x) => String(x.id()) === id);
+            return own !== undefined && (w.name() || '') === (own.name() || '');
+          };
+        }
       } else {
         bundle = bundleFor(item.app);
         if (!bundle) throw new Error('app not found');
@@ -285,7 +314,8 @@ function apply(plan) {
       const win = waitForWindow(bundle, plan.wait || 10, prefer);
       if (!win) {
         result.ok = false;
-        result.notes.push('window did not appear in ' + (plan.wait || 10) + ' s');
+        result.notes.push(prefer ? 'its window was not found in ' + (plan.wait || 10) + ' s, nothing moved'
+                                 : 'window did not appear in ' + (plan.wait || 10) + ' s');
         continue;
       }
       const note = place(win, item.frame, item.screen, allScreens);

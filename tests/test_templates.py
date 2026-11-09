@@ -31,10 +31,10 @@ if request["mode"] == "snapshot":
 else:
     failing = reply.get("fail", {{}})
     results = []
-    for window in request["plan"]["windows"]:
+    for window in request["plan"]["windows"][: reply.get("answer_only", 99)]:
         note = failing.get(str(window["index"]))
         results.append({{"index": window["index"], "ok": note is None, "notes": [note] if note else [],
-                        "state": "win-%d" % window["index"] if window["kind"] != "app" else None}})
+                        "state": {{"id": "win-%d" % window["index"], "pid": 7}} if window["kind"] != "app" else None}})
     print(json.dumps({{"trusted": reply.get("trusted", True), "results": results}}))
 """
 
@@ -290,6 +290,35 @@ urls = ["https://docs.rs"]
         )
         self.assertNotIn("[[window]]", self.manifest("env").read_text())
 
+    def test_save_never_prints_or_stores_escape_sequences_from_other_apps(self) -> None:
+        snapshot = self.snapshot(browser_tabs=True)
+        snapshot["apps"].append(
+            {"name": "Preview", "bundle": "com.apple.Preview", "windows": [
+                {"title": "x\u001b]52;c;Y3VybA==\u0007", "frame": [0, 39, 400, 400],
+                 "document": "/tmp/a\u001b[2Kb.pdf"}]}
+        )
+        self.reply({"snapshot": snapshot})
+        result = self.ok("template", "save", "env", input="5\n\nn\n\n", cwd=self.project)
+        self.assertNotIn("\u001b", result.stdout + result.stderr)
+        self.assertIn("\\u{1b}]52;c;Y3VybA==\\u{7}", result.stdout)
+        text = self.manifest("env").read_text()
+        self.assertIn('app = "Preview"', text)
+        self.assertNotIn("open =", text)  # the file name with ESC is dropped
+
+    def test_template_files_with_control_characters_are_refused(self) -> None:
+        self.write("env", self.V2.replace('run = "claude"', 'run = "curl x | sh; : \\u001b[2K"'))
+        result = self.ul("template", "show", "env")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("run must not contain control characters", result.stderr)
+        self.assertNotIn("\u001b", result.stdout + result.stderr)
+
+    def test_a_template_named_like_a_command_never_shadows_it(self) -> None:
+        self.ok("config", "set", "aliases.short", '["version"]')
+        for name in ("git", "doctor", "game", "short"):
+            with self.subTest(name=name):
+                self.write(name, self.V2)
+                self.assertEqual(self.ul("_template-path", name).returncode, 3)
+
     # ------------------------------------------------------------ launch
 
     def test_launch_opens_apps_then_places_everything_in_one_script_run(self) -> None:
@@ -307,7 +336,7 @@ urls = ["https://docs.rs"]
             ("app", [0.0, 0.0, 0.5, 1.0], str(self.project / "src")),
         )
         self.assertEqual(
-            (ghostty["kind"], ghostty["screen"], ghostty["state"]),
+            (ghostty["kind"], ghostty["screen"], ghostty.get("state")),
             ("terminal", 2, None),
         )
         self.assertEqual(
@@ -329,19 +358,44 @@ urls = ["https://docs.rs"]
         self.assertNotIn("claude", args.replace("Unlaw templates", ""))
         self.assertNotIn("docs.rs", args)
 
-    def test_second_launch_reuses_the_windows_it_opened(self) -> None:
+    def test_second_launch_reuses_the_windows_it_opened_until_the_template_changes(self) -> None:
         self.write("env", self.V2)
         self.ok("_template-launch", "env")
-        state = json.loads(
-            (self.unlaw / "data" / "runtime" / "templates.json").read_text()
-        )
-        self.assertEqual(state, {"env": {"1": "win-1", "2": "win-2"}})
+        state_file = self.unlaw / "data" / "runtime" / "templates.json"
+        state = json.loads(state_file.read_text())["env"]
+        self.assertEqual(sorted(state), ["1", "2"])
+        self.assertEqual((state["1"]["id"], state["1"]["pid"]), ("win-1", 7))
         self.ok("_template-launch", "env", "--no-focus")
         second = self.requests()[-1]["plan"]
         self.assertEqual(
-            [window["state"] for window in second["windows"]], [None, "win-1", "win-2"]
+            [window.get("state") for window in second["windows"]],
+            [None, {"id": "win-1", "pid": 7}, {"id": "win-2", "pid": 7}],
         )
         self.assertFalse(second["focus"])
+        # After an edit the Ghostty window asks for other panes: a new window, not the old one.
+        self.write("env", self.V2.replace('run = "claude"', 'run = "codex"'))
+        self.ok("_template-launch", "env")
+        third = self.requests()[-1]["plan"]
+        self.assertEqual([window.get("state") for window in third["windows"]], [None, None, {"id": "win-2", "pid": 7}])
+        # rm forgets the windows too.
+        self.ok("template", "rm", "env", "--yes")
+        self.assertNotIn("env", json.loads(state_file.read_text()))
+
+    def test_windows_the_script_does_not_answer_for_are_failures(self) -> None:
+        self.write("env", self.V2)
+        self.reply({"answer_only": 1})
+        result = self.ul("_template-launch", "env")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("✓ Zed", result.stdout)
+        self.assertIn("! Ghostty  no answer from osascript", result.stderr)
+
+    def test_a_window_parked_off_screen_saves_a_loadable_frame(self) -> None:
+        snapshot = self.snapshot(browser_tabs=True)
+        snapshot["apps"] = [{"name": "Notes", "bundle": "com.apple.Notes", "windows": [
+            {"title": "n", "frame": [5000, 3000, 400, 400], "document": None}]}]
+        self.reply({"snapshot": snapshot})
+        self.ok("template", "save", "env", input="1\n\n\n\n", cwd=self.project)
+        self.assertIn("Notes", self.ok("template", "show", "env").stdout)
 
     def test_focus_from_the_file_and_no_focus_flag(self) -> None:
         self.write("env", self.V2.replace("focus = false", "focus = true"))
