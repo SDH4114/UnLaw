@@ -53,6 +53,8 @@ class CoreTestCase(unittest.TestCase):
             self.env.pop(key, None)
         # The real Keychain is never queried; tests that need a token add their own.
         self.tool("security", "#!/bin/sh\nexit 44\n")
+        # Nor are real windows read or moved; template tests install their own osascript.
+        self.tool("osascript", "#!/bin/sh\necho 'osascript is not available in tests' >&2\nexit 45\n")
 
     def ul(
         self,
@@ -121,6 +123,8 @@ class CoreTestCase(unittest.TestCase):
         return [line.split("|") if line else [] for line in log.read_text(encoding="utf-8").splitlines()]
 
     def save_template(self, name: str, project: Path, app: str = "zed", ai: bool = False) -> None:
-        answers = f"{app}\n{'y' if ai else 'n'}\n"
-        self.ok("create", "template", name, input=answers, cwd=project)
+        """A template in the original path/app/ai format, which is still read."""
+        manifest = self.unlaw / "templates" / "projects" / f"{name}.toml"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(f'path = "{project}"\napp = "{app}"\nai = {"true" if ai else "false"}\n', encoding="utf-8")
 

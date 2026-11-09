@@ -66,7 +66,7 @@ class CliTests(CoreTestCase):
         self.assertEqual(self.ok("_template-path", "hearme").stdout.strip(), str(project))
         self.assertEqual(self.ul("_template-path", "missing").returncode, 3)
         log = self.recording_tool("open", exit_code=6)
-        self.assertEqual(self.ul("_template-launch", "hearme").returncode, 6)
+        self.assertEqual(self.ul("_template-launch", "hearme").returncode, 1)
         self.assertEqual(self.calls(log), [["-a", "Zed", str(project)]])
 
     def test_hidden_template_helpers_reject_extra_arguments(self) -> None:
@@ -172,7 +172,7 @@ class CommandContractTests(CoreTestCase):
 
     def test_completion_offers_subcommands(self) -> None:
         self.assertIn("set:Set and validate a value", self.ok("_complete", "2", "config").stdout.splitlines())
-        self.assertIn("template:Save the current project as a template", self.ok("_complete", "2", "create").stdout)
+        self.assertIn("template:Save open windows as a template (= ul template save)", self.ok("_complete", "2", "create").stdout)
         self.assertEqual(self.ok("_complete", "2", "yt").stdout, "")
 
 

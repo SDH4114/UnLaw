@@ -19,6 +19,7 @@ mod remove;
 mod shell;
 mod skills;
 mod system;
+mod template_cmd;
 mod update;
 mod util;
 mod workspace;
@@ -58,6 +59,7 @@ fn system(name: &str, args: &[String]) -> Option<i32> {
         "reinstall" => remove::reinstall(args),
         "remove" => remove::run(args),
         "skills" => skills::run(args),
+        "template" => template_cmd::run(args),
         "templates" => system::list_templates(args),
         "update" => update::run(args),
         "venv" => system::venv(args),
@@ -115,12 +117,16 @@ fn hidden(name: &str, args: &[String]) -> Option<i32> {
             }
         }
         "_template-launch" => {
-            let [template] = args else {
-                return Some(usage("Usage: ul _template-launch <name>"));
+            let launch_usage = format!("Usage: ul _template-launch <name> {}", template_cmd::LAUNCH_FLAGS);
+            let Some((template, flags)) = args.split_first() else {
+                return Some(usage(&launch_usage));
+            };
+            let Some(options) = template_cmd::parse_launch_flags(flags) else {
+                return Some(usage(&launch_usage));
             };
             let config = config::load().ok();
-            match workspace::load(template).map_err(shell::ShellError::from).and_then(|t| shell::launch(&t, config.as_ref())) {
-                Ok(code) => code,
+            match workspace::load(template) {
+                Ok(template) => template_cmd::launch(&template, config.as_ref(), &options),
                 Err(error) => report(&error),
             }
         }

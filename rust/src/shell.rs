@@ -6,7 +6,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::config::Config;
 use crate::util::{atomic_write, read_to_string_or_empty};
 use crate::workspace::{self, Template};
 
@@ -41,28 +40,6 @@ fn existing_directory(template: &Template) -> Result<&Path> {
 pub fn template_path(name: &str) -> Result<PathBuf> {
     let template = workspace::load(name)?;
     existing_directory(&template).map(Path::to_path_buf)
-}
-
-fn open(args: &[&str]) -> Result<i32> {
-    Command::new("open")
-        .args(args)
-        .status()
-        .map(|status| status.code().unwrap_or(1))
-        .map_err(|error| ShellError(error.to_string()))
-}
-
-pub fn launch(template: &Template, config: Option<&Config>) -> Result<i32> {
-    let path = existing_directory(template)?.to_string_lossy().into_owned();
-    let app = if template.app == "zed" {
-        config.map(|config| config.string("apps.editor")).unwrap_or_else(|| "Zed".into())
-    } else {
-        "Obsidian".into()
-    };
-    let code = open(&["-a", &app, &path])?;
-    if code != 0 || !template.ai {
-        return Ok(code);
-    }
-    open(&["-a", "ChatGPT"])
 }
 
 pub fn ensure_venv(directory: &Path, python: &Path) -> Result<PathBuf> {
@@ -117,12 +94,10 @@ pub const ZSH_INTEGRATION: &str = r#"ul() {
     _unlaw_path="$(command ul _template-path "$1" 2>/dev/null)"
     local _unlaw_status=$?
     if (( _unlaw_status == 0 )); then
-      if (( $# != 1 )); then
-        command ul _template-launch "$@"
-        return $?
+      if (( ${@[(Ie)--dry-run]} == 0 )); then
+        builtin cd -- "$_unlaw_path" || return $?
       fi
-      builtin cd -- "$_unlaw_path" || return $?
-      command ul _template-launch "$1"
+      command ul _template-launch "$@"
       return $?
     fi
   fi
@@ -227,12 +202,6 @@ mod tests {
         let error = ensure_venv(&directory, Path::new("/usr/bin/true")).unwrap_err();
         assert!(error.0.contains("Invalid virtual environment"), "{error}");
         fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn missing_project_directories_are_not_launched() {
-        let template = Template { name: "gone".into(), path: "/nonexistent/project".into(), app: "zed".into(), ai: true };
-        assert!(launch(&template, None).unwrap_err().0.contains("does not exist"));
     }
 
     #[test]

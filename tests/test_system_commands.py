@@ -59,53 +59,28 @@ class SystemCommandTests(CoreTestCase):
     def _template(self, name: str) -> str:
         return (self.unlaw / "templates" / "projects" / f"{name}.toml").read_text()
 
-    def test_create_named_project_template_prompts_for_app_and_ai(self) -> None:
-        project = self.root / "HearMe"
-        project.mkdir()
-        result = self.ok("create", "template", "hearme", input="zed\ny\n", cwd=project)
-        self.assertEqual(self._template("hearme"), f'path = "{project}"\napp = "zed"\nai = true\n')
-        self.assertIn("Created template 'hearme'", result.stdout)
-        self.assertIn("Open with (zed/obsidian) > ", result.stdout)
-
-    def test_create_project_template_prompts_for_missing_name(self) -> None:
-        project = self.root / "Dante"
-        project.mkdir()
-        self.ok("create", "template", input="dante\nobsidian\nn\n", cwd=project)
-        self.assertEqual(self._template("dante"), f'path = "{project}"\napp = "obsidian"\nai = false\n')
-
-    def test_create_project_template_reprompts_invalid_choices(self) -> None:
-        project = self.root / "Dante"
-        project.mkdir()
-        result = self.ok("create", "template", "dante", input="code\nZED\nmaybe\nn\n", cwd=project)
-        self.assertIn('app = "zed"', self._template("dante"))
-        self.assertIn("zed or obsidian", result.stderr)
-        self.assertIn("y or n", result.stderr)
-
-    def test_create_project_template_cancellation_writes_nothing(self) -> None:
-        result = self.ul("create", "template", input="")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("cancelled", result.stderr.lower())
-        result = self.ul("create", "template", "half", input="zed\n")
-        self.assertEqual(result.returncode, 1)
-        self.assertEqual(self.ok("templates").stdout, "")
-
     def test_create_project_template_rejects_all_name_conflicts(self) -> None:
         project = self.root / "project"
         project.mkdir()
         self.ok("config", "set", "aliases.shortcut", '["git"]')
         self.save_template("saved", project)
-        for name in ("doctor", "git", "shortcut", "saved"):
+        for name in ("doctor", "git", "shortcut", "template"):
             with self.subTest(name=name):
-                result = self.ul("create", "template", name, input="zed\nn\n", cwd=project)
+                result = self.ul("create", "template", name, input="", cwd=project)
                 self.assertEqual(result.returncode, 1)
                 self.assertIn("already in use", result.stderr)
+        # An existing template is replaced only after a yes.
+        result = self.ul("create", "template", "saved", input="n\n", cwd=project)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Replace it?", result.stdout)
+        self.assertIn('app = "zed"', (self.unlaw / "templates" / "projects" / "saved.toml").read_text())
 
     def test_templates_and_list_have_separate_sorted_sections(self) -> None:
         project = self.root / "project"
         project.mkdir()
         self.save_template("zeta", project)
         self.save_template("alpha", project, "obsidian", True)
-        self.assertEqual(self.ok("templates").stdout, "alpha\nzeta\n")
+        self.assertEqual(self.ok("templates").stdout, f"alpha  {project}  Obsidian, ChatGPT\nzeta   {project}  Zed\n")
         listing = self.ok("list").stdout
         self.assertTrue(listing.startswith("Templates\nalpha\nzeta\n\nCommands\n"))
         self.assertNotIn("\nalpha\n", listing.split("Commands\n", 1)[1])

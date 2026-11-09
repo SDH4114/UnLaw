@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -137,21 +137,7 @@ pub fn list_templates(args: &[String]) -> i32 {
     if print_if_requested("templates", args) {
         return 0;
     }
-    if !args.is_empty() {
-        return usage("Usage: ul templates");
-    }
-    match workspace::discover() {
-        Ok(templates) => {
-            for name in templates.keys() {
-                println!("{name}");
-            }
-            0
-        }
-        Err(error) => {
-            eprintln!("unlaw templates: {error}");
-            2
-        }
-    }
+    crate::template_cmd::list(args)
 }
 
 pub fn list_all(args: &[String]) -> i32 {
@@ -315,8 +301,21 @@ pub fn complete(args: &[String]) -> i32 {
         .collect(),
         (2, Some("create")) => vec![
             candidate("command", "Create commands/<name> (--lang python|rust)"),
-            candidate("template", "Save the current project as a template"),
+            candidate("template", "Save open windows as a template (= ul template save)"),
         ],
+        (2, Some("template")) => [
+            ("save", "Save the open windows as a template"),
+            ("edit", "Edit a template's TOML (creates a starter)"),
+            ("show", "Show what a template opens"),
+            ("rm", "Delete a template"),
+            ("list", "List templates"),
+        ]
+        .iter()
+        .map(|(name, text)| candidate(name, text))
+        .collect(),
+        (3, Some("template")) if words.get(1).is_some_and(|word| ["save", "edit", "show", "rm", "remove"].contains(&word.as_str())) => {
+            workspace::discover().map(|templates| templates.keys().map(|name| candidate(name, "template")).collect()).unwrap_or_default()
+        }
         (2, Some("skills")) => [
             ("install", "Install the agent skill (--project, --path, --claude)"),
             ("list", "Show installs"),
@@ -512,94 +511,13 @@ fn create_user_command(args: &[String]) -> i32 {
     0
 }
 
-struct Cancelled;
-
-fn prompt(text: &str) -> Result<String, Cancelled> {
-    print!("{text}");
-    let _ = io::stdout().flush();
-    let mut line = String::new();
-    match io::stdin().lock().read_line(&mut line) {
-        Ok(0) | Err(_) => Err(Cancelled),
-        Ok(_) => Ok(line.trim().to_string()),
-    }
-}
-
-fn prompt_choice(text: &str, allowed: &[&str], error: &str) -> Result<String, Cancelled> {
-    loop {
-        let value = prompt(text)?.to_lowercase();
-        if allowed.contains(&value.as_str()) {
-            return Ok(value);
-        }
-        eprintln!("{error}");
-    }
-}
-
-fn create_project_template(args: &[String]) -> i32 {
-    if args.len() > 1 {
-        return usage("Usage: ul create template [name]");
-    }
-    let cancelled = || {
-        eprintln!("unlaw create template: Cancelled.");
-        1
-    };
-    let name = match args.first() {
-        Some(name) => name.clone(),
-        None => match prompt("Name of template > ") {
-            Ok(name) => name,
-            Err(Cancelled) => return cancelled(),
-        },
-    };
-    let fail = |error: &dyn std::fmt::Display| {
-        eprintln!("unlaw create template: {error}");
-        2
-    };
-    if let Err(error) = workspace::validate_name(&name) {
-        return fail(&error);
-    }
-    let config = match config::load() {
-        Ok(config) => config,
-        Err(error) => return fail(&error),
-    };
-    let templates = match workspace::discover() {
-        Ok(templates) => templates,
-        Err(error) => return fail(&error),
-    };
-    if is_system(&name)
-        || builtin::is_builtin(&name)
-        || commands::resolve(&name).is_some()
-        || config.alias(&name).is_some()
-        || templates.contains_key(&name)
-    {
-        eprintln!("unlaw create template: Name already in use: {name}");
-        return 1;
-    }
-    let Ok(app) = prompt_choice("Open with (zed/obsidian) > ", &["zed", "obsidian"], "Please enter zed or obsidian.") else {
-        return cancelled();
-    };
-    let Ok(ai) = prompt_choice("Add AI? (y/n) > ", &["y", "n"], "Please enter y or n.") else {
-        return cancelled();
-    };
-    let cwd = match env::current_dir() {
-        Ok(cwd) => cwd,
-        Err(error) => return fail(&error),
-    };
-    match workspace::create(&name, &cwd, &app, ai == "y") {
-        Ok(template) => {
-            println!("Created template '{name}' for {}", template.path.display());
-            println!("Run it with: ul {name}");
-            0
-        }
-        Err(error) => fail(&error),
-    }
-}
-
 pub fn create(args: &[String]) -> i32 {
     if print_if_requested("create", args) {
         return 0;
     }
     match args.first().map(String::as_str) {
         Some("command") => create_user_command(&args[1..]),
-        Some("template") => create_project_template(&args[1..]),
+        Some("template") => crate::template_cmd::create(&args[1..]),
         _ => usage("Usage: ul create command <name> | ul create template [name]"),
     }
 }
@@ -976,12 +894,28 @@ pub fn doctor(args: &[String]) -> i32 {
 }
 
 pub fn run_template_hint(name: &str, args: &[String]) -> i32 {
+    let flags = crate::template_cmd::LAUNCH_FLAGS;
     if help::wants_help(args) && args.len() == 1 {
-        println!("Open the saved project in its configured app.\nUsage: ul {name}\nExample: ul {name}");
+        println!(
+            "Go to the template's folder and open its windows.\nUsage: ul {name} {flags}\n  --focus       Hide every other app\n  --no-focus    Do not hide other apps (overrides focus = true)\n  --dry-run     Show what it would open; changes nothing\nShow: ul template show {name}   Change: ul template edit {name}\nExample: ul {name}"
+        );
+        if let Ok(template) = workspace::load(name) {
+            print!("\n{}", crate::template_cmd::describe(&template));
+        }
         return 0;
     }
-    if !args.is_empty() {
-        return usage(&format!("Usage: ul {name}"));
+    let Some(options) = crate::template_cmd::parse_launch_flags(args) else {
+        return usage(&format!("Usage: ul {name} {flags}"));
+    };
+    if options.dry_run {
+        let config = config::load().ok();
+        return match workspace::load(name) {
+            Ok(template) => crate::template_cmd::launch(&template, config.as_ref(), &options),
+            Err(error) => {
+                eprintln!("unlaw: {error}");
+                1
+            }
+        };
     }
     eprintln!(
         "unlaw: Project templates require current-shell integration. Run `ul doctor --fix`, then restart the shell or run `exec zsh`."

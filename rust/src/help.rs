@@ -14,7 +14,7 @@ Global options:
 const SECTIONS: &[(&str, &[&str])] = &[
     ("Install and update", &["update", "reinstall", "remove", "features", "doctor", "version"]),
     ("Configuration", &["config", "edit", "init", "completion", "skills"]),
-    ("Commands and projects", &["commands", "list", "which", "create", "templates", "venv"]),
+    ("Commands and projects", &["commands", "list", "which", "create", "template", "templates", "venv"]),
 ];
 
 fn summary_line(name: &str, summary: &str) -> String {
@@ -121,7 +121,7 @@ Example: ul config set storage.root ~/Downloads/unlaw
 Usage:
   ul create command <name>              Create commands/<name>/main.py
   ul create command <name> --lang rust  Create a Cargo project in commands/<name>
-  ul create template [name]             Prompt for project name, app and AI preference
+  ul create template [name]             Same as ul template save: snapshot open windows
 Existing commands/templates are not overwritten. Templates come from
 templates/commands/main.py and templates/commands/rust/ when present
 ({{command_name}} is replaced). Rust commands need cargo and are rebuilt
@@ -184,7 +184,7 @@ Example: ul init
     ),
     (
         "list",
-        "List saved project templates and available commands.
+        "List saved templates and available commands.
 Usage: ul list
 Example: ul list
 ",
@@ -262,9 +262,63 @@ Examples:
 ",
     ),
     (
+        "template",
+        "Templates: a working environment you start with one command, `ul <name>`.
+It changes the shell to the project folder and opens its windows: apps placed on
+the screen, Ghostty windows with tabs and splits (each pane in its folder,
+optionally running claude, codex or any command), and sites in the default
+browser.
+Usage:
+  ul template save [name] [--force]   Snapshot the open windows, pick which belong
+  ul template edit <name>             Edit the TOML (creates a starter if missing)
+  ul template show <name>             Show what it opens
+  ul template rm <name> [--yes]       Delete it
+  ul template list                    Same as ul templates
+  ul <name> [--focus|--no-focus] [--dry-run]
+save reads every visible window (apps, frames, Ghostty tabs and their folders,
+the default browser's tabs when it is scriptable: Safari, Chromium browsers),
+then asks which windows go in, which sites to keep, what each Ghostty pane
+runs, the project folder and focus mode, and shows the result before saving.
+Starting a template opens apps with `open -a`, creates Ghostty windows through
+its AppleScript, reuses the Ghostty/browser windows it opened last time, and
+places windows by fractions of the screen. --focus (or focus = true) hides
+every other app; nothing is closed. One window failing does not stop the
+others; the exit status is 1 then.
+File: templates/projects/<name>.toml in the config dir:
+  version = 2
+  path = \"~/giti/app\"            # the shell cds here
+  focus = false
+  [[window]]
+  app = \"Zed\"                     # any app name, \"Ghostty\" or \"browser\"
+  open = \"~/giti/app\"            # folder, file or URL for the app
+  frame = \"left\"                  # full, left, right, top, bottom, top-left, ...,
+                                    # left-third, center-third, right-third,
+                                    # left-two-thirds, right-two-thirds, center
+                                    # or [x, y, width, height] in 0..1
+  screen = 1                        # 1 = main display
+  [[window]]
+  app = \"Ghostty\"
+  frame = \"right\"
+  [[window.tab]]
+  panes = [{ dir = \"~/giti/app\", run = \"claude\" }, { split = \"down\" }]
+  [[window]]
+  app = \"browser\"
+  urls = [\"https://github.com\"]
+Old templates (path/app/ai) still work; save them again for the new features.
+Needs: macOS Accessibility for your terminal (placing and reading windows) and
+Automation for Ghostty and the browser (macOS asks once). Windows in full
+screen or on other Spaces are not seen by save.
+Examples:
+  ul template save work
+  ul work --focus
+  ul template edit work
+",
+    ),
+    (
         "templates",
-        "List saved project templates.
+        "List saved templates: name, folder and apps.
 Usage: ul templates
+Details: ul template --help
 Example: ul templates
 ",
     ),

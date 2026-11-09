@@ -151,11 +151,11 @@ ul commands --json              # machine-readable JSON
 ul commands search              # the command catalog on GitHub (checklist on a terminal)
 ul commands search youtube      # filter by name and description; --list only prints
 ul commands get yt music        # download commands that are not installed yet
-ul templates                    # saved project templates
+ul templates                    # saved templates (working environments)
 ul list                         # templates first, then commands
 ul which git                    # where a command comes from
 ul create command anime         # new command
-ul create template hearme       # save the current project
+ul template save hearme         # save the open windows as a template
 ul venv                         # create/activate .venv in the current shell
 ul doctor --verbose             # full diagnostics
 ul doctor --fix                 # safe automatic fixes
@@ -179,39 +179,79 @@ ul --version
 An unknown command gets a suggestion with the closest name. `--dry-run` shows the
 exact process for a command (interpreter and path) without running it.
 
-## Saved projects
+## Templates: working environments
 
-A project template saves an existing folder and its launch settings. Project
-files are not copied.
+A template is a working environment you start with one command. `ul <name>`
+changes the current shell to the project folder and opens its windows: apps
+placed on the screen, Ghostty windows with tabs and splits (each pane in its
+folder, optionally running `claude`, `codex` or any command) and sites in the
+default browser.
+
+Arrange the windows the way you like, then save them:
 
 ```bash
 cd ~/giti/HearMe
-ul create template hearme
+ul template save hearme
 ```
 
-Unlaw asks whether to open the project with `zed` or `obsidian`, then whether to
-open ChatGPT. If no name is given, it is prompted for too:
-
-```text
-Name of template > hearme
-Open with (zed/obsidian) > zed
-Add AI? (y/n) > y
-```
-
-Once saved, the project can be launched from any folder:
+Unlaw reads every visible window and asks which ones belong to the template
+(a checklist: an app you just happened to have open stays out), which browser
+tabs to keep, what each Ghostty pane runs, the project folder and whether to
+hide other apps on start. It shows the result before saving.
 
 ```bash
-ul hearme
+ul hearme               # go to the folder, open and place everything
+ul hearme --focus       # also hide every other app (nothing is closed)
+ul hearme --dry-run     # show what it would open
+ul template show hearme
+ul template edit hearme # the TOML file; `edit <new name>` creates a starter
+ul template rm hearme
+ul templates            # name, folder and apps of each template
 ```
 
-The command changes directory in the current Zsh, opens it in the chosen app and
-launches ChatGPT if requested. No new terminal is created. Saved projects are
-listed by `ul templates`, and the combined list by `ul list`. The manifest is
-stored in `~/.config/unlaw/templates/projects/<name>.toml` and contains only the
-absolute path, the app and the AI flag.
+The file lives in `~/.config/unlaw/templates/projects/<name>.toml`:
 
-To change directory in the current shell, install the integration once and
-restart Zsh:
+```toml
+version = 2
+path = "~/giti/HearMe"        # the shell cds here
+focus = false
+
+[[window]]
+app = "Zed"
+open = "~/giti/HearMe"
+frame = "left"                # preset or [x, y, width, height] in 0..1
+screen = 1                    # 1 = main display
+
+[[window]]
+app = "Ghostty"
+frame = "right"
+
+[[window.tab]]
+panes = [
+  { dir = "~/giti/HearMe", run = "claude" },
+  { dir = "~/giti/HearMe", split = "down" },
+]
+
+[[window]]
+app = "browser"               # the default browser
+urls = ["https://github.com/SDH4114/HearMe"]
+```
+
+Presets: `full`, `left`, `right`, `top`, `bottom`, `top-left`, `top-right`,
+`bottom-left`, `bottom-right`, `left-third`, `center-third`, `right-third`,
+`left-two-thirds`, `right-two-thirds`, `center`. Frames are fractions of the
+screen, so a template survives another display or resolution. Running a template
+again reuses the Ghostty and browser windows it opened last time. `run` is typed
+into the shell, so the pane stays a shell when the agent exits.
+
+macOS asks once for Accessibility (placing and reading windows) for your
+terminal and for Automation of Ghostty and the browser. Safari and Chromium
+browsers share their tabs with `save`; others (Firefox, Zen) do not, so `save`
+asks for the links and those browsers decide where links open. Windows in full
+screen or on other Spaces are not seen by `save`. Templates in the old format
+(`path`, `app`, `ai`) still work; save them again to use the new features.
+
+Changing the directory of the current shell needs the integration once:
 
 ```bash
 ul doctor --fix

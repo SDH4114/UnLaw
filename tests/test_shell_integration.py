@@ -28,11 +28,13 @@ class ShellIntegrationTests(CoreTestCase):
         self.ok("_template-launch", "hearme")
         self.assertEqual(self.calls(log), [["-a", "Obsidian", str(self.project)]])
 
-    def test_editor_failure_stops_before_ai(self) -> None:
+    def test_one_failing_app_does_not_stop_the_others(self) -> None:
         self.save_template("hearme", self.project, "zed", True)
         log = self.recording_tool("open", exit_code=5)
-        self.assertEqual(self.ul("_template-launch", "hearme").returncode, 5)
-        self.assertEqual(len(self.calls(log)), 1)
+        result = self.ul("_template-launch", "hearme")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(len(self.calls(log)), 2)
+        self.assertIn("! Zed      open -a failed (exit 5)", result.stderr)
 
     def test_launch_rejects_missing_saved_directory(self) -> None:
         self.save_template("hearme", self.project)
@@ -50,9 +52,11 @@ class ShellIntegrationTests(CoreTestCase):
     def test_rendered_zsh_changes_directory_then_launches(self) -> None:
         script = self.ok("_shell-init", "zsh").stdout
         self.assertIn('builtin cd -- "$_unlaw_path"', script)
-        self.assertIn('command ul _template-launch "$1"', script)
+        self.assertIn('command ul _template-launch "$@"', script)
         self.assertNotIn("Terminal", script)
-        self.assertLess(script.index("builtin cd --"), script.index('command ul _template-launch "$1"'))
+        self.assertLess(script.index("builtin cd --"), script.index('command ul _template-launch "$@"'))
+        # --dry-run only shows the plan, so the shell stays where it is.
+        self.assertLess(script.index("(Ie)--dry-run"), script.index("builtin cd --"))
         self.assertEqual(self.ul("_shell-init", "bash").returncode, 2)
 
     def test_rendered_zsh_sources_venv_in_current_shell(self) -> None:
