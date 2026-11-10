@@ -1,6 +1,6 @@
 # Templates v2: working environments (design)
 
-Date: 2026-11-10. Status: implemented on `feat/templates` (3.16.0-beta.1).
+Date: 2026-11-10. Status: implemented on `feat/templates` (3.16.0).
 
 ## Goal
 Describe a working environment once and start it with `ul <name>`: change the shell
@@ -22,7 +22,7 @@ open sites in the default browser.
 - Approach A: Rust core + one embedded JXA script (`rust/src/desktop.js`), JSON on
   stdin. Not a Python seed (two sources of truth with the shell integration), not
   macOS Harness (only `ul mac` may depend on it).
-- Version 3.16.0-beta.1, no other bump.
+- Version 3.16.0, no other bump.
 
 ## Format
 See `ul template --help` and README "Templates". Frames are fractions of the
