@@ -19,8 +19,19 @@ from .kanban import version_of
 
 NEW_CANVAS = {"nodes": [], "edges": []}
 NODE_TYPES = {"text", "file", "link", "group"}
-ELEMENT_TYPES = {"freedraw", "rectangle", "ellipse", "diamond", "line", "arrow", "text"}
-POINT_TYPES = {"freedraw", "line", "arrow"}
+ELEMENT_TYPES = {
+    "freedraw",
+    "rectangle",
+    "ellipse",
+    "diamond",
+    "line",
+    "arrow",
+    "text",
+    "paint",
+}
+# paint = an area left by the fill tool: outer ring in points, optional holes.
+POINT_TYPES = {"freedraw", "line", "arrow", "paint"}
+MAX_STROKE_WIDTH = 100
 MAX_ELEMENTS = 20000
 MAX_NODES = 20000
 MAX_EDGES = 20000
@@ -97,8 +108,10 @@ def _validate_element(element: dict) -> int:
     if fill is not None and not (isinstance(fill, str) and COLOR.fullmatch(fill)):
         raise ValueError(f"{what}: fill must be #rrggbb or null")
     width = element.get("strokeWidth")
-    if "strokeWidth" in element and not (_canvas_number(width) and 1 <= width <= 20):
-        raise ValueError(f"{what}: strokeWidth must be 1-20")
+    if "strokeWidth" in element and not (
+        _canvas_number(width) and 1 <= width <= MAX_STROKE_WIDTH
+    ):
+        raise ValueError(f"{what}: strokeWidth must be 1-{MAX_STROKE_WIDTH}")
     rough = element.get("roughness")
     if "roughness" in element and not (_canvas_number(rough) and 0 <= rough <= 2):
         raise ValueError(f"{what}: roughness must be 0-2")
@@ -115,18 +128,27 @@ def _validate_element(element: dict) -> int:
         _text(element["text"], what)
     count = 0
     if kind in POINT_TYPES or "points" in element:
-        points = element.get("points")
-        if not isinstance(points, list):
-            raise ValueError(f"{what}: points must be a list of [x, y]")
-        for point in points:
-            if not (
-                isinstance(point, list)
-                and len(point) == 2
-                and all(_canvas_number(value) for value in point)
-            ):
-                raise ValueError(f"{what}: points must be a list of [x, y] numbers")
-        count = len(points)
+        count = _points(element.get("points"), f"{what}: points")
+    if "holes" in element:
+        holes = element["holes"]
+        if not isinstance(holes, list):
+            raise ValueError(f"{what}: holes must be a list of point lists")
+        for ring in holes:
+            count += _points(ring, f"{what}: holes")
     return count
+
+
+def _points(points: object, what: str) -> int:
+    if not isinstance(points, list):
+        raise ValueError(f"{what} must be a list of [x, y]")
+    for point in points:
+        if not (
+            isinstance(point, list)
+            and len(point) == 2
+            and all(_canvas_number(value) for value in point)
+        ):
+            raise ValueError(f"{what} must be a list of [x, y] numbers")
+    return len(points)
 
 
 def _validate_unlaw(extra: object) -> None:
@@ -134,6 +156,11 @@ def _validate_unlaw(extra: object) -> None:
         raise ValueError("unlaw must be an object")
     if extra.get("version") != 1 or isinstance(extra.get("version"), bool):
         raise ValueError("unlaw.version must be 1")
+    background = extra.get("background")
+    if "background" in extra and not (
+        isinstance(background, str) and COLOR.fullmatch(background)
+    ):
+        raise ValueError("unlaw.background must look like #rrggbb")
     elements = extra.get("elements")
     if not isinstance(elements, list):
         raise ValueError("unlaw.elements must be a list")

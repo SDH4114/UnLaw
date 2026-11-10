@@ -369,6 +369,16 @@ LEGACY_NORMALIZED_HASHES["desk"].update({
     "fe899319d2ca95d2ce4df59a75d9c4413bd598a50e9a8639c1d3fc26f9818487",
 })
 
+# Desk seed of 3.16.0 (8b6b26e, also the copy on the maintainer machine), before the canvas fill tool, icons and file actions.
+LEGACY_SOURCE_HASHES["desk"].add("9159a886ba928fa147bac5f1e00584de52528ab5713b4acd7107e523231f8990")
+LEGACY_NORMALIZED_HASHES["desk"].add("f8a2e3dc47418a5a19cb7fc09993d243a2ac45498daac366249fbf632eee5f60")
+# Desk seed of the 3.16.1 dev build installed on the maintainer machine, before the flood fill, partial eraser and width slider.
+LEGACY_SOURCE_HASHES["desk"].add("9d593b4d73a0f352f311c69ce359e3dd9a0c7350de645a0c7639c5d61ecfa4be")
+LEGACY_NORMALIZED_HASHES["desk"].add("686745a9ad91c959ab13c25d06826710746590fbbe14d0621dd9622cb3c40c30")
+# The next 3.16.1 dev build installed there, before the typed stroke width and the - / = keys.
+LEGACY_SOURCE_HASHES["desk"].add("2c9c1bf13f443bfcca114a4b4cf2c83dd6a82a2abe6353a5b3fee1208d913d16")
+LEGACY_NORMALIZED_HASHES["desk"].add("f492b37c596283f6e2f5b8f369d56587beb87dec41c3c98459512142969cd338")
+
 # Commands now built into the Rust core. Untouched seeds with these hashes are
 # removed so the built-in runs; edited copies stay and override it.
 RETIRED_COMMANDS = ("game", "zip", "lm", "app", "browser")

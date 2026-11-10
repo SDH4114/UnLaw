@@ -65,6 +65,21 @@ class DeskUITests(unittest.TestCase):
     def test_arcade_box_corners_and_tees_connect_the_correct_edges(self) -> None:
         self.run_case("box_edges")
 
+    def test_canvas_fill_tool(self) -> None:
+        self.run_case("canvas_fill_tool")
+
+    def test_canvas_photoshop_keys_new_rename_and_open(self) -> None:
+        self.run_case("canvas_keys_and_files")
+
+    def test_canvas_fill_floods_the_clicked_color(self) -> None:
+        self.run_case("canvas_flood_fill")
+
+    def test_canvas_partial_eraser_cuts_lines(self) -> None:
+        self.run_case("canvas_partial_eraser")
+
+    def test_canvas_tool_menus_and_width_slider(self) -> None:
+        self.run_case("canvas_tool_menus_and_width")
+
     def test_canvas_rough_strokes_are_seeded_and_deterministic(self) -> None:
         self.run_case("canvas_prng_and_rough")
 

@@ -180,6 +180,9 @@ class ValidationTests(unittest.TestCase):
         self.rejects({"unlaw": []}, "unlaw")
         self.rejects({"unlaw": {"version": 2, "elements": []}}, "version")
         self.rejects({"unlaw": {"version": 1, "elements": {}}}, "elements")
+        self.rejects({"unlaw": {"version": 1, "elements": [], "background": "red"}}, "background")
+        data = {"nodes": [], "edges": [], "unlaw": {"version": 1, "elements": [], "background": "#fafafa"}}
+        self.assertEqual(canvas.validate_canvas(data), data)
 
     def test_element_rules(self) -> None:
         good = sample()["unlaw"]["elements"][0]
@@ -194,7 +197,9 @@ class ValidationTests(unittest.TestCase):
             ("fill", "#GGGGGG"),
             ("fill", 5),
             ("strokeWidth", 0),
-            ("strokeWidth", 21),
+            ("strokeWidth", 101),
+            ("holes", "x"),
+            ("holes", [[[0]]]),
             ("roughness", 3),
             ("roughness", -1),
             ("seed", 1.5),
@@ -209,6 +214,32 @@ class ValidationTests(unittest.TestCase):
                     {"unlaw": {"version": 1, "elements": [{**good, key: value}]}},
                     "element",
                 )
+
+    def test_paint_areas_and_wide_strokes(self) -> None:
+        paint = {
+            "id": "p",
+            "type": "paint",
+            "x": 0,
+            "y": 0,
+            "width": 10,
+            "height": 10,
+            "points": [[0, 0], [10, 0], [10, 10]],
+            "holes": [[[2, 2], [3, 2], [3, 3]]],
+            "fill": "#30a46c",
+            "stroke": "#30a46c",
+            "strokeWidth": 100,
+        }
+        data = {"unlaw": {"version": 1, "elements": [paint]}}
+        self.assertEqual(canvas.validate_canvas(data)["unlaw"]["elements"][0], paint)
+        self.rejects(
+            {"unlaw": {"version": 1, "elements": [{**paint, "points": None}]}},
+            "points",
+        )
+        many = [[0, 0]] * (canvas.MAX_POINTS - 2)
+        self.rejects(
+            {"unlaw": {"version": 1, "elements": [{**paint, "holes": [many]}]}},
+            "points",
+        )
 
     def test_text_element_needs_text_and_font_size_range(self) -> None:
         good = sample()["unlaw"]["elements"][2]
@@ -605,6 +636,85 @@ class ServerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CanvasFileActionTests(ServerTests):
+    """New canvas-N, renaming from the name field and the macOS open dialog (a fake osascript)."""
+
+    def test_new_takes_the_first_free_number_and_never_overwrites(self) -> None:
+        self.canvas_dir.mkdir()
+        (self.canvas_dir / "canvas-1.canvas").write_text('{"nodes":[{"id":"k","type":"text","text":"keep","x":0,"y":0,"width":1,"height":1}]}')
+        names = []
+        for _ in range(2):
+            status, data = self.request("POST", "/api/canvas/new", {})
+            self.assertEqual(status, 200, data)
+            self.assertEqual(data["canvas"], {"nodes": [], "edges": []})
+            names.append(data["name"])
+        self.assertEqual(names, ["canvas-2", "canvas-3"])
+        self.assertIn("keep", (self.canvas_dir / "canvas-1.canvas").read_text())
+        _, overview = self.request("GET", "/api/canvases")
+        self.assertEqual(overview["current"], str((self.canvas_dir / "canvas-3.canvas").resolve()))
+
+    def test_new_creates_the_folder(self) -> None:
+        status, data = self.request("POST", "/api/canvas/new", {})
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["path"], str((self.canvas_dir / "canvas-1.canvas").resolve()))
+
+    def test_rename_moves_the_file_and_keeps_contents_and_version(self) -> None:
+        made = self.create("canvas-1")
+        status, data = self.request("POST", "/api/canvas/rename", {"path": made["path"], "name": "  Ideas.canvas "})
+        self.assertEqual(status, 200, data)
+        target = (self.canvas_dir / "Ideas.canvas").resolve()
+        self.assertEqual((data["path"], data["name"], data["version"]), (str(target), "Ideas", made["version"]))
+        self.assertFalse(Path(made["path"]).exists())
+        _, overview = self.request("GET", "/api/canvases")
+        self.assertEqual(overview["current"], str(target))
+        self.assertEqual([item["name"] for item in overview["items"]], ["Ideas"])
+
+    def test_rename_never_overwrites_and_checks_the_name(self) -> None:
+        first = self.create("one")
+        self.create("two")
+        status, data = self.request("POST", "/api/canvas/rename", {"path": first["path"], "name": "two"})
+        self.assertEqual(status, 400)
+        self.assertIn("already exists", data["error"])
+        for bad in ("", "a/b", ".hidden", "~x", "bad\nname", 5):
+            with self.subTest(name=bad):
+                self.assertEqual(self.request("POST", "/api/canvas/rename", {"path": first["path"], "name": bad})[0], 400)
+        self.assertTrue(Path(first["path"]).exists())
+        self.assertEqual(self.request("POST", "/api/canvas/rename", {"path": str(self.root / "gone.canvas"), "name": "x"})[0], 404)
+
+    def fake_osascript(self, script: str) -> Path:
+        tools = self.root / "bin"
+        tools.mkdir(exist_ok=True)
+        fake = tools / "osascript"
+        fake.write_text("#!/bin/sh\n" + script)
+        fake.chmod(0o755)
+        return tools
+
+    def test_choose_returns_the_picked_file_and_starts_in_the_canvas_folder(self) -> None:
+        self.canvas_dir.mkdir()
+        log = self.root / "args"
+        tools = self.fake_osascript(f'for a in "$@"; do echo "$a" >> {log}; done\necho /picked/Plan.canvas\n')
+        with patch.dict(os.environ, {"PATH": str(tools)}):
+            status, data = self.request("POST", "/api/canvas/choose", {})
+        self.assertEqual((status, data), (200, {"path": "/picked/Plan.canvas"}))
+        args = log.read_text().splitlines()
+        self.assertEqual(args[-1], str(self.canvas_dir))
+        self.assertIn("choose file", " ".join(args))
+
+    def test_choose_cancel_and_failure(self) -> None:
+        tools = self.fake_osascript('echo "execution error: User canceled. (-128)" >&2\nexit 1\n')
+        with patch.dict(os.environ, {"PATH": str(tools)}):
+            self.assertEqual(self.request("POST", "/api/canvas/choose", {}), (200, {"path": None}))
+        tools = self.fake_osascript('echo boom >&2\nexit 1\n')
+        with patch.dict(os.environ, {"PATH": str(tools)}):
+            status, data = self.request("POST", "/api/canvas/choose", {})
+        self.assertEqual(status, 400)
+        self.assertIn("boom", data["error"])
+
+    def test_choose_without_osascript_lets_the_page_ask(self) -> None:
+        with patch.dict(os.environ, {"PATH": str(self.root / "empty")}):
+            self.assertEqual(self.request("POST", "/api/canvas/choose", {}), (200, {"unavailable": True}))
 
 
 class SeedNameCollisionTests(unittest.TestCase):

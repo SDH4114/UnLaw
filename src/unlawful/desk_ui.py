@@ -264,12 +264,30 @@ canvas.wave.strip { position: absolute; left: 0; right: 0; bottom: 0; height: 64
 .cv { display: flex; flex-direction: column; height: 100%; min-height: 420px; }
 .cvbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .cvbar .group { display: flex; align-items: center; gap: 2px; background: var(--column); border-radius: 9px; padding: 2px; }
-.cvbar .group button { border: none; background: transparent; padding: 3px 9px; border-radius: 7px; color: var(--muted); font-size: 13px; }
+.cvbar .group button { border: none; background: transparent; padding: 4px 6px; border-radius: 7px; color: var(--muted); font-size: 13px; display: inline-flex; align-items: center; justify-content: center; }
+.cvbar .group button svg { width: 18px; height: 18px; display: block; }
+.cvbar .group button:disabled { opacity: .35; }
 .cvbar .group button:hover { color: var(--text); }
 .cvbar .group button.on { background: var(--panel); box-shadow: var(--shadow); color: var(--text); }
-.cvbar .group button.swatch { width: 18px; height: 18px; padding: 0; border-radius: 50%; margin: 0 3px; border: 2px solid var(--line); }
-.cvbar .group button.swatch.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
-.cvbar .cvpick { max-width: 220px; border-color: transparent; background: var(--column); font-weight: 550; }
+.cvbar .group .swatch { box-sizing: border-box; width: 18px; height: 18px; padding: 0; border-radius: 50%; margin: 0 3px; border: 2px solid var(--line); }
+.cvbar .group .swatch.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.cvbar .group .swatch.custom { position: relative; display: inline-block; overflow: hidden; cursor: pointer; background: conic-gradient(#e5484d, #e8b520, #30a46c, #2aa9bd, #3a6df0, #8e4ec6, #e5484d); }
+.cvbar .group .swatch.custom input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; padding: 0; cursor: pointer; }
+.cvbar .cvname { width: 150px; font-weight: 600; border: 1px solid transparent; background: transparent; border-radius: 7px; padding: 3px 7px; color: var(--text); }
+.cvbar .cvname:hover, .cvbar .cvname:focus { border-color: var(--line); background: var(--column); outline: none; }
+.cvbar .cvpick { max-width: 120px; border-color: transparent; background: var(--column); color: var(--muted); }
+.cvbar .group button.more { position: relative; }
+.cvbar .group button.more::after { content: ""; position: absolute; right: 2px; bottom: 2px; border-style: solid; border-width: 0 0 5px 5px; border-color: transparent transparent currentColor transparent; opacity: .55; }
+.cvbar .cvwidth { width: 120px; margin: 0 4px; accent-color: var(--accent); }
+.cvbar .cvwidthval { width: 38px; font-size: 12px; color: var(--text); text-align: center; font-variant-numeric: tabular-nums; border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 2px 3px; margin-right: 2px; }
+.cvbar .cvwidthval:hover, .cvbar .cvwidthval:focus { border-color: var(--line); background: var(--panel); outline: none; }
+.cvmenu { position: fixed; z-index: 30; display: none; flex-direction: column; gap: 2px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--lift); }
+.cvmenu.on { display: flex; }
+.cvmenu button { display: flex; align-items: center; gap: 9px; border: none; background: transparent; padding: 6px 10px; border-radius: 7px; color: var(--text); font-size: 13px; text-align: left; white-space: nowrap; }
+.cvmenu button:hover { background: var(--column); }
+.cvmenu button.on { background: var(--accent-soft); color: var(--accent); }
+.cvmenu button svg { width: 18px; height: 18px; flex: none; }
+.cvmenu .num { width: 18px; text-align: center; font-weight: 700; font-size: 15px; }
 .cvzoom, .cvstatus { font: 12px var(--mono); color: var(--muted); min-width: 40px; text-align: center; }
 .cvstage { position: relative; flex: 1; min-height: 0; overflow: hidden; }
 .cvcanvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
@@ -324,7 +342,7 @@ canvas.wave.strip { position: absolute; left: 0; right: 0; bottom: 0; height: 64
     <dt>double-click</dt><dd>Edit a card; drag cards between columns</dd>
     <dt>Games</dt><dd>While a game runs every key goes to it: arrows/WASD, Space, P pause, Esc leaves. Mouse works as in the terminal.</dd>
     <dt>Studio</dt><dd><kbd>r</kbd> start / stop recording, <kbd>p</kbd> pause / resume. Recording runs <code>ul capture</code>, so it keeps going when the page is closed.</dd>
-    <dt>Canvas</dt><dd>Tools: <kbd>v</kbd> select, <kbd>h</kbd> hand (or hold <kbd>space</kbd>), <kbd>t</kbd> card, <kbd>r</kbd> <kbd>o</kbd> <kbd>d</kbd> shapes, <kbd>l</kbd> line, <kbd>a</kbd> arrow, <kbd>p</kbd> pen, <kbd>x</kbd> text, <kbd>e</kbd> eraser. <kbd>g</kbd> group, <kbd>f</kbd> fit, <kbd>Del</kbd> delete, arrows nudge, <kbd>Cmd/Ctrl</kbd>+<kbd>Z</kbd> <kbd>C</kbd> <kbd>V</kbd> <kbd>D</kbd> <kbd>A</kbd>. Wheel pans, <kbd>Ctrl</kbd>+wheel or pinch zooms, double-click edits text, drag a side dot of a card to connect.</dd>
+    <dt>Canvas</dt><dd>Photoshop-style keys; a tool stays until you pick another. <kbd>v</kbd> select, <kbd>h</kbd> hand (or hold <kbd>space</kbd>), <kbd>n</kbd> card, <kbd>t</kbd> text, <kbd>u</kbd> shapes (<kbd>Shift</kbd>+<kbd>u</kbd> cycles rectangle, ellipse, diamond, line, arrow; also <kbd>r</kbd> <kbd>o</kbd> <kbd>l</kbd> <kbd>a</kbd>), <kbd>b</kbd> brush, <kbd>g</kbd> fill (<kbd>Alt</kbd>+click clears; open space reaching the edge of the view fills the background), <kbd>e</kbd> eraser (<kbd>Shift</kbd>+<kbd>e</kbd> switches whole object / only where it passes). Click an active eraser or shape tool again for its options (shape evenness 3 perfect, 2, 1 rougher). The fill tool floods the area of the clicked color like a paint program. <kbd>[</kbd> <kbd>]</kbd> or <kbd>-</kbd> <kbd>=</kbd> stroke width (slider 1-100; click the number to type one), <kbd>d</kbd> default color, <kbd>Cmd/Ctrl</kbd>+<kbd>G</kbd> group, <kbd>Cmd/Ctrl</kbd>+<kbd>0</kbd> fit, <kbd>Cmd/Ctrl</kbd>+<kbd>+</kbd> <kbd>-</kbd> zoom, <kbd>Del</kbd> delete, arrows nudge, <kbd>Cmd/Ctrl</kbd>+<kbd>Z</kbd> <kbd>C</kbd> <kbd>V</kbd> <kbd>D</kbd> <kbd>A</kbd>. Wheel pans, <kbd>Ctrl</kbd>+wheel or pinch zooms, double-click edits text, drag a side dot of a card to connect. The name left of the tools renames the file.</dd>
     <dt><kbd>?</kbd></dt><dd>This list</dd>
   </dl>
 </div></div>
@@ -1741,11 +1759,46 @@ for (const button of $("tabs").children) button.addEventListener("click", () => 
 
 // ---- canvas: JSON Canvas cards and edges plus our own drawn elements ----
 // The pure helpers (geometry, hit-testing, rough strokes, edits, history) come first so the tests can call them.
-const CV_TOOLS = { select: "v", hand: "h", card: "t", rectangle: "r", ellipse: "o", diamond: "d", line: "l", arrow: "a", freedraw: "p", text: "x", eraser: "e" };
-const CV_LABELS = { select: "Select", hand: "Hand", card: "Card", rectangle: "Rect", ellipse: "Ellipse", diamond: "Diamond", line: "Line", arrow: "Arrow", freedraw: "Pen", text: "Text", eraser: "Eraser" };
-const CV_BY_KEY = Object.fromEntries(Object.entries(CV_TOOLS).map(([tool, key]) => [key, tool]));
+// Photoshop-style keys (letters by physical key, so they work in any layout): the first one is shown in tooltips,
+// the rest are aliases; Shift+U cycles the shape tools like Photoshop's tool groups.
+const CV_TOOLS = { select: "vm", hand: "h", card: "n", text: "t", rectangle: "ur", ellipse: "o", diamond: "", line: "l", arrow: "a", freedraw: "bp", fill: "g", eraser: "e" };
+const CV_LABELS = { select: "Select", hand: "Hand", card: "Card", text: "Text", rectangle: "Rectangle", ellipse: "Ellipse", diamond: "Diamond", line: "Line", arrow: "Arrow", freedraw: "Brush", fill: "Fill", eraser: "Eraser" };
+const CV_BY_KEY = Object.fromEntries(Object.entries(CV_TOOLS).flatMap(([tool, keys]) => [...keys].map((key) => [key, tool])));
+const CV_SHAPE_CYCLE = ["rectangle", "ellipse", "diamond", "line", "arrow"];
+// 24x24 outline icons (stroke = currentColor), built with createElementNS, never innerHTML.
+const CV_ICONS = {
+  select: "M5 3l6.5 17.5 2.6-7.4 7.4-2.6z",
+  hand: "M8 12.5V5.5a1.5 1.5 0 0 1 3 0V11 M11 10.5v-6a1.5 1.5 0 0 1 3 0V11 M14 10.5V6.5a1.5 1.5 0 0 1 3 0V14a6 6 0 0 1-6 6h-.6a6 6 0 0 1-4.7-2.3L3.8 13.6a1.6 1.6 0 0 1 2.5-2L8 13.6",
+  card: "M4 4h16v11l-5 5H4z M15 20v-5h5 M8 9h8 M8 12.5h5",
+  text: "M5 7V4h14v3 M12 4v16 M9 20h6",
+  rectangle: "M4 6h16v12H4z",
+  ellipse: "M3 12a9 7 0 1 0 18 0a9 7 0 1 0-18 0",
+  diamond: "M12 3l9 9-9 9-9-9z",
+  line: "M5 19L19 5",
+  arrow: "M5 19L19 5 M10 5h9v9",
+  freedraw: "M4 20l4-1L19 8a2.1 2.1 0 0 0-3-3L5 16z M14 7l3 3",
+  fill: "M11 3l8 8-7 7-8-8z M4 10h15 M20 15.5s1.8 2.2 1.8 3.2a1.8 1.8 0 0 1-3.6 0c0-1 1.8-3.2 1.8-3.2z",
+  eraser: "M7 20h13 M3.8 15.8L13.5 6a2 2 0 0 1 2.9 0l2.6 2.6a2 2 0 0 1 0 2.9L11.5 19H7z M9 10.5l5.5 5.5",
+  filled: "M4 6h16v12H4z M4 10l4-4 M4 15l9-9 M7 18l12-12 M13 18l7-7",
+  undo: "M9 14L4 9l5-5 M4 9h10.5a5.5 5.5 0 0 1 0 11H11",
+  redo: "M15 14l5-5-5-5 M20 9H9.5a5.5 5.5 0 0 0 0 11H13",
+  group: "M3 7V3h4 M17 3h4v4 M21 17v4h-4 M7 21H3v-4 M8 8h8v8H8z",
+  fit: "M4 9V4h5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5",
+  export: "M12 4v11 M7 10l5 5 5-5 M5 20h14",
+  plus: "M12 5v14 M5 12h14",
+  folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  erasePart: "M7 11a5 5 0 1 0 10 0a5 5 0 1 0-10 0 M3 20.5h18",
+  rough3: "M5 5h14v14H5z",
+  rough2: "M5 5.5c4.5-1 9 .8 14-.5 M19 5c-.9 4.6.8 9.2 0 14 M19.2 19c-4.8.8-9.4-1-14.2 0 M5 19c.8-4.6-.9-9.2 0-13.5",
+  rough1: "M4.5 6c4-2.4 10 1.6 15-1.2 M18.6 4.2c-2 5.2 2.1 9.6-.3 15.3 M20 18.6c-5.3 2-10-1.8-15.6.4 M5.2 20c1.9-4.8-2.2-9.6.6-15.4",
+};
 const CV_INK = ["#1d1d1f", "#e5484d", "#f08c3a", "#e8b520", "#30a46c", "#3a6df0", "#8e4ec6", "#f2f2f5"];
-const CV_WIDTHS = [2, 4, 8];
+const CV_MIN_WIDTH = 1, CV_MAX_WIDTH = 100;
+// Evenness levels of the shape tools' menu: 3 is a perfect shape, 1 the roughest; the stored value is roughness.
+const CV_ROUGH_LEVELS = [{ level: 3, rough: 0, label: "Perfect" }, { level: 2, rough: 1, label: "A little uneven" }, { level: 1, rough: 2, label: "More uneven" }];
+const CV_ERASERS = [{ mode: "object", icon: "eraser", label: "Whole object" }, { mode: "part", icon: "erasePart", label: "Only where it passes" }];
+const CV_FILL_TOLERANCE = 40;
+const CV_PREFS = "desk-canvas-tools";
 const CV_PRESETS = { "1": "#e5484d", "2": "#f08c3a", "3": "#e8b520", "4": "#30a46c", "5": "#2aa9bd", "6": "#8e4ec6" };
 const CV_FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif';
 const CV_MONO = '"SF Mono", ui-monospace, Menlo, monospace';
@@ -1753,13 +1806,14 @@ const CV_HAND = '"Bradley Hand", "Marker Felt", "Comic Sans MS", cursive';
 const CV_MIN_ZOOM = 0.1, CV_MAX_ZOOM = 4, CV_HISTORY = 100, CV_MIN_BOX = 8;
 const CV_SIDES = { top: [0, -1], right: [1, 0], bottom: [0, 1], left: [-1, 0] };
 const CV_SIDE_NAMES = Object.keys(CV_SIDES);
-const CV_SHAPES = new Set(["rectangle", "ellipse", "diamond", "line", "arrow", "freedraw", "text"]);
+const CV_SHAPES = new Set(["rectangle", "ellipse", "diamond", "line", "arrow", "freedraw", "text", "paint"]);
 const CV_HEX = /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/;
 
 const cvNum = (value, fallback) => (typeof value === "number" && Number.isFinite(value) ? value : fallback);
 const cvClone = (value) => JSON.parse(JSON.stringify(value));
 const cvId = () => Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
 const cvSeed = () => Math.floor(Math.random() * 2147483647);
+const cvBackground = (doc) => (doc && doc.unlaw && typeof doc.unlaw.background === "string" && CV_HEX.test(doc.unlaw.background) ? doc.unlaw.background : null);
 
 function nodeColor(color) {
   if (typeof color !== "string") return null;
@@ -1915,19 +1969,44 @@ function elementOutline(el) {
   return [[x, y], [x + width, y], [x + width, y + height], [x, y + height]];
 }
 
+// A world point in the element's own unrotated frame.
+function localPoint(el, x, y) {
+  if (!el.angle) return { x, y };
+  const cx = el.x + el.width / 2, cy = el.y + el.height / 2, cos = Math.cos(-el.angle), sin = Math.sin(-el.angle);
+  const dx = x - cx, dy = y - cy;
+  return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
+}
+
+// Shapes and pen strokes that end near their start enclose an area the fill tool can paint.
+function fillable(el) {
+  if (el.type === "rectangle" || el.type === "ellipse" || el.type === "diamond") return true;
+  if (el.type !== "freedraw") return false;
+  const pts = elementPoints(el);
+  if (pts.length < 3) return false;
+  const [a, b] = [pts[0], pts[pts.length - 1]];
+  return Math.hypot(b[0] - a[0], b[1] - a[1]) <= Math.max(12, 0.25 * Math.max(el.width, el.height));
+}
+const fillOutline = (el) => (el.type === "freedraw" ? elementPoints(el) : elementOutline(el));
+
+// A paint element is an area left by the fill tool: an outer ring plus holes, filled even-odd.
+function paintRings(el) {
+  const rel = (ring) => (Array.isArray(ring) ? ring.filter((p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1])).map((p) => [el.x + p[0], el.y + p[1]]) : []);
+  return [rel(el.points), ...(Array.isArray(el.holes) ? el.holes.map(rel) : [])].filter((ring) => ring.length >= 3);
+}
+function paintContains(el, x, y) {
+  let inside = false;
+  for (const ring of paintRings(el)) if (pointInPoly(ring, x, y)) inside = !inside;
+  return inside;
+}
+
 function hitElement(el, x, y, tol) {
-  if (el.angle) {
-    const cx = el.x + el.width / 2, cy = el.y + el.height / 2, cos = Math.cos(-el.angle), sin = Math.sin(-el.angle);
-    const dx = x - cx, dy = y - cy;
-    x = cx + dx * cos - dy * sin;
-    y = cy + dx * sin + dy * cos;
-  }
+  ({ x, y } = localPoint(el, x, y));
   if (el.type === "text") return boxContains(el, x, y, tol);
+  if (el.type === "paint") return paintContains(el, x, y);
   const reach = tol + cvNum(el.strokeWidth, 2) / 2;
+  if (el.fill && fillable(el) && pointInPoly(fillOutline(el), x, y)) return true;
   if (el.type === "line" || el.type === "arrow" || el.type === "freedraw") return polyDist(elementPoints(el), x, y, false) <= reach;
-  const outline = elementOutline(el);
-  if (el.fill && pointInPoly(outline, x, y)) return true;
-  return polyDist(outline, x, y, true) <= reach;
+  return polyDist(elementOutline(el), x, y, true) <= reach;
 }
 
 function hitGroup(node, x, y, tol) {
@@ -1989,6 +2068,72 @@ function hitTest(doc, x, y, zoom) {
   return null;
 }
 
+// What the fill tool paints at a world point: like hitTest, but the inside of an unfilled closed shape counts
+// (after any drawing seen through it) and a click anywhere in a group colors the group. null = the empty background.
+function fillTarget(doc, x, y, zoom) {
+  const tol = 6 / (zoom || 1);
+  const elements = docElements(doc), nodes = docNodes(doc);
+  let hollow = null;
+  for (let i = elements.length - 1; i >= 0; i--) {
+    const el = elements[i], local = localPoint(el, x, y);
+    if (hitElement(el, x, y, tol)) return cvKey("x", el);
+    if (!hollow && fillable(el) && pointInPoly(fillOutline(el), local.x, local.y)) hollow = cvKey("x", el);
+  }
+  if (hollow) return hollow;
+  for (let i = nodes.length - 1; i >= 0; i--) if (nodes[i].type !== "group" && boxContains(nodes[i], x, y)) return cvKey("n", nodes[i]);
+  const map = nodeMap(doc);
+  for (const edge of docEdges(doc).reverse()) {
+    const curve = edgeCurveFor(map, edge);
+    if (curve && hitEdge(curve, x, y, tol)) return cvKey("e", edge);
+  }
+  for (let i = nodes.length - 1; i >= 0; i--) if (nodes[i].type === "group" && (boxContains(nodes[i], x, y) || hitGroup(nodes[i], x, y, tol))) return cvKey("n", nodes[i]);
+  return null;
+}
+
+// The fill tool: enclosed areas get a fill, cards, groups and edges a color, open strokes and text a new ink.
+// color null clears a fill or a card color (open strokes keep their ink). Returns whether anything changed.
+function applyFill(doc, key, color) {
+  const item = cvLookup(doc, key);
+  if (!item) return false;
+  if (key[0] === "x") {
+    if (item.type === "paint") {
+      if (color === null) return removeItems(doc, [key]) > 0;
+      if (item.fill === color && item.stroke === color) return false;
+      item.fill = color;
+      item.stroke = color;
+      return true;
+    }
+    if (fillable(item)) {
+      if ((item.fill || null) === color) return false;
+      item.fill = color;
+    } else {
+      if (color === null || item.stroke === color) return false;
+      item.stroke = color;
+    }
+    return true;
+  }
+  if (color === null) {
+    if (!("color" in item)) return false;
+    delete item.color;
+    return true;
+  }
+  if (item.color === color) return false;
+  item.color = color;
+  return true;
+}
+
+function setBackground(doc, color) {
+  if (cvBackground(doc) === color) return false;
+  if (color === null) {
+    if (!doc.unlaw || typeof doc.unlaw !== "object") return false;
+    delete doc.unlaw.background;
+    return true;
+  }
+  ensureElements(doc);
+  doc.unlaw.background = color;
+  return true;
+}
+
 // Two slightly different passes per shape, wobble drawn from the element's own seed.
 function roughLine(rng, a, b, rough) {
   const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
@@ -2004,7 +2149,7 @@ function roughLine(rng, a, b, rough) {
 }
 
 function roughStrokes(el) {
-  if (!CV_SHAPES.has(el.type) || el.type === "text") return [];
+  if (!CV_SHAPES.has(el.type) || el.type === "text" || el.type === "paint") return [];
   const rough = Math.max(0, Math.min(2, cvNum(el.roughness, 1)));
   const rng = mulberry32(cvNum(el.seed, 1));
   const passes = rough > 0 ? 2 : 1;
@@ -2050,6 +2195,243 @@ function arrowHead(from, to, size) {
   return [-0.45, 0.45].map((turn) => [to[0] - size * Math.cos(angle + turn), to[1] - size * Math.sin(angle + turn)]);
 }
 
+// ---- fill tool: flood the clicked color on a rendered snapshot, keep the area as a paint element ----
+// Pixels connected (4-way) to (sx, sy) whose RGBA stays within tol of it; touches = the area reaches the image edge.
+function floodRegion(data, w, h, sx, sy, tol) {
+  const mask = new Uint8Array(w * h), start = sy * w + sx, k0 = start * 4;
+  const r0 = data[k0], g0 = data[k0 + 1], b0 = data[k0 + 2], a0 = data[k0 + 3];
+  const same = (i) => {
+    const k = i * 4;
+    return Math.abs(data[k] - r0) <= tol && Math.abs(data[k + 1] - g0) <= tol && Math.abs(data[k + 2] - b0) <= tol && Math.abs(data[k + 3] - a0) <= tol;
+  };
+  const stack = [start];
+  mask[start] = 1;
+  let touches = false, count = 0;
+  while (stack.length) {
+    const i = stack.pop(), x = i % w, y = (i - x) / w;
+    count++;
+    if (x === 0 || y === 0 || x === w - 1 || y === h - 1) touches = true;
+    if (x > 0 && !mask[i - 1] && same(i - 1)) { mask[i - 1] = 1; stack.push(i - 1); }
+    if (x < w - 1 && !mask[i + 1] && same(i + 1)) { mask[i + 1] = 1; stack.push(i + 1); }
+    if (y > 0 && !mask[i - w] && same(i - w)) { mask[i - w] = 1; stack.push(i - w); }
+    if (y < h - 1 && !mask[i + w] && same(i + w)) { mask[i + w] = 1; stack.push(i + w); }
+  }
+  return { mask, touches, count };
+}
+
+// One pixel wider on every side, so the area slips under antialiased edges instead of leaving a light seam.
+function growMask(mask, w, h) {
+  const out = new Uint8Array(mask);
+  for (let i = 0; i < mask.length; i++) {
+    if (!mask[i]) continue;
+    const x = i % w;
+    if (x > 0) out[i - 1] = 1;
+    if (x < w - 1) out[i + 1] = 1;
+    if (i >= w) out[i - w] = 1;
+    if (i < mask.length - w) out[i + w] = 1;
+  }
+  return out;
+}
+
+// Closed rings of pixel corners around a mask (outer border and holes). Where two pixels touch only at a corner
+// the walk turns right, around the pixel it came along. Even-odd filling only needs the set of edges anyway.
+function traceMask(mask, w, h) {
+  const W = w + 1, next = new Map();
+  const add = (x0, y0, x1, y1) => {
+    const key = y0 * W + x0;
+    if (!next.has(key)) next.set(key, []);
+    next.get(key).push([x1, y1]);
+  };
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (!mask[i]) continue;
+      if (y === 0 || !mask[i - w]) add(x, y, x + 1, y);
+      if (x === w - 1 || !mask[i + 1]) add(x + 1, y, x + 1, y + 1);
+      if (y === h - 1 || !mask[i + w]) add(x + 1, y + 1, x, y + 1);
+      if (x === 0 || !mask[i - 1]) add(x, y + 1, x, y);
+    }
+  }
+  const rings = [];
+  for (const [key, list] of next) {
+    while (list.length) {
+      const sx = key % W, sy = (key - sx) / W, ring = [[sx, sy]];
+      let px = sx, py = sy, [cx, cy] = list.pop();
+      while (cx !== sx || cy !== sy) {
+        ring.push([cx, cy]);
+        const out = next.get(cy * W + cx);
+        if (!out || !out.length) break;
+        let pick = 0;
+        if (out.length > 1) {
+          const dx = cx - px, dy = cy - py;
+          pick = Math.max(0, out.findIndex(([nx, ny]) => dx * (ny - cy) - dy * (nx - cx) > 0));
+        }
+        const [nx, ny] = out.splice(pick, 1)[0];
+        px = cx; py = cy; cx = nx; cy = ny;
+      }
+      rings.push(ring);
+    }
+  }
+  return rings;
+}
+
+function ringArea(ring) {
+  let sum = 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) sum += (ring[j][0] + ring[i][0]) * (ring[j][1] - ring[i][1]);
+  return Math.abs(sum) / 2;
+}
+
+// Douglas-Peucker on a closed ring: the pixel staircase becomes straight and diagonal runs.
+function simplifyRing(ring, eps) {
+  const n = ring.length;
+  const pts = ring.filter((p, i) => {
+    const a = ring[(i - 1 + n) % n], b = ring[(i + 1) % n];
+    return (p[0] - a[0]) * (b[1] - p[1]) - (p[1] - a[1]) * (b[0] - p[0]) !== 0;
+  });
+  if (pts.length < 4) return pts;
+  let far = 0, best = -1;
+  pts.forEach((p, i) => { const d = Math.hypot(p[0] - pts[0][0], p[1] - pts[0][1]); if (d > best) { best = d; far = i; } });
+  const rdp = (line) => {
+    const keep = new Uint8Array(line.length);
+    keep[0] = keep[line.length - 1] = 1;
+    const stack = [[0, line.length - 1]];
+    while (stack.length) {
+      const [a, b] = stack.pop();
+      let index = -1, dist = eps;
+      for (let i = a + 1; i < b; i++) {
+        const d = segDist(line[i][0], line[i][1], line[a][0], line[a][1], line[b][0], line[b][1]);
+        if (d > dist) { dist = d; index = i; }
+      }
+      if (index >= 0) { keep[index] = 1; stack.push([a, index], [index, b]); }
+    }
+    return line.filter((_, i) => keep[i]);
+  };
+  return [...rdp(pts.slice(0, far + 1)).slice(0, -1), ...rdp([...pts.slice(far), pts[0]]).slice(0, -1)];
+}
+
+// The flooded area as a paint element in world units: rings from a snapshot drawn at view with scale k.
+function paintFromMask(mask, w, h, view, k, color) {
+  const traced = traceMask(mask, w, h);
+  let rings = [];
+  for (let eps = 0.8; eps <= 13; eps *= 2) {
+    rings = traced.map((ring) => simplifyRing(ring, eps)).filter((ring) => ring.length >= 3 && ringArea(ring) >= 2);
+    if (rings.reduce((sum, ring) => sum + ring.length, 0) <= 40000) break;
+  }
+  if (!rings.length) return null;
+  const round = (v) => Math.round(v * 100) / 100;
+  const world = rings.map((ring) => ring.map(([px, py]) => { const p = toWorld(view, px / k, py / k); return [p.x, p.y]; }));
+  world.sort((a, b) => ringArea(b) - ringArea(a));
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const ring of world) for (const [x, y] of ring) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+  const rel = (ring) => ring.map(([x, y]) => [round(x - x0), round(y - y0)]);
+  return { id: cvId(), type: "paint", x: round(x0), y: round(y0), width: round(x1 - x0), height: round(y1 - y0), points: rel(world[0]), holes: world.slice(1).map(rel), stroke: color, fill: color, strokeWidth: 1 };
+}
+
+// Whether a world point lies on an element's ink (its line or text), not inside its area.
+function onInk(el, x, y, tol) {
+  ({ x, y } = localPoint(el, x, y));
+  if (el.type === "text") return boxContains(el, x, y, tol);
+  if (el.type === "paint") return false;
+  const reach = tol + cvNum(el.strokeWidth, 2) / 2;
+  if (el.type === "line" || el.type === "arrow" || el.type === "freedraw") return polyDist(elementPoints(el), x, y, false) <= reach;
+  return polyDist(elementOutline(el), x, y, true) <= reach;
+}
+
+// ---- partial eraser: cut drawn lines where a round eraser passes ----
+// The element's drawn strokes in world units (rotation applied); a rough shape keeps its wobble.
+function elementStrokes(el) {
+  if (el.type === "text" || el.type === "paint" || !CV_SHAPES.has(el.type)) return [];
+  const strokes = roughStrokes(el).filter((stroke) => stroke.pts.length);
+  if (!el.angle) return strokes;
+  const cx = el.x + el.width / 2, cy = el.y + el.height / 2, cos = Math.cos(el.angle), sin = Math.sin(el.angle);
+  const turn = ([x, y]) => [cx + (x - cx) * cos - (y - cy) * sin, cy + (x - cx) * sin + (y - cy) * cos];
+  return strokes.map((stroke) => ({ ...stroke, pts: stroke.pts.map(turn) }));
+}
+
+function pieceOf(el, pts, type, smooth) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of pts) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+  const piece = cvClone(el);
+  delete piece.angle;
+  delete piece.holes;
+  return Object.assign(piece, {
+    id: cvId(), type, x: x0, y: y0, width: x1 - x0, height: y1 - y0, fill: null,
+    points: pts.map(([x, y]) => [Math.round((x - x0) * 100) / 100, Math.round((y - y0) * 100) / 100]),
+    roughness: type === "freedraw" && smooth ? cvNum(el.roughness, 1) : 0,
+  });
+}
+
+// What is left of el after a round eraser of radius r at (x, y): null when untouched, else the pieces (maybe none).
+// Shapes turn into line pieces; a filled shape keeps its fill as a paint area under them.
+function cutElement(el, x, y, r) {
+  const reach = r + cvNum(el.strokeWidth, 2) / 2, step = Math.max(0.5, reach / 4);
+  const strokes = elementStrokes(el);
+  if (!strokes.some((stroke) => polyDist(stroke.pts, x, y, false) <= reach)) return null;
+  const pieces = [];
+  let cut = false;
+  strokes.forEach((stroke, n) => {
+    const dense = [];
+    stroke.pts.forEach((p, i) => {
+      if (i) {
+        const a = stroke.pts[i - 1];
+        if (segDist(x, y, a[0], a[1], p[0], p[1]) <= reach + step) {
+          const parts = Math.min(4000, Math.ceil(Math.hypot(p[0] - a[0], p[1] - a[1]) / step));
+          for (let k = 1; k < parts; k++) dense.push([a[0] + ((p[0] - a[0]) * k) / parts, a[1] + ((p[1] - a[1]) * k) / parts]);
+        }
+      }
+      dense.push(p);
+    });
+    const runs = [];
+    let run = [];
+    for (const p of dense) {
+      if (Math.hypot(p[0] - x, p[1] - y) > reach) { run.push(p); continue; }
+      cut = true;
+      if (run.length) runs.push(run);
+      run = [];
+    }
+    if (run.length) runs.push(run);
+    const closed = dense.length > 2 && dense[0][0] === dense[dense.length - 1][0] && dense[0][1] === dense[dense.length - 1][1];
+    if (closed && runs.length > 1 && runs[0][0] === dense[0] && runs[runs.length - 1].at(-1) === dense[dense.length - 1]) {
+      runs[0] = [...runs.pop(), ...runs[0].slice(1)];
+    }
+    const lastPoint = dense[dense.length - 1];
+    for (const part of runs) {
+      if (part.length < 2) continue;
+      if (el.type === "freedraw") { pieces.push(pieceOf(el, part, "freedraw", true)); continue; }
+      const head = el.type === "arrow" && n === 0 && part[part.length - 1] === lastPoint;
+      pieces.push(pieceOf(el, part, head ? "arrow" : stroke.smooth ? "freedraw" : "line", stroke.smooth));
+    }
+  });
+  if (!cut) return null;
+  if (el.fill && fillable(el)) {
+    const area = elementStrokes({ ...el, roughness: 0 });
+    const outline = el.type === "freedraw" ? area[0].pts : area[0].pts.slice(0, -1);
+    const paint = pieceOf(el, outline, "paint", false);
+    Object.assign(paint, { fill: el.fill, stroke: el.fill, strokeWidth: 1, holes: [] });
+    delete paint.roughness;
+    pieces.unshift(paint);
+  }
+  return pieces;
+}
+
+// Cuts every element the eraser touches at (x, y); returns how many changed.
+function eraseAt(doc, x, y, r) {
+  const list = doc.unlaw && Array.isArray(doc.unlaw.elements) ? doc.unlaw.elements : null;
+  if (!list) return 0;
+  let changed = 0;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const el = list[i];
+    if (!validBox(el) || !CV_SHAPES.has(el.type)) continue;
+    // The pad covers half the stroke and the wobble of rough shapes, which can leave the box by a few units.
+    if (!el.angle && !boxContains(el, x, y, r + cvNum(el.strokeWidth, 2) + 8)) continue;
+    const pieces = cutElement(el, x, y, r);
+    if (!pieces) continue;
+    list.splice(i, 1, ...pieces);
+    changed++;
+  }
+  return changed;
+}
+
 // ---- resize ----
 function resizeBox(box, handle, dx, dy) {
   let x0 = box.x, y0 = box.y, x1 = box.x + box.width, y1 = box.y + box.height;
@@ -2071,6 +2453,7 @@ function applyBox(item, orig, box) {
   if (Array.isArray(orig.points)) {
     const kx = orig.width ? box.width / orig.width : 1, ky = orig.height ? box.height / orig.height : 1;
     item.points = orig.points.map((p) => (Array.isArray(p) ? [p[0] * kx, p[1] * ky] : p));
+    if (Array.isArray(orig.holes)) item.holes = orig.holes.map((ring) => (Array.isArray(ring) ? ring.map((p) => (Array.isArray(p) ? [p[0] * kx, p[1] * ky] : p)) : ring));
   }
   if (typeof orig.fontSize === "number" && orig.height > 0) item.fontSize = Math.max(8, Math.min(200, Math.round(orig.fontSize * box.height / orig.height)));
 }
@@ -2127,6 +2510,7 @@ function applyStyle(doc, keys, patch) {
     const item = cvLookup(doc, key);
     if (!item) continue;
     if (key[0] === "x") {
+      if (patch.stroke !== undefined && patch.fill === undefined && item.fill && item.fill === item.stroke) item.fill = patch.stroke;
       if (patch.stroke !== undefined) item.stroke = patch.stroke;
       if (patch.fill !== undefined) item.fill = patch.fill;
       if (patch.strokeWidth !== undefined) item.strokeWidth = patch.strokeWidth;
@@ -2246,8 +2630,21 @@ const cv = {
   path: "", name: "", version: "", doc: null, items: [], tool: "select", view: { x: 0, y: 0, z: 1 }, sel: [],
   style: { stroke: CV_INK[0], fill: false, width: 4, rough: 1 }, hist: null, drag: null, editing: null, space: false,
   dirty: false, saving: null, saveTimer: 0, clip: null, pasted: 0, hover: null, pointer: null, lastLabel: "", lastAt: 0,
-  drawPending: false, el: null, ctx: null, w: 0, h: 0, dpr: 1, ui: {}, gesture: 1,
+  drawPending: false, el: null, ctx: null, w: 0, h: 0, dpr: 1, ui: {}, gesture: 1, eraser: "object", cursor: null, menu: "",
 };
+
+// The eraser mode, shape evenness and width are remembered in this browser.
+function cvLoadPrefs() {
+  let prefs = {};
+  try { prefs = JSON.parse(localStorage.getItem(CV_PREFS) || "{}") || {}; } catch { prefs = {}; }
+  if (CV_ERASERS.some((e) => e.mode === prefs.eraser)) cv.eraser = prefs.eraser;
+  if (CV_ROUGH_LEVELS.some((l) => l.rough === prefs.rough)) cv.style.rough = prefs.rough;
+  if (Number.isInteger(prefs.width) && prefs.width >= CV_MIN_WIDTH && prefs.width <= CV_MAX_WIDTH) cv.style.width = prefs.width;
+}
+function cvSavePrefs() {
+  try { localStorage.setItem(CV_PREFS, JSON.stringify({ eraser: cv.eraser, rough: cv.style.rough, width: cv.style.width })); } catch { /* private mode: not remembered */ }
+}
+cvLoadPrefs();
 
 function cvLoad(shape) {
   cv.path = shape.path;
@@ -2347,15 +2744,52 @@ async function loadCanvasList() {
   return data;
 }
 
-async function cvOpen(path, create) {
-  await saveCanvas();
-  const { status, data } = await api("POST", "/api/canvases", { path, create });
-  if (status !== 200) { toast(data.error || "Could not open the canvas"); cvFillPick(); return false; }
+async function cvShow(data) {
   cvLoad(data);
   localStorage.setItem("desk-canvas", data.path);
   cvFit();
   await loadCanvasList();
+}
+
+async function cvOpen(path, create) {
+  await saveCanvas();
+  const { status, data } = await api("POST", "/api/canvases", { path, create });
+  if (status !== 200) { toast(data.error || "Could not open the canvas"); cvFillPick(); return false; }
+  await cvShow(data);
   return true;
+}
+
+// New canvas = the next free canvas-N in the canvas folder, opened at once; rename it in the name field.
+async function cvNew() {
+  await saveCanvas();
+  const { status, data } = await api("POST", "/api/canvas/new", {});
+  if (status !== 200) { toast(data.error || "Could not create a canvas"); return; }
+  await cvShow(data);
+}
+
+// "Open…" shows the macOS open dialog (through the server); without it the page asks for a path.
+async function cvChoose() {
+  const { status, data } = await api("POST", "/api/canvas/choose", {});
+  if (status !== 200) { toast(data.error || "Could not show the file dialog"); return; }
+  if (data.unavailable) {
+    const answer = prompt("Path or name of the canvas to open");
+    if (answer && answer.trim()) await cvOpen(answer.trim(), false);
+  } else if (data.path) {
+    await cvOpen(data.path, false);
+  }
+}
+
+async function cvRename(raw) {
+  const field = cv.ui.name, name = String(raw || "").trim();
+  if (!cv.path || !name || name === cv.name) { if (field) field.value = cv.name; return; }
+  await saveCanvas();
+  const { status, data } = await api("POST", "/api/canvas/rename", { path: cv.path, name });
+  if (status !== 200) { toast(data.error || "Could not rename the canvas"); if (cv.ui.name) cv.ui.name.value = cv.name; return; }
+  cv.path = data.path;
+  cv.name = data.name;
+  if (typeof data.version === "string" && !cv.dirty) cv.version = data.version;
+  localStorage.setItem("desk-canvas", data.path);
+  await loadCanvasList();
 }
 
 async function cvStart() {
@@ -2450,15 +2884,21 @@ function paintElement(ctx, el, pal, hideText) {
     ctx.restore();
     return;
   }
+  if (el.type === "paint") {
+    ctx.beginPath();
+    for (const ring of paintRings(el)) ring.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
+    ctx.fillStyle = adaptInk(typeof el.fill === "string" ? el.fill : el.stroke, pal.dark);
+    ctx.fill("evenodd");
+    ctx.restore();
+    return;
+  }
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.strokeStyle = ink;
-  ctx.lineWidth = Math.max(1, Math.min(20, cvNum(el.strokeWidth, 2)));
-  if (el.fill && (el.type === "rectangle" || el.type === "ellipse" || el.type === "diamond")) {
-    ctx.globalAlpha = 0.22;
+  ctx.lineWidth = Math.max(CV_MIN_WIDTH, Math.min(CV_MAX_WIDTH, cvNum(el.strokeWidth, 2)));
+  if (el.fill && fillable(el)) {
     ctx.fillStyle = adaptInk(el.fill, pal.dark);
-    strokePathFill(ctx, elementOutline(el));
-    ctx.globalAlpha = 1;
+    strokePathFill(ctx, fillOutline(el));
   }
   for (const stroke of roughStrokes(el)) strokePath(ctx, stroke);
   if (el.type === "arrow") {
@@ -2645,6 +3085,15 @@ function paintOverlay(o) {
     ctx.stroke();
     ctx.setLineDash([]);
   }
+  if (ui.eraser) {
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = pal.muted;
+    ctx.beginPath();
+    ctx.arc(ui.eraser.x, ui.eraser.y, Math.max(2, ui.eraser.r), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = pal.accent;
+  }
   if (drag && drag.mode === "shape" && drag.tool === "card") {
     const a = toScreen(view, drag.x0, drag.y0), b = toScreen(view, drag.x1, drag.y1), box = normRect(a.x, a.y, b.x, b.y);
     ctx.setLineDash([6, 4]);
@@ -2658,7 +3107,7 @@ function paintScene(o) {
   const { ctx, doc, view, pal, ui } = o;
   const k = o.scale;
   ctx.setTransform(k, 0, 0, k, 0, 0);
-  ctx.fillStyle = pal.bg;
+  ctx.fillStyle = cvBackground(doc) || pal.bg;
   ctx.fillRect(0, 0, o.w, o.h);
   if (ui) paintGrid(ctx, view, o.w, o.h, pal);
   ctx.setTransform(k * view.z, 0, 0, k * view.z, k * view.x, k * view.y);
@@ -2689,7 +3138,8 @@ function cvDraw() {
       cv.ctx.fillRect(0, 0, cv.w, cv.h);
       return;
     }
-    const ui = { sel: new Set(cv.sel), hover: cv.hover, drag: cv.drag, editing: cv.editing && cv.editing.key, tool: cv.tool, draft: cvDraft() };
+    const eraser = cv.tool === "eraser" && cv.eraser === "part" && cv.cursor ? { ...cv.cursor, r: cvEraserRadius() * cv.view.z } : null;
+    const ui = { sel: new Set(cv.sel), hover: cv.hover, drag: cv.drag, editing: cv.editing && cv.editing.key, tool: cv.tool, draft: cvDraft(), eraser };
     paintScene({ ctx: cv.ctx, doc: cv.doc, view: cv.view, w: cv.w, h: cv.h, pal, scale: cv.dpr, ui });
   });
 }
@@ -2741,16 +3191,26 @@ function cvExport() {
   }, "image/png");
 }
 
+function cvIcon(name, weight) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg"), path = document.createElementNS(ns, "path");
+  const attrs = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": String(weight || 1.8), "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" };
+  for (const [key, value] of Object.entries(attrs)) svg.setAttribute(key, value);
+  path.setAttribute("d", CV_ICONS[name] || "");
+  svg.append(path);
+  return svg;
+}
+
 // ---- canvas interaction ----
 function cvSelect(keys) {
   cv.sel = keys;
   const only = keys.length === 1 && keys[0][0] === "x" ? cvLookup(cv.doc, keys[0]) : null;
-  if (only && only.type !== "text") {
+  if (only && only.type !== "text" && only.type !== "paint") {
     cv.style = {
       stroke: typeof only.stroke === "string" ? only.stroke : cv.style.stroke,
       fill: Boolean(only.fill),
       width: cvNum(only.strokeWidth, cv.style.width),
-      rough: cvNum(only.roughness, cv.style.rough),
+      rough: cv.style.rough,
     };
   }
   cvSync();
@@ -2758,6 +3218,7 @@ function cvSelect(keys) {
 }
 
 function cvSetTool(tool) {
+  cvCloseMenu();
   cv.tool = tool;
   cv.hover = null;
   cvSync();
@@ -2776,9 +3237,13 @@ function cvSync() {
   if (!ui.tools) return;
   for (const [tool, button] of Object.entries(ui.tools)) button.classList.toggle("on", tool === cv.tool);
   CV_INK.forEach((color, i) => ui.ink[i].classList.toggle("on", color === cv.style.stroke));
+  const custom = !CV_INK.includes(cv.style.stroke);
+  ui.customWrap.classList.toggle("on", custom);
+  ui.customWrap.style.background = custom ? cv.style.stroke : "";
+  if (custom && /^#[0-9a-fA-F]{6}$/.test(cv.style.stroke) && ui.custom.value !== cv.style.stroke.toLowerCase()) ui.custom.value = cv.style.stroke.toLowerCase();
   ui.fill.classList.toggle("on", cv.style.fill);
-  CV_WIDTHS.forEach((width, i) => ui.widths[i].classList.toggle("on", width === cv.style.width));
-  ui.rough.forEach((button, i) => button.classList.toggle("on", i === cv.style.rough));
+  if (document.activeElement !== ui.width) ui.width.value = String(widthToSlider(cv.style.width));
+  if (document.activeElement !== ui.widthValue) ui.widthValue.value = String(cv.style.width);
   ui.undo.disabled = !cv.hist || !cv.hist.undo.length;
   ui.redo.disabled = !cv.hist || !cv.hist.redo.length;
   cvZoomLabel();
@@ -2788,10 +3253,11 @@ function cvSync() {
 // Changing the style also restyles the selection.
 function cvStyle(patch) {
   Object.assign(cv.style, patch);
+  if (patch.width !== undefined || patch.rough !== undefined) cvSavePrefs();
   if (cv.doc && cv.sel.length) {
     applyStyle(cv.doc, cv.sel, {
       stroke: patch.stroke, strokeWidth: patch.width, roughness: patch.rough,
-      fill: patch.fill !== undefined || patch.stroke !== undefined ? (cv.style.fill ? cv.style.stroke : null) : undefined,
+      fill: patch.fill !== undefined ? (cv.style.fill ? cv.style.stroke : null) : undefined,
     });
     cvCommit("style");
   }
@@ -2864,15 +3330,25 @@ function cvSideHandle(s) {
 function cvDown(event) {
   if (!cv.doc || (event.button !== 0 && event.button !== 1)) return;
   event.preventDefault();
+  const wasEditing = Boolean(cv.editing);
   if (cv.editing) cvEndEdit();
   cv.el.focus();
   if (cv.el.setPointerCapture) cv.el.setPointerCapture(event.pointerId);
   const { s, w } = cvPoint(event);
   if (event.button === 1 || cv.tool === "hand" || cv.space) { cv.drag = { mode: "pan", s, view: { ...cv.view } }; cvCursor(); return; }
   if (cv.tool === "select") { cvDownSelect(event, s, w); return; }
-  if (cv.tool === "eraser") { cv.drag = { mode: "erase", removed: 0 }; cvErase(w); return; }
+  // The tool stays active, so the click that closes a card or text editor only closes it.
+  if (wasEditing && (cv.tool === "text" || cv.tool === "card")) return;
+  if (cv.tool === "fill") { cvBucket(w, s, event.altKey); return; }
+  if (cv.tool === "eraser") { cv.drag = { mode: "erase", removed: 0, last: null }; cvErase(w); return; }
+  if (cv.sel.length) cvSelect([]);
   if (cv.tool === "freedraw") { cv.drag = { mode: "pen", pts: [[w.x, w.y]], seed: cvSeed() }; return; }
-  if (cv.tool === "text") { cvNewText(w); return; }
+  if (cv.tool === "text") {
+    const key = hitTest(cv.doc, w.x, w.y, cv.view.z), item = key && key[0] === "x" ? cvLookup(cv.doc, key) : null;
+    if (item && item.type === "text") { cvSelect([key]); cvStartEdit(key); return; }
+    cvNewText(w);
+    return;
+  }
   cv.drag = { mode: "shape", tool: cv.tool, x0: w.x, y0: w.y, x1: w.x, y1: w.y, shift: event.shiftKey, seed: cvSeed() };
 }
 
@@ -2907,6 +3383,7 @@ function cvMove(event) {
   if (!cv.doc) return;
   const { s, w } = cvPoint(event);
   const d = cv.drag;
+  if (cv.tool === "eraser" && cv.eraser === "part") { cv.cursor = s; cvDraw(); }
   if (!d) {
     const key = cvHoverKey(w);
     if (key !== cv.hover) { cv.hover = key; cvCursor(); cvDraw(); }
@@ -2995,7 +3472,6 @@ function cvFinishShape(d) {
     const box = big ? normRect(d.x0, d.y0, x1, y1) : { x: d.x0, y: d.y0, width: 260, height: 120 };
     const node = { id: cvId(), type: "text", text: "", x: box.x, y: box.y, width: Math.max(80, box.width), height: Math.max(48, box.height) };
     ensureList(cv.doc, "nodes").push(node);
-    cvSetTool("select");
     cvSelect([cvKey("n", node)]);
     cvStartEdit(cvKey("n", node));
     return;
@@ -3004,7 +3480,6 @@ function cvFinishShape(d) {
   const el = cvDraftOf(d);
   if (!el) return;
   ensureElements(cv.doc).push(el);
-  cvSetTool("select");
   cvSelect([cvKey("x", el)]);
   cvCommit("draw");
 }
@@ -3013,9 +3488,53 @@ function cvNewText(w) {
   const size = 24;
   const el = { id: cvId(), type: "text", x: w.x, y: w.y, width: 10, height: size * 1.25, stroke: cv.style.stroke, fill: null, strokeWidth: cv.style.width, roughness: cv.style.rough, seed: cvSeed(), text: "", fontSize: size };
   ensureElements(cv.doc).push(el);
-  cvSetTool("select");
   cvSelect([cvKey("x", el)]);
   cvStartEdit(cvKey("x", el));
+}
+
+// The scene as pixels, drawn like the screen without grid or selection; null where no canvas can be made.
+function cvSnapshot() {
+  if (!cv.doc || !cv.w || !cv.h) return null;
+  const canvas = document.createElement("canvas");
+  if (!canvas || typeof canvas.getContext !== "function") return null;
+  const k = Math.min(2, cv.dpr || 1), w = Math.round(cv.w * k), h = Math.round(cv.h * k);
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  paintScene({ ctx, doc: cv.doc, view: cv.view, w: cv.w, h: cv.h, pal: cvPalette(), scale: k, ui: null });
+  const image = ctx.getImageData(0, 0, w, h);
+  return image && image.data ? { data: image.data, w, h, k } : null;
+}
+
+// Like a paint program: the area of the clicked color, bounded by anything else, gets the color as a paint element.
+// Cards, groups and edges take the color, a click on a line or text recolors it, and an area that runs out of
+// the view falls back to filling the shape under it or the background. Alt+click clears instead.
+function cvBucket(w, s, clear) {
+  const color = clear ? null : cv.style.stroke;
+  const tol = 6 / cv.view.z;
+  const key = fillTarget(cv.doc, w.x, w.y, cv.view.z), item = key && cvLookup(cv.doc, key);
+  if (key && key[0] !== "x") { if (applyFill(cv.doc, key, color)) cvCommit("fill"); return; }
+  if (item && onInk(item, w.x, w.y, tol)) {
+    if (color !== null && item.stroke !== color) { item.stroke = color; cvCommit("fill"); }
+    return;
+  }
+  if (color !== null && !(item && item.type === "paint" && item.fill === color)) {
+    const shot = cvSnapshot();
+    const px = shot && Math.floor(s.x * shot.k), py = shot && Math.floor(s.y * shot.k);
+    if (shot && px >= 0 && py >= 0 && px < shot.w && py < shot.h) {
+      const region = floodRegion(shot.data, shot.w, shot.h, px, py, CV_FILL_TOLERANCE);
+      const paint = !region.touches && paintFromMask(growMask(region.mask, shot.w, shot.h), shot.w, shot.h, cv.view, shot.k, color);
+      if (paint) {
+        const list = ensureElements(cv.doc), at = item ? list.indexOf(item) : -1;
+        // Above a filled shape it was poured into, under an empty outline so the line stays on top.
+        list.splice(at < 0 ? 0 : item.fill ? at + 1 : at, 0, paint);
+        cvCommit("fill");
+        return;
+      }
+    }
+  }
+  if (key ? applyFill(cv.doc, key, color) : setBackground(cv.doc, color)) cvCommit("fill");
 }
 
 function cvFinishConnect(d, w) {
@@ -3027,7 +3546,25 @@ function cvFinishConnect(d, w) {
   cvCommit("connect");
 }
 
+function cvEraserRadius() {
+  return Math.max(cv.style.width / 2, 8 / cv.view.z);
+}
+
 function cvErase(w) {
+  const d = cv.drag;
+  if (d && cv.eraser === "part") {
+    const r = cvEraserRadius(), from = d.last || w;
+    const steps = Math.min(200, Math.max(1, Math.ceil(Math.hypot(w.x - from.x, w.y - from.y) / Math.max(0.5, r / 2))));
+    let changed = 0;
+    for (let i = 1; i <= steps; i++) changed += eraseAt(cv.doc, from.x + ((w.x - from.x) * i) / steps, from.y + ((w.y - from.y) * i) / steps, r);
+    d.last = w;
+    if (changed) {
+      d.removed += changed;
+      cv.sel = cv.sel.filter((k) => cvLookup(cv.doc, k));
+      cvDraw();
+    }
+    return;
+  }
   const key = hitTest(cv.doc, w.x, w.y, cv.view.z);
   if (!key || !cv.drag) return;
   if (removeItems(cv.doc, [key])) {
@@ -3194,9 +3731,83 @@ function cvSelectAll() {
 const CV_ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 
 // Returns true when the key was a canvas shortcut; the page's own keys never run in this view.
+function cvZoomBy(factor) {
+  cvSetView(zoomAt(cv.view, cv.w / 2, cv.h / 2, factor));
+}
+
+// The slider is logarithmic: fine steps among thin lines, big ones toward 100.
+const widthToSlider = (width) => Math.round((Math.log(Math.max(CV_MIN_WIDTH, Math.min(CV_MAX_WIDTH, width))) / Math.log(CV_MAX_WIDTH)) * 1000);
+const sliderToWidth = (value) => Math.max(CV_MIN_WIDTH, Math.min(CV_MAX_WIDTH, Math.round(Math.exp((value / 1000) * Math.log(CV_MAX_WIDTH)))));
+
+// A width typed by hand: digits only, kept within 1-100; anything else puts the current width back.
+function cvTypedWidth(text) {
+  const value = Number.parseInt(String(text).trim(), 10);
+  if (Number.isFinite(value) && /^\s*\d+\s*$/.test(String(text))) {
+    const width = Math.max(CV_MIN_WIDTH, Math.min(CV_MAX_WIDTH, value));
+    if (width !== cv.style.width) cvStyle({ width });
+  }
+  cvSync();
+}
+
+// [ and ] (or - and =) like Photoshop's brush size: 1 below 10, 5 below 50, then 10.
+function cvStepWidth(dir) {
+  const w = cv.style.width, step = (dir > 0 ? w >= 50 : w > 50) ? 10 : (dir > 0 ? w >= 10 : w > 10) ? 5 : 1;
+  const next = Math.max(CV_MIN_WIDTH, Math.min(CV_MAX_WIDTH, w + dir * step));
+  if (next !== w) cvStyle({ width: next });
+}
+
+function cvSetEraser(mode) {
+  cv.eraser = mode;
+  cvSavePrefs();
+  cvSetTool("eraser");
+}
+
+// The bubble under an active tool's button: eraser mode, or how even the shapes are drawn.
+function cvMenuItems(tool) {
+  if (tool === "eraser") return CV_ERASERS.map((e) => ({ icon: e.icon, label: e.label, on: cv.eraser === e.mode, pick: () => cvSetEraser(e.mode) }));
+  if (CV_SHAPE_CYCLE.includes(tool)) {
+    return CV_ROUGH_LEVELS.map((l) => ({ num: String(l.level), label: l.label, on: cv.style.rough === l.rough, pick: () => { cvStyle({ rough: l.rough }); cvCloseMenu(); } }));
+  }
+  return null;
+}
+
+function cvOpenMenu(tool) {
+  const menu = cv.ui.menu, items = cvMenuItems(tool);
+  if (!menu || !items) return;
+  menu.textContent = "";
+  for (const item of items) {
+    const button = h("button", { class: item.on ? "on" : "" }, item.icon ? cvIcon(item.icon) : h("span", { class: "num", text: item.num }), h("span", { text: item.label }));
+    button.addEventListener("click", () => { item.pick(); cvCloseMenu(); });
+    menu.append(button);
+  }
+  const anchor = cv.ui.tools[tool], box = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : { left: 0, bottom: 0 };
+  menu.style.left = Math.round(box.left) + "px";
+  menu.style.top = Math.round(box.bottom + 6) + "px";
+  menu.classList.add("on");
+  cv.menu = tool;
+}
+
+function cvCloseMenu() {
+  if (!cv.menu) return;
+  cv.menu = "";
+  if (cv.ui.menu) cv.ui.menu.classList.remove("on");
+}
+
+// A click on the active tool's button opens its menu; on another tool it switches.
+function cvToolClick(tool) {
+  if (cv.tool === tool && cvMenuItems(tool)) {
+    if (cv.menu === tool) cvCloseMenu(); else cvOpenMenu(tool);
+    return;
+  }
+  cvSetTool(tool);
+}
+
 function canvasKey(event) {
+  if (event.key === "Escape" && cv.menu) { cvCloseMenu(); return true; }
   if (!cv.doc) return false;
   const key = event.key, mod = event.metaKey || event.ctrlKey;
+  // Physical keys, so the shortcuts also work with a Russian (or any) keyboard layout.
+  const code = event.code || "", physical = code.startsWith("Key") ? code.slice(3).toLowerCase() : code.startsWith("Digit") ? code.slice(5) : "";
   if (key === " " && !mod) { event.preventDefault(); cv.space = true; cvCursor(); return true; }
   if (key === "Escape") {
     if ($("help").classList.contains("on")) return false;
@@ -3206,14 +3817,21 @@ function canvasKey(event) {
     return false;
   }
   if (mod) {
-    const letter = key.length === 1 ? key.toLowerCase() : "";
-    if (!letter || !"zyacvd".includes(letter)) return false;
+    if (code === "Equal" || code === "NumpadAdd" || code === "Minus" || code === "NumpadSubtract") {
+      event.preventDefault();
+      cvZoomBy(code === "Equal" || code === "NumpadAdd" ? 1.25 : 0.8);
+      return true;
+    }
+    const letter = physical || (key.length === 1 ? key.toLowerCase() : "");
+    if (!letter || !"zyacvdg0".includes(letter)) return false;
     event.preventDefault();
     if (letter === "z") { if (event.shiftKey) cvRedo(); else cvUndo(); }
     else if (letter === "y") cvRedo();
     else if (letter === "a") cvSelectAll();
     else if (letter === "c") cvCopy();
     else if (letter === "v") cvPaste(cv.clip);
+    else if (letter === "g") cvGroup();
+    else if (letter === "0") cvFit();
     else cvDuplicate();
     return true;
   }
@@ -3226,9 +3844,22 @@ function canvasKey(event) {
     cvNudge(CV_ARROWS[key][0] * step, CV_ARROWS[key][1] * step);
     return true;
   }
-  const letter = key.length === 1 ? key.toLowerCase() : "";
+  if (code === "BracketLeft" || code === "BracketRight") { cvStepWidth(code === "BracketLeft" ? -1 : 1); return true; }
+  if (code === "Minus" || code === "Equal" || code === "NumpadSubtract" || code === "NumpadAdd") { cvStepWidth(code === "Minus" || code === "NumpadSubtract" ? -1 : 1); return true; }
+  const letter = physical || (key.length === 1 ? key.toLowerCase() : "");
+  if (letter === "e" && event.shiftKey) {
+    const mode = cv.eraser === "part" ? "object" : "part";
+    cvSetEraser(mode);
+    toast("Eraser: " + CV_ERASERS.find((e) => e.mode === mode).label.toLowerCase());
+    return true;
+  }
+  if (letter === "u" && event.shiftKey) {
+    const at = CV_SHAPE_CYCLE.indexOf(cv.tool);
+    cvSetTool(CV_SHAPE_CYCLE[(at + 1) % CV_SHAPE_CYCLE.length]);
+    return true;
+  }
   if (CV_BY_KEY[letter]) { cvSetTool(CV_BY_KEY[letter]); return true; }
-  if (letter === "g") { cvGroup(); return true; }
+  if (letter === "d") { cvStyle({ stroke: CV_INK[0] }); return true; }
   if (letter === "f") { cvFit(); return true; }
   return false;
 }
@@ -3236,31 +3867,40 @@ function canvasKey(event) {
 // ---- toolbar and view ----
 function cvFillPick() {
   const pick = cv.ui.pick;
-  if (!pick) return;
-  pick.textContent = "";
-  const items = cv.items.some((item) => item.path === cv.path) || !cv.path ? cv.items : [...cv.items, { path: cv.path, name: cv.name || cv.path }];
-  for (const item of items) pick.append(h("option", { value: item.path, text: item.name, selected: item.path === cv.path }));
-  pick.append(h("option", { value: "__new", text: "New canvas…" }), h("option", { value: "__open", text: "Open another…" }));
-  if (!cv.path) pick.value = items.length ? "" : "__new";
+  if (pick) {
+    pick.textContent = "";
+    const items = cv.items.some((item) => item.path === cv.path) || !cv.path ? cv.items : [...cv.items, { path: cv.path, name: cv.name || cv.path }];
+    pick.append(h("option", { value: "", text: "Canvases", disabled: true }));
+    for (const item of items) pick.append(h("option", { value: item.path, text: (item.path === cv.path ? "\u2713 " : "") + item.name }));
+    pick.value = "";
+  }
+  const field = cv.ui.name;
+  if (field) {
+    if (document.activeElement !== field) field.value = cv.name;
+    field.disabled = !cv.path;
+  }
 }
 
 async function cvPickChanged() {
   const value = cv.ui.pick.value;
-  if (value === "__new" || value === "__open") {
-    const answer = prompt(value === "__new" ? "Name of the new canvas" : "Path or name of the canvas to open");
-    cvFillPick();
-    if (answer && answer.trim()) await cvOpen(answer.trim(), value === "__new");
-  } else if (value && value !== cv.path) {
-    await cvOpen(value, false);
-  }
+  cv.ui.pick.value = "";
+  if (value && value !== cv.path) await cvOpen(value, false);
 }
 
 function cvBuildBar() {
-  const ui = { tools: {}, ink: [], widths: [], rough: [] };
+  const ui = { tools: {}, ink: [] };
   const press = (button, action) => () => { action(); button.blur(); };
+  const iconButton = (icon, title, run, weight) => {
+    const button = h("button", { title, "aria-label": title }, cvIcon(icon, weight));
+    button.addEventListener("click", press(button, run));
+    return button;
+  };
   const toolButtons = Object.keys(CV_TOOLS).map((tool) => {
-    const button = h("button", { title: CV_LABELS[tool] + " (" + CV_TOOLS[tool].toUpperCase() + ")", text: CV_LABELS[tool] });
-    button.addEventListener("click", press(button, () => cvSetTool(tool)));
+    const keys = CV_TOOLS[tool], shape = CV_SHAPE_CYCLE.includes(tool);
+    const hint = [keys ? keys[0].toUpperCase() : "", shape ? "Shift+U cycles shapes" : ""].filter(Boolean).join("; ");
+    const extra = tool === "fill" ? ". Floods the clicked color; Alt+click clears" : tool === "eraser" ? ". Click again: whole object or only where it passes (Shift+E)" : shape ? ". Click again: how even" : "";
+    const button = iconButton(tool, CV_LABELS[tool] + (hint ? " (" + hint + ")" : "") + extra, () => cvToolClick(tool));
+    if (tool === "eraser" || shape) button.classList.add("more");
     ui.tools[tool] = button;
     return button;
   });
@@ -3270,35 +3910,43 @@ function cvBuildBar() {
     ui.ink.push(button);
     return button;
   });
-  ui.fill = h("button", { title: "Fill shapes with the stroke color", text: "Fill" });
-  ui.fill.addEventListener("click", press(ui.fill, () => cvStyle({ fill: !cv.style.fill })));
-  const widths = CV_WIDTHS.map((width, i) => {
-    const button = h("button", { title: ["Thin", "Medium", "Thick"][i] + " stroke", text: ["S", "M", "L"][i] });
-    button.addEventListener("click", press(button, () => cvStyle({ width })));
-    ui.widths.push(button);
-    return button;
+  ui.custom = h("input", { type: "color", value: "#3a6df0", "aria-label": "Any color" });
+  ui.custom.addEventListener("input", () => cvStyle({ stroke: ui.custom.value.toLowerCase() }));
+  ui.customWrap = h("label", { class: "swatch custom", title: "Any color\u2026" }, ui.custom);
+  ui.fill = iconButton("filled", "Draw shapes filled with the color", () => cvStyle({ fill: !cv.style.fill }));
+  ui.width = h("input", { class: "cvwidth", type: "range", min: "0", max: "1000", step: "1", title: "Stroke width, 1-100 ([ ] or - = step)", "aria-label": "Stroke width" });
+  ui.width.addEventListener("input", () => cvStyle({ width: sliderToWidth(Number(ui.width.value)) }));
+  ui.width.addEventListener("change", () => ui.width.blur());
+  // The number next to the slider is a field: type an exact width, Enter applies, Escape cancels.
+  ui.widthValue = h("input", { class: "cvwidthval", type: "text", inputmode: "numeric", maxlength: "3", spellcheck: "false", title: "Stroke width: type 1-100, Enter applies", "aria-label": "Stroke width in pixels" });
+  ui.widthValue.addEventListener("focus", () => ui.widthValue.select && ui.widthValue.select());
+  ui.widthValue.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); ui.widthValue.blur(); }
+    else if (event.key === "Escape") { ui.widthValue.value = String(cv.style.width); ui.widthValue.blur(); }
   });
-  const roughs = [0, 1, 2].map((rough) => {
-    const button = h("button", { title: ["Clean lines", "Light sketch", "Rough sketch"][rough] + " (roughness " + rough + ")", text: String(rough) });
-    button.addEventListener("click", press(button, () => cvStyle({ rough })));
-    ui.rough.push(button);
-    return button;
+  ui.widthValue.addEventListener("blur", () => cvTypedWidth(ui.widthValue.value));
+  ui.menu = h("div", { class: "cvmenu" });
+  ui.undo = iconButton("undo", "Undo (Cmd/Ctrl+Z)", cvUndo);
+  ui.redo = iconButton("redo", "Redo (Shift+Cmd/Ctrl+Z)", cvRedo);
+  ui.name = h("input", { class: "cvname", type: "text", spellcheck: "false", title: "Canvas name: click to rename", "aria-label": "Canvas name" });
+  ui.name.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); ui.name.blur(); }
+    else if (event.key === "Escape") { ui.name.value = cv.name; ui.name.blur(); }
   });
-  const action = (text, title, run) => { const button = h("button", { title, text }); button.addEventListener("click", press(button, run)); return button; };
-  ui.undo = action("Undo", "Undo (Cmd/Ctrl+Z)", cvUndo);
-  ui.redo = action("Redo", "Redo (Shift+Cmd/Ctrl+Z)", cvRedo);
-  ui.pick = h("select", { class: "cvpick", title: "Canvas" });
+  ui.name.addEventListener("blur", () => cvRename(ui.name.value));
+  ui.pick = h("select", { class: "cvpick", title: "Switch canvas" });
   ui.pick.addEventListener("change", cvPickChanged);
   ui.zoom = h("span", { class: "cvzoom", title: "Zoom" });
   ui.status = h("span", { class: "cvstatus" });
   ui.root = h("div", { class: "cvbar" },
-    ui.pick,
+    ui.name,
+    h("div", { class: "group" }, ui.pick, iconButton("plus", "New canvas (canvas-1, canvas-2, \u2026)", cvNew), iconButton("folder", "Open a canvas file\u2026", cvChoose)),
     h("div", { class: "group" }, toolButtons),
-    h("div", { class: "group" }, swatches),
-    h("div", { class: "group" }, ui.fill, widths, roughs),
-    h("div", { class: "group" }, action("Group", "Group the selection (G)", cvGroup), ui.undo, ui.redo),
-    h("div", { class: "group" }, action("Fit", "Fit everything in view (F)", cvFit), ui.zoom),
-    h("div", { class: "group" }, action("PNG", "Export the canvas as a PNG image", cvExport)),
+    h("div", { class: "group" }, swatches, ui.customWrap),
+    h("div", { class: "group" }, ui.fill, ui.width, ui.widthValue),
+    h("div", { class: "group" }, iconButton("group", "Group the selection (Cmd/Ctrl+G)", cvGroup), ui.undo, ui.redo),
+    h("div", { class: "group" }, iconButton("fit", "Fit everything in view (Cmd/Ctrl+0)", cvFit), ui.zoom),
+    h("div", { class: "group" }, iconButton("export", "Export the canvas as a PNG image", cvExport)),
     ui.status);
   return ui;
 }
@@ -3309,8 +3957,8 @@ function renderCanvas(main) {
   const ui = cvBuildBar();
   const canvas = h("canvas", { class: "cvcanvas", tabindex: "0" });
   ui.editor = h("textarea", { class: "cvedit", spellcheck: "false" });
-  ui.empty = h("div", { class: "cvempty" }, h("div", { text: "No canvas yet" }), h("button", { class: "primary", text: "New canvas…", onclick: () => { cv.ui.pick.value = "__new"; cvPickChanged(); } }));
-  main.append(h("div", { class: "cv" }, ui.root, h("div", { class: "cvstage" }, canvas, ui.editor, ui.empty)));
+  ui.empty = h("div", { class: "cvempty" }, h("div", { text: "No canvas yet" }), h("button", { class: "primary", text: "New canvas", onclick: cvNew }));
+  main.append(h("div", { class: "cv" }, ui.root, h("div", { class: "cvstage" }, canvas, ui.editor, ui.empty), ui.menu));
   cv.el = canvas;
   cv.ctx = canvas.getContext("2d");
   cv.ui = ui;
@@ -3318,6 +3966,7 @@ function renderCanvas(main) {
   canvas.addEventListener("pointermove", cvMove);
   canvas.addEventListener("pointerup", cvUp);
   canvas.addEventListener("pointercancel", cvCancelDrag);
+  canvas.addEventListener("pointerleave", () => { if (cv.cursor) { cv.cursor = null; cvDraw(); } });
   canvas.addEventListener("dblclick", cvDouble);
   canvas.addEventListener("contextmenu", (event) => event.preventDefault());
   canvas.addEventListener("wheel", cvWheel, { passive: false });
@@ -3337,6 +3986,13 @@ function renderCanvas(main) {
 
 window.addEventListener("resize", () => { if (state.view === "canvas") cvResize(); });
 document.addEventListener("keyup", (event) => { if (event.key === " " && cv.space) { cv.space = false; cvCursor(); } });
+// A press anywhere outside the open tool menu (and its button) closes it.
+document.addEventListener("pointerdown", (event) => {
+  if (!cv.menu || !cv.ui.menu) return;
+  const button = cv.ui.tools[cv.menu];
+  if (cv.ui.menu.contains(event.target) || (button && button.contains(event.target))) return;
+  cvCloseMenu();
+}, true);
 document.addEventListener("visibilitychange", () => { if (document.hidden && state.view === "canvas") saveCanvas(); });
 $("theme").addEventListener("click", () => { if (state.view === "canvas") cvDraw(); });
 

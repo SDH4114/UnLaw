@@ -306,10 +306,24 @@ Canvas: a whiteboard in the page. Files are JSON Canvas (.canvas, jsoncanvas.org
   end in .canvas. Saving replaces the file atomically and is refused (the page
   reloads) when the file changed meanwhile. A new canvas is an empty
   {"nodes": [], "edges": []}; an existing file is never overwritten on create.
-  Tools: v select, h hand (or Space/middle mouse), t card, r rectangle,
-  o ellipse, d diamond, l line, a arrow, p pen, x text, e eraser, g group,
-  f fit; drag a card's side dot onto another card to connect them; wheel pans,
-  Ctrl+wheel/pinch zooms; Cmd+Z/Shift+Cmd+Z, Cmd+C/V/D; PNG export button.
+  The + button creates the next free canvas-N in desk.canvas_dir at once; the
+  name field left of the tools renames the file (never over another one); the
+  folder button picks a .canvas file in the macOS open dialog.
+  Tools stay active until you pick another. Photoshop-style keys (any keyboard
+  layout): v select, h hand (or Space/middle mouse), n card, t text, u shapes
+  (Shift+u cycles rectangle, ellipse, diamond, line, arrow; also r o l a),
+  b brush, g fill, e eraser (Shift+e switches its mode); [ ] or - = stroke width
+  (the slider goes from 1 to 100; click its number to type an exact width), d default color, Cmd+G group, Cmd+0 fit,
+  Cmd+= / Cmd+- zoom. Click an active eraser or shape tool again for a menu:
+  the eraser removes whole objects or only cuts lines where it passes (text,
+  cards and fill areas stay), shapes are drawn with evenness 3 (perfect), 2 or
+  1 (roughest). Fill works like a paint program: the area of the clicked color,
+  bounded by anything else, becomes a fill area; a click on a line or text
+  recolors it, cards, groups and edges take the color, and an area that runs
+  out of the view fills the shape under it or the background; Alt+click
+  clears. The rainbow swatch picks any color. Drag a card's side dot
+  onto another card to connect them; wheel pans, Ctrl+wheel/pinch zooms;
+  Cmd+Z/Shift+Cmd+Z, Cmd+C/V/D; PNG export button.
 Boards: the board menu lists Apple Reminders, recent boards and the boards in
   desk.boards_dir; "New board…" asks for a name and creates it there.
 Reminders: a separate layer, never mixed into your .md boards. Each Reminders

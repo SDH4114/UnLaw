@@ -75,7 +75,10 @@ function harness() {
       nearestSide, resizeBox, handleAt, applyBox, wrapText, adaptInk, nodeColor, noteName, makeLinear, makeFreedraw,
       snapAngle, applyStyle, containedIds, groupAround, moveItems, removeItems, copyItems, pasteItems, makeHistory,
       histCommit, histUndo, histRedo, cvLoad, cvCommit, cvUndo, cvRedo, saveCanvas, pollCanvas,
-      renderCanvas, cvDown, cvMove, cvUp, cvWheel, cvSetTool, cvEndEdit, cvSelect, cvGroup, cvExport, paintScene, cvPalette};
+      renderCanvas, cvDown, cvMove, cvUp, cvWheel, cvSetTool, cvEndEdit, cvSelect, cvGroup, cvExport, paintScene, cvPalette,
+      fillable, fillTarget, applyFill, setBackground, cvBackground, canvasKey, cvStyle, cvNew, cvRename, cvChoose, CV_BY_KEY,
+      floodRegion, growMask, traceMask, paintFromMask, paintContains, cutElement, eraseAt, cvBucket, cvToolClick,
+      widthToSlider, sliderToWidth, cvStepWidth, cvBuildBar, cvTypedWidth};
   `, context);
   return {context, a: context.audit, listeners, timers, intervals, frames, ids,
     run: code => vm.runInContext(code, context)};
@@ -595,8 +598,10 @@ const tests = {
   assert.equal(space.prevented, true);
   assert.equal(fetches, 0, 'space pans instead of starting the timer');
   press('canvas', {key: 'n'});
+  assert.equal(a.cv.tool, 'card', 'n is the card tool here, not the board quick-add');
   press('canvas', {key: '/'});
   assert.equal(a.state.view, 'canvas', 'board keys do nothing here');
+  press('canvas', {key: 'v'});
   press('board', {key: 'r'});
   assert.equal(a.cv.tool, 'select', 'canvas keys do nothing on the board');
   press('board', {key: 'p'});
@@ -660,11 +665,13 @@ const tests = {
   assert.equal(drawn.type, 'rectangle');
   assert.equal(drawn.width, 120); assert.equal(drawn.height, 80);
   assert.equal(typeof drawn.seed, 'number');
-  assert.equal(a.cv.tool, 'select', 'back to select after a shape');
+  assert.equal(a.cv.tool, 'rectangle', 'the tool stays until the user picks another');
   assert.equal(a.cv.sel[0], 'x:' + drawn.id);
   assert.equal(a.cv.doc.unlaw.future, 'yes', 'the drawing joined the existing unlaw object');
 
-  a.cvSetTool('rectangle');
+  drag([300, 420], [340, 460]);
+  assert.equal(a.cv.doc.unlaw.elements.at(-1).type, 'rectangle', 'a second rectangle without picking the tool again');
+  a.cv.doc.unlaw.elements.pop();
   a.cvDown(at(10, 10)); a.cvUp(at(11, 11));
   assert.equal(a.cv.doc.unlaw.elements.length, 2, 'a click without a drag draws nothing');
 
@@ -684,6 +691,7 @@ const tests = {
   assert.equal(card.text, 'hello <b>there</b>', 'text is stored as typed');
   assert.equal(a.cv.hist.undo.length, undoDepth + 1, 'creating and typing is one step');
 
+  assert.equal(a.cv.tool, 'card', 'the card tool stays too');
   a.cvSetTool('select');
   a.cvMove(at(100, 50));
   assert.equal(a.cv.hover, 'n:n1');
@@ -722,6 +730,248 @@ const tests = {
   a.cvExport();
   const link = h.context.document.body.children.at(-1);
   assert.equal(link.isConnected, false, 'the temporary download link is removed');
+ },
+ async canvas_fill_tool() {
+  const h = harness(), a = h.a;
+  const doc = plain(sampleShape().canvas);
+  const ring = [[0, 0], [100, 0], [100, 100], [0, 100], [4, 6]];
+  doc.unlaw.elements.push(
+   {id: 'p1', type: 'freedraw', x: 600, y: 600, width: 100, height: 100, points: ring, stroke: '#000000', fill: null, strokeWidth: 2, roughness: 1, seed: 1},
+   {id: 'p2', type: 'freedraw', x: 900, y: 900, width: 100, height: 10, points: [[0, 0], [50, 10], [100, 0]], stroke: '#000000', fill: null, strokeWidth: 2, roughness: 1, seed: 1},
+  );
+  assert.equal(a.fillable(doc.unlaw.elements[0]), true, 'rectangles are fillable');
+  assert.equal(a.fillable(doc.unlaw.elements[1]), true, 'a pen loop is fillable');
+  assert.equal(a.fillable(doc.unlaw.elements[2]), false, 'an open stroke is not');
+  assert.equal(a.fillTarget(doc, 60, 330, 1), 'x:x1', 'the inside of an unfilled rectangle counts for the bucket');
+  assert.equal(a.hitTest(doc, 60, 330, 1), null, 'but not for selection');
+  assert.equal(a.applyFill(doc, 'x:x1', '#123456'), true);
+  assert.equal(doc.unlaw.elements[0].fill, '#123456');
+  assert.equal(a.applyFill(doc, 'x:x1', '#123456'), false, 'the same color again changes nothing');
+  assert.equal(a.hitTest(doc, 60, 330, 1), 'x:x1', 'a filled shape is hit inside');
+  assert.equal(a.fillTarget(doc, 650, 650, 1), 'x:p1');
+  a.applyFill(doc, 'x:p1', '#ff0000');
+  assert.equal(doc.unlaw.elements[1].fill, '#ff0000');
+  a.applyFill(doc, 'x:p2', '#00ff00');
+  assert.equal(doc.unlaw.elements[2].stroke, '#00ff00', 'an open stroke takes the color as ink');
+  assert.equal(doc.unlaw.elements[2].fill, null);
+  a.applyFill(doc, 'n:n1', '#abcdef');
+  assert.equal(doc.nodes[0].color, '#abcdef', 'cards take the color');
+  assert.equal(doc.nodes[0].plugin.a, 1, 'unknown keys stay');
+  assert.equal(a.fillTarget(doc, 0, 180, 1), 'n:g1', 'a click anywhere inside a group colors the group');
+  assert.equal(a.applyFill(doc, 'n:n1', null), true);
+  assert.equal('color' in doc.nodes[0], false, 'alt+click clears a card color');
+  assert.equal(a.applyFill(doc, 'x:x1', null), true);
+  assert.equal(doc.unlaw.elements[0].fill, null);
+  assert.equal(a.fillTarget(doc, 5000, 5000, 1), null, 'empty space is the background');
+  assert.equal(a.setBackground(doc, '#fafafa'), true);
+  assert.equal(a.cvBackground(doc), '#fafafa');
+  assert.equal(doc.unlaw.future, 'yes');
+  assert.equal(a.setBackground(doc, null), true);
+  assert.equal(a.cvBackground(doc), null);
+  assert.equal('background' in doc.unlaw, false);
+  a.applyStyle(doc, ['x:p1'], {stroke: '#111111'});
+  assert.equal(doc.unlaw.elements[1].fill, '#ff0000', 'changing the ink keeps a fill of another color');
+  doc.unlaw.elements[1].fill = '#111111';
+  a.applyStyle(doc, ['x:p1'], {stroke: '#222222'});
+  assert.equal(doc.unlaw.elements[1].fill, '#222222', 'a fill in the old ink follows the new ink');
+ },
+ async canvas_keys_and_files() {
+  const h = harness(), a = h.a;
+  const calls = [];
+  let shape = sampleShape();
+  h.context.fetch = async (path, options) => {
+   const body = options && options.body ? JSON.parse(options.body) : null;
+   calls.push([path, body]);
+   if (path === '/api/canvases' && !body) return response({dir: '/c', current: shape.path, items: [{path: shape.path, name: shape.name}]});
+   if (path === '/api/canvas/new') { shape = {...sampleShape(), path: '/c/canvas-1.canvas', name: 'canvas-1', version: 'v9'}; return response(shape); }
+   if (path === '/api/canvas/rename') { shape = {...shape, path: '/c/' + body.name + '.canvas', name: body.name}; return response(shape); }
+   if (path === '/api/canvas/choose') return response({path: '/elsewhere/b.canvas'});
+   if (path === '/api/canvases') { shape = {...sampleShape(), path: body.path, name: 'b'}; return response(shape); }
+   return response(shape);
+  };
+  a.cvLoad(sampleShape());
+  const press = (code, extra = {}) => a.canvasKey({key: '?', code, shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, preventDefault() {}, ...extra});
+  for (const [code, tool] of [['KeyV', 'select'], ['KeyH', 'hand'], ['KeyN', 'card'], ['KeyT', 'text'], ['KeyU', 'rectangle'], ['KeyB', 'freedraw'], ['KeyG', 'fill'], ['KeyE', 'eraser'], ['KeyP', 'freedraw'], ['KeyR', 'rectangle']]) {
+   assert.equal(press(code), true);
+   assert.equal(a.cv.tool, tool, code);
+  }
+  assert.equal(press('KeyV', {key: 'м'}), true, 'a Russian layout still reaches the V key');
+  assert.equal(a.cv.tool, 'select');
+  a.cv.tool = 'rectangle';
+  for (const tool of ['ellipse', 'diamond', 'line', 'arrow', 'rectangle']) { press('KeyU', {shiftKey: true}); assert.equal(a.cv.tool, tool, 'Shift+U cycles the shapes'); }
+  for (const [from, code, to] of [[4, 'BracketRight', 5], [10, 'BracketRight', 15], [50, 'BracketRight', 60], [100, 'BracketRight', 100],
+   [60, 'BracketLeft', 50], [50, 'BracketLeft', 45], [10, 'BracketLeft', 9], [1, 'BracketLeft', 1]]) {
+   a.cv.style.width = from;
+   press(code);
+   assert.equal(a.cv.style.width, to, code + ' from ' + from);
+  }
+  a.cv.style.stroke = '#e5484d';
+  press('KeyD'); assert.equal(a.cv.style.stroke, '#1d1d1f', 'D restores the default color');
+  a.cvSelect(['n:n1', 'n:n2']);
+  assert.equal(press('KeyG', {metaKey: true}), true);
+  assert.equal(a.cv.doc.nodes[0].type, 'group', 'Cmd+G groups');
+  assert.equal(a.cv.tool, 'rectangle', 'Cmd+G does not pick the fill tool');
+  a.cvStyle({stroke: '#0a0b0c'});
+  assert.equal(a.cv.style.stroke, '#0a0b0c', 'any color can be chosen');
+
+  await a.cvNew();
+  assert.equal(a.cv.path, '/c/canvas-1.canvas', 'New canvas opens canvas-N at once');
+  assert.equal(a.cv.name, 'canvas-1');
+  await a.cvRename('  Ideas  ');
+  assert.deepEqual(calls.find(([path]) => path === '/api/canvas/rename')[1], {path: '/c/canvas-1.canvas', name: 'Ideas'});
+  assert.equal(a.cv.path, '/c/Ideas.canvas');
+  assert.equal(a.cv.name, 'Ideas');
+  const renames = calls.filter(([path]) => path === '/api/canvas/rename').length;
+  await a.cvRename('Ideas');
+  assert.equal(calls.filter(([path]) => path === '/api/canvas/rename').length, renames, 'the same name sends nothing');
+  await a.cvChoose();
+  assert.equal(a.cv.path, '/elsewhere/b.canvas', 'the file picked in the dialog opens');
+ },
+
+ async canvas_flood_fill() {
+  const h = harness(), a = h.a;
+  // A white image with a black square border from a to b and a black island from c to d inside.
+  const picture = (size, a0, b0, c0, d0) => {
+   const px = new Uint8ClampedArray(size * size * 4).fill(255);
+   const dot = (x, y) => { const k = (y * size + x) * 4; px[k] = px[k + 1] = px[k + 2] = 0; };
+   for (let i = a0; i <= b0; i++) { dot(i, a0); dot(i, b0); dot(a0, i); dot(b0, i); }
+   for (let y = c0; y <= d0; y++) for (let x = c0; x <= d0; x++) dot(x, y);
+   return px;
+  };
+  const w = 20, hgt = 20, data = picture(20, 4, 15, 8, 11);
+  const inside = a.floodRegion(data, w, hgt, 6, 6, 40);
+  assert.equal(inside.touches, false, 'a closed area does not reach the edge');
+  assert.equal(inside.count, 100 - 16, 'only the same color, the island stays out');
+  assert.equal(a.floodRegion(data, w, hgt, 1, 1, 40).touches, true, 'the open outside reaches the edge');
+  assert.equal(a.traceMask(inside.mask, w, hgt).length, 2, 'outer border and one hole');
+  const paint = plain(a.paintFromMask(a.growMask(inside.mask, w, hgt), w, hgt, {x: 0, y: 0, z: 1}, 1, '#30a46c'));
+  assert.equal(paint.type, 'paint');
+  assert.deepEqual([paint.x, paint.y, paint.width, paint.height], [4, 4, 12, 12], 'grown one pixel under the border');
+  assert.equal(paint.holes.length, 1);
+  assert.equal(paint.fill, '#30a46c');
+  assert.equal(a.paintContains(paint, 6, 6), true);
+  assert.equal(a.paintContains(paint, 9.5, 9.5), false, 'the hole stays empty');
+  assert.equal(a.paintContains(paint, 2, 2), false);
+  const zoomed = plain(a.paintFromMask(a.growMask(inside.mask, w, hgt), w, hgt, {x: 10, y: 0, z: 2}, 2, '#30a46c'));
+  assert.deepEqual([zoomed.x, zoomed.y, zoomed.width, zoomed.height], [-4, 1, 3, 3], 'snapshot pixels map back to world units');
+
+  // The page: a snapshot of a bigger such picture stands in for the rendered scene.
+  a.cvLoad({path: '/c/a.canvas', name: 'a', version: 'v1', canvas: {nodes: [], edges: [], unlaw: {version: 1, elements: [
+   {id: 'r', type: 'rectangle', x: 10, y: 10, width: 40, height: 40, stroke: '#000000', fill: null, strokeWidth: 1, roughness: 0, seed: 1},
+  ]}}});
+  a.cv.view = {x: 0, y: 0, z: 1};
+  a.cv.w = 60; a.cv.h = 60;
+  h.context.__image = picture(60, 10, 50, 26, 34);
+  h.run('cvSnapshot = () => ({data: globalThis.__image, w: 60, h: 60, k: 1})');
+  a.cv.style.stroke = '#e5484d';
+  a.cvBucket({x: 20, y: 20}, {x: 20, y: 20}, false);
+  const els = a.cv.doc.unlaw.elements;
+  assert.equal(els.length, 2, 'the flooded area becomes a paint element');
+  assert.equal(els[0].type, 'paint', 'under the empty outline, so the line stays on top');
+  assert.equal(els[0].fill, '#e5484d');
+  assert.equal(a.hitTest(a.cv.doc, 20, 20, 1), 'x:' + els[0].id, 'a paint area can be selected');
+  assert.equal(a.hitTest(a.cv.doc, 30, 30, 1), null, 'the island is a hole');
+  a.cvBucket({x: 1, y: 1}, {x: 1, y: 1}, false);
+  assert.equal(a.cv.doc.unlaw.background, '#e5484d', 'an area running out of the view fills the background');
+  a.cv.style.stroke = '#3a6df0';
+  a.cvBucket({x: 10, y: 30}, {x: 10, y: 30}, false);
+  assert.equal(els[1].stroke, '#3a6df0', 'a click on a line recolors the line');
+  a.cvBucket({x: 20, y: 20}, {x: 20, y: 20}, true);
+  assert.equal(a.cv.doc.unlaw.elements.length, 1, 'alt+click removes a paint area');
+  assert.equal(a.cv.hist.undo.length > 0, true);
+ },
+ async canvas_partial_eraser() {
+  const h = harness(), a = h.a;
+  const base = {stroke: '#000000', fill: null, strokeWidth: 2, roughness: 0, seed: 1, extra: 'k'};
+  const line = {...base, id: 'l', type: 'line', x: 0, y: 0, width: 100, height: 0, points: [[0, 0], [100, 0]]};
+  assert.equal(a.cutElement(line, 50, 40, 5), null, 'an untouched line stays as it is');
+  const pieces = plain(a.cutElement(line, 50, 0, 5));
+  assert.equal(pieces.length, 2, 'the line is cut in two');
+  assert.ok(pieces[0].x + pieces[0].width < 45 && pieces[1].x > 55, 'the gap is where the eraser passed');
+  assert.equal(pieces[0].extra, 'k', 'unknown keys stay on the pieces');
+  assert.notEqual(pieces[0].id, pieces[1].id);
+  const arrow = plain(a.cutElement({...line, type: 'arrow'}, 50, 0, 5));
+  assert.deepEqual(arrow.map(p => p.type), ['line', 'arrow'], 'the head stays on the piece with the end');
+  assert.deepEqual(plain(a.cutElement(line, 2, 0, 5)).length, 1, 'cutting the end leaves one piece');
+  assert.deepEqual(plain(a.cutElement(line, 50, 0, 80)), [], 'a big eraser leaves nothing');
+  const box = {...base, id: 'b', type: 'rectangle', x: 0, y: 0, width: 100, height: 100, fill: '#ff0000'};
+  const cut = plain(a.cutElement(box, 50, 0, 5));
+  assert.equal(cut[0].type, 'paint', 'a filled shape keeps its fill');
+  assert.equal(cut[0].fill, '#ff0000');
+  assert.equal(cut.length, 2, 'the rest of a closed outline is one piece');
+  assert.equal(a.hitElement(cut[1], 50, 100, 2), true);
+  assert.equal(a.hitElement(cut[1], 50, 0, 2), false);
+  const pen = {...base, id: 'p', type: 'freedraw', x: 0, y: 0, width: 100, height: 10, points: [[0, 0], [50, 10], [100, 0]]};
+  assert.ok(plain(a.cutElement(pen, 50, 10, 4)).every(p => p.type === 'freedraw'), 'pen strokes stay pen strokes');
+  assert.equal(a.cutElement({...base, id: 't', type: 'text', text: 'hi', x: 0, y: 0, width: 50, height: 20}, 10, 10, 5), null, 'text is left alone');
+  const doc = {nodes: [], edges: [], unlaw: {version: 1, elements: [line, {...line, id: 'far', y: 500}]}};
+  assert.equal(a.eraseAt(doc, 50, 0, 5), 1);
+  assert.deepEqual(doc.unlaw.elements.map(e => e.type), ['line', 'line', 'line']);
+  assert.equal(doc.unlaw.elements[2].id, 'far');
+
+  a.cvLoad({path: '/c/a.canvas', name: 'a', version: 'v1', canvas: {nodes: [], edges: [], unlaw: {version: 1, elements: [plain(line)]}}});
+  a.cv.view = {x: 0, y: 0, z: 1};
+  a.cv.el = {getBoundingClientRect: () => ({left: 0, top: 0}), focus() {}, style: {}};
+  a.cv.eraser = 'part';
+  a.cv.tool = 'eraser';
+  a.cv.style.width = 10;
+  const at = (x, y) => ({button: 0, clientX: x, clientY: y, pointerId: 1, preventDefault() {}});
+  a.cvDown(at(30, -20)); a.cvMove(at(30, 20)); a.cvUp(at(30, 20));
+  assert.equal(a.cv.doc.unlaw.elements.length, 2, 'a drag across the line cuts it even between pointer events');
+  a.cv.eraser = 'object';
+  a.cvDown(at(80, 0)); a.cvUp(at(80, 0));
+  assert.equal(a.cv.doc.unlaw.elements.length, 1, 'the whole-object eraser still removes what it touches');
+ },
+ async canvas_tool_menus_and_width() {
+  const h = harness(), a = h.a;
+  for (let width = 1; width <= 100; width++) assert.equal(a.sliderToWidth(a.widthToSlider(width)), width, 'every width is on the slider');
+  assert.equal(a.sliderToWidth(0), 1);
+  assert.equal(a.sliderToWidth(1000), 100);
+  a.cv.ui = a.cvBuildBar();
+  for (const [typed, width] of [['37', 37], [' 5 ', 5], ['250', 100], ['0', 1], ['abc', 1], ['12px', 1], ['', 1]]) {
+   a.cvTypedWidth(typed);
+   assert.equal(a.cv.style.width, width, 'typed ' + JSON.stringify(typed));
+  }
+  assert.equal(a.cv.ui.widthValue.value, '1', 'a bad entry shows the current width again');
+  a.cv.doc = {nodes: [], edges: []};
+  const key = code => a.canvasKey({key: '?', code, shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, preventDefault() {}});
+  a.cv.style.width = 10;
+  key('Equal'); assert.equal(a.cv.style.width, 15, '= makes the line thicker');
+  key('Minus'); key('Minus'); assert.equal(a.cv.style.width, 9, '- makes it thinner');
+  a.cv.doc = null;
+  a.cv.style.width = 4;
+  const saved = [];
+  h.context.localStorage.setItem = (key, value) => saved.push([key, JSON.parse(value)]);
+  a.cv.ui = a.cvBuildBar();
+  const menu = a.cv.ui.menu, on = new Set();
+  menu.classList = {add: c => on.add(c), remove: c => on.delete(c), toggle() {}, contains: c => on.has(c)};
+  for (const tool of ['eraser', 'rectangle']) a.cv.ui.tools[tool].getBoundingClientRect = () => ({left: 40, bottom: 30});
+  Object.defineProperty(menu, 'textContent', {set() { menu.children = []; }});
+  a.cv.tool = 'select';
+  a.cvToolClick('eraser');
+  assert.equal(a.cv.tool, 'eraser', 'the first click picks the tool');
+  assert.equal(on.has('on'), false);
+  a.cvToolClick('eraser');
+  assert.equal(on.has('on'), true, 'a second click opens the bubble');
+  assert.equal(menu.children.length, 2, 'whole object or only where it passes');
+  assert.equal(menu.style.top, '36px');
+  a.canvasKey({key: 'Escape', code: 'Escape', preventDefault() {}});
+  assert.equal(on.has('on'), false, 'Escape closes the bubble');
+  assert.equal(a.cv.tool, 'eraser', 'and keeps the tool');
+  a.cv.doc = {nodes: [], edges: []};
+  a.canvasKey({key: 'E', code: 'KeyE', shiftKey: true, metaKey: false, ctrlKey: false, altKey: false, preventDefault() {}});
+  assert.equal(a.cv.eraser, 'part', 'Shift+E switches the eraser mode');
+  assert.deepEqual(saved.at(-1), ['desk-canvas-tools', {eraser: 'part', rough: 1, width: 4}], 'and remembers it');
+  a.cvToolClick('rectangle');
+  a.cvToolClick('rectangle');
+  assert.equal(menu.children.length, 3, 'shapes offer evenness 3, 2, 1');
+  const levels = menu.children.map(item => item.children[0].textContent);
+  assert.deepEqual(levels, ['3', '2', '1']);
+  a.cvStyle({rough: 0});
+  assert.equal(a.cv.style.rough, 0);
+  assert.deepEqual(saved.at(-1)[1].rough, 0);
+  a.cvToolClick('rectangle');
+  assert.equal(on.has('on'), false, 'clicking the button again closes it');
  },
 };
 if (!tests[process.argv[2]]) throw Error('unknown UI regression');

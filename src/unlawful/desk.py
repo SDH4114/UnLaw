@@ -58,6 +58,16 @@ MAX_BODY = 64 * 1024
 MAX_CANVAS_BODY = 16 * 1024 * 1024
 MAX_TEXT = 500
 RECENT = 8
+# The macOS open dialog for "Open…" in the Canvas tab; argv[1] is the folder it starts in.
+CHOOSE_CANVAS_SCRIPT = (
+    "on run argv",
+    "activate",
+    'set chosen to choose file with prompt "Open a canvas" of type {"canvas"} default location (POSIX file (item 1 of argv))',
+    "return POSIX path of chosen",
+    "end run",
+)
+CHOOSE_TIMEOUT = 600
+MAX_CANVAS_NUMBER = 10000
 
 
 def _number(value: object, default: float, minimum: float) -> float:
@@ -445,6 +455,7 @@ class Desk:
         self.canvas_dir = boards_folder(self.settings["canvas_dir"], config_dir())
         self.canvas_current: Path | None = None
         self.canvas_lock = threading.Lock()
+        self.choose_lock = threading.Lock()
         self.pomodoro = Pomodoro(directory, self.settings, clock)
         self.lock = threading.Lock()
         self.today: Callable[[], date] = lambda: datetime.now().astimezone().date()
@@ -699,6 +710,77 @@ class Desk:
             new_version = write_canvas(path, canvas)
             self._canvas_shown(path)
         return self._canvas_json(path, new_version, canvas)
+
+    def canvas_new(self) -> dict:
+        """Create and open the first free canvas-N in desk.canvas_dir (never an existing file)."""
+        with self.canvas_lock:
+            self.canvas_dir.mkdir(parents=True, exist_ok=True)
+            for number in range(1, MAX_CANVAS_NUMBER):
+                path = self.canvas_dir / f"canvas-{number}.canvas"
+                try:
+                    with path.open("xb") as handle:
+                        handle.write(render_canvas(NEW_CANVAS))
+                except FileExistsError:
+                    continue
+                break
+            else:
+                raise ValueError(f"No free canvas-N name in {self.canvas_dir}")
+            path = path.resolve()
+            version, canvas = read_canvas(path)
+            self._canvas_shown(path)
+        return self._canvas_json(path, version, canvas)
+
+    def canvas_rename(self, raw: object, name: object) -> dict:
+        """Rename a canvas inside its own folder; the contents (and so the version) stay as they are."""
+        clean = name.strip() if isinstance(name, str) else ""
+        if clean.casefold().endswith(".canvas"):
+            clean = clean[: -len(".canvas")].strip()
+        if not _bare_name(clean, ".canvas") or len(clean.encode()) > 240:
+            raise ValueError("A canvas name is plain text: no /, not starting with . or ~")
+        with self.canvas_lock:
+            path = canvas_file(raw, create=False, canvas_dir=self.canvas_dir)
+            target = path.with_name(clean + ".canvas")
+            if target != path:
+                if target.exists() and not os.path.samefile(path, target):
+                    raise ValueError(f"A canvas named {clean} already exists")
+                if target.exists():  # only the letter case changes on a case-insensitive disk
+                    os.rename(path, target)
+                else:
+                    try:  # a hard link fails when the name was taken meanwhile, so nothing is overwritten
+                        os.link(path, target)
+                    except FileExistsError as error:
+                        raise ValueError(f"A canvas named {clean} already exists") from error
+                    os.unlink(path)
+            version, canvas = read_canvas(target)
+            self._canvas_shown(target)
+        return self._canvas_json(target, version, canvas)
+
+    def canvas_choose(self) -> dict:
+        """Ask for a .canvas file in the macOS open dialog: {"path": None} when cancelled,
+        {"unavailable": True} without osascript (the page then asks for a path)."""
+        osascript = shutil.which("osascript")
+        if osascript is None:
+            return {"unavailable": True}
+        if not self.choose_lock.acquire(blocking=False):
+            raise ValueError("The file dialog is already open")
+        try:
+            start = self.canvas_dir if self.canvas_dir.is_dir() else Path.home()
+            command = [osascript]
+            for line in CHOOSE_CANVAS_SCRIPT:
+                command += ["-e", line]
+            try:
+                result = subprocess.run(
+                    [*command, str(start)], capture_output=True, text=True, timeout=CHOOSE_TIMEOUT, check=False
+                )
+            except subprocess.TimeoutExpired:
+                return {"path": None}
+        finally:
+            self.choose_lock.release()
+        if result.returncode != 0:
+            if "-128" in result.stderr:  # the user pressed Cancel
+                return {"path": None}
+            raise ValueError("The file dialog failed: " + result.stderr.strip()[:300])
+        return {"path": result.stdout.strip() or None}
 
     def switch(self, raw: object, create: bool) -> dict:
         text = _clean_text(raw)
@@ -1085,6 +1167,12 @@ class Handler(BaseHTTPRequestHandler):
                     )
             elif path == "/api/canvases":
                 self._json(200, self.desk.canvas_open(body.get("path"), bool(body.get("create"))))
+            elif path == "/api/canvas/new":
+                self._json(200, self.desk.canvas_new())
+            elif path == "/api/canvas/rename":
+                self._json(200, self.desk.canvas_rename(body.get("path"), body.get("name")))
+            elif path == "/api/canvas/choose":
+                self._json(200, self.desk.canvas_choose())
             elif path == "/api/game/start":
                 session = self.arcade.start(
                     body.get("game"), body.get("level"), body.get("rows"), body.get("cols")
