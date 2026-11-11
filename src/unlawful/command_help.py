@@ -68,7 +68,8 @@ Usage: ul timer <duration> [label...]   Start a timer in the background
 A timer runs as a detached process, so you can close the terminal. When it ends a
 notification appears (with a sound unless timer.sound is false). `wait` shows the
 countdown on one line and notifies too. Labels must not contain control characters.
-State: storage.root/runtime/timers.json. Entries whose process is gone are dropped.
+State: storage.root/runtime/timers.json. Timers do not survive a logout or restart:
+the next `ul timer` reports each one once on stderr as lost (not yet due) or missed.
 Needs: macOS `osascript` for the notification.
 Settings: timer.sound (true/false), storage.root.
 Examples:
