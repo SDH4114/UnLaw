@@ -78,6 +78,9 @@ Usage:
   ul commands [--verbose|--describe|--json]
   ul commands search [words...] [--list]   Browse the catalog on GitHub
   ul commands get <name>...                Download commands from the catalog
+  ul commands check <name> [--timeout <seconds>]
+                                           Run <name> --help (no stdin) and report exit code,
+                                           Usage line and description
 Options: --verbose includes source/path; --describe adds one-line descriptions
 read from help.txt, the main.py docstring or a script's first comment (the
 command is not run); --json prints structured records.
@@ -119,15 +122,17 @@ Example: ul config set storage.root ~/Downloads/unlaw
         "create",
         "Create an editable command or save the current project as a template.
 Usage:
-  ul create command <name>              Create commands/<name>/main.py
+  ul create command <name>              Create commands/<name>/ with main.py, AGENTS.md, CLAUDE.md
   ul create command <name> --lang rust  Create a Cargo project in commands/<name>
   ul create template [name]             Same as ul template save: snapshot open windows
-Existing commands/templates are not overwritten. Templates come from
-templates/commands/main.py and templates/commands/rust/ when present
-({{command_name}} is replaced). Rust commands need cargo and are rebuilt
+Existing commands/templates/files are not overwritten. Names of system, built-in
+and default commands and of aliases are refused. Templates come from
+templates/commands/main.py, templates/commands/AGENTS.md and
+templates/commands/rust/ when present ({{command_name}} is replaced). Rust commands need cargo and are rebuilt
 automatically when their sources change.
 A command folder may instead contain main.sh, main.js or an executable main.
-Commands receive UNLAW_COMMAND, UNLAW_COMMAND_DIR, UNLAW_CONFIG_DIR and UNLAW_STORAGE.
+Commands receive UNLAW_COMMAND, UNLAW_COMMAND_DIR, UNLAW_CONFIG_DIR, UNLAW_STORAGE and UNLAW_BIN.
+Agents: the rules for writing commands are in `ul skills show authoring`.
 Examples:
   ul create command hello
   ul create command fast --lang rust

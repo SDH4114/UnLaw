@@ -5,7 +5,9 @@
 //!   UNLAW_COMMAND      command name, e.g. "{{command_name}}"
 //!   UNLAW_COMMAND_DIR  this command's folder
 //!   UNLAW_CONFIG_DIR   Unlaw configuration folder (config.toml lives here)
-//!   UNLAW_STORAGE      resolved storage.root folder for files your command saves
+//!   UNLAW_STORAGE      resolved storage.root; save files in UNLAW_STORAGE/<name>/
+//!   UNLAW_BIN          absolute path of the running ul, for calling other commands
+//! Exit codes: 0 success, 1 failure, 2 wrong usage.
 
 use std::env;
 use std::process::ExitCode;

@@ -9,6 +9,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::assets::{FEATURE_LIST, FEATURE_RETIRED, RETIRED, SEEDS};
 use crate::builtin;
 use crate::commands;
 use crate::config::{self, commands_dir, config_dir, config_file, templates_dir, Config, ConfigError};
@@ -19,6 +20,9 @@ use crate::util::{atomic_write, create_new_atomic, home, read_to_string_or_empty
 use crate::workspace;
 
 const COMMAND_TEMPLATE: &str = include_str!("../assets/command_main.py");
+const AGENTS_TEMPLATE: &str = include_str!("../assets/command_agents.md");
+/// Written into every new command folder so an agent opened there knows the rules.
+const CLAUDE_TEMPLATE: &str = "@AGENTS.md\n";
 
 pub(crate) struct Record {
     pub name: String,
@@ -66,6 +70,62 @@ fn usage(text: &str) -> i32 {
     2
 }
 
+/// `ul commands check <name>`: runs the command's own `--help` (no stdin, a
+/// deadline) and reports what an agent should have got right.
+fn check_command(args: &[String]) -> i32 {
+    let usage_text = "Usage: ul commands check <name> [--timeout <seconds>]";
+    let (name, seconds) = match args {
+        [name] => (name, 30),
+        [name, flag, value] | [flag, value, name] if flag == "--timeout" => match value.parse::<u64>() {
+            Ok(seconds) if seconds > 0 => (name, seconds),
+            _ => return usage(usage_text),
+        },
+        _ => return usage(usage_text),
+    };
+    let config = match config::load() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("unlaw commands: {error}");
+            return 2;
+        }
+    };
+    let Some(command) = commands::resolve(name).filter(|_| !is_system(name)) else {
+        eprintln!("unlaw commands: {name} is not a command you can check (only commands in the commands folder)");
+        return 2;
+    };
+    println!("Checking ul {name} ({})", command.path.display());
+    let mut failed = false;
+    let mut report = |good: bool, text: String| {
+        failed |= !good;
+        println!("  {}  {text}", if good { "ok  " } else { "FAIL" });
+    };
+    if command.kind == commands::Kind::Cargo && commands::ensure_built(&command).is_err() {
+        report(false, "the Rust project does not build".into());
+        return 1;
+    }
+    let line = commands::command_line(&command, &["--help".to_string()], &config);
+    let mut process = Command::new(&line[0]);
+    process.args(&line[1..]).envs(commands::environment(&command, &config));
+    match run_command_with_timeout(process, Duration::from_secs(seconds)) {
+        Err(error) if error == "timed out" => report(false, format!("--help did not finish within {seconds} s (it must print help and exit)")),
+        Err(error) => report(false, format!("--help could not run: {error}")),
+        Ok((status, stdout, stderr)) => {
+            match status.code() {
+                Some(0) => report(true, "--help exits 0".into()),
+                Some(code) => report(false, format!("--help exited with {code}, expected 0")),
+                None => report(false, "--help was stopped by a signal".into()),
+            }
+            let has_usage = format!("{stdout}\n{stderr}").to_lowercase().contains("usage");
+            report(has_usage, if has_usage { "the help has a Usage line".into() } else { "no Usage line in the help".into() });
+        }
+    }
+    match commands::summary(&command) {
+        Some(summary) => report(true, format!("description: {summary}")),
+        None => report(false, "no description for `ul commands --describe` (add help.txt, a docstring or a first comment)".into()),
+    }
+    i32::from(failed)
+}
+
 pub fn list_commands(args: &[String]) -> i32 {
     if print_if_requested("commands", args) {
         return 0;
@@ -73,12 +133,13 @@ pub fn list_commands(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
         Some("search") => return crate::catalog::search(&args[1..]),
         Some("get") => return crate::catalog::get(&args[1..]),
+        Some("check") => return check_command(&args[1..]),
         _ => {}
     }
     let flag = match args {
         [] => "",
         [flag] if ["--verbose", "--json", "--describe"].contains(&flag.as_str()) => flag.as_str(),
-        _ => return usage("Usage: ul commands [--verbose|--describe|--json] | search [words...] [--list] | get <name>..."),
+        _ => return usage("Usage: ul commands [--verbose|--describe|--json] | search [words...] [--list] | get <name>... | check <name> [--timeout <seconds>]"),
     };
     let config = match config::load() {
         Ok(config) => config,
@@ -328,6 +389,7 @@ pub fn complete(args: &[String]) -> i32 {
         (2, Some("commands")) => [
             ("search", "Browse the command catalog on GitHub"),
             ("get", "Download commands from the catalog"),
+            ("check", "Run a command's --help and report problems"),
             ("--verbose", "Include source and path"),
             ("--describe", "Add descriptions"),
             ("--json", "Structured records"),
@@ -444,6 +506,9 @@ fn create_rust_command(name: &str, directory: &Path) -> i32 {
             return 1;
         }
     }
+    if let Err(code) = write_agent_files(name, directory) {
+        return code;
+    }
     let command = commands::UserCommand { name: name.into(), path: directory.join("Cargo.toml"), kind: commands::Kind::Cargo };
     println!("Created Rust command '{name}': {}", directory.display());
     if let Err(code) = commands::ensure_built(&command) {
@@ -453,6 +518,57 @@ fn create_rust_command(name: &str, directory: &Path) -> i32 {
     println!("Edit {} — `ul {name}` rebuilds it automatically.", directory.join("src").join("main.rs").display());
     println!("Run it with: ul {name}");
     0
+}
+
+/// Names a new command must not take: system and built-in commands, every
+/// default command (current and retired, so a later release can never clash
+/// with it) and the user's aliases. Returns what the name already is.
+fn reserved_name(name: &str) -> Option<&'static str> {
+    if is_system(name) {
+        return Some("a system command");
+    }
+    if builtin::is_builtin(name) {
+        return Some("a built-in command");
+    }
+    let is_default = SEEDS.iter().any(|(seed, ..)| *seed == name)
+        || RETIRED.iter().any(|(retired, ..)| *retired == name)
+        || FEATURE_RETIRED.contains(&name)
+        || FEATURE_LIST.iter().any(|(feature, ..)| *feature == name);
+    if is_default {
+        return Some("a default Unlaw command");
+    }
+    // Keeps the page `ul skills show authoring` from being shadowed by a command page.
+    if name == crate::skills::AUTHORING {
+        return Some("reserved for the authoring guide");
+    }
+    // An unreadable config must not stop the user from creating a command.
+    let aliased = config::load().ok().is_some_and(|config| config.aliases().iter().any(|(alias, _)| alias == name));
+    aliased.then_some("one of your aliases")
+}
+
+/// AGENTS.md and CLAUDE.md for the new folder; files that exist are kept.
+fn write_agent_files(name: &str, directory: &Path) -> Result<(), i32> {
+    let custom = templates_dir().join("commands").join("AGENTS.md");
+    let rules = if custom.is_file() {
+        fs::read_to_string(&custom).map_err(|error| {
+            eprintln!("unlaw: Could not read {}: {error}", custom.display());
+            1
+        })?
+    } else {
+        AGENTS_TEMPLATE.to_string()
+    };
+    let files = [("AGENTS.md", rules.replace("{{command_name}}", name)), ("CLAUDE.md", CLAUDE_TEMPLATE.to_string())];
+    for (file, text) in files {
+        let path = directory.join(file);
+        if path.exists() || path.is_symlink() {
+            continue;
+        }
+        if let Err(error) = create_new_atomic(&path, &text, ".command.") {
+            eprintln!("unlaw: Could not create {}: {error}", path.display());
+            return Err(1);
+        }
+    }
+    Ok(())
 }
 
 fn create_user_command(args: &[String]) -> i32 {
@@ -467,10 +583,14 @@ fn create_user_command(args: &[String]) -> i32 {
         eprintln!("unlaw: Unknown language: {language}. Use python or rust.");
         return 2;
     }
-    if !workspace::valid_name(name) || is_system(name) || builtin::is_builtin(name) {
+    if !workspace::valid_name(name) {
         eprintln!(
-            "unlaw: Command names must start with a lowercase letter and contain only lowercase letters, numbers, '-' or '_', and must not be a system or built-in command."
+            "unlaw: Command names must start with a lowercase letter and contain only lowercase letters, numbers, '-' or '_'."
         );
+        return 2;
+    }
+    if let Some(kind) = reserved_name(name) {
+        eprintln!("unlaw: '{name}' is {kind}; choose another name for your command (for example 'my-{name}').");
         return 2;
     }
     let directory = commands_dir().join(name);
@@ -502,9 +622,12 @@ fn create_user_command(args: &[String]) -> i32 {
     } else {
         COMMAND_TEMPLATE.to_string()
     };
-    if let Err(error) = create_new_atomic(&destination, &template, ".command.") {
+    if let Err(error) = create_new_atomic(&destination, &template.replace("{{command_name}}", name), ".command.") {
         eprintln!("unlaw: Could not create {}: {error}", destination.display());
         return 1;
+    }
+    if let Err(code) = write_agent_files(name, &directory) {
+        return code;
     }
     println!("Created command '{name}': {}", destination.display());
     println!("Run it with: ul {name}");
@@ -554,11 +677,20 @@ fn tool(name: &'static str, executable: &str, detail: &str) -> Check {
 
 /// Run a program with a deadline, returning (success, stdout, stderr).
 fn run_with_timeout(program: &Path, args: &[&str], timeout: Duration) -> Result<(bool, String, String), String> {
-    let mut child = Command::new(program)
-        .args(args)
+    let mut command = Command::new(program);
+    command.args(args);
+    run_command_with_timeout(command, timeout).map(|(status, stdout, stderr)| (status.success(), stdout, stderr))
+}
+
+/// Like `run_with_timeout` for a prepared command: no stdin, its own process
+/// group, and on timeout the whole group is killed so no child is left behind.
+fn run_command_with_timeout(mut command: Command, timeout: Duration) -> Result<(std::process::ExitStatus, String, String), String> {
+    use std::os::unix::process::CommandExt;
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
         .map_err(|error| error.to_string())?;
     let mut stdout = child.stdout.take().unwrap();
@@ -578,6 +710,9 @@ fn run_with_timeout(program: &Path, args: &[&str], timeout: Duration) -> Result<
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() >= timeout => {
+                unsafe {
+                    libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+                }
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err("timed out".into());
@@ -586,7 +721,7 @@ fn run_with_timeout(program: &Path, args: &[&str], timeout: Duration) -> Result<
             Err(error) => return Err(error.to_string()),
         }
     };
-    Ok((status.success(), out.join().unwrap_or_default(), err.join().unwrap_or_default()))
+    Ok((status, out.join().unwrap_or_default(), err.join().unwrap_or_default()))
 }
 
 fn harness_permissions(executable: Option<&Path>) -> (bool, String) {
