@@ -64,65 +64,115 @@ class ConfiguredTestCase(unittest.TestCase):
         set_config_value("todo.file", "TODO.md")
 
 
-class TodoCommandTests(ConfiguredTestCase):
-    def test_list_numbers_tasks_and_preserves_multiline_detail(self) -> None:
-        from unlawful.todo import main
+class DeskTerminalTests(ConfiguredTestCase):
+    """`ul desk list/show/add/move/done`: the board from the terminal, for people and agents."""
 
-        output = io.StringIO()
-        with patch.dict(os.environ, self.env, clear=False), redirect_stdout(output):
-            self.assertEqual(main([]), 0)
-        rendered = output.getvalue()
-        self.assertIn("To do", rendered)
-        self.assertIn("1. [ ] First task", rendered)
-        self.assertIn("continued detail", rendered)
+    def desk(self, *args: str) -> tuple[int, str, str]:
+        from unlawful.desk import main
+
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.dict(os.environ, self.env, clear=False), redirect_stdout(output), redirect_stderr(errors):
+            code = main(list(args))
+        return code, output.getvalue(), errors.getvalue()
+
+    def board(self) -> str:
+        return (self.vault / "TODO.md").read_text(encoding="utf-8")
+
+    def test_show_numbers_tasks_and_keeps_multiline_detail(self) -> None:
+        code, rendered, _ = self.desk("show")
+        self.assertEqual(code, 0)
+        self.assertIn(f"Board: {(self.vault / 'TODO.md').resolve()}", rendered)
+        self.assertIn("To do\n  1. [ ] First task\n     continued detail\n  2. [ ] Second task", rendered)
         self.assertIn("4. [x] Old task", rendered)
 
-    def test_add_inserts_task_into_requested_column_without_damaging_footer(self) -> None:
-        from unlawful.todo import main
+    def test_show_json_has_ids_columns_and_the_version(self) -> None:
+        import json
 
-        with patch.dict(os.environ, self.env, clear=False), redirect_stdout(io.StringIO()):
-            self.assertEqual(main(["add", "Ship", "Unlaw", "--column", "In progress"]), 0)
-        text = (self.vault / "TODO.md").read_text(encoding="utf-8")
+        from unlawful.kanban import version_of
+
+        code, output, _ = self.desk("show", "--json")
+        self.assertEqual(code, 0)
+        data = json.loads(output)
+        self.assertEqual(data["version"], version_of((self.vault / "TODO.md").read_bytes()))
+        self.assertEqual([column["name"] for column in data["columns"]], ["To do", "In progress", "Completed"])
+        first = data["columns"][0]["cards"][0]
+        self.assertEqual((first["id"], first["title"], first["checked"]), (1, "First task", False))
+        self.assertEqual(first["details"], ["continued detail"])
+        self.assertTrue(data["columns"][2]["cards"][0]["checked"])
+
+    def test_show_and_changes_take_a_named_board(self) -> None:
+        self.assertEqual(self.desk("new", "Work")[0], 0)
+        code, _, errors = self.desk("add", "Plan", "the", "week", "-b", "Work")
+        self.assertEqual(code, 0, errors)
+        code, output, _ = self.desk("show", "Work")
+        self.assertIn("To do\n  1. [ ] Plan the week", output)
+        self.assertNotIn("Plan the week", self.board())
+        code, output, _ = self.desk("list")
+        self.assertEqual(code, 0)
+        self.assertIn("Work", output)
+        self.assertIn(str((self.vault / "TODO.md").resolve()), output)
+
+    def test_list_json(self) -> None:
+        import json
+
+        self.desk("new", "Ideas")
+        code, output, _ = self.desk("list", "--json")
+        self.assertEqual(code, 0)
+        data = json.loads(output)
+        self.assertEqual(data["default"], str((self.vault / "TODO.md").resolve()))
+        self.assertEqual([board["name"] for board in data["boards"]], ["Ideas"])
+        self.assertIn("reminders", data)
+
+    def test_add_goes_to_the_first_column_or_the_requested_one_without_damaging_footer(self) -> None:
+        self.assertEqual(self.desk("add", "Ship", "Unlaw", "--column", "in progress")[0], 0)
+        self.assertEqual(self.desk("add", "Plain")[0], 0)
+        text = self.board()
         self.assertIn("## In progress\n\n- [ ] Active task\n- [ ] Ship Unlaw", text)
+        self.assertIn("- [ ] Second task\n- [ ] Plain", text)
         self.assertIn("%% kanban:settings", text)
 
     def test_move_moves_the_entire_multiline_task_block(self) -> None:
-        from unlawful.todo import main
-
-        with patch.dict(os.environ, self.env, clear=False), redirect_stdout(io.StringIO()):
-            self.assertEqual(main(["move", "1", "In progress"]), 0)
-        text = (self.vault / "TODO.md").read_text(encoding="utf-8")
+        self.assertEqual(self.desk("move", "1", "In", "progress")[0], 0)
+        text = self.board()
         self.assertNotIn("## To do\n\n- [ ] First task", text)
         self.assertIn("## In progress\n\n- [ ] Active task\n- [ ] First task\n\tcontinued detail", text)
 
     def test_done_checks_and_moves_task_to_completed(self) -> None:
-        from unlawful.todo import main
-
-        with patch.dict(os.environ, self.env, clear=False), redirect_stdout(io.StringIO()):
-            self.assertEqual(main(["done", "2"]), 0)
-        text = (self.vault / "TODO.md").read_text(encoding="utf-8")
+        code, output, _ = self.desk("done", "2")
+        self.assertEqual(code, 0)
+        self.assertIn("Completed #2: Second task", output)
+        text = self.board()
         self.assertNotIn("- [ ] Second task", text)
         self.assertRegex(text, r"- \[x\] Second task  \[completion:: \d{4}-\d{2}-\d{2}\]")
 
     def test_done_uses_the_boards_done_column_when_completed_is_missing(self) -> None:
-        from unlawful.todo import main
+        (self.vault / "TODO.md").write_text(self.board().replace("## Completed", "## Done"), encoding="utf-8")
+        self.assertEqual(self.desk("done", "1")[0], 0)
+        self.assertRegex(self.board(), r"## Done\n\n- \[x\] Old task\n- \[x\] First task")
 
-        board = (self.vault / "TODO.md").read_text(encoding="utf-8").replace("## Completed", "## Done")
-        (self.vault / "TODO.md").write_text(board, encoding="utf-8")
-        with patch.dict(os.environ, self.env, clear=False), redirect_stdout(io.StringIO()):
-            self.assertEqual(main(["done", "1"]), 0)
-        text = (self.vault / "TODO.md").read_text(encoding="utf-8")
-        self.assertRegex(text, r"## Done\n\n- \[x\] Old task\n- \[x\] First task")
+    def test_bad_input_changes_nothing(self) -> None:
+        before = self.board()
+        for args in (
+            ("done", "9"),
+            ("done", "x"),
+            ("move", "1", "Nowhere"),
+            ("add",),
+            ("add", "text", "--column", "Nowhere"),
+            ("show", "missing-board"),
+            ("add", "x", "-b"),
+        ):
+            code, _, errors = self.desk(*args)
+            self.assertEqual(code, 2, args)
+            self.assertTrue(errors.startswith("unlaw desk: "), (args, errors))
+        self.assertEqual(self.board(), before)
+        self.assertEqual(self.desk("show", "--bogus")[0], 2)
 
-    def test_search_is_case_insensitive_and_does_not_edit(self) -> None:
-        from unlawful.todo import main
-
-        before = (self.vault / "TODO.md").read_text(encoding="utf-8")
-        output = io.StringIO()
-        with patch.dict(os.environ, self.env, clear=False), redirect_stdout(output):
-            self.assertEqual(main(["search", "ACTIVE"]), 0)
-        self.assertIn("Active task", output.getvalue())
-        self.assertEqual((self.vault / "TODO.md").read_text(encoding="utf-8"), before)
+    def test_help_is_short(self) -> None:
+        code, output, _ = self.desk("--help")
+        self.assertEqual(code, 0)
+        self.assertLessEqual(len(output.splitlines()), 30)
+        for action in ("list", "show", "add", "move", "done", "pomodoro", "--reminders"):
+            self.assertIn(action, output)
 
 
 class DesktopCommandTests(ConfiguredTestCase):

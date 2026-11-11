@@ -84,7 +84,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("git_blame", "who changed this line"),
     ("git_commit", "commit and push with ul git"),
     ("ul_picker", "run a ul command"),
-    ("ul_todo", "show the TODO board (ul todo)"),
+    ("ul_todo", "show the TODO board (ul desk show)"),
     ("ul_doctor", "run ul doctor"),
     ("ul_config", "edit Unlaw's config.toml"),
     ("ul_agent", "open the local agent (ula)"),
@@ -394,7 +394,7 @@ pub fn run(
             ));
         }
         "ul_picker" => crate::picker::open_ul(ed),
-        "ul_todo" => crate::ul::run(ed, "todo", false)?,
+        "ul_todo" => crate::ul::run(ed, "desk show", false)?,
         "ul_doctor" => crate::ul::run(ed, "doctor", false)?,
         "ul_config" => {
             let path = crate::config::config_dir().join("config.toml");

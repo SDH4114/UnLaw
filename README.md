@@ -29,7 +29,7 @@ The core is always installed: `ul`/`unlaw`, the `ule` editor, system commands,
 |---|---|
 | AI | `lm` (local models), `agent` (needs `lm`; adds `ula`), `tg`, `gpt` |
 | Media | `yt`, `music`, `lofi`, `netflix`, `capture` |
-| Productivity | `todo`, `desk`, `obsidian`, `work` |
+| Productivity | `desk`, `obsidian`, `work` |
 | Development | `git`, `py`, `rust`, `cpp`, `zed` |
 | System | `mac`, `steam`, `minecraft` |
 | Fun | `game` |
@@ -91,7 +91,7 @@ waits for `y`; `--yes` skips the question):
 
 ```bash
 ul reinstall               # clean build of main, default settings and default commands
-ul remove todo             # delete commands/todo (a default one also leaves core.features)
+ul remove music            # delete commands/music (a default one also leaves core.features)
 ul remove                  # uninstall Unlaw and delete its files
 ```
 
@@ -116,7 +116,7 @@ automatically create the user structure:
 ~/.config/unlaw/
 ├── config.toml
 ├── commands/                   # all non-system commands
-│   ├── todo/main.py
+│   ├── desk/main.py
 │   ├── yt/main.py
 │   └── ...
 ├── data/                       # single default storage
@@ -551,26 +551,6 @@ Creates a CMake project. Standards 11, 14, 17, 20, 23 and 26 are supported.
 
 No generator overwrites an existing directory.
 
-## Obsidian Kanban
-
-`ul todo` works with an existing `TODO.md` inside the configured Obsidian vault
-and keeps the Kanban plugin's service block intact. Task numbers are shown by the
-command without arguments:
-
-```bash
-ul todo
-ul todo add "Finish Unlaw"
-ul todo add "Check tests" --column "For today"
-ul todo search "Unlaw"
-ul todo move 3 "In progress"
-ul todo done 3
-ul todo open
-ul todo path
-```
-
-Changes are written atomically. Multi-line descriptions move together with the
-task.
-
 ## Desk: board, today and pomodoro in the browser
 
 `ul desk` opens the same board in the browser: drag cards between columns,
@@ -582,15 +562,36 @@ cards due today, cards in a Doing column and the next seven days; Stats shows
 focus sessions, finished tasks, the day streak and the cards you focused on most.
 
 ```bash
-ul desk                                  # the ul todo board
+ul desk                                  # the default board (todo.vault_path + todo.file)
+ul desk Work                             # <desk.boards_dir>/Work.md
 ul desk ~/notes/Project.md --no-open     # any Kanban .md file
-ul desk new ~/notes/Plan.md              # a new board: To do / Doing / Done
+ul desk --reminders                      # Apple Reminders: lists are columns
+ul desk new Plan                         # a new board: To do / Doing / Done
 ul desk pomodoro start 50 --card "Write chapter 3"
 ul desk pomodoro                         # status; also pause, resume, skip, stop
 ul desk stats
 ```
 
-The Markdown file stays the source of truth: `ul todo`, the agent and Obsidian
+### Boards from the terminal (and for AI agents)
+
+The same boards without the page, so a person or any coding agent can read the
+tasks and change them. Card numbers come from `show`; `add`/`move`/`done` take
+`-b <board>` and otherwise use the default board.
+
+```bash
+ul desk list                             # default, named and recent boards; --json
+ul desk show                             # columns and numbered cards
+ul desk show Work --json                 # ids, titles, details, tags, due dates, version
+ul desk show --reminders                 # Apple Reminders (read only here)
+ul desk add "Call the bank @tomorrow"    # first column; --column "Doing"
+ul desk move 3 Doing
+ul desk done 3                           # checks it and moves it to the Done column
+```
+
+`ul todo` was removed in 3.17.0: `ul desk show/add/move/done` replace it. An
+untouched `commands/todo` is deleted on the next run; an edited one is kept.
+
+The Markdown file stays the source of truth: `ul desk`, the agent and Obsidian
 see each change, and edits made elsewhere show up on the page within two seconds.
 A change based on an old version of the file is refused and retried on top of
 the new one, so nothing is overwritten. The timer lives in `storage.root/desk`,
@@ -599,8 +600,20 @@ macOS notification. The server listens on 127.0.0.1 only and needs the random
 token in the printed address. Keys: `n` new card, `/` search, `space` timer,
 `1`–`5` views, `?` all shortcuts. Only the Python standard library is used.
 
+**Reminders** is a separate layer that never touches your .md boards: each
+Reminders list is a column, each open reminder a card. Add, edit, `@date`, drag
+to another list, done and delete go straight to Reminders through EventKit; the
+first use asks to allow your terminal in System Settings > Privacy & Security.
+
+**Canvas** is a whiteboard on JSON Canvas files (`.canvas`, opened by Obsidian
+Canvas too); drawings are kept in an extra top-level `unlaw` key. A bare name
+means `<desk.canvas_dir>/<name>.canvas`. Photoshop-style keys work on any
+keyboard layout: `v` select, `h` hand, `n` card, `t` text, `u` shapes, `b`
+brush, `g` fill, `e` eraser, `[`/`]` width, `d` default color, Cmd+G group,
+Cmd+0 fit.
+
 **Games** plays the `ul game` arcade (Tetris, Snake, Minesweeper, Space Invaders,
-Chomp, Dash) in the page with keyboard and mouse. The desk runs `ul game --stream`, so
+Chomp, Dash, Ping Pong) in the page with keyboard and mouse. The desk runs `ul game --stream`, so
 these are the same Rust games, and best scores are shared with the terminal in
 `storage.root/runtime/arcade.toml`. Leaving the tab pauses a game.
 
@@ -800,7 +813,7 @@ The first five minutes:
   visual/line/block modes with block insert, `.` repeat, macros (`qa…q`, `@a`, `Q`),
   registers (`"+` is the clipboard), marks, jumps, `:s`, `:g`, `:sort`, `:normal`,
   `:%!filter`, splits (`Ctrl-w v/s/h/j/k/l`).
-- ul: `space uu` picks a ul command, `:ul todo add milk` runs one into the panel,
+- ul: `space uu` picks a ul command, `:ul desk add milk` runs one into the panel,
   `:ul! game` hands over the terminal, `space gc` commits and pushes with `ul git`.
 - Local AI through `ul lm` (nothing leaves the Mac): `space aa` ask, visual +
   `space ae` rewrite the selection (one undo step), `space ax` explain.
@@ -912,7 +925,7 @@ ul skills install               # ~/.agents/skills/unlaw
 ul skills install --claude      # plus a link in ~/.claude/skills
 ul skills install --project     # ./.agents/skills/unlaw in the current project
 ul skills list
-ul skills show todo             # one command's reference page
+ul skills show desk             # one command's reference page
 ul skills remove
 ```
 

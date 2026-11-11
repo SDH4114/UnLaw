@@ -80,16 +80,16 @@ class ConfigTests(unittest.TestCase):
             "rust",
             "steam",
             "tg",
-            "todo",
             "work",
             "yt",
             "zed",
         }
         self.assertTrue(expected <= {path.name for path in commands.iterdir() if path.is_dir()})
-        todo = (commands / "todo" / "main.py").read_text(encoding="utf-8")
-        self.assertIn("def main", todo)
-        self.assertNotIn("unlawful.", todo)
-        self.assertNotIn("from .", todo)
+        desk = (commands / "desk" / "main.py").read_text(encoding="utf-8")
+        self.assertIn("def main", desk)
+        self.assertNotIn("unlawful.", desk)
+        self.assertNotIn("from .", desk)
+        self.assertFalse((commands / "todo").exists(), "todo was replaced by ul desk")
         self.assertFalse((commands / "game").exists(), "game is built into the Rust core")
         self.assertFalse((commands / "zip").exists(), "zip is built into the Rust core")
         self.assertFalse((commands / "doctor").exists())

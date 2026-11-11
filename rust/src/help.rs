@@ -231,7 +231,7 @@ taken out of core.features so it is not installed again (ul features add
 <command> brings it back). System commands cannot be removed; lm and game are
 built into ul: ul features remove <name>.
 Examples:
-  ul remove todo
+  ul remove music
   ul remove hello --yes
   ul remove
 ",
@@ -258,7 +258,7 @@ folders it did not create are never overwritten.
 Examples:
   ul skills install --claude
   ul skills install --project
-  ul skills show todo
+  ul skills show desk
 ",
     ),
     (

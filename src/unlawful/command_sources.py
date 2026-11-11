@@ -379,9 +379,17 @@ LEGACY_NORMALIZED_HASHES["desk"].add("686745a9ad91c959ab13c25d06826710746590fbbe
 LEGACY_SOURCE_HASHES["desk"].add("2c9c1bf13f443bfcca114a4b4cf2c83dd6a82a2abe6353a5b3fee1208d913d16")
 LEGACY_NORMALIZED_HASHES["desk"].add("f492b37c596283f6e2f5b8f369d56587beb87dec41c3c98459512142969cd338")
 
-# Commands now built into the Rust core. Untouched seeds with these hashes are
-# removed so the built-in runs; edited copies stay and override it.
-RETIRED_COMMANDS = ("game", "zip", "lm", "app", "browser")
+# Seeds of 3.16.1 (also the copies on the maintainer machine), before `ul desk list/show/add/move/done` replaced `ul todo`.
+LEGACY_SOURCE_HASHES["agent"].add("0ab809c4f94de8563a9711744c32342c1dd8d5c77fe4e1f23b423e3b5cff8ec7")
+LEGACY_NORMALIZED_HASHES["agent"].add("f10e111a23b15f0c0fd62668359f6d6c851e4d5db9e3d028634ba0fcf1268696")
+LEGACY_SOURCE_HASHES["desk"].add("9da7aa188890adfbb9b4d7cde2efec5e93c41adbd2a15b2ba42b978b302a03c3")
+LEGACY_NORMALIZED_HASHES["desk"].add("9f229bea3c7843f9f5c3cc74a165452dfe9373b6f6f5c5c5ff300d2b1c050f20")
+LEGACY_SOURCE_HASHES["todo"].add("4bc83452c4e515ee0965775e8c2cd281600787f6ffbfb17af5ec81f37f18f4aa")
+
+# Commands now built into the Rust core, or removed (`todo`, replaced by
+# `ul desk`). Untouched seeds with these hashes are removed so the built-in
+# runs; edited copies stay and override it.
+RETIRED_COMMANDS = ("game", "zip", "lm", "app", "browser", "todo")
 LEGACY_SOURCE_HASHES["game"].add("4eb7ad4f73245d473ae986086fc5943893fb9656d350703018e97f57a7b292e7")
 LEGACY_SOURCE_HASHES["zip"].add("e69649db613965b2d5a2235467e4e5e4d5a2b8cb5f694bcb1c9a0132eecc34e6")
 # The LM Studio client of release 3.0.0; `lm` now runs its own MLX engine.
@@ -401,6 +409,12 @@ LEGACY_SOURCE_HASHES["browser"].add("db814ce6b36d767e3a59c0edea8e5b00b54daebc070
 # `normalized_source`): some installs got copies that differ only in blank lines
 # or the summary docstring, which are untouched code, not user edits.
 RETIRED_NORMALIZED_HASHES = {
+    # Every todo seed: the normalized hashes of earlier releases, then 3.16.1
+    # with `normalized_source` and with only blank lines removed.
+    "todo": LEGACY_NORMALIZED_HASHES["todo"] | {
+        "e567020a63ce49e493e865f768ebbef00d2396f4d1a36ef10e58d71e805d3a85",
+        "5bb6818be8b0d1c75dd049181d36b5059fb1a00179413ec1f0a33cb199ddf2c9",
+    },
     "app": {
         "181e657d412afa5d5f39858100184208258f709350d2191bcf8635614258ae63",
         "312edbff8ef9041c1dbaef2702f6fb02ad5d2fb5a11b696f5b82c004e0fbad60",
@@ -449,7 +463,7 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
             "model": "auto",
             "roots": ["~"],
             "allowed_ids": [],
-            "commands": ["todo", "capture", "music", "yt", "zip", "tg"],
+            "commands": ["desk", "capture", "music", "yt", "zip", "tg"],
             "max_steps": 12,
             "confirm_timeout": 300,
             "digest_time": "",
@@ -483,13 +497,6 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
             "api_base": "https://api.telegram.org",
             "keychain_service": "unlaw.telegram",
         },
-    },
-    "todo": {
-        "todo": {
-            "vault_path": "~/aiwork/data-obsidian",
-            "file": "TODO.md",
-            "completed_column": "Completed",
-        }
     },
     "desk": {
         "storage": {"root": "data"},
@@ -663,7 +670,6 @@ _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "rust": ("project_templates.py", "built_in_commands/rust/main.py"),
     "steam": ("built_in_commands/steam/main.py",),
     "tg": ("telegram.py",),
-    "todo": ("kanban.py", "todo.py"),
     "desk": ("kanban.py", "reminders.py", "canvas.py", "desk_ui.py", "desk.py"),
     "work": ("desktop/work.py",),
     "yt": ("desktop/youtube.py",),

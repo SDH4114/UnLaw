@@ -1,8 +1,8 @@
 # Unlaw command source. Edit freely: this file has no runtime dependency on Unlaw.
-"""Kanban board, TODO list and pomodoro timer in the browser, on your Obsidian board file."""
+"""Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Kanban board, TODO list and pomodoro timer in the browser, on your Obsidian board file.\nUsage: ul desk [board.md|name] [--reminders] [--port N] [--no-open]\n       ul desk new <board.md|name> | path [board.md|name] | stats [board.md|name]\n       ul desk pomodoro [status|start [minutes] [--card <text>]|pause|resume|stop|skip]\nActions:\n  no arguments     Serve the todo board (todo.vault_path + todo.file) on 127.0.0.1\n                   and open it in the browser; Ctrl+C stops the server\n  board.md         Serve another Kanban Markdown file instead\n  name             A bare name (no folder, no .md) is a board in desk.boards_dir\n  --reminders      Start on the Apple Reminders layer (see Reminders below)\n  --port N         Use exactly this port (0 = any free one); default desk.port,\n                   or the next free port after it\n  --no-open        Print the address without opening the browser\n  new <board.md>   Create a board with To do / Doing / Done columns\n  new <name>       The same in desk.boards_dir (created when missing)\n  path [board.md]  Print the board\'s path\n  stats [board.md] Focus sessions, finished tasks, streak and busiest cards\n  pomodoro         Show or control the timer from the terminal; the page shows\n                   the same timer, and a macOS notification marks each phase end\nPage: Board (drag cards between columns, double-click to edit), Today (overdue,\n  due today, in progress, next 7 days), Stats, Games, Studio, Canvas. Keys: n new\n  card, / search, space start/pause timer, 1-6 views, Esc clear filters, ? keys.\nGames: Tetris, Snake, Minesweeper, Space Invaders, Chomp, Dash and Ping Pong from\n  `ul game`, played in the page with keyboard and mouse at easy/normal/hard.\n  The page runs `ul game --stream` (the same Rust games), so best scores are\n  the ones in storage.root/runtime/arcade.toml that the terminal arcade shows\n  too. The page also sends key releases, so two Ping Pong players can hold\n  keys at once. Leaving the tab pauses a game; closing the page ends it.\nCanvas: a whiteboard in the page. Files are JSON Canvas (.canvas, jsoncanvas.org),\n  so Obsidian Canvas opens them: text, file, link and group nodes plus edges.\n  Freehand drawings and shapes (rectangle, ellipse, diamond, line, arrow, text)\n  are stored in the same file under the extra top-level key "unlaw", which\n  Obsidian ignores; every key Unlaw does not know is kept as it was. A bare\n  name opens or creates <desk.canvas_dir>/<name>.canvas; any other path must\n  end in .canvas. Saving replaces the file atomically and is refused (the page\n  reloads) when the file changed meanwhile. A new canvas is an empty\n  {"nodes": [], "edges": []}; an existing file is never overwritten on create.\n  The + button creates the next free canvas-N in desk.canvas_dir at once; the\n  name field left of the tools renames the file (never over another one); the\n  folder button picks a .canvas file in the macOS open dialog.\n  Tools stay active until you pick another. Photoshop-style keys (any keyboard\n  layout): v select, h hand (or Space/middle mouse), n card, t text, u shapes\n  (Shift+u cycles rectangle, ellipse, diamond, line, arrow; also r o l a),\n  b brush, g fill, e eraser (Shift+e switches its mode); [ ] or - = stroke width\n  (the slider goes from 1 to 100; click its number to type an exact width), d default color, Cmd+G group, Cmd+0 fit,\n  Cmd+= / Cmd+- zoom. Click an active eraser or shape tool again for a menu:\n  the eraser removes whole objects or only cuts lines where it passes (text,\n  cards and fill areas stay), shapes are drawn with evenness 3 (perfect), 2 or\n  1 (roughest). Fill works like a paint program: the area of the clicked color,\n  bounded by anything else, becomes a fill area; a click on a line or text\n  recolors it, cards, groups and edges take the color, and an area that runs\n  out of the view fills the shape under it or the background; Alt+click\n  clears. The rainbow swatch picks any color. Drag a card\'s side dot\n  onto another card to connect them; wheel pans, Ctrl+wheel/pinch zooms;\n  Cmd+Z/Shift+Cmd+Z, Cmd+C/V/D; PNG export button.\nBoards: the board menu lists Apple Reminders, recent boards and the boards in\n  desk.boards_dir; "New board…" asks for a name and creates it there.\nReminders: a separate layer, never mixed into your .md boards. Each Reminders\n  list is a column, each open reminder a card (its notes as details). Changes\n  go straight to Reminders (and iCloud): add, edit, @date sets the due date,\n  drag to another column moves it to that list, done completes it, delete\n  removes it, a new column creates a list. Order inside a list stays the\n  Reminders app\'s own. Uses EventKit through osascript; the first use asks to\n  allow your terminal in System Settings > Privacy & Security > Reminders.\nCards: #tag filters, @{2026-11-01} due dates (quick add: @today @tomorrow\n  @сегодня @завтра @+3 @2026-11-01), [[note]] opens the note in Obsidian.\n  Done cards move to todo.completed_column (or the board\'s Done column).\nThe file stays the source of truth: ul todo, the agent and Obsidian see every\n  change, and edits made elsewhere appear on the page within two seconds.\nSecurity: listens on 127.0.0.1 only and needs the random token in the printed\n  address; it reads and writes only the open board, Reminders (when that\n  layer is open), canvas files you open and storage.root/desk.\nSettings: desk.port (8765), desk.open_browser (true), desk.sound (true),\n  desk.reminders (true; false hides the layer), desk.boards_dir ("boards":\n  a relative path is inside the Unlaw config directory, ~ works),\n  desk.canvas_dir ("canvas", the same rules),\n  desk.pomodoro.work (25), short_break (5), long_break (15), cycles (4) in minutes;\n  todo.vault_path, todo.file, todo.completed_column, apps.lofi_url,\n  games.difficulty (default level on the Games tab).\nStorage: storage.root/desk (timer state, pomodoro.jsonl log, recent boards,\n  recent-canvas.json with the last 8 canvases).\nDependencies: Python standard library; osascript for notifications and the\n  Reminders layer; the Games tab needs ul built with the `game` feature.\nExamples: ul desk\n          ul desk ~/notes/Project.md --no-open\n          ul desk new Work            (~/.config/unlaw/boards/Work.md by default)\n          ul desk --reminders\n          ul desk pomodoro start 50 --card "Write chapter 3"\n'
+COMMAND_HELP = 'Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser.\nUsage: ul desk [board] [--reminders] [--port N] [--no-open]\n       ul desk list | show [board] | add <text> | move <n> <column> | done <n>\n       ul desk new <name> | path [board] | stats [board] | pomodoro [start|pause|stop|...]\nPage:\n  ul desk           Open the default board (todo.vault_path + todo.file) on 127.0.0.1\n  [board]           A name = <desk.boards_dir>/<name>.md, or a path to any .md board\n  --reminders       Open Apple Reminders as a board (lists = columns)\nTerminal (for you and AI agents):\n  list [--json]     Default, recent and named boards, and whether Reminders is on\n  show [board]      Columns and numbered cards; --json for scripts, --reminders\n  add <text>        New card in the first column (--column C; @today/@tomorrow dates)\n  move <n> <col>    Move card n; done <n> checks it and moves it to the Done column\n                    add/move/done take -b <board>; without it the default board\n  new <name>        Create a board with To do / Doing / Done\n  stats, pomodoro   Focus statistics and the timer the page shows too\nThe .md file is the source of truth: Obsidian, the page and these commands all\nsee every change. Tabs on the page: Board, Today, Stats, Games, Studio, Canvas.\nSettings: desk.port, desk.boards_dir, desk.canvas_dir, desk.reminders, desk.pomodoro.*,\n  todo.vault_path, todo.file, todo.completed_column.\nExamples: ul desk\n          ul desk show Work --json\n          ul desk add "Call the bank @tomorrow" -b Work\n'
 
 import copy
 import os
@@ -4971,8 +4971,10 @@ from pathlib import Path
 
 
 USAGE = (
-    "Usage: ul desk [board.md|name] [--reminders] [--port N] [--no-open] | new <board.md|name> | path [board.md] | "
-    "stats [board.md] | pomodoro [status|start [minutes] [--card <text>]|pause|resume|stop|skip]"
+    "Usage: ul desk [board] [--reminders] [--port N] [--no-open] | list [--json] | "
+    "show [board] [--reminders] [--json] | add <text> [--column C] [-b board] | "
+    "move <n> <column> [-b board] | done <n> [-b board] | new <name> | path [board] | stats [board] | "
+    "pomodoro [status|start [minutes] [--card <text>]|pause|resume|stop|skip]"
 )
 PHASES = {
     "work": "Focus",
@@ -6807,6 +6809,180 @@ def _stats_cli(path: Path | None, config: dict) -> int:
     return 0
 
 
+def _board_choice(args: list[str]) -> tuple[str | None, list[str]]:
+    """`--board NAME` (or `-b`) anywhere in args; the rest stays in order."""
+    rest, board = [], None
+    position = 0
+    while position < len(args):
+        arg = args[position]
+        if arg in {"--board", "-b"}:
+            if position + 1 >= len(args) or board is not None:
+                raise ValueError(f"{arg} needs one board (a name or a .md file)")
+            board = args[position + 1]
+            position += 2
+            continue
+        rest.append(arg)
+        position += 1
+    return board, rest
+
+
+def _chosen_board(raw: str | None, config: dict, boards_dir: Path) -> Path:
+    return board_file(raw, boards_dir=boards_dir) if raw else default_board(config)
+
+
+def _board_lines(board: KanbanBoard) -> list[str]:
+    """Columns and numbered cards, the format `ul todo` printed (the agent reads it)."""
+    lines: list[str] = []
+    numbered = board.numbered_tasks()
+    for section in board.sections:
+        if lines:
+            lines.append("")
+        lines.append(section.name)
+        tasks = [(number, task) for number, owner, task in numbered if owner is section]
+        if not tasks:
+            lines.append("  (empty)")
+        for number, task in tasks:
+            item = card(task)
+            lines.append(f"  {number}. [{'x' if item['checked'] else ' '}] {item['title']}")
+            lines.extend(f"     {detail}" for detail in item["details"] if detail)
+    return lines
+
+
+def _board_json(board: KanbanBoard, source: str, version: str) -> dict:
+    numbered = board.numbered_tasks()
+    return {
+        "board": source,
+        "version": version,
+        "columns": [
+            {
+                "name": section.name,
+                "cards": [
+                    {"id": number, **card(task)}
+                    for number, owner, task in numbered
+                    if owner is section
+                ],
+            }
+            for section in board.sections
+        ],
+    }
+
+
+def _show_cli(args: list[str], config: dict, boards_dir: Path) -> int:
+    as_json = "--json" in args
+    reminders = "--reminders" in args
+    rest = [arg for arg in args if arg not in {"--json", "--reminders"}]
+    if len(rest) > 1 or any(arg.startswith("-") for arg in rest) or (reminders and rest):
+        print(USAGE, file=sys.stderr)
+        return 2
+    if reminders:
+        if not reminders_available(desk_settings(config)["reminders"]):
+            raise ValueError("The Reminders layer is off (desk.reminders) or not on macOS")
+        version, board, _, _ = Reminders().read(fresh=True)
+        source = REMINDERS
+    else:
+        path = _chosen_board(rest[0] if rest else None, config, boards_dir)
+        data = path.read_bytes()
+        board, source, version = KanbanBoard.parse(data.decode("utf-8")), str(path), version_of(data)
+    if as_json:
+        print(json.dumps(_board_json(board, source, version), ensure_ascii=False, indent=2))
+        return 0
+    print(f"Board: {'Apple Reminders' if reminders else source}")
+    print()
+    print("\n".join(_board_lines(board)) if board.sections else "No columns.")
+    return 0
+
+
+def _list_cli(args: list[str], config: dict, boards_dir: Path) -> int:
+    if args not in ([], ["--json"]):
+        print(USAGE, file=sys.stderr)
+        return 2
+    try:
+        default: str | None = str(default_board(config))
+    except (FileNotFoundError, ValueError):
+        default = None
+    try:
+        boards = sorted(
+            (path.resolve() for path in boards_dir.glob("*.md") if path.is_file()),
+            key=lambda path: path.stem.casefold(),
+        )
+    except OSError:
+        boards = []
+    recent = _read_json(storage_path("desk") / "recent.json", [])
+    recent_paths = [
+        item for item in (recent if isinstance(recent, list) else [])
+        if isinstance(item, str) and Path(item).is_file()
+    ]
+    reminders = reminders_available(desk_settings(config)["reminders"])
+    if args:
+        print(json.dumps({
+            "default": default,
+            "boards_dir": str(boards_dir),
+            "boards": [{"name": path.stem, "path": str(path)} for path in boards],
+            "recent": recent_paths,
+            "reminders": reminders,
+        }, ensure_ascii=False, indent=2))
+        return 0
+    print(f"Default: {default or '(none: set todo.vault_path and todo.file)'}")
+    print(f"Boards in {boards_dir}:")
+    width = max((len(path.stem) for path in boards), default=0)
+    for path in boards:
+        print(f"  {path.stem:<{width}}  {path}")
+    if not boards:
+        print("  (none; create one with: ul desk new <name>)")
+    if recent_paths:
+        print("Recent:")
+        for item in recent_paths:
+            print(f"  {item}")
+    print(f"Reminders: {'available (ul desk show --reminders)' if reminders else 'off'}")
+    return 0
+
+
+def _change_cli(action: str, args: list[str], config: dict, boards_dir: Path) -> int:
+    """add / move / done on a .md board, the same edits the page makes."""
+    raw, rest = _board_choice(args)
+    path = _chosen_board(raw, config, boards_dir)
+    board = KanbanBoard.parse(path.read_bytes().decode("utf-8"))
+    if action == "add":
+        column: str | None = None
+        if "--column" in rest:
+            at = rest.index("--column")
+            if at + 1 >= len(rest):
+                raise ValueError("--column needs a column name")
+            column = rest[at + 1]
+            rest = rest[:at] + rest[at + 2 :]
+        text = quick_text(" ".join(rest), datetime.now().astimezone().date())
+        if not text or "\n" in text or "\r" in text:
+            raise ValueError("The task text must be one non-empty line")
+        if not board.sections:
+            raise ValueError(f"{path} has no columns")
+        section = board.section(column) if column else board.sections[0]
+        section.tasks.append([f"- [ ] {text}"])
+        write_board(path, board)
+        print(f"Added to {section.name}: {text}")
+        return 0
+    if not rest or not rest[0].isdigit():
+        raise ValueError(f"{action} needs a card number from: ul desk show")
+    number = int(rest[0])
+    if action == "move":
+        if len(rest) < 2:
+            raise ValueError("move needs a card number and a column")
+        target = board.section(" ".join(rest[1:]))
+        source, task = board.pop_task(number)
+        target.tasks.append(task)
+        write_board(path, board)
+        print(f"Moved #{number}: {source.name} -> {target.name}")
+        return 0
+    if len(rest) != 1:
+        raise ValueError("done takes one card number")
+    target = completed_section(board, str(config.get("todo", {}).get("completed_column", "Completed")))
+    _, task = board.pop_task(number)
+    title = complete_task(task, datetime.now().astimezone().date())
+    target.tasks.append(task)
+    write_board(path, board)
+    print(f"Completed #{number}: {title}")
+    return 0
+
+
 def _parse_serve(args: list[str]) -> tuple[str | None, int | None, bool, bool]:
     board: str | None = None
     port: int | None = None
@@ -6855,6 +7031,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _stats_cli(
                 board_file(args[1], boards_dir=boards_dir) if len(args) == 2 else default_board(config), config
             )
+        if action == "show":
+            return _show_cli(args[1:], config, boards_dir)
+        if action == "list":
+            return _list_cli(args[1:], config, boards_dir)
+        if action in {"add", "move", "done"}:
+            return _change_cli(action, args[1:], config, boards_dir)
         if action in {"new", "path", "stats"}:
             print(USAGE, file=sys.stderr)
             return 2

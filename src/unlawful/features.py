@@ -21,8 +21,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("lofi", "Media", "Open the lofi website"),
     ("netflix", "Media", "Open Netflix"),
     ("capture", "Media", "Screenshots and screen, camera and microphone recording"),
-    ("todo", "Productivity", "Obsidian TODO board"),
-    ("desk", "Productivity", "Kanban board, TODO and pomodoro in the browser"),
+    ("desk", "Productivity", "Kanban boards, Reminders, pomodoro and canvas; terminal access for agents"),
     ("obsidian", "Productivity", "Open Obsidian"),
     ("work", "Productivity", "lofi plus the current folder in your editor"),
     ("git", "Development", "Stage, commit and push in one command"),
@@ -39,6 +38,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
 CARGO = ("lm", "agent", "game")
 REQUIRES: dict[str, tuple[str, ...]] = {"agent": ("lm",)}
 NAMES = tuple(name for name, _, _ in FEATURES)
+# Features of earlier releases: still accepted in core.features, never installed.
+RETIRED = ("todo",)
 
 
 def resolve(names: list[str] | tuple[str, ...]) -> list[str]:

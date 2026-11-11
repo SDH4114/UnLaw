@@ -257,106 +257,29 @@ TELEGRAM_BOT_TOKEN= line in .env next to config.toml is used. Default downloads:
 storage.root/telegram/downloads.
 Example: ul tg send "Hello"
 ''',
-    "todo": '''Read and update the configured Obsidian TODO board.
-Usage: ul todo [open|path|search <text>|add <text> [--column <name>]|move <id> <column>|done <id>]
-Actions:
-  no arguments   List tasks with numeric IDs
-  open / path    Open the board in Obsidian / print its path
-  search <text>  Find matching tasks
-  add <text>     Add a task; --column selects its section
-  move <id> <column> Move a task to another section
-  done <id>      Mark complete and move to todo.completed_column
-Settings: todo.vault_path, todo.file, todo.completed_column.
-Example: ul todo add "Study Python" --column "To do"
-''',
-    "desk": '''Kanban board, TODO list and pomodoro timer in the browser, on your Obsidian board file.
-Usage: ul desk [board.md|name] [--reminders] [--port N] [--no-open]
-       ul desk new <board.md|name> | path [board.md|name] | stats [board.md|name]
-       ul desk pomodoro [status|start [minutes] [--card <text>]|pause|resume|stop|skip]
-Actions:
-  no arguments     Serve the todo board (todo.vault_path + todo.file) on 127.0.0.1
-                   and open it in the browser; Ctrl+C stops the server
-  board.md         Serve another Kanban Markdown file instead
-  name             A bare name (no folder, no .md) is a board in desk.boards_dir
-  --reminders      Start on the Apple Reminders layer (see Reminders below)
-  --port N         Use exactly this port (0 = any free one); default desk.port,
-                   or the next free port after it
-  --no-open        Print the address without opening the browser
-  new <board.md>   Create a board with To do / Doing / Done columns
-  new <name>       The same in desk.boards_dir (created when missing)
-  path [board.md]  Print the board's path
-  stats [board.md] Focus sessions, finished tasks, streak and busiest cards
-  pomodoro         Show or control the timer from the terminal; the page shows
-                   the same timer, and a macOS notification marks each phase end
-Page: Board (drag cards between columns, double-click to edit), Today (overdue,
-  due today, in progress, next 7 days), Stats, Games, Studio, Canvas. Keys: n new
-  card, / search, space start/pause timer, 1-6 views, Esc clear filters, ? keys.
-Games: Tetris, Snake, Minesweeper, Space Invaders, Chomp, Dash and Ping Pong from
-  `ul game`, played in the page with keyboard and mouse at easy/normal/hard.
-  The page runs `ul game --stream` (the same Rust games), so best scores are
-  the ones in storage.root/runtime/arcade.toml that the terminal arcade shows
-  too. The page also sends key releases, so two Ping Pong players can hold
-  keys at once. Leaving the tab pauses a game; closing the page ends it.
-Canvas: a whiteboard in the page. Files are JSON Canvas (.canvas, jsoncanvas.org),
-  so Obsidian Canvas opens them: text, file, link and group nodes plus edges.
-  Freehand drawings and shapes (rectangle, ellipse, diamond, line, arrow, text)
-  are stored in the same file under the extra top-level key "unlaw", which
-  Obsidian ignores; every key Unlaw does not know is kept as it was. A bare
-  name opens or creates <desk.canvas_dir>/<name>.canvas; any other path must
-  end in .canvas. Saving replaces the file atomically and is refused (the page
-  reloads) when the file changed meanwhile. A new canvas is an empty
-  {"nodes": [], "edges": []}; an existing file is never overwritten on create.
-  The + button creates the next free canvas-N in desk.canvas_dir at once; the
-  name field left of the tools renames the file (never over another one); the
-  folder button picks a .canvas file in the macOS open dialog.
-  Tools stay active until you pick another. Photoshop-style keys (any keyboard
-  layout): v select, h hand (or Space/middle mouse), n card, t text, u shapes
-  (Shift+u cycles rectangle, ellipse, diamond, line, arrow; also r o l a),
-  b brush, g fill, e eraser (Shift+e switches its mode); [ ] or - = stroke width
-  (the slider goes from 1 to 100; click its number to type an exact width), d default color, Cmd+G group, Cmd+0 fit,
-  Cmd+= / Cmd+- zoom. Click an active eraser or shape tool again for a menu:
-  the eraser removes whole objects or only cuts lines where it passes (text,
-  cards and fill areas stay), shapes are drawn with evenness 3 (perfect), 2 or
-  1 (roughest). Fill works like a paint program: the area of the clicked color,
-  bounded by anything else, becomes a fill area; a click on a line or text
-  recolors it, cards, groups and edges take the color, and an area that runs
-  out of the view fills the shape under it or the background; Alt+click
-  clears. The rainbow swatch picks any color. Drag a card's side dot
-  onto another card to connect them; wheel pans, Ctrl+wheel/pinch zooms;
-  Cmd+Z/Shift+Cmd+Z, Cmd+C/V/D; PNG export button.
-Boards: the board menu lists Apple Reminders, recent boards and the boards in
-  desk.boards_dir; "New board…" asks for a name and creates it there.
-Reminders: a separate layer, never mixed into your .md boards. Each Reminders
-  list is a column, each open reminder a card (its notes as details). Changes
-  go straight to Reminders (and iCloud): add, edit, @date sets the due date,
-  drag to another column moves it to that list, done completes it, delete
-  removes it, a new column creates a list. Order inside a list stays the
-  Reminders app's own. Uses EventKit through osascript; the first use asks to
-  allow your terminal in System Settings > Privacy & Security > Reminders.
-Cards: #tag filters, @{2026-11-01} due dates (quick add: @today @tomorrow
-  @сегодня @завтра @+3 @2026-11-01), [[note]] opens the note in Obsidian.
-  Done cards move to todo.completed_column (or the board's Done column).
-The file stays the source of truth: ul todo, the agent and Obsidian see every
-  change, and edits made elsewhere appear on the page within two seconds.
-Security: listens on 127.0.0.1 only and needs the random token in the printed
-  address; it reads and writes only the open board, Reminders (when that
-  layer is open), canvas files you open and storage.root/desk.
-Settings: desk.port (8765), desk.open_browser (true), desk.sound (true),
-  desk.reminders (true; false hides the layer), desk.boards_dir ("boards":
-  a relative path is inside the Unlaw config directory, ~ works),
-  desk.canvas_dir ("canvas", the same rules),
-  desk.pomodoro.work (25), short_break (5), long_break (15), cycles (4) in minutes;
-  todo.vault_path, todo.file, todo.completed_column, apps.lofi_url,
-  games.difficulty (default level on the Games tab).
-Storage: storage.root/desk (timer state, pomodoro.jsonl log, recent boards,
-  recent-canvas.json with the last 8 canvases).
-Dependencies: Python standard library; osascript for notifications and the
-  Reminders layer; the Games tab needs ul built with the `game` feature.
+    "desk": '''Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser.
+Usage: ul desk [board] [--reminders] [--port N] [--no-open]
+       ul desk list | show [board] | add <text> | move <n> <column> | done <n>
+       ul desk new <name> | path [board] | stats [board] | pomodoro [start|pause|stop|...]
+Page:
+  ul desk           Open the default board (todo.vault_path + todo.file) on 127.0.0.1
+  [board]           A name = <desk.boards_dir>/<name>.md, or a path to any .md board
+  --reminders       Open Apple Reminders as a board (lists = columns)
+Terminal (for you and AI agents):
+  list [--json]     Default, recent and named boards, and whether Reminders is on
+  show [board]      Columns and numbered cards; --json for scripts, --reminders
+  add <text>        New card in the first column (--column C; @today/@tomorrow dates)
+  move <n> <col>    Move card n; done <n> checks it and moves it to the Done column
+                    add/move/done take -b <board>; without it the default board
+  new <name>        Create a board with To do / Doing / Done
+  stats, pomodoro   Focus statistics and the timer the page shows too
+The .md file is the source of truth: Obsidian, the page and these commands all
+see every change. Tabs on the page: Board, Today, Stats, Games, Studio, Canvas.
+Settings: desk.port, desk.boards_dir, desk.canvas_dir, desk.reminders, desk.pomodoro.*,
+  todo.vault_path, todo.file, todo.completed_column.
 Examples: ul desk
-          ul desk ~/notes/Project.md --no-open
-          ul desk new Work            (~/.config/unlaw/boards/Work.md by default)
-          ul desk --reminders
-          ul desk pomodoro start 50 --card "Write chapter 3"
+          ul desk show Work --json
+          ul desk add "Call the bank @tomorrow" -b Work
 ''',
     "work": '''Open the configured lofi website and the current directory in your editor.
 Usage: ul work

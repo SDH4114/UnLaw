@@ -834,7 +834,7 @@ fn doctor_checks() -> Vec<Check> {
             }
         },
         Check {
-            name: "Obsidian TODO",
+            name: "Desk board",
             available: todo_file.is_file(),
             required: false,
             detail: todo_file.display().to_string(),

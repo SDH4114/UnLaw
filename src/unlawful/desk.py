@@ -44,8 +44,10 @@ from .kanban import (
 from .reminders import REMINDERS, Reminders, boards_folder, reminders_available
 
 USAGE = (
-    "Usage: ul desk [board.md|name] [--reminders] [--port N] [--no-open] | new <board.md|name> | path [board.md] | "
-    "stats [board.md] | pomodoro [status|start [minutes] [--card <text>]|pause|resume|stop|skip]"
+    "Usage: ul desk [board] [--reminders] [--port N] [--no-open] | list [--json] | "
+    "show [board] [--reminders] [--json] | add <text> [--column C] [-b board] | "
+    "move <n> <column> [-b board] | done <n> [-b board] | new <name> | path [board] | stats [board] | "
+    "pomodoro [status|start [minutes] [--card <text>]|pause|resume|stop|skip]"
 )
 PHASES = {
     "work": "Focus",
@@ -1880,6 +1882,180 @@ def _stats_cli(path: Path | None, config: dict) -> int:
     return 0
 
 
+def _board_choice(args: list[str]) -> tuple[str | None, list[str]]:
+    """`--board NAME` (or `-b`) anywhere in args; the rest stays in order."""
+    rest, board = [], None
+    position = 0
+    while position < len(args):
+        arg = args[position]
+        if arg in {"--board", "-b"}:
+            if position + 1 >= len(args) or board is not None:
+                raise ValueError(f"{arg} needs one board (a name or a .md file)")
+            board = args[position + 1]
+            position += 2
+            continue
+        rest.append(arg)
+        position += 1
+    return board, rest
+
+
+def _chosen_board(raw: str | None, config: dict, boards_dir: Path) -> Path:
+    return board_file(raw, boards_dir=boards_dir) if raw else default_board(config)
+
+
+def _board_lines(board: KanbanBoard) -> list[str]:
+    """Columns and numbered cards, the format `ul todo` printed (the agent reads it)."""
+    lines: list[str] = []
+    numbered = board.numbered_tasks()
+    for section in board.sections:
+        if lines:
+            lines.append("")
+        lines.append(section.name)
+        tasks = [(number, task) for number, owner, task in numbered if owner is section]
+        if not tasks:
+            lines.append("  (empty)")
+        for number, task in tasks:
+            item = card(task)
+            lines.append(f"  {number}. [{'x' if item['checked'] else ' '}] {item['title']}")
+            lines.extend(f"     {detail}" for detail in item["details"] if detail)
+    return lines
+
+
+def _board_json(board: KanbanBoard, source: str, version: str) -> dict:
+    numbered = board.numbered_tasks()
+    return {
+        "board": source,
+        "version": version,
+        "columns": [
+            {
+                "name": section.name,
+                "cards": [
+                    {"id": number, **card(task)}
+                    for number, owner, task in numbered
+                    if owner is section
+                ],
+            }
+            for section in board.sections
+        ],
+    }
+
+
+def _show_cli(args: list[str], config: dict, boards_dir: Path) -> int:
+    as_json = "--json" in args
+    reminders = "--reminders" in args
+    rest = [arg for arg in args if arg not in {"--json", "--reminders"}]
+    if len(rest) > 1 or any(arg.startswith("-") for arg in rest) or (reminders and rest):
+        print(USAGE, file=sys.stderr)
+        return 2
+    if reminders:
+        if not reminders_available(desk_settings(config)["reminders"]):
+            raise ValueError("The Reminders layer is off (desk.reminders) or not on macOS")
+        version, board, _, _ = Reminders().read(fresh=True)
+        source = REMINDERS
+    else:
+        path = _chosen_board(rest[0] if rest else None, config, boards_dir)
+        data = path.read_bytes()
+        board, source, version = KanbanBoard.parse(data.decode("utf-8")), str(path), version_of(data)
+    if as_json:
+        print(json.dumps(_board_json(board, source, version), ensure_ascii=False, indent=2))
+        return 0
+    print(f"Board: {'Apple Reminders' if reminders else source}")
+    print()
+    print("\n".join(_board_lines(board)) if board.sections else "No columns.")
+    return 0
+
+
+def _list_cli(args: list[str], config: dict, boards_dir: Path) -> int:
+    if args not in ([], ["--json"]):
+        print(USAGE, file=sys.stderr)
+        return 2
+    try:
+        default: str | None = str(default_board(config))
+    except (FileNotFoundError, ValueError):
+        default = None
+    try:
+        boards = sorted(
+            (path.resolve() for path in boards_dir.glob("*.md") if path.is_file()),
+            key=lambda path: path.stem.casefold(),
+        )
+    except OSError:
+        boards = []
+    recent = _read_json(storage_path("desk") / "recent.json", [])
+    recent_paths = [
+        item for item in (recent if isinstance(recent, list) else [])
+        if isinstance(item, str) and Path(item).is_file()
+    ]
+    reminders = reminders_available(desk_settings(config)["reminders"])
+    if args:
+        print(json.dumps({
+            "default": default,
+            "boards_dir": str(boards_dir),
+            "boards": [{"name": path.stem, "path": str(path)} for path in boards],
+            "recent": recent_paths,
+            "reminders": reminders,
+        }, ensure_ascii=False, indent=2))
+        return 0
+    print(f"Default: {default or '(none: set todo.vault_path and todo.file)'}")
+    print(f"Boards in {boards_dir}:")
+    width = max((len(path.stem) for path in boards), default=0)
+    for path in boards:
+        print(f"  {path.stem:<{width}}  {path}")
+    if not boards:
+        print("  (none; create one with: ul desk new <name>)")
+    if recent_paths:
+        print("Recent:")
+        for item in recent_paths:
+            print(f"  {item}")
+    print(f"Reminders: {'available (ul desk show --reminders)' if reminders else 'off'}")
+    return 0
+
+
+def _change_cli(action: str, args: list[str], config: dict, boards_dir: Path) -> int:
+    """add / move / done on a .md board, the same edits the page makes."""
+    raw, rest = _board_choice(args)
+    path = _chosen_board(raw, config, boards_dir)
+    board = KanbanBoard.parse(path.read_bytes().decode("utf-8"))
+    if action == "add":
+        column: str | None = None
+        if "--column" in rest:
+            at = rest.index("--column")
+            if at + 1 >= len(rest):
+                raise ValueError("--column needs a column name")
+            column = rest[at + 1]
+            rest = rest[:at] + rest[at + 2 :]
+        text = quick_text(" ".join(rest), datetime.now().astimezone().date())
+        if not text or "\n" in text or "\r" in text:
+            raise ValueError("The task text must be one non-empty line")
+        if not board.sections:
+            raise ValueError(f"{path} has no columns")
+        section = board.section(column) if column else board.sections[0]
+        section.tasks.append([f"- [ ] {text}"])
+        write_board(path, board)
+        print(f"Added to {section.name}: {text}")
+        return 0
+    if not rest or not rest[0].isdigit():
+        raise ValueError(f"{action} needs a card number from: ul desk show")
+    number = int(rest[0])
+    if action == "move":
+        if len(rest) < 2:
+            raise ValueError("move needs a card number and a column")
+        target = board.section(" ".join(rest[1:]))
+        source, task = board.pop_task(number)
+        target.tasks.append(task)
+        write_board(path, board)
+        print(f"Moved #{number}: {source.name} -> {target.name}")
+        return 0
+    if len(rest) != 1:
+        raise ValueError("done takes one card number")
+    target = completed_section(board, str(config.get("todo", {}).get("completed_column", "Completed")))
+    _, task = board.pop_task(number)
+    title = complete_task(task, datetime.now().astimezone().date())
+    target.tasks.append(task)
+    write_board(path, board)
+    print(f"Completed #{number}: {title}")
+    return 0
+
+
 def _parse_serve(args: list[str]) -> tuple[str | None, int | None, bool, bool]:
     board: str | None = None
     port: int | None = None
@@ -1928,6 +2104,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _stats_cli(
                 board_file(args[1], boards_dir=boards_dir) if len(args) == 2 else default_board(config), config
             )
+        if action == "show":
+            return _show_cli(args[1:], config, boards_dir)
+        if action == "list":
+            return _list_cli(args[1:], config, boards_dir)
+        if action in {"add", "move", "done"}:
+            return _change_cli(action, args[1:], config, boards_dir)
         if action in {"new", "path", "stats"}:
             print(USAGE, file=sys.stderr)
             return 2

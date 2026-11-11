@@ -43,12 +43,12 @@ class RemoveTests(CoreTestCase):
         self.assertFalse((self.unlaw / "commands" / "hello").exists())
 
     def test_a_default_command_leaves_core_features_and_is_not_seeded_again(self) -> None:
-        self.assertTrue((self.unlaw / "commands" / "todo").is_dir())
-        result = self.ok("remove", "todo", "--yes")
-        self.assertIn("ul features add todo", result.stdout)
+        self.assertTrue((self.unlaw / "commands" / "music").is_dir())
+        result = self.ok("remove", "music", "--yes")
+        self.assertIn("ul features add music", result.stdout)
         self.ok("init")
-        self.assertFalse((self.unlaw / "commands" / "todo").exists())
-        self.assertNotIn("todo", self.features())
+        self.assertFalse((self.unlaw / "commands" / "music").exists())
+        self.assertNotIn("music", self.features())
         self.assertIn("yt", self.features())
 
     def test_a_symlinked_command_loses_only_the_link(self) -> None:
@@ -146,21 +146,21 @@ class ReinstallTests(CoreTestCase):
     def test_reinstall_rebuilds_and_resets_settings_but_keeps_user_files(self) -> None:
         log = self.fake_cargo()
         self.ok("config", "set", "games.difficulty", "hard")
-        self.ok("config", "set", "core.features", '["yt", "todo"]')
+        self.ok("config", "set", "core.features", '["yt", "desk"]')
         self.ok("config", "set", "storage.root", "elsewhere")
         (self.unlaw / "ule.toml").write_text("tab_width = 8\n")
-        todo = self.unlaw / "commands" / "todo" / "main.py"
-        todo.write_text(todo.read_text() + "# mine\n")
+        desk = self.unlaw / "commands" / "desk" / "main.py"
+        desk.write_text(desk.read_text() + "# mine\n")
         self.command("hello", "print('hi')\n")
         (self.unlaw / "templates" / "python" / "keep.txt").write_text("t")
 
         result = self.ok("reinstall", input="y\n")
         self.assertEqual(log.read_text().splitlines(), ["unlaw cache=False", "ule cache=False"])
         self.assertEqual(self.ok("config", "get", "games.difficulty").stdout.strip(), "normal")
-        self.assertEqual(json.loads(self.ok("config", "get", "core.features").stdout), ["yt", "todo"])
+        self.assertEqual(json.loads(self.ok("config", "get", "core.features").stdout), ["yt", "desk"])
         self.assertEqual(self.ok("config", "get", "storage.root").stdout.strip(), "elsewhere")
         self.assertFalse((self.unlaw / "ule.toml").exists())
-        self.assertEqual(todo.read_text(), command_source("todo"))
+        self.assertEqual(desk.read_text(), command_source("desk"))
         self.assertTrue((self.unlaw / "commands" / "yt" / "main.py").is_file())
         self.assertTrue((self.unlaw / "commands" / "hello" / "main.py").is_file())
         self.assertTrue((self.unlaw / "templates" / "python" / "keep.txt").is_file())
@@ -168,9 +168,9 @@ class ReinstallTests(CoreTestCase):
         self.assertEqual(len(backups), 1)
         self.assertIn("hard", (backups[0] / "config.toml").read_text())
         self.assertTrue((backups[0] / "ule.toml").is_file())
-        self.assertIn("# mine", (backups[0] / "commands" / "todo" / "main.py").read_text())
+        self.assertIn("# mine", (backups[0] / "commands" / "desk" / "main.py").read_text())
         self.assertFalse((backups[0] / "commands" / "yt").exists(), "untouched seeds are not backed up")
-        self.assertIn("Edited default commands saved there: todo", result.stdout)
+        self.assertIn("Edited default commands saved there: desk", result.stdout)
 
     def test_a_failed_build_resets_nothing(self) -> None:
         self.fake_cargo(exit_code=3)

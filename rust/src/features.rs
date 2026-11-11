@@ -11,7 +11,7 @@
 use std::io;
 use std::sync::LazyLock;
 
-use crate::assets::{FEATURE_CORE, FEATURE_LIST};
+use crate::assets::{FEATURE_CORE, FEATURE_LIST, FEATURE_RETIRED};
 use crate::checklist::{self, Entry};
 use crate::config::{self, Config, Value};
 use crate::help::print_if_requested;
@@ -99,7 +99,7 @@ pub fn config_errors(value: Option<&Value>) -> Vec<String> {
     let mut errors = Vec::new();
     for item in items {
         match item {
-            Value::Str(name) if name == "all" || find(name).is_some() => {}
+            Value::Str(name) if name == "all" || find(name).is_some() || FEATURE_RETIRED.contains(&name.as_str()) => {}
             Value::Str(name) => errors.push(format!("Unknown feature in core.features: {name}")),
             _ => return vec!["Invalid core.features: expected an array of feature names".into()],
         }
@@ -353,6 +353,8 @@ mod tests {
     fn config_errors_name_unknown_features() {
         let names = |items: &[&str]| Value::Array(items.iter().map(|item| Value::Str(item.to_string())).collect());
         assert!(config_errors(Some(&names(&["all", "yt", "game"]))).is_empty());
+        // A feature of an earlier release (todo, replaced by desk) keeps old configs valid.
+        assert!(config_errors(Some(&names(&["todo", "desk"]))).is_empty());
         assert_eq!(config_errors(Some(&names(&["zip"]))), vec!["Unknown feature in core.features: zip"]);
         assert_eq!(config_errors(Some(&Value::Str("all".into()))), vec!["Invalid core.features: expected an array of feature names"]);
         assert_eq!(config_errors(None), vec!["Invalid core.features: expected an array of feature names"]);

@@ -144,10 +144,10 @@ class SeedUpgradeTests(CoreTestCase):
         mangled = "\n".join(lines[:1] + lines[2:]).replace("\n\n\n", "\n\n\n\n") + "\n"
         (self.unlaw / "commands" / "tg" / "main.py").write_text(mangled, encoding="utf-8")
         edited = seed + "\nprint('mine')\n"
-        (self.unlaw / "commands" / "todo" / "main.py").write_text(edited, encoding="utf-8")
+        (self.unlaw / "commands" / "yt" / "main.py").write_text(edited, encoding="utf-8")
         self.ok("version")
         self.assertEqual((self.unlaw / "commands" / "tg" / "main.py").read_text(encoding="utf-8"), seed)
-        self.assertEqual((self.unlaw / "commands" / "todo" / "main.py").read_text(encoding="utf-8"), edited)
+        self.assertEqual((self.unlaw / "commands" / "yt" / "main.py").read_text(encoding="utf-8"), edited)
         self.assertIn("Open Telegram", self.ok("commands", "--describe").stdout)
 
     def test_python_and_rust_normalize_alike(self) -> None:
@@ -157,8 +157,24 @@ class SeedUpgradeTests(CoreTestCase):
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
         from unlawful.command_sources import command_source, is_replaceable_command_source, normalized_source
 
-        source = command_source("todo")
+        source = command_source("work")
         self.assertFalse(normalized_source(source).startswith('"""'))
-        stripped = "\n".join(line for line in source.splitlines() if not line.startswith('"""Read'))
-        self.assertTrue(is_replaceable_command_source(stripped, "todo"))
-        self.assertFalse(is_replaceable_command_source(source + "\nprint('mine')\n", "todo"))
+        stripped = "\n".join(line for line in source.splitlines() if not line.startswith('"""Open'))
+        self.assertTrue(is_replaceable_command_source(stripped, "work"))
+        self.assertFalse(is_replaceable_command_source(source + "\nprint('mine')\n", "work"))
+
+    def test_the_retired_todo_seed_is_removed_and_an_edited_one_kept(self) -> None:
+        """`ul todo` was replaced by `ul desk show/add/move/done` in 3.17.0."""
+        self.ok("version")
+        old = (Path(__file__).parent / "fixtures" / "todo-3.16.1.py").read_text(encoding="utf-8")
+        todo = self.unlaw / "commands" / "todo"
+        todo.mkdir()
+        (todo / "main.py").write_text(old.replace("\n\n", "\n\n\n", 1), encoding="utf-8")
+        self.ok("version")
+        self.assertFalse(todo.exists(), "an untouched todo seed (blank lines aside) is removed")
+        todo.mkdir()
+        (todo / "main.py").write_text(old + "\n# mine\n", encoding="utf-8")
+        self.ok("version")
+        self.assertTrue((todo / "main.py").is_file(), "an edited todo stays")
+        self.ok("config", "set", "core.features", '["todo", "desk"]')
+        self.ok("config", "check")

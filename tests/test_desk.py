@@ -301,7 +301,7 @@ class PomodoroTests(unittest.TestCase):
 
 
 class DeskServerTests(unittest.TestCase):
-    """The seeded command as a real process: auth, sync with `ul todo`, the timer CLI."""
+    """The seeded command as a real process: auth, sync with `ul desk add/show`, the timer CLI."""
 
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
@@ -330,7 +330,6 @@ class DeskServerTests(unittest.TestCase):
             commands = ensure_layout() / "commands"
             set_config_value("todo.vault_path", str(self.vault))
         self.desk = commands / "desk" / "main.py"
-        self.todo = commands / "todo" / "main.py"
 
     def run_seed(self, script: Path, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -395,9 +394,9 @@ class DeskServerTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("ul desk pomodoro", result.stdout)
+        self.assertIn("ul desk show", result.stdout)
 
-    def test_server_guards_host_and_token_and_syncs_with_todo(self) -> None:
+    def test_server_guards_host_and_token_and_syncs_with_the_terminal(self) -> None:
         port, token = self.start()
         auth = {"X-Desk-Token": token}
         self.assertEqual(self.request(port, "GET", "/")[0], 403)
@@ -434,10 +433,10 @@ class DeskServerTests(unittest.TestCase):
             auth,
         )
         self.assertEqual(status, 200)
-        listed = self.run_seed(self.todo)
+        listed = self.run_seed(self.desk, "show")
         self.assertIn("From the page", listed.stdout)
 
-        added = self.run_seed(self.todo, "add", "From the terminal")
+        added = self.run_seed(self.desk, "add", "From the terminal")
         self.assertEqual(added.returncode, 0, added.stderr)
         status, conflict = self.request(
             port,
@@ -459,10 +458,10 @@ class DeskServerTests(unittest.TestCase):
                 self.assertEqual(self.request(port, "GET", target, headers=headers)[0], 400, (target, headers))
         self.assertEqual(self.request(port, "GET", "/api/board", headers=auth)[0], 200)
 
-    def test_todo_keeps_crlf_line_endings(self) -> None:
+    def test_terminal_add_keeps_crlf_line_endings(self) -> None:
         board = self.vault / "TODO.md"
         board.write_bytes(BOARD.replace("\n", "\r\n").encode())
-        added = self.run_seed(self.todo, "add", "From the terminal")
+        added = self.run_seed(self.desk, "add", "From the terminal")
         self.assertEqual(added.returncode, 0, added.stderr)
         data = board.read_bytes()
         self.assertIn(b"From the terminal\r\n", data)

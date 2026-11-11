@@ -388,7 +388,7 @@ class AgentCommandTests(AgentCase):
         model = self.model(
             [
                 call("ul", args=["config", "set", "agent.roots", '["/"]']),
-                call("ul", args=["todo", "--help"]),
+                call("ul", args=["desk", "--help"]),
                 {"content": "ok"},
             ]
         )
@@ -396,7 +396,7 @@ class AgentCommandTests(AgentCase):
         results = model.tool_results()
         self.assertIn("not in agent.commands", results[0])
         self.assertIn("exit 0", results[1])
-        self.assertIn("Obsidian TODO board", results[1])
+        self.assertIn("ul desk show", results[1])
 
     def test_today_plan_and_unschedule_through_tools(self) -> None:
         moment = dt.datetime.now()

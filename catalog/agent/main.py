@@ -19,7 +19,7 @@ DEFAULT_CONFIG = {'storage': {'root': 'data'},
  'agent': {'model': 'auto',
            'roots': ['~'],
            'allowed_ids': [],
-           'commands': ['todo', 'capture', 'music', 'yt', 'zip', 'tg'],
+           'commands': ['desk', 'capture', 'music', 'yt', 'zip', 'tg'],
            'max_steps': 12,
            'confirm_timeout': 300,
            'digest_time': '',
@@ -1406,32 +1406,45 @@ def run_ul(*args: str, timeout: float = 600) -> subprocess.CompletedProcess[str]
 
 
 DONE_COLUMNS = {"done", "completed", "finished", "archive", "готово", "сделано", "выполнено", "архив"}
-TASK_LINE = re.compile(r"^\s+\d+\. \[([ xX])\]")
+
+
+def board_cards() -> dict:
+    """The default desk board as `ul desk show --json` returns it."""
+    result = run_ul("desk", "show", "--json", timeout=60)
+    if result.returncode != 0:
+        raise ToolError((result.stderr or result.stdout).strip() or "ul desk show failed")
+    try:
+        board = json.loads(result.stdout)
+    except ValueError as error:
+        raise ToolError(f"ul desk show returned no JSON: {error}") from error
+    if not isinstance(board, dict) or not isinstance(board.get("columns"), list):
+        raise ToolError("ul desk show returned an unexpected answer")
+    return board
+
+
+def format_cards(board: dict, open_only: bool = False, config: dict | None = None) -> str:
+    """Columns with `  id. [ ] title` lines and indented details, like `ul desk show`."""
+    # Boards name their last column differently; none of them holds open work.
+    completed = {str((config or {}).get("todo", {}).get("completed_column", "Completed")).casefold(), *DONE_COLUMNS}
+    blocks = []
+    for column in board["columns"]:
+        name = str(column.get("name", ""))
+        if open_only and name.casefold() in completed:
+            continue
+        lines = []
+        for card in column.get("cards", []):
+            if open_only and card.get("checked"):
+                continue
+            lines.append(f"  {card.get('id')}. [{'x' if card.get('checked') else ' '}] {card.get('title', '')}")
+            lines.extend(f"     {detail}" for detail in card.get("details", []) if detail)
+        if lines or not open_only:
+            blocks.append(name + "\n" + ("\n".join(lines) if lines else "  (empty)"))
+    return "\n\n".join(blocks)
 
 
 def open_tasks(config: dict) -> str:
-    """`ul todo` without the completed column and finished tasks."""
-    result = run_ul("todo", timeout=60)
-    if result.returncode != 0:
-        raise ToolError((result.stderr or result.stdout).strip() or "ul todo failed")
-    # Boards name their last column differently; none of them holds open work.
-    completed = {str(config["todo"]["completed_column"]).casefold(), *DONE_COLUMNS}
-    sections: list[tuple[str, list[str]]] = []
-    keep = False
-    for line in result.stdout.splitlines():
-        if not line.strip():
-            continue
-        if not line.startswith(" "):
-            sections.append((line.strip(), []))
-            continue
-        task = TASK_LINE.match(line)
-        if task:
-            keep = task.group(1) == " "
-        # Detail lines follow their task.
-        if keep and sections and sections[-1][0].casefold() not in completed:
-            sections[-1][1].append(line)
-    text = "\n".join(f"{name}\n" + "\n".join(lines) for name, lines in sections if lines)
-    return text or "No open tasks."
+    """Open cards of the default desk board, without the Done columns."""
+    return format_cards(board_cards(), open_only=True, config=config) or "No open tasks."
 
 
 def today_text(config: dict) -> str:
@@ -1830,8 +1843,7 @@ class Tools:
         return today_text(self.config)
 
     def _todo_list(self) -> str:
-        result = run_ul("todo", timeout=60)
-        return (result.stdout or result.stderr).strip() or "No tasks."
+        return format_cards(board_cards()) or "No tasks."
 
     def _list_schedule(self) -> str:
         return plan_text()
@@ -1923,16 +1935,16 @@ class Tools:
         return f"exit {result.returncode}\n{_clip(output, 8000)}"
 
     def _todo_add(self, text: str, column: str = "") -> str:
-        self._approve(f"Add task to {column or 'To do'}", text)
+        self._approve(f"Add task to {column or 'the first column'}", text)
         result = run_ul(
-            "todo", "add", text, *(["--column", column] if column else []), timeout=60
+            "desk", "add", text, *(["--column", column] if column else []), timeout=60
         )
         return (result.stdout + result.stderr).strip()
 
     def _todo_done(self, id: int) -> str:
         number = int(id)
         self._approve(f"Complete TODO task #{number}")
-        result = run_ul("todo", "done", str(number), timeout=60)
+        result = run_ul("desk", "done", str(number), timeout=60)
         return (result.stdout + result.stderr).strip()
 
     def _schedule(self, prompt: str, when: str, repeat: str = "once", kind: str = "reminder") -> str:

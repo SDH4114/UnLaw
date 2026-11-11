@@ -31,7 +31,7 @@ class SkillsTests(CoreTestCase):
         self.assertTrue(link.is_symlink())
         self.assertEqual(os.readlink(link), "../../.agents/skills/unlaw")
         self.assertEqual(link.resolve(), skill.resolve())
-        self.assertIn("ul todo add", (skill / "reference" / "todo.md").read_text(encoding="utf-8"))
+        self.assertIn("ul desk add", (skill / "reference" / "desk.md").read_text(encoding="utf-8"))
 
     def test_new_and_removed_commands_refresh_the_snapshot(self) -> None:
         self.ok("skills", "install")

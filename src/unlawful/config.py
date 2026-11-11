@@ -12,6 +12,7 @@ from typing import Any
 
 from .command_sources import command_source, is_replaceable_command_source
 from .features import NAMES as OPTIONAL_FEATURES
+from .features import RETIRED as RETIRED_FEATURES
 from .features import resolve as resolve_features
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -91,7 +92,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "model": "auto",
         "roots": ["~"],
         "allowed_ids": [],
-        "commands": ["todo", "capture", "music", "yt", "zip", "tg"],
+        "commands": ["desk", "capture", "music", "yt", "zip", "tg"],
         "max_steps": 12,
         "confirm_timeout": 300,
         "digest_time": "",
@@ -118,7 +119,6 @@ DEFAULT_COMMAND_NAMES = (
     "rust",
     "steam",
     "tg",
-    "todo",
     "work",
     "yt",
     "zed",
@@ -289,7 +289,11 @@ def _feature_errors(features: Any) -> list[str]:
     message = "Invalid core.features: expected an array of feature names"
     if not isinstance(features, list) or not all(isinstance(item, str) for item in features):
         return [message]
-    return [f"Unknown feature in core.features: {name}" for name in features if name != "all" and name not in OPTIONAL_FEATURES]
+    return [
+        f"Unknown feature in core.features: {name}"
+        for name in features
+        if name != "all" and name not in OPTIONAL_FEATURES and name not in RETIRED_FEATURES
+    ]
 
 
 def selected_features(config: dict[str, Any]) -> list[str]:

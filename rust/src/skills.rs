@@ -173,7 +173,7 @@ fn skill_markdown(records: &[Record]) -> String {
     let mut text = String::from(
         "---
 name: unlaw
-description: Use the `ul` (Unlaw) command line on this Mac. It runs the user's personal commands (TODO board, Telegram, screen capture, YouTube downloads, archives, local AI models with `ul lm`, a local agent with `ul agent`, project templates, app launchers) and manages Unlaw configuration. Use it when the user mentions ul or unlaw, or asks for one of these tasks.
+description: Use the `ul` (Unlaw) command line on this Mac. It runs the user's personal commands (Kanban boards and tasks with `ul desk show`, Telegram, screen capture, YouTube downloads, archives, local AI models with `ul lm`, a local agent with `ul agent`, project templates, app launchers) and manages Unlaw configuration. Use it when the user mentions ul or unlaw, or asks for one of these tasks.
 ---
 
 # Unlaw (`ul`)
@@ -676,13 +676,13 @@ mod tests {
     #[test]
     fn every_seed_has_reference_help() {
         let record = Record {
-            name: "todo".into(),
+            name: "desk".into(),
             source: "config",
             path: None,
             expansion: None,
             summary: None,
         };
-        assert!(reference(&record).contains("ul todo"));
+        assert!(reference(&record).contains("ul desk show"));
         assert!(reference(&record).contains("```text"));
     }
 
