@@ -43,6 +43,7 @@ FEATURES = [
     ("rust", "Development", "New Rust project from a template"),
     ("cpp", "Development", "New C++ project from a template"),
     ("zed", "Development", "Open the current folder in your editor"),
+    ("awake", "System", "Keep the Mac awake for a time, until a time or while a command runs; lid closed too"),
     ("mac", "System", "Control macOS apps through macos-harness"),
     ("steam", "System", "Open Steam"),
     ("minecraft", "System", "Open Prism Launcher"),

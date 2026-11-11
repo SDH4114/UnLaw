@@ -66,6 +66,7 @@ class ConfigTests(unittest.TestCase):
             root = ensure_layout()
         commands = root / "commands"
         expected = {
+            "awake",
             "capture",
             "cpp",
             "git",
@@ -109,6 +110,7 @@ class ConfigTests(unittest.TestCase):
         from unlawful.config import DEFAULT_CONFIG, ensure_layout
 
         expected = {
+            "awake": {"storage": {"root": "data"}},
             "capture": {
                 "storage": {"root": "data"},
                 "capture": DEFAULT_CONFIG["capture"],

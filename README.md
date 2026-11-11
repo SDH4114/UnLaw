@@ -31,7 +31,7 @@ The core is always installed: `ul`/`unlaw`, the `ule` editor, system commands,
 | Media | `yt`, `music`, `lofi`, `netflix`, `capture` |
 | Productivity | `desk`, `obsidian`, `work` |
 | Development | `git`, `py`, `rust`, `cpp`, `zed` |
-| System | `mac`, `steam`, `minecraft` |
+| System | `awake`, `mac`, `steam`, `minecraft` |
 | Fun | `game` |
 
 Re-running the installer on a machine that already has Unlaw is an update: it keeps
@@ -655,6 +655,32 @@ such as BlackHole. Old one-word actions (`ul capture screenshot`, `area`,
 `screen`, `audio`, …) still work. Files go to `storage.root/captures` and are
 never overwritten; Telegram saves downloads to `storage.root/telegram/downloads`,
 and runtime files go to `storage.root/runtime`.
+
+## Keep the Mac awake
+
+```bash
+ul awake 2h                       # also 30m, 1h30m, 90 (minutes); at most 7 days
+ul awake until 18:30              # tomorrow if it has passed; also: until 2026-12-01 09:00
+ul awake on                       # no end; `ul awake off` stops it
+ul awake --pid 1234               # while that process lives
+ul awake --display -- make build  # screen on too; runs the command, exits with its code
+ul awake                          # status (also: status --json)
+```
+
+`ul awake` runs macOS `caffeinate` (`-i -s`, plus `-d` with `--display`) in a
+detached supervisor. A new session replaces the running one (not a
+`-- command` session, which lives in its terminal; stop that command instead).
+State is `storage.root/runtime/awake.json`.
+
+`caffeinate` cannot keep a MacBook awake with the lid closed; `pmset -a
+disablesleep 1` can, but needs root. `ul awake lid setup` installs a sudoers
+rule once (`/etc/sudoers.d/unlaw-awake`, validated with `visudo -cf`) that
+allows exactly `pmset -a disablesleep 0` and `1` without a password. After that
+`--lid` sets it for the session and restores it at the end (timeout, `off`,
+signal, command exit). If the restore fails, `status` says lid sleep is still
+disabled and `ul awake off` retries. On battery, a closed MacBook in a bag gets
+hot and drains the battery (`--lid` warns). `lid remove` deletes the rule,
+`lid status` checks that it works.
 
 ## Quick apps
 

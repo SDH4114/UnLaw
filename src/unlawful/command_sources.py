@@ -471,6 +471,7 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
             "users": {},
         },
     },
+    "awake": {"storage": {"root": "data"}},
     "capture": {
         "storage": {"root": "data"},
         "capture": {
@@ -656,6 +657,7 @@ def latest_capture() -> Path | None:
 
 _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "agent": ("agent_ui.py", "agent.py"),
+    "awake": ("awake.py",),
     "capture": ("capture.py",),
     "cpp": ("project_templates.py", "built_in_commands/cpp/main.py"),
     "git": ("git_hosts.py", "built_in_commands/git/main.py"),
@@ -685,7 +687,7 @@ def _support_source(name: str) -> str:
         parts.append(_CONFIG_SUPPORT.replace("__DEFAULT_CONFIG__", rendered))
     if name in {"cpp", "py", "rust"}:
         parts.append(_TEMPLATES_SUPPORT)
-    if name in {"agent", "capture", "desk", "tg", "yt"}:
+    if name in {"agent", "awake", "capture", "desk", "tg", "yt"}:
         parts.append(_STORAGE_SUPPORT)
     if name == "tg":
         parts.extend((_CONFIG_WRITE_SUPPORT, _LATEST_CAPTURE_SUPPORT))

@@ -7,6 +7,11 @@
    "sha256": "a25dad1283cd3efd144e628c76b4366ca36916850596b2daf9421f92716fe088"
   },
   {
+   "name": "awake",
+   "summary": "Keep the Mac from sleeping for a while, until a time or while something runs; lid closed too.",
+   "sha256": "e3146f8607b410624641eeb5fc593ca390cb4ab14e7d95b10c2b6407ab9563c6"
+  },
+  {
    "name": "capture",
    "summary": "Screenshots and screen, camera and audio recordings on macOS.",
    "sha256": "e5b0af11cee8f66403673ddbfbca838190a332b307e1461859d02262fc1ca8cc"
