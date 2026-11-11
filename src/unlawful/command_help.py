@@ -58,6 +58,22 @@ Examples:
   ula -c
   ula server
 ''',
+    "timer": '''Countdown timers and alarms with macOS notifications.
+Usage: ul timer
+Example: ul timer
+''',
+    "clip": '''Clipboard history in the background: list, search and copy again.
+Usage: ul clip
+Example: ul clip
+''',
+    "weather": '''Weather now and the forecast from Open-Meteo (no API key).
+Usage: ul weather
+Example: ul weather
+''',
+    "sys": '''Computer stats: CPU, GPU, RAM, disk, battery and charge cycles.
+Usage: ul sys
+Example: ul sys
+''',
     "awake": '''Keep the Mac from sleeping for a while, until a time or while something runs; lid closed too.
 Usage: ul awake [status [--json]]
        ul awake <duration> | until [YYYY-MM-DD] HH:MM | on | off
@@ -220,6 +236,10 @@ Examples: ul git "Fix downloader"
   ul git pr --base develop
   ul git undo --list
   ul git undo "add parser"
+''',
+    "claude": '''Open the Claude macOS application.
+Usage: ul claude
+Example: ul claude
 ''',
     "gpt": '''Open the ChatGPT macOS application.
 Usage: ul gpt

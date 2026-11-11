@@ -17,6 +17,16 @@
    "sha256": "e5b0af11cee8f66403673ddbfbca838190a332b307e1461859d02262fc1ca8cc"
   },
   {
+   "name": "claude",
+   "summary": "Open the Claude macOS application.",
+   "sha256": "c6ee2e41da7bfcd37711deed1d90e148f27219dc457c9cd58b3e5f69a2882723"
+  },
+  {
+   "name": "clip",
+   "summary": "Clipboard history in the background: list, search and copy again.",
+   "sha256": "b96bc22c586d2d09b87484dcae634c7f3a898059b0b7e85481dcaccc08148d8b"
+  },
+  {
    "name": "cpp",
    "summary": "Create a C++ project from the configured templates.",
    "sha256": "8b29e6379a137b88c35caf88dc1fa7c72db6f0e9f4d9efdea58738be2d075d06"
@@ -82,9 +92,24 @@
    "sha256": "577bb17e2452c055e961da61348642f62e6cbd5bc9b1bceb2f2aab6885bcac6d"
   },
   {
+   "name": "sys",
+   "summary": "Computer stats: CPU, GPU, RAM, disk, battery and charge cycles.",
+   "sha256": "9816132c2bfe5466c9965d62f3714430d8cc06f930100c87a7fd3d81cef24a8e"
+  },
+  {
    "name": "tg",
    "summary": "Open Telegram, or send and download messages/files through your bot.",
    "sha256": "6ab4158e9c3784514d7bc6bab7845629dc43ab0d023f2e4499632ee0046a39a6"
+  },
+  {
+   "name": "timer",
+   "summary": "Countdown timers and alarms with macOS notifications.",
+   "sha256": "df1887f16ad1d9adee483b660aa36d728b4520c5969d29043ad276214cf6f63e"
+  },
+  {
+   "name": "weather",
+   "summary": "Weather now and the forecast from Open-Meteo (no API key).",
+   "sha256": "e1027e037ff94eaaaf23c5d9c5be66bce9d2c0fff090646da52abb331f060999"
   },
   {
    "name": "work",

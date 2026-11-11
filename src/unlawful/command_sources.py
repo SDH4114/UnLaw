@@ -472,6 +472,9 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
         },
     },
     "awake": {"storage": {"root": "data"}},
+    "clip": {"storage": {"root": "data"}, "clip": {"max_items": 200, "interval": 1.0}},
+    "timer": {"storage": {"root": "data"}, "timer": {"sound": True}},
+    "weather": {"weather": {"city": "", "units": "metric"}},
     "capture": {
         "storage": {"root": "data"},
         "capture": {
@@ -658,9 +661,14 @@ def latest_capture() -> Path | None:
 _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "agent": ("agent_ui.py", "agent.py"),
     "awake": ("awake.py",),
+    "clip": ("clip.py",),
+    "sys": ("sysinfo.py",),
+    "timer": ("timer.py",),
+    "weather": ("weather.py",),
     "capture": ("capture.py",),
     "cpp": ("project_templates.py", "built_in_commands/cpp/main.py"),
     "git": ("git_hosts.py", "built_in_commands/git/main.py"),
+    "claude": ("built_in_commands/claude/main.py",),
     "gpt": ("built_in_commands/gpt/main.py",),
     "lofi": ("built_in_commands/lofi/main.py",),
     "mac": ("harness.py", "built_in_commands/mac/main.py"),
@@ -687,7 +695,7 @@ def _support_source(name: str) -> str:
         parts.append(_CONFIG_SUPPORT.replace("__DEFAULT_CONFIG__", rendered))
     if name in {"cpp", "py", "rust"}:
         parts.append(_TEMPLATES_SUPPORT)
-    if name in {"agent", "awake", "capture", "desk", "tg", "yt"}:
+    if name in {"agent", "awake", "capture", "clip", "desk", "tg", "timer", "yt"}:
         parts.append(_STORAGE_SUPPORT)
     if name == "tg":
         parts.extend((_CONFIG_WRITE_SUPPORT, _LATEST_CAPTURE_SUPPORT))

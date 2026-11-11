@@ -111,6 +111,9 @@ class ConfigTests(unittest.TestCase):
 
         expected = {
             "awake": {"storage": {"root": "data"}},
+            "clip": {"storage": {"root": "data"}, "clip": {"max_items": 200, "interval": 1.0}},
+            "timer": {"storage": {"root": "data"}, "timer": {"sound": True}},
+            "weather": {"weather": {"city": "", "units": "metric"}},
             "capture": {
                 "storage": {"root": "data"},
                 "capture": DEFAULT_CONFIG["capture"],
@@ -192,6 +195,7 @@ class ConfigTests(unittest.TestCase):
         from unlawful.config import ensure_layout
 
         targets = {
+            "claude": "Claude",
             "gpt": "ChatGPT",
             "minecraft": "Prism Launcher",
             "netflix": "Netflix",
