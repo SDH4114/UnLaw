@@ -2,7 +2,7 @@
 """Countdown timers and alarms with macOS notifications."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Countdown timers and alarms with macOS notifications.\nUsage: ul timer <duration> [label...]   Start a timer in the background\n       ul timer at HH:MM [label...]     Alarm at that time (tomorrow if it has passed)\n       ul timer [list] [--json]         Running timers with the time left\n       ul timer cancel ID|--all         Stop one timer or all of them\n       ul timer wait <duration> [label...]   Count down here (Ctrl+C cancels)\n  <duration>   30s, 5m, 1h30m or bare minutes (25); at most 7 days\nA timer runs as a detached process, so you can close the terminal. When it ends a\nnotification appears (with a sound unless timer.sound is false). `wait` shows the\ncountdown on one line and notifies too. Labels must not contain control characters.\nState: storage.root/runtime/timers.json. Entries whose process is gone are dropped.\nNeeds: macOS `osascript` for the notification.\nSettings: timer.sound (true/false), storage.root.\nExamples:\n  ul timer 25m write report\n  ul timer at 18:30 leave\n  ul timer wait 90s tea\n  ul timer cancel 2\n'
+COMMAND_HELP = 'Countdown timers and alarms with macOS notifications.\nUsage: ul timer <duration> [label...]   Start a timer in the background\n       ul timer at HH:MM [label...]     Alarm at that time (tomorrow if it has passed)\n       ul timer [list] [--json]         Running timers with the time left\n       ul timer cancel ID|--all         Stop one timer or all of them\n       ul timer wait <duration> [label...]   Count down here (Ctrl+C cancels)\n  <duration>   30s, 5m, 1h30m or bare minutes (25); at most 7 days\nA timer runs as a detached process, so you can close the terminal. When it ends a\nnotification appears (with a sound unless timer.sound is false). `wait` shows the\ncountdown on one line and notifies too. Labels must not contain control characters.\nState: storage.root/runtime/timers.json. Timers do not survive a logout or restart:\nthe next `ul timer` reports each one once on stderr as lost (not yet due) or missed.\nNeeds: macOS `osascript` for the notification.\nSettings: timer.sound (true/false), storage.root.\nExamples:\n  ul timer 25m write report\n  ul timer at 18:30 leave\n  ul timer wait 90s tea\n  ul timer cancel 2\n'
 
 import copy
 import os
@@ -69,7 +69,9 @@ from pathlib import Path
 #   {"version": 1, "timers": [{id, kind "duration"|"alarm", label, end (epoch seconds), created, pid, lstart}]}
 #   pid/lstart are filled in by the starting command right after it spawned the process (pid is null for a moment).
 # An entry whose process is not alive, does not run this file with `_run <id>`, or started at another time (a reused
-# pid) is stale and is dropped. A pid is never signalled unless `ps` confirms the process is ours.
+# pid) is stale and is dropped, and reported once on stderr as lost (end still ahead) or missed (end passed):
+# detached processes die with a logout or reboot. A `ps` that answers nothing is "unknown": the entry is kept.
+# A pid is never signalled unless `ps` confirms the process is ours.
 # The notification text goes to osascript as arguments (`on run argv`); user text is never part of AppleScript source.
 
 USAGE = """Usage: ul timer <duration> [label...] | at HH:MM [label...]
@@ -235,12 +237,16 @@ def _seed_arguments(command: str) -> str | None:
     return None
 
 
-def is_ours(entry: dict) -> bool:
-    """True when the entry's pid is alive, runs `_run <id>` of this file and started when recorded."""
+def is_ours(entry: dict) -> bool | None:
+    """True when the entry's pid is alive, runs `_run <id>` of this file and started when recorded; False when it
+    is gone or is another process; None when `ps` told nothing (unknown: keep the entry, never signal it)."""
     pid = entry.get("pid")
     if not _alive(pid):
         return False
-    arguments = _seed_arguments(_command_of(pid))
+    command = _command_of(pid)
+    if not command:
+        return None
+    arguments = _seed_arguments(command)
     if arguments is None or arguments.split() != ["_run", str(entry.get("id"))]:
         return False
     recorded = " ".join(str(entry.get("lstart") or "").split())
@@ -314,16 +320,37 @@ def write_timers(timers: list[dict]) -> None:
         raise
 
 
-def live_timers(now: float) -> list[dict]:
-    """The recorded timers without stale ones. The caller holds the lock and writes the result back."""
-    kept = []
+def live_timers(now: float) -> tuple[list[dict], list[dict]]:
+    """(timers still running, timers whose process is gone). The caller holds the lock, writes the first list back
+    and tells the user about the second with `report_lost`, so a lost timer is reported exactly once."""
+    kept, lost = [], []
     for entry in read_timers():
         starting = (
             entry.get("pid") is None and now - entry.get("created", 0) < START_GRACE
         )
-        if starting or is_ours(entry):
+        if starting or is_ours(entry) is not False:
             kept.append(entry)
-    return kept
+        else:
+            lost.append(entry)
+    return kept, lost
+
+
+def report_lost(lost: list[dict], now: float) -> None:
+    for entry in lost:
+        name = f"{entry['kind']} {entry['id']}" + (
+            f" ({entry['label']})" if entry["label"] else ""
+        )
+        due = format_end(entry["end"], now)
+        if entry["end"] > now:
+            print(
+                f"unlaw timer: {name} was lost: the Mac restarted or you logged out (it was due {due})",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"unlaw timer: {name} was missed: it was due {due} but the Mac was off or you were logged out",
+                file=sys.stderr,
+            )
 
 
 def _find(timers: list[dict], timer_id: str) -> dict | None:
@@ -379,7 +406,7 @@ def sound_enabled() -> bool:
 def start(kind: str, end: float, label: str) -> None:
     now = time.time()
     with _locked():
-        timers = live_timers(now)
+        timers, lost = live_timers(now)
         timer_id = str(max((_number(entry) for entry in timers), default=0) + 1)
         timers.append(
             {
@@ -393,6 +420,7 @@ def start(kind: str, end: float, label: str) -> None:
             }
         )
         write_timers(timers)
+    report_lost(lost, now)
     try:
         process = subprocess.Popen(
             [sys.executable, SELF, "_run", timer_id],
@@ -442,9 +470,10 @@ def run_timer(timer_id: str) -> int:
 def show_list(as_json: bool) -> int:
     now = time.time()
     with _locked():
-        timers = live_timers(now)
-        if timers != read_timers():
+        timers, lost = live_timers(now)
+        if lost:
             write_timers(timers)
+    report_lost(lost, now)
     timers.sort(key=_number)
     if as_json:
         rows = [
@@ -493,11 +522,13 @@ def cancel(args: list[str]) -> int:
         if wanted is not None and not targets:
             raise TimerError(f"no timer {wanted}", 1)
         for entry in targets:
-            if is_ours(entry):
+            if is_ours(entry) is True:
                 _stop(entry["pid"])
         gone = {e["id"] for e in targets}
         # Stale entries of other ids are dropped on the way.
-        write_timers([e for e in live_timers(time.time()) if e["id"] not in gone])
+        kept, lost = live_timers(time.time())
+        write_timers([e for e in kept if e["id"] not in gone])
+    report_lost([e for e in lost if e["id"] not in gone], time.time())
     if wanted is None:
         print(f"cancelled {len(targets)} timer(s)" if targets else "no timers running")
     else:

@@ -28,6 +28,14 @@ def now() -> datetime:
     return datetime.now().astimezone()
 
 
+RESET_SIGNALS = (
+    "import os, signal, sys\n"
+    "signal.signal(signal.SIGINT, signal.SIG_DFL)\n"
+    "signal.signal(signal.SIGQUIT, signal.SIG_DFL)\n"
+    "os.execv(sys.argv[1], sys.argv[1:])"
+)
+
+
 def alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -264,9 +272,58 @@ class TimerTests(TimerBase):
         self.assertIn("quick", self.notifications()[0])
         self.assertEqual(self.entries(), [])
 
+    def lose(self, timer: str, end_in: float) -> None:
+        """Simulate a logout: the process dies, the entry stays, the end time is `end_in` seconds away."""
+        entry = self.entries()[0]
+        os.kill(entry["pid"], signal.SIGKILL)
+        self.assertTrue(wait_for(lambda: not alive(entry["pid"])))
+        data = json.loads(self.state_path().read_text(encoding="utf-8"))
+        data["timers"][0]["end"] = time.time() + end_in
+        self.state_path().write_text(json.dumps(data), encoding="utf-8")
+
+    def test_a_timer_lost_before_its_end_is_reported_once(self) -> None:
+        timer = self.timer_id(self.ok("timer", "1h", "night", "alarm"))
+        self.lose(timer, 3600)
+        first = self.ul("timer", "list")
+        self.assertIn("lost", first.stderr)
+        self.assertIn("night alarm", first.stderr)
+        self.assertIn("logged out", first.stderr)
+        self.assertIn("no timers", first.stdout)
+        self.assertNotIn("lost", self.ul("timer", "list").stderr)
+
+    def test_a_timer_that_ended_while_dead_is_reported_as_missed(self) -> None:
+        timer = self.timer_id(self.ok("timer", "at", "07:00", "wake"))
+        self.lose(timer, -60)
+        result = self.ul("timer", "list", "--json")
+        self.assertIn("missed", result.stderr)
+        self.assertIn("wake", result.stderr)
+        self.assertEqual(json.loads(result.stdout), [])
+        self.assertNotIn("missed", self.ul("timer", "list").stderr)
+
+    def test_starting_a_timer_also_reports_lost_ones(self) -> None:
+        timer = self.timer_id(self.ok("timer", "1h", "old"))
+        self.lose(timer, 3600)
+        result = self.ul("timer", "5m", "new")
+        self.assertIn("lost", result.stderr)
+        self.assertIn("old", result.stderr)
+
+    def test_a_failing_ps_never_drops_or_signals_a_live_timer(self) -> None:
+        timer = self.timer_id(self.ok("timer", "1h"))
+        pid = self.entries()[0]["pid"]
+        self.tool("ps", "#!/bin/sh\nexit 1\n")
+        self.assertEqual([item["id"] for item in self.listing()], [timer])
+        self.assertEqual(len(self.entries()), 1)
+        self.ul(
+            "timer", "cancel", timer
+        )  # unconfirmed: removed from the list, never signalled
+        self.assertTrue(alive(pid))
+        os.kill(pid, signal.SIGKILL)
+
     def test_ctrl_c_cancels_a_wait_without_notifying(self) -> None:
         process = subprocess.Popen(
-            [str(binary()), "timer", "wait", "1h"],
+            # A suite run in the background or under nohup ignores SIGINT; a terminal's Ctrl+C must work here,
+            # so the signals are reset before ul is exec'd.
+            [sys.executable, "-c", RESET_SIGNALS, str(binary()), "timer", "wait", "1h"],
             env=self.env,
             cwd=self.root,
             stdout=subprocess.PIPE,
@@ -274,6 +331,13 @@ class TimerTests(TimerBase):
             text=True,
             start_new_session=True,
         )
+
+        def reap() -> None:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+
+        self.addCleanup(reap)
         time.sleep(1.5)
         # Like a terminal's Ctrl+C: the whole foreground group gets the signal.
         os.killpg(process.pid, signal.SIGINT)

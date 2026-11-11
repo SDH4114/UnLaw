@@ -759,6 +759,8 @@ ul timer                      # running timers (also: list --json)
 ul timer cancel 2             # or --all
 ul timer wait 90s tea         # count down in the terminal, Ctrl+C cancels
 ```
+Timers are background processes, so they do not survive a logout or a restart. The next
+`ul timer` command says so once on stderr ("lost" if the time had not come, "missed" if it had).
 Setting: timer.sound (default true).
 
 ### ul weather

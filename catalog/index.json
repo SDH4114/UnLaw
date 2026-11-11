@@ -104,7 +104,7 @@
   {
    "name": "timer",
    "summary": "Countdown timers and alarms with macOS notifications.",
-   "sha256": "dc8e864e7c9d0058e2bb7dc2a90a5d9b9d8575702c112b01c4e09772a1f9beb4"
+   "sha256": "876bd5db8671597e3a40f1f217b84cc8931b763d7458167ca154a6480f8269bd"
   },
   {
    "name": "weather",
