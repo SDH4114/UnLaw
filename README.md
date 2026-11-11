@@ -676,16 +676,17 @@ State is `storage.root/runtime/awake.json`.
 disablesleep 1` can, but needs root. `ul awake lid setup` installs a sudoers
 rule once (`/etc/sudoers.d/unlaw-awake`) that allows exactly
 `pmset -a disablesleep 0` and `1` without a password. The setup is one `sudo`
-call (one password prompt) with a fixed script: it copies the rule as root to a
-hidden file in the same folder, validates that copy with `visudo -cf`, and only
-then moves it into place. The rule names the account from the account
+call (one password prompt) with a fixed script that gets the rule text as an
+argument: root writes it to a hidden file in the same folder (a user-owned file
+is never read as root), validates that file with `visudo -cf`, and only then
+moves it into place. The rule names the account from the account
 database, never `$USER`, and refuses names that sudoers reads as keywords
 (`ALL`, other all-caps aliases). After that `--lid` sets it for the session and
 restores it at the end (timeout, `off`, signal, command exit). If the process
 is killed or the Mac loses power, the debt is on record before the lid is
-disabled; it is repaid at the next login (a small LaunchAgent runs
-`ul awake _scheduled`, which `--lid` sessions install) or at the next
-`ul awake` call. If the restore fails, `status` says lid sleep is still
+disabled; it is repaid within 5 minutes or at the next login (a small
+LaunchAgent runs `ul awake _scheduled`, which `--lid` sessions install and
+which removes itself once nothing is owed) or at the next `ul awake` call. If the restore fails, `status` says lid sleep is still
 disabled and `ul awake off` retries. On battery, a closed MacBook in a bag gets
 hot and drains the battery (`--lid` warns). `lid remove` deletes the rule,
 `lid status` checks that it really works (it runs `sudo -n pmset -a
@@ -714,9 +715,9 @@ that is already open starts at once); it is rewritten on every `add`/`rm` and
 removed with the last schedule. A scheduled session lasts until the end of the
 window. It never replaces a `-- command` session and never cuts short a manual
 session that ends later or has no end. `schedule rm` also stops the session
-that schedule started. `ul awake off` during a scheduled window skips the rest
-of that window (and any other window open at that moment); the next day's
-window runs as usual. When a scheduled start replaces a shorter manual session
+that schedule started. `ul awake off` (of a scheduled or a manual session)
+during a scheduled window skips the rest of that window and any other window
+open at that moment; the next day's window runs as usual. When a scheduled start replaces a shorter manual session
 it keeps that session's `--display` and `--lid`. Finished one-offs are dropped.
 `ul remove`, `ul remove awake` and `ul features remove awake` boot the job out
 and delete the plist; they only report `/etc/sudoers.d/unlaw-awake` (remove it

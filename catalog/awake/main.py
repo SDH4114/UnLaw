@@ -62,7 +62,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from datetime import time as clock_time
@@ -86,6 +86,12 @@ from pathlib import Path
 #                      `ul awake off` (or the next session) manages to restore it
 #   source             "manual" ("schedule:<id>" for sessions that schedules start)
 #   watch_pid, command extras for kinds "pid" and "command"
+# Locks (flock files in storage.root/runtime), always taken in this order, never the other way round:
+#   awake-schedules.lock  ->  awake-start.lock  ->  awake.lock (state file) / awake-lid.lock (pmset writes)
+# awake-start.lock is held from the lid check of a start until its supervisor (or `-- command` state) is ready, so
+# two starts never overlap and the second reads the real SleepDisabled; awake-lid.lock makes every pmset write, and
+# the rule probe (read + write back the same value), atomic. Nothing is held while waiting for a process, except
+# that a start waits (up to 15 s) for the session it replaces to stop.
 # Schedules: storage.root/runtime/awake-schedules.json, written atomically under its own flock (awake-schedules.lock).
 #   {"version": 1, "schedules": [{id, start "HH:MM", end "HH:MM", days [0-6, Mon=0] or null (every day), date
 #   "YYYY-MM-DD" or null (one-off), display, lid, name, created}]}. One LaunchAgent (~/Library/LaunchAgents/
@@ -111,14 +117,18 @@ SUDO = "/usr/bin/sudo"
 # A sudoers user name: not a keyword or alias (those are all upper case: ALL, ADMINS, ...), nothing to quote.
 USER_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]*")
 SUDOERS_ALIAS = re.compile(r"[A-Z][A-Z0-9_]*")
-# Runs as root in ONE sudo call. $1 = the candidate rule, $2 = the target; no user data is in the text itself.
-# The copy is root-owned in a dot-named file (sudo ignores names with a dot) and is checked there before it moves.
+# Runs as root in ONE sudo call. $1 = the rule text, $2 = the target; the text of the script holds no user data.
+# Root writes the file itself (umask 077, then root:wheel 0440) in a dot-named file (sudo ignores names with a dot),
+# checks that copy and only then moves it: no user-owned file is ever read as root.
 SETUP_SCRIPT = """set -eu
-src=$1; target=$2
+umask 077
+text=$1; target=$2
 dir=${target%/*}; base=${target##*/}
 tmp=$dir/.$base.new
 trap '/bin/rm -f "$tmp"' EXIT
-/usr/bin/install -m 0440 -o root -g wheel "$src" "$tmp"
+/usr/bin/printf '%s\\n' "$text" > "$tmp"
+/usr/sbin/chown root:wheel "$tmp"
+/bin/chmod 0440 "$tmp"
 /usr/sbin/visudo -cf "$tmp"
 /bin/mv -f "$tmp" "$target"
 """
@@ -128,6 +138,8 @@ SELF = os.path.abspath(__file__)
 KINDS_WITH_TIMER = ("duration", "until")
 SCHEDULE_VERSION = 1
 SCHEDULE_LOCK = "awake-schedules.lock"
+START_LOCK = "awake-start.lock"
+LID_LOCK = "awake-lid.lock"
 JOB_LABEL = "com.unlaw.awake"
 DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 WINDOW = re.compile(r"([0-9]{1,2}):([0-9]{2})-([0-9]{1,2}):([0-9]{2})")
@@ -247,14 +259,19 @@ def state_file() -> Path:
 
 
 @contextmanager
-def _locked(name: str = "awake.lock") -> Iterator[None]:
-    """Serialize state changes across CLI processes and supervisors; never held while waiting."""
+def _locked(name: str = "awake.lock", blocking: bool = True) -> Iterator[bool]:
+    """Serialize state changes across CLI processes and supervisors. Yields False (and holds nothing) when
+    `blocking` is off and somebody else has the lock."""
     lock = storage_path("runtime", name)
     lock.parent.mkdir(parents=True, exist_ok=True)
     with lock.open("a") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
         try:
-            yield
+            fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
 
@@ -395,7 +412,8 @@ def _command_of(pid: int) -> str:
 
 
 def _lstart(pid: int) -> str:
-    """When the process started (`ps -o lstart=`): a reused pid has another start time."""
+    """When the process started (`ps -o lstart=`): a reused pid has another start time. `ps` prints local time, so
+    it is asked in UTC and the C locale: the same pid must read the same under any TZ. "" = unknown."""
     try:
         result = subprocess.run(
             ["ps", "-p", str(pid), "-o", "lstart="],
@@ -403,6 +421,7 @@ def _lstart(pid: int) -> str:
             text=True,
             timeout=10,
             check=False,
+            env={**os.environ, "TZ": "UTC", "LC_ALL": "C"},
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
@@ -410,8 +429,11 @@ def _lstart(pid: int) -> str:
 
 
 def _same_start(pid: int, recorded: object) -> bool:
-    """True when no start time was recorded, or the process still has it."""
-    return not recorded or _lstart(pid) == " ".join(str(recorded).split())
+    """False only when both start times are known and differ: an unknown one must never condemn a live session."""
+    if not recorded:
+        return True
+    current = _lstart(pid)
+    return not current or current == " ".join(str(recorded).split())
 
 
 def _is_python(word: str) -> bool:
@@ -419,13 +441,16 @@ def _is_python(word: str) -> bool:
 
 
 def _seed_arguments(command: str) -> str | None:
-    """The arguments after `<python> <this file>` in a `ps` command line, or None for any other process."""
-    parts = command.split(None, 1)
-    if len(parts) != 2 or not _is_python(parts[0]):
-        return None
-    if parts[1] == SELF:
-        return ""
-    return parts[1][len(SELF) + 1 :] if parts[1].startswith(SELF + " ") else None
+    """The arguments after `<python> <this file>` in a `ps` command line, or None for any other process.
+    The interpreter path may contain spaces, so this file is searched for, not split off."""
+    marker = " " + SELF
+    start = command.find(marker)
+    while start > 0:
+        rest = command[start + len(marker) :]
+        if (not rest or rest.startswith(" ")) and _is_python(command[:start].strip()):
+            return rest.strip()
+        start = command.find(marker, start + 1)
+    return None
 
 
 def is_ours(state: dict) -> bool:
@@ -544,14 +569,23 @@ def _sudo(*arguments: str) -> bool:
     return result.returncode == 0
 
 
-def set_sleep_disabled(disabled: bool) -> bool:
-    """`sudo -n pmset -a disablesleep 1|0`; only works through the sudoers rule from `ul awake lid setup`."""
+def _write_sleep_disabled(disabled: bool) -> bool:
     return _sudo(PMSET, "-a", "disablesleep", "1" if disabled else "0")
 
 
+def set_sleep_disabled(disabled: bool) -> bool:
+    """`sudo -n pmset -a disablesleep 1|0`; only works through the sudoers rule from `ul awake lid setup`."""
+    with _locked(LID_LOCK):
+        return _write_sleep_disabled(disabled)
+
+
 def lid_rule_works() -> bool:
-    """Run the command itself with the value it already has. `sudo -l` answers yes for ANY NOPASSWD rule."""
-    return set_sleep_disabled(bool(read_sleep_disabled()))
+    """Run the command itself with the value it already has (`sudo -l` answers yes for ANY NOPASSWD rule).
+    Read and write happen under the lid lock, so a session's 1 or 0 is never overwritten; an unknown setting
+    is never written."""
+    with _locked(LID_LOCK):
+        disabled = read_sleep_disabled()
+        return disabled is not None and _write_sleep_disabled(disabled)
 
 
 def _require_lid_rule() -> None:
@@ -773,7 +807,7 @@ def _ensure_settle_job() -> None:
     try:
         with _locked(SCHEDULE_LOCK):
             sync_job(load_schedules())
-    except AwakeError as error:
+    except (AwakeError, OSError) as error:
         _note(
             f"could not install the login job that repays the lid after a crash: {error}"
         )
@@ -781,56 +815,53 @@ def _ensure_settle_job() -> None:
 
 def start_session(plan: Plan, settle_job: bool = True) -> str | None:
     """Start a detached session (every kind except "command"). Returns the description of a replaced session."""
-    lid_previous, replaced = _prepare(plan)
-    pending = _pending_state(plan, lid_previous)
-    try:
-        caffeinate = shutil.which("caffeinate")
-        spec = {
-            "state": _base_state(plan, lid_previous),
-            "caffeinate": caffeinate,
-            "seconds": plan.seconds,
-            "watch_pid": plan.watch_pid,
-        }
+    with _locked(START_LOCK):
+        lid_previous, replaced = _prepare(plan)
+        pending = _pending_state(plan, lid_previous)
         try:
-            supervisor = subprocess.Popen(
-                [sys.executable, SELF, "_supervise", json.dumps(spec)],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-                close_fds=True,
-            )
-        except OSError as error:
-            raise AwakeError(f"could not start the supervisor: {error}", 1) from error
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            state = read_state()
-            if (
-                state
-                and state.get("supervisor_pid") == supervisor.pid
-                and state.get("caffeinate_pid")
-            ):
-                break
-            if supervisor.poll() is not None:
-                break
-            time.sleep(0.05)
-        else:
-            state = None
-        if not (
+            _launch_supervisor(plan, lid_previous)
+        except BaseException:
+            # Whatever stopped the start (an error, Ctrl-C): give the lid back, drop the record of the start.
+            _finish(pending)
+            raise
+    if plan.lid and lid_previous == 0 and settle_job:
+        _ensure_settle_job()  # outside the start lock: the schedule lock comes first in the lock order
+    return replaced
+
+
+def _launch_supervisor(plan: Plan, lid_previous: int | None) -> None:
+    spec = {
+        "state": _base_state(plan, lid_previous),
+        "caffeinate": shutil.which("caffeinate"),
+        "seconds": plan.seconds,
+        "watch_pid": plan.watch_pid,
+    }
+    try:
+        supervisor = subprocess.Popen(
+            [sys.executable, SELF, "_supervise", json.dumps(spec)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except OSError as error:
+        raise AwakeError(f"could not start the supervisor: {error}", 1) from error
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        state = read_state()
+        if (
             state
             and state.get("supervisor_pid") == supervisor.pid
             and state.get("caffeinate_pid")
         ):
-            if supervisor.poll() is None:
-                supervisor.terminate()
-            raise AwakeError("the session did not start (see runtime/awake.log)", 1)
-    except BaseException:
-        # Whatever stopped the start (an error, Ctrl-C): give the lid back and drop the record of the start.
-        _finish(pending)
-        raise
-    if plan.lid and lid_previous == 0 and settle_job:
-        _ensure_settle_job()
-    return replaced
+            return
+        if supervisor.poll() is not None:
+            break
+        time.sleep(0.05)
+    if supervisor.poll() is None:
+        supervisor.terminate()
+    raise AwakeError("the session did not start (see runtime/awake.log)", 1)
 
 
 def supervise(spec: dict) -> int:
@@ -880,12 +911,21 @@ def _finish(state: dict) -> None:
         _mark_restore_failed(state, owner=os.getpid())
         return
     clear_state(owner=os.getpid())
+    if state.get("lid"):
+        # Never waits: whoever holds the schedule lock (a scheduled run replacing this session) decides itself.
+        _drop_idle_job(blocking=False)
 
 
 def run_command(plan: Plan) -> int:
     """`ul awake -- cmd`: run cmd in the foreground, awake while it runs, exit with its code."""
     assert plan.command is not None
-    lid_previous, replaced = _prepare(plan)
+    start = ExitStack()  # the start lock: held until the session state is written, not while the command runs
+    start.enter_context(_locked(START_LOCK))
+    try:
+        lid_previous, replaced = _prepare(plan)
+    except BaseException:
+        start.close()
+        raise
     if replaced:
         print(f"Replaced: {replaced}")
     state = _pending_state(plan, lid_previous)
@@ -893,14 +933,17 @@ def run_command(plan: Plan) -> int:
         child = subprocess.Popen(plan.command)
     except FileNotFoundError:
         _finish(state)
+        start.close()
         print(f"unlaw awake: command not found: {plan.command[0]}", file=sys.stderr)
         return 127
     except OSError as error:
         _finish(state)
+        start.close()
         print(f"unlaw awake: cannot run {plan.command[0]}: {error}", file=sys.stderr)
         return 126
     except BaseException:
         _finish(state)
+        start.close()
         raise
     caffeinate = None
     previous: dict[int, object] = {}
@@ -926,10 +969,12 @@ def run_command(plan: Plan) -> int:
         state["caffeinate_pid"] = caffeinate.pid
         state["caffeinate_lstart"] = _lstart(caffeinate.pid)
         write_state(state)
+        start.close()
         if plan.lid and lid_previous == 0:
             _ensure_settle_job()
         code = child.wait()
     finally:
+        start.close()
         if child.poll() is None:
             child.kill()
             child.wait()
@@ -995,8 +1040,9 @@ def stop_command() -> int:
     if session is not None:
         description = describe(session)
         stop_session(session)
-        if str(session.get("source", "")).startswith("schedule:"):
-            _skip_open_windows(session)
+        _skip_open_windows(
+            session
+        )  # schedule or manual: the windows open right now must not restart
         marker = read_state()
         if marker and marker.get("lid_restore_failed"):
             print(
@@ -1065,35 +1111,25 @@ def lid_setup(yes: bool) -> int:
         "It lets you run exactly those two pmset commands without a password, nothing else."
     )
     print(
-        "One sudo call (it asks for your password once) copies it as root to a hidden file in the same folder,"
+        "One sudo call (it asks for your password once) writes it as root to a hidden file in the same folder,"
     )
-    print("checks that copy with `visudo -cf`, and only then moves it into place.")
+    print("checks that file with `visudo -cf`, and only then moves it into place.")
     if not _confirm(yes):
         print("Cancelled.")
         return 1
-    content = f"# Written by `ul awake lid setup`. Remove with `ul awake lid remove`.\n{rule}\n"
-    with tempfile.TemporaryDirectory(prefix="unlaw-awake-") as folder:
-        candidate = Path(folder) / "unlaw-awake"
-        candidate.write_text(content, encoding="utf-8")
-        candidate.chmod(0o600)
-        try:
-            install = subprocess.run(
-                [
-                    _sudo_path(),
-                    "/bin/sh",
-                    "-c",
-                    SETUP_SCRIPT,
-                    "sh",
-                    str(candidate),
-                    SUDOERS_FILE,
-                ],
-                check=False,
-            )
-        except OSError as error:
-            raise AwakeError(f"could not run sudo: {error}", 1) from error
+    content = (
+        f"# Written by `ul awake lid setup`. Remove with `ul awake lid remove`.\n{rule}"
+    )
+    try:
+        install = subprocess.run(
+            [_sudo_path(), "/bin/sh", "-c", SETUP_SCRIPT, "sh", content, SUDOERS_FILE],
+            check=False,
+        )
+    except OSError as error:
+        raise AwakeError(f"could not run sudo: {error}", 1) from error
     if install.returncode != 0:
         raise AwakeError(
-            "the rule was not installed (sudo, install or visudo failed; nothing was changed)",
+            "the rule was not installed (sudo or visudo failed; nothing was changed)",
             1,
         )
     print(f"Installed {SUDOERS_FILE}. `ul awake --lid` is ready.")
@@ -1299,11 +1335,11 @@ def _ts(text: str) -> float:
     return datetime.fromisoformat(text).timestamp()
 
 
-def _drop_idle_job() -> None:
+def _drop_idle_job(blocking: bool = True) -> None:
     """The login job without schedules exists only to repay the lid: once nothing is owed it goes."""
     try:
-        with _locked(SCHEDULE_LOCK):
-            if not load_schedules() and not _lid_owed():
+        with _locked(SCHEDULE_LOCK, blocking) as got:
+            if got and not load_schedules() and not _lid_owed():
                 remove_job()
     except AwakeError as error:
         _log(f"could not check the login job: {error}")
@@ -1491,10 +1527,11 @@ def _write_job(items: list[dict]) -> Path:
         "StandardOutPath": str(log),
         "StandardErrorPath": str(log),
     }
-    if (
-        items
-    ):  # without schedules the job only runs at load, to repay a lid left disabled
+    if items:
         plist["StartCalendarInterval"] = calendar_intervals(items)
+    else:
+        # Only there to repay a lid left disabled: at load, and every 5 minutes (a killed supervisor, no reboot).
+        plist["StartInterval"] = 300
     path = _job_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -1759,7 +1796,9 @@ def run_scheduled(args: list[str]) -> int:
     code = 0
     with _locked(SCHEDULE_LOCK):
         try:
-            _settle()  # first: a lid left disabled by a crash is repaid even when no window is open
+            # first: a lid left disabled by a crash is repaid even when no window is open
+            with _locked(START_LOCK):
+                _settle()
         except AwakeError as error:
             _note(str(error))
             code = 1

@@ -46,7 +46,7 @@ if a[:2] == ["-n", "-l"]:
     # sudo -l answers 0 for any NOPASSWD rule of the user, not only ours
     raise SystemExit(0 if has_rule or os.path.exists(d + "/any_nopasswd") else 1)
 if a[:2] == ["/bin/sh", "-c"]:
-    shutil.copy(a[4], d + "/candidate.seen")
+    open(d + "/candidate.seen", "w").write(a[4] + "\\n")  # the rule text is a positional argument
     raise SystemExit(1 if os.path.exists(d + "/sudo_fail_other") else 0)
 if a[:2] == ["-n", "/usr/bin/pmset"]:
     if not has_rule or os.path.exists(d + "/sudo_fail"):
@@ -712,16 +712,26 @@ class AwakeTests(AwakeBase):
         self.assertEqual(call[:2], ["/bin/sh", "-c"])
         script = call[2]
         self.assertEqual(call[3], "sh")
-        candidate, target = call[4], call[5]
+        text, target = call[4], call[5]
         self.assertEqual(target, SUDOERS_PATH)
-        self.assertFalse(Path(candidate).exists(), "the temporary file is removed")
-        # data reaches the script only as positional arguments
+        # the rule text is data: it reaches the script only as a positional argument, never as a user-owned file
         user = pwd.getpwuid(os.getuid()).pw_name
-        for text in (candidate, target, user):
-            self.assertNotIn(text, script)
+        self.assertIn(f"{user} ALL=(root) NOPASSWD:", text)
+        self.assertEqual(len(call), 6)
+        for needle in (user, "NOPASSWD", target, "unlaw-awake-"):
+            self.assertNotIn(needle, script)
         # root-side steps use absolute paths, validate the root-owned copy, then move it into place
-        for tool in ("/usr/bin/install", "/usr/sbin/visudo -cf", "/bin/mv", "/bin/rm"):
+        for tool in (
+            "/usr/bin/printf",
+            "/usr/sbin/chown",
+            "/bin/chmod",
+            "/usr/sbin/visudo -cf",
+            "/bin/mv",
+            "/bin/rm",
+        ):
             self.assertIn(tool, script)
+        self.assertNotIn("/usr/bin/install", script)
+        self.assertLess(script.index("umask 077"), script.index("/usr/bin/printf"))
         self.assertLess(script.index("/usr/sbin/visudo"), script.index("/bin/mv"))
         self.assertIn('"$tmp"', script)
         self.assertIn(".$base", script)  # a dot-named temp file: sudo ignores it

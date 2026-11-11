@@ -6,9 +6,12 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import shutil
 import signal
 import subprocess
 import sys
+import threading
+import time
 import unittest
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -20,6 +23,7 @@ sys.path.insert(0, str(HERE))
 
 from test_awake import FAKE_PMSET, AwakeBase, alive, load_awake, wait_for
 from test_awake_schedule import FAKE_LAUNCHCTL, LABEL, window
+from ulbin import binary
 
 # Also records whether the plist still exists when launchd is told to boot the job out.
 FAKE_LAUNCHCTL_PLIST = FAKE_LAUNCHCTL.replace(
@@ -32,7 +36,14 @@ FAKE_LAUNCHCTL_PLIST = FAKE_LAUNCHCTL.replace(
 FAKE_PMSET_MARKER = FAKE_PMSET.replace(
     'open(state, "w").write(a[2])',
     'open(d + "/pmset.marker", "a").write(a[2] + ("1" if os.path.exists(os.environ["FAKE_STATE"]) else "0") + "\\n")\n'
-    '    open(state, "w").write(a[2])',
+    '    open(state, "w").write(a[2])\n'
+    '    if a[2] == "1" and os.path.exists(d + "/slow_disable"):\n'
+    '        open(d + "/slow_started", "w").write("")\n'
+    '        os.remove(d + "/slow_disable")  # only the first disable is slow\n'
+    '        __import__("time").sleep(1.5)',
+).replace(
+    "    value = open(state)",
+    '    if os.path.exists(d + "/unknown_state"):\n        raise SystemExit(0)\n    value = open(state)',
 )
 
 VALID_STATE = {
@@ -144,8 +155,53 @@ class ReviewTests(AwakeBase):
         plist = self.plist()
         self.assertTrue(plist["RunAtLoad"])
         self.assertNotIn("StartCalendarInterval", plist)
+        # a supervisor killed without a reboot is repaid within minutes, not at the next login
+        self.assertEqual(plist["StartInterval"], 300)
         self.assertEqual(plist["ProgramArguments"][1:], ["awake", "_scheduled"])
         self.assertEqual(self.launchctl()[-1][0], "bootstrap")
+
+    def test_a_job_with_schedules_has_no_poll_interval(self) -> None:
+        self.add("09:00-10:00")
+        self.assertNotIn("StartInterval", self.plist())
+        self.assertIn("StartCalendarInterval", self.plist())
+
+    def test_the_settle_only_job_goes_when_a_lid_session_ends_by_itself(self) -> None:
+        self.allow_lid()
+        self.start("2s", "--lid")
+        self.assertTrue(self.plist_path.exists())
+        self.assertTrue(wait_for(lambda: self.state() is None))
+        self.assertTrue(wait_for(lambda: not self.plist_path.exists()))
+        self.assertEqual(self.sleep_disabled(), "0")
+
+    def test_the_job_with_schedules_stays_when_a_lid_session_ends_by_itself(
+        self,
+    ) -> None:
+        self.allow_lid()
+        self.add("09:00-10:00")
+        self.start("2s", "--lid")
+        self.assertTrue(wait_for(lambda: self.state() is None))
+        time.sleep(0.5)
+        self.assertTrue(self.plist_path.exists())
+
+    def test_dropping_the_idle_job_never_waits_for_the_schedule_lock(self) -> None:
+        self.allow_lid()
+        self.start("on", "--lid")
+        self.ok("awake", "off")  # nothing owed now; the job is gone
+        self.start("on", "--lid")
+        with self.inprocess() as awake, awake._locked(awake.SCHEDULE_LOCK):
+            began = time.monotonic()
+            awake._drop_idle_job(blocking=False)
+            self.assertLess(time.monotonic() - began, 2)
+        self.assertTrue(self.plist_path.exists())
+
+    def test_a_failure_to_install_the_login_job_is_a_warning_not_a_traceback(
+        self,
+    ) -> None:
+        with (
+            self.inprocess() as awake,
+            mock.patch.object(awake, "sync_job", side_effect=OSError("disk full")),
+        ):
+            awake._ensure_settle_job()  # must not raise
 
     def test_a_session_without_the_lid_installs_no_job(self) -> None:
         self.start("on")
@@ -544,13 +600,22 @@ class ReviewTests(AwakeBase):
         self.scheduled()
         self.assertIsNone(self.state())
 
-    def test_off_of_a_manual_session_records_no_skip(self) -> None:
+    def test_off_of_a_manual_session_during_a_window_skips_that_window_too(
+        self,
+    ) -> None:
         self.add(window())
         self.start("on")
         self.ok("awake", "off")
-        self.assertEqual(self.document().get("skipped", []), [])
+        (entry,) = self.document()["skipped"]
+        self.assertEqual(entry["id"], 1)
         self.scheduled()
-        self.wait_session("schedule:1")
+        self.assertIsNone(self.state())
+
+    def test_off_of_a_manual_session_outside_any_window_records_nothing(self) -> None:
+        self.add(window(-120, 180))
+        self.start("on")
+        self.ok("awake", "off")
+        self.assertEqual(self.document().get("skipped", []), [])
 
     def test_removing_a_schedule_drops_its_skip(self) -> None:
         self.add(window())
@@ -559,6 +624,146 @@ class ReviewTests(AwakeBase):
         self.ok("awake", "off")
         self.ok("awake", "schedule", "rm", "1")
         self.assertEqual(self.document().get("skipped", []), [])
+
+    # ---------------------------------------------------------------- round 3
+
+    def test_a_live_session_is_still_ours_under_another_time_zone(self) -> None:
+        # `ps -o lstart=` prints local time: the recorded start time must not depend on the caller's TZ
+        self.env["TZ"] = "UTC"
+        self.allow_lid()
+        self.start("on", "--lid")
+        for zone in ("Asia/Tokyo", "America/Los_Angeles"):
+            data = json.loads(
+                self.ok("awake", "status", "--json", env={"TZ": zone}).stdout
+            )
+            self.assertTrue(data["active"], zone)
+        self.assertEqual(self.sleep_disabled(), "1", "the lid must not be given back")
+
+    def test_an_unknown_start_time_never_condemns_a_live_session(self) -> None:
+        with self.inprocess() as awake:
+            with mock.patch.object(awake, "_lstart", return_value=""):
+                self.assertTrue(
+                    awake._same_start(os.getpid(), "Mon Jan 1 00:00:00 2001")
+                )
+            with mock.patch.object(
+                awake, "_lstart", return_value="Tue Jan 2 00:00:00 2001"
+            ):
+                self.assertFalse(
+                    awake._same_start(os.getpid(), "Mon Jan 1 00:00:00 2001")
+                )
+                self.assertTrue(awake._same_start(os.getpid(), ""))
+
+    def test_start_times_are_read_in_utc_and_the_c_locale(self) -> None:
+        seen = {}
+        real = subprocess.run
+
+        def spy(args, *more, **kwargs):
+            if args[0] == "ps" and "lstart=" in args:
+                seen.update(kwargs.get("env") or {})
+            return real(args, *more, **kwargs)
+
+        with (
+            self.inprocess() as awake,
+            mock.patch.object(awake.subprocess, "run", spy),
+        ):
+            self.assertTrue(awake._lstart(os.getpid()))
+        self.assertEqual((seen.get("TZ"), seen.get("LC_ALL")), ("UTC", "C"))
+        self.assertIn("PATH", seen)
+
+    def test_two_starts_at_once_do_not_lose_the_lid_debt(self) -> None:
+        self.allow_lid()
+        (self.fake / "slow_disable").write_text("")
+        first = subprocess.Popen(
+            [str(binary()), "awake", "on", "--lid"],
+            env=self.env,
+            cwd=self.root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(lambda: (first.kill(), first.wait()))
+        # the first has disabled the lid and is still starting: the second must wait for it
+        self.assertTrue(wait_for(lambda: (self.fake / "slow_started").exists()))
+        second = self.ul("awake", "on", "--lid")
+        _, err = first.communicate(timeout=30)
+        self.assertEqual(first.returncode, 0, err)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertTrue(self.status()["active"])
+        # one session only: the second start replaced the first instead of running beside it
+        pids = [int(x) for x in self.read("caffeinate.pids").split()]
+        self.assertEqual(sum(alive(pid) for pid in pids), 1, pids)
+        self.ok("awake", "off")
+        self.assertEqual(self.sleep_disabled(), "0")
+        self.assertIsNone(self.state())
+
+    def test_the_start_lock_comes_after_the_schedule_lock(self) -> None:
+        # `_scheduled` holds the schedule lock and starts a session (start lock); a start in progress must
+        # not deadlock with it: run both orders of arrival
+        self.allow_lid()
+        self.add(window())
+        (self.fake / "slow_disable").write_text("")
+        first = subprocess.Popen(
+            [str(binary()), "awake", "30m", "--lid"],
+            env=self.env,
+            cwd=self.root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self.addCleanup(lambda: (first.kill(), first.wait()))
+        self.assertTrue(wait_for(lambda: (self.fake / "slow_started").exists()))
+        self.ok("awake", "_scheduled")
+        first.wait(timeout=30)
+        self.assertEqual(first.returncode, 0)
+        self.assertTrue(self.status()["active"])
+
+    def test_seed_arguments_survive_spaces_in_the_interpreter_path(self) -> None:
+        with self.inprocess() as awake:
+            seed = "/Users/some one/.config/unlaw/commands/awake/main.py"
+            with mock.patch.object(awake, "SELF", seed):
+                cases = {
+                    f"/opt/My Apps/Python 3/bin/python3.13 {seed} _supervise {{}}": "_supervise {}",
+                    f"/usr/bin/python3 {seed}": "",
+                    f"/usr/bin/python3 {seed} -- make build": "-- make build",
+                    f"/bin/sleep {seed} _supervise {{}}": None,
+                    "/usr/bin/python3 /other/main.py _supervise {}": None,
+                    f"/usr/bin/python3 {seed}x _supervise {{}}": None,
+                    "": None,
+                }
+                for command, expected in cases.items():
+                    with self.subTest(command=command):
+                        self.assertEqual(awake._seed_arguments(command), expected)
+
+    def test_the_rule_probe_never_writes_when_the_setting_is_unknown(self) -> None:
+        (self.fake / "rule_ok").write_text("")
+        (self.fake / "unknown_state").write_text("")
+        result = self.ul("awake", "lid", "status")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.read("pmset.log"), "")
+        self.assertEqual(self.ul("awake", "1h", "--lid").returncode, 1)
+        self.assertEqual(self.read("pmset.log"), "")
+
+    def test_the_rule_probe_waits_for_the_lid_lock(self) -> None:
+        self.allow_lid()
+        done = threading.Event()
+        with self.inprocess() as awake:
+            with awake._locked(awake.LID_LOCK):
+                worker = threading.Thread(
+                    target=lambda: (awake.lid_rule_works(), done.set()), daemon=True
+                )
+                worker.start()
+                self.assertFalse(
+                    done.wait(0.5), "the probe must wait while the lid is being changed"
+                )
+            self.assertTrue(done.wait(10))
+        worker.join(5)
+
+    def test_no_test_can_reach_a_real_tool(self) -> None:
+        for name in ("sudo", "pmset", "launchctl", "caffeinate", "visudo"):
+            found = shutil.which(name, path=self.env["PATH"])
+            self.assertEqual(found, str(self.bin / name), name)
+        self.assertEqual(self.env["UNLAW_AWAKE_SUDO"], str(self.bin / "sudo"))
 
     def test_help_mentions_the_skip(self) -> None:
         self.assertIn("skips", self.ok("awake", "--help").stdout)
