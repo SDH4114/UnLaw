@@ -260,7 +260,10 @@ class WatchTests(ClipBase):
     def test_the_watcher_is_exempt_from_core_command_timeout(self) -> None:
         self.ok("config", "set", "core.command_timeout", "1")
         line = json.dumps(entry("late"))
-        self.tool("osascript", f"#!{sys.executable}\nimport time\ntime.sleep(2.5)\nprint({line!r})\n")
+        self.tool(
+            "osascript",
+            f"#!{sys.executable}\nimport time\ntime.sleep(2.5)\nprint({line!r})\n",
+        )
         result = self.ul("clip", "_watch")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.texts(), ["late"])
@@ -299,7 +302,9 @@ class WatchTests(ClipBase):
 class HelperScriptTests(unittest.TestCase):
     """The JXA helper only runs on a real pasteboard, so its race guard is checked on the script text."""
 
-    def test_a_sample_is_dropped_when_the_pasteboard_changed_while_it_was_read(self) -> None:
+    def test_a_sample_is_dropped_when_the_pasteboard_changed_while_it_was_read(
+        self,
+    ) -> None:
         sys.path.insert(0, str(HERE.parent / "src"))
         from unlawful.clip import HELPER
 
@@ -307,7 +312,9 @@ class HelperScriptTests(unittest.TestCase):
         recheck = HELPER.index("changeCount", read_text)
         advance = HELPER.index("last = count", read_text)
         self.assertLess(read_text, recheck, "changeCount is read again after the text")
-        self.assertLess(recheck, advance, "the sample counts as seen only after the re-check")
+        self.assertLess(
+            recheck, advance, "the sample counts as seen only after the re-check"
+        )
         self.assertEqual(HELPER.count("last = count"), 1)
 
 
@@ -437,7 +444,12 @@ class ActionTests(ClipBase):
         (folder / "history.json.damaged-20260101-000000").write_text("secret")
         self.ok("clip", "pause")
         self.ok("clip", "clear", "--yes")
-        self.assertEqual(sorted(p.name for p in folder.iterdir() if p.name.startswith("history.json")), [])
+        self.assertEqual(
+            sorted(
+                p.name for p in folder.iterdir() if p.name.startswith("history.json")
+            ),
+            [],
+        )
         self.assertTrue((folder / "paused").exists())
 
     def test_clear_with_only_damaged_copies_left_still_removes_them(self) -> None:

@@ -454,7 +454,9 @@ def status() -> int:
     # two clues: nothing new for a long time while copying, or osascript errors in the watcher's log.
     log = clip_dir() / "watch.log"
     if log.exists() and log.stat().st_size > 0:
-        print(f"Watcher log: {log} ({log.stat().st_size} bytes; read it if copies are not being stored)")
+        print(
+            f"Watcher log: {log} ({log.stat().st_size} bytes; read it if copies are not being stored)"
+        )
     return 0
 
 
