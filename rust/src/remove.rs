@@ -22,6 +22,8 @@ use crate::util::{home, is_executable, which};
 const BINARIES: [&str; 5] = ["ul", "unlaw", "ula", "unlawagent", "ule"];
 /// The launchd job of `ula setup` (agent.py `LABEL`).
 const AGENT_LABEL: &str = "com.unlaw.agent";
+/// The launchd job of `ul awake schedule` (awake.py `JOB_LABEL`).
+const AWAKE_LABEL: &str = "com.unlaw.awake";
 
 /// `[y/N]` on stdin; anything but y/yes, or the end of input, is no.
 fn confirm(question: &str) -> bool {
@@ -45,6 +47,21 @@ fn remove_tree(path: &Path) -> io::Result<()> {
 
 fn exists(path: &Path) -> bool {
     path.exists() || path.is_symlink()
+}
+
+fn awake_job_path() -> std::path::PathBuf {
+    home().join("Library").join("LaunchAgents").join(format!("{AWAKE_LABEL}.plist"))
+}
+
+/// Boots the `ul awake schedule` job out of launchd and deletes its plist; false when there was none.
+pub fn remove_awake_job() -> io::Result<bool> {
+    let plist = awake_job_path();
+    if !exists(&plist) {
+        return Ok(false);
+    }
+    let domain = format!("gui/{}/{AWAKE_LABEL}", unsafe { libc::getuid() });
+    let _ = Command::new("launchctl").args(["bootout", &domain]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    remove_tree(&plist).map(|()| true)
 }
 
 fn home_relative(path: &Path) -> String {
@@ -222,6 +239,9 @@ fn remove_everything(yes: bool) -> i32 {
     if exists(&plist) {
         println!("  - the agent's background job ({AGENT_LABEL})");
     }
+    if exists(&awake_job_path()) {
+        println!("  - the awake schedules' background job ({AWAKE_LABEL})");
+    }
     if shell_block.is_some() {
         println!("  - the shell integration block in ~/.zshrc");
     }
@@ -255,6 +275,9 @@ fn remove_everything(yes: bool) -> i32 {
         let domain = format!("gui/{}/{AGENT_LABEL}", unsafe { libc::getuid() });
         let _ = Command::new("launchctl").args(["bootout", &domain]).stdout(Stdio::null()).stderr(Stdio::null()).status();
         report("the agent's background job".into(), remove_tree(&plist));
+    }
+    if exists(&awake_job_path()) {
+        report("the awake schedules' background job".into(), remove_awake_job().map(|_| ()));
     }
     if !skill_installs.is_empty() {
         report("the agent skill".into(), skills::remove_all());
@@ -348,6 +371,17 @@ fn remove_commands(names: &[&str], yes: bool) -> i32 {
             Ok(()) => println!("Removed {name}"),
             Err(error) => {
                 eprintln!("unlaw remove: Could not remove {}: {error}", directory.display());
+                code = 1;
+            }
+        }
+    }
+    // The schedules of `ul awake` live in a launchd job that would keep calling the deleted command.
+    if unique.contains(&"awake") {
+        match remove_awake_job() {
+            Ok(true) => println!("Removed the awake schedules' background job"),
+            Ok(false) => {}
+            Err(error) => {
+                eprintln!("unlaw remove: Could not remove the awake schedules' background job: {error}");
                 code = 1;
             }
         }

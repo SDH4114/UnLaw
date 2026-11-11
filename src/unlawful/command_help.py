@@ -63,6 +63,7 @@ Usage: ul awake [status [--json]]
        ul awake <duration> | until [YYYY-MM-DD] HH:MM | on | off
        ul awake --pid PID | -- <command...>
        ul awake lid setup|remove|status
+       ul awake schedule add HH:MM-HH:MM [--days D | --date YYYY-MM-DD] [--name TEXT] | list [--json] | rm ID|--all
   <duration>     30m, 2h, 1h30m, 45s or bare minutes (90); at most 7 days
   until HH:MM    Until that local time (tomorrow if it has passed)
   on / off       No end, until `off` / stop the session and restore the lid setting
@@ -72,6 +73,10 @@ Options:
   --display      The screen stays on too (caffeinate -d)
   --lid          Keep a MacBook awake with the lid closed (needs lid setup, see below)
 A new session replaces the running one, except a `-- command` session (stop that command).
+Schedules: a window (may cross midnight) every day (--days daily|weekdays|weekends|mon,tue,..)
+  or once (--date), with --display/--lid; --lid needs lid setup first. A launchd job
+  (com.unlaw.awake) starts it, never cutting short a longer manual session. A sleeping Mac is
+  not woken at the start: the window begins once the Mac is awake and still inside it.
 Lid: caffeinate cannot do this, `pmset -a disablesleep 1` can but needs root. `ul awake lid
   setup` installs a sudoers rule (/etc/sudoers.d/unlaw-awake) that allows exactly
   `pmset -a disablesleep 0|1` without a password; `lid remove` deletes it (--yes skips the
@@ -81,6 +86,7 @@ Settings: storage.root (state in runtime/awake.json).
 Examples: ul awake 2h --display
           ul awake until 18:30
           ul awake --lid -- make build
+          ul awake schedule add 23:00-06:00 --days weekdays
 ''',
     "capture": '''Screenshots and screen, camera and audio recordings on macOS.
 Usage: ul capture                 a menu: pick what to capture (in a terminal)

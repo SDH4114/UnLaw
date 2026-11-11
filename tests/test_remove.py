@@ -51,6 +51,32 @@ class RemoveTests(CoreTestCase):
         self.assertNotIn("music", self.features())
         self.assertIn("yt", self.features())
 
+    def awake_job(self) -> Path:
+        job = self.home / "Library" / "LaunchAgents" / "com.unlaw.awake.plist"
+        job.parent.mkdir(parents=True, exist_ok=True)
+        job.write_text("<plist/>")
+        return job
+
+    def test_removing_awake_boots_out_its_launchd_job(self) -> None:
+        job = self.awake_job()
+        self.assertTrue((self.unlaw / "commands" / "awake").is_dir())
+        self.ok("remove", "awake", "--yes")
+        self.assertFalse(job.exists())
+        self.assertEqual([call[0] for call in self.calls(self.launchctl)], ["bootout"])
+        self.assertTrue(self.calls(self.launchctl)[0][1].endswith("/com.unlaw.awake"))
+
+    def test_removing_another_command_leaves_the_awake_job(self) -> None:
+        job = self.awake_job()
+        self.ok("remove", "music", "--yes")
+        self.assertTrue(job.exists())
+        self.assertEqual(self.calls(self.launchctl), [])
+
+    def test_features_remove_awake_boots_out_its_launchd_job(self) -> None:
+        job = self.awake_job()
+        self.ok("features", "remove", "awake", "--no-build")
+        self.assertFalse(job.exists())
+        self.assertTrue(self.calls(self.launchctl)[0][1].endswith("/com.unlaw.awake"))
+
     def test_a_symlinked_command_loses_only_the_link(self) -> None:
         target = self.root / "mine"
         target.mkdir()
@@ -81,6 +107,7 @@ class RemoveTests(CoreTestCase):
         agents = self.home / "Library" / "LaunchAgents"
         agents.mkdir(parents=True)
         (agents / "com.unlaw.agent.plist").write_text("<plist/>")
+        (agents / "com.unlaw.awake.plist").write_text("<plist/>")
 
     def test_remove_asks_and_cancelling_keeps_everything(self) -> None:
         self.install_fakes()
@@ -106,7 +133,10 @@ class RemoveTests(CoreTestCase):
         self.assertFalse((self.home / "Library" / "Caches" / "unlaw").exists())
         self.assertFalse((self.home / "Library" / "LaunchAgents" / "com.unlaw.agent.plist").exists())
         self.assertEqual((self.home / ".zshrc").read_text(), "export A=1\nalias b=c\n")
-        self.assertEqual(self.calls(self.launchctl)[0][0], "bootout")
+        self.assertFalse((self.home / "Library" / "LaunchAgents" / "com.unlaw.awake.plist").exists())
+        bootouts = [call[1].split("/")[-1] for call in self.calls(self.launchctl) if call[0] == "bootout"]
+        self.assertEqual(sorted(bootouts), ["com.unlaw.agent", "com.unlaw.awake"])
+        self.assertIn("awake schedules", result.stdout)
         self.assertEqual([call[0] for call in self.calls(self.cargo)], ["uninstall", "uninstall"])
 
 

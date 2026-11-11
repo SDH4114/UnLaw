@@ -5,6 +5,7 @@ import getpass
 import json
 import math
 import os
+import plistlib
 import re
 import shlex
 import shutil
@@ -16,7 +17,8 @@ import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from datetime import time as clock_time
 from pathlib import Path
 
 from unlawful.command_help import COMMAND_HELP
@@ -39,6 +41,11 @@ from .config import ConfigError, storage_path
 #                      `ul awake off` (or the next session) manages to restore it
 #   source             "manual" ("schedule:<id>" for sessions that schedules start)
 #   watch_pid, command extras for kinds "pid" and "command"
+# Schedules: storage.root/runtime/awake-schedules.json, written atomically under its own flock (awake-schedules.lock).
+#   {"version": 1, "schedules": [{id, start "HH:MM", end "HH:MM", days [0-6, Mon=0] or null (every day), date
+#   "YYYY-MM-DD" or null (one-off), display, lid, name, created}]}. One LaunchAgent (~/Library/LaunchAgents/
+#   com.unlaw.awake.plist) runs `ul awake _scheduled` at every window start (and at load); that run starts a session
+#   until the end of the window that contains now.
 # A state whose supervisor is not alive (or whose `ps` line is not ours) is stale: it is settled and treated as no
 # session. A pid is never signalled unless `ps` confirms the process is ours.
 
@@ -46,6 +53,8 @@ USAGE = """Usage: ul awake [status [--json]]
        ul awake <duration> | until [YYYY-MM-DD] HH:MM | on | off [--display] [--lid]
        ul awake --pid PID | -- <command...>
        ul awake lid setup|remove|status
+       ul awake schedule add HH:MM-HH:MM [--days D | --date YYYY-MM-DD] [--display] [--lid] [--name TEXT]
+       ul awake schedule list [--json] | rm ID|--all
 Run `ul awake --help` for details.
 """
 
@@ -57,6 +66,16 @@ USER_NAME = re.compile(r"[A-Za-z0-9._-]+")
 DURATION = re.compile(r"(?:([0-9]{1,9})h)?(?:([0-9]{1,9})m)?(?:([0-9]{1,9})s)?")
 SELF = os.path.abspath(__file__)
 KINDS_WITH_TIMER = ("duration", "until")
+SCHEDULE_VERSION = 1
+SCHEDULE_LOCK = "awake-schedules.lock"
+JOB_LABEL = "com.unlaw.awake"
+DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+WINDOW = re.compile(r"([0-9]{1,2}):([0-9]{2})-([0-9]{1,2}):([0-9]{2})")
+CLOCK = re.compile(r"([0-9]{2}):([0-9]{2})")
+CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+SCHEDULE_USAGE = (
+    "use: ul awake schedule add HH:MM-HH:MM [options] | list [--json] | rm ID|--all"
+)
 
 
 class AwakeError(Exception):
@@ -168,9 +187,9 @@ def state_file() -> Path:
 
 
 @contextmanager
-def _locked() -> Iterator[None]:
+def _locked(name: str = "awake.lock") -> Iterator[None]:
     """Serialize state changes across CLI processes and supervisors; never held while waiting."""
-    lock = storage_path("runtime", "awake.lock")
+    lock = storage_path("runtime", name)
     lock.parent.mkdir(parents=True, exist_ok=True)
     with lock.open("a") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
@@ -226,6 +245,10 @@ def clear_state(owner: int | None = None) -> None:
 def _note(message: str) -> None:
     """A loud message on stderr, also in runtime/awake.log (supervisors have no terminal)."""
     print(f"unlaw awake: {message}", file=sys.stderr)
+    _log(message)
+
+
+def _log(message: str) -> None:
     try:
         log = storage_path("runtime", "awake.log")
         log.parent.mkdir(parents=True, exist_ok=True)
@@ -856,6 +879,518 @@ def lid_status() -> int:
     return 1
 
 
+# ---------------------------------------------------------------- schedules
+
+
+def schedules_file() -> Path:
+    return storage_path("runtime", "awake-schedules.json")
+
+
+def _damaged(path: Path, why: str) -> AwakeError:
+    return AwakeError(f"{path} is damaged ({why}); fix or delete it", 1)
+
+
+def _valid_schedule(item: object) -> bool:
+    if not isinstance(item, dict):
+        return False
+    days = item.get("days")
+    day = item.get("date")
+    try:
+        if day is not None:
+            date.fromisoformat(day)
+    except (TypeError, ValueError):
+        return False
+    return (
+        isinstance(item.get("id"), int)
+        and all(
+            isinstance(item.get(key), str) and CLOCK.fullmatch(item[key])
+            for key in ("start", "end")
+        )
+        and (
+            days is None
+            or (
+                isinstance(days, list)
+                and all(isinstance(d, int) and 0 <= d <= 6 for d in days)
+            )
+        )
+    )
+
+
+def load_schedules() -> list[dict]:
+    """The stored schedules; a missing file is none, a damaged one an error (it is never overwritten)."""
+    path = schedules_file()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except OSError as error:
+        raise AwakeError(f"cannot read {path}: {error}", 1) from error
+    try:
+        data = json.loads(text)
+    except ValueError as error:
+        raise _damaged(path, "not JSON") from error
+    items = data.get("schedules") if isinstance(data, dict) else None
+    if not isinstance(items, list) or not all(_valid_schedule(i) for i in items):
+        raise _damaged(path, "unexpected content")
+    return items
+
+
+def _save_schedules(items: list[dict]) -> None:
+    path = schedules_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(prefix=".awake-schedules.", dir=path.parent)
+    with os.fdopen(handle, "w", encoding="utf-8") as stream:
+        json.dump({"version": SCHEDULE_VERSION, "schedules": items}, stream, indent=2)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+
+
+def parse_window(text: str) -> tuple[str, str]:
+    """`HH:MM-HH:MM` → ("HH:MM", "HH:MM"). The end may be earlier (the window crosses midnight), never equal."""
+    match = WINDOW.fullmatch(text.strip())
+    if match is None:
+        raise AwakeError(f"not a window: {text!r} (use HH:MM-HH:MM, like 23:00-06:00)")
+    hour1, minute1, hour2, minute2 = (int(part) for part in match.groups())
+    if hour1 > 23 or hour2 > 23 or minute1 > 59 or minute2 > 59:
+        raise AwakeError(f"not a window: {text!r} (hours 0-23, minutes 0-59)")
+    if (hour1, minute1) == (hour2, minute2):
+        raise AwakeError(f"the window is empty: {text!r} (start and end are the same)")
+    return f"{hour1:02d}:{minute1:02d}", f"{hour2:02d}:{minute2:02d}"
+
+
+def parse_days(text: str) -> list[int] | None:
+    """`daily`, `weekdays`, `weekends` or `mon,tue,...` (English short names, any case) → weekdays Mon=0, None = daily."""
+    word = text.strip().lower()
+    groups = {
+        "daily": None,
+        "weekdays": [0, 1, 2, 3, 4],
+        "weekends": [5, 6],
+    }
+    if word in groups:
+        return groups[word]
+    days: set[int] = set()
+    for part in word.split(","):
+        if part.strip() not in DAY_NAMES:
+            raise AwakeError(
+                f"not a day list: {text!r} (use daily, weekdays, weekends or mon,tue,wed,thu,fri,sat,sun)"
+            )
+        days.add(DAY_NAMES.index(part.strip()))
+    return None if len(days) == 7 else sorted(days)
+
+
+def parse_date(text: str) -> str:
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", text.strip()):
+        raise AwakeError(f"not a date: {text!r} (use YYYY-MM-DD)")
+    try:
+        return date.fromisoformat(text.strip()).isoformat()
+    except ValueError as error:
+        raise AwakeError(f"not a date: {text!r} ({error})") from error
+
+
+def _clean_name(text: str) -> str:
+    name = text.strip()
+    if CONTROL.search(name):
+        raise AwakeError("the name has control characters")
+    if len(name) > 60:
+        raise AwakeError("the name is longer than 60 characters")
+    return name
+
+
+def _hm(text: str) -> clock_time:
+    hour, minute = text.split(":")
+    return clock_time(int(hour), int(minute))
+
+
+def _window_on(item: dict, day: date) -> tuple[float, float]:
+    """The window that starts on `day` as local timestamps; it ends the next day when end < start."""
+    start = datetime.combine(day, _hm(item["start"]))
+    end = datetime.combine(day, _hm(item["end"]))
+    if end <= start:
+        end += timedelta(days=1)
+    return start.timestamp(), end.timestamp()
+
+
+def _starts_on(item: dict, day: date) -> bool:
+    if item.get("date"):
+        return item["date"] == day.isoformat()
+    days = item.get("days")
+    return days is None or day.weekday() in days
+
+
+def open_window(item: dict, now: float) -> tuple[float, float] | None:
+    """The window of `item` that contains `now`. Yesterday's counts too: it may run past midnight."""
+    today = _local(now).date()
+    for day in (today - timedelta(days=1), today):
+        if _starts_on(item, day):
+            start, end = _window_on(item, day)
+            if start <= now < end:
+                return start, end
+    return None
+
+
+def next_start(item: dict, now: float) -> float | None:
+    today = _local(now).date()
+    for offset in range(8):
+        day = today + timedelta(days=offset)
+        if _starts_on(item, day):
+            start, _ = _window_on(item, day)
+            if start > now:
+                return start
+    return None
+
+
+def _is_over(item: dict, now: float) -> bool:
+    """A one-off whose window has ended."""
+    if not item.get("date"):
+        return False
+    return _window_on(item, date.fromisoformat(item["date"]))[1] <= now
+
+
+def _days_label(item: dict) -> str:
+    if item.get("date"):
+        return item["date"]
+    days = item.get("days")
+    if days is None:
+        return "daily"
+    if days == [0, 1, 2, 3, 4]:
+        return "weekdays"
+    if days == [5, 6]:
+        return "weekends"
+    return ",".join(DAY_NAMES[d] for d in days)
+
+
+# ---------------------------------------------------------------- the launchd job
+
+
+def _job_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{JOB_LABEL}.plist"
+
+
+def _launchctl(*args: str) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            ["launchctl", *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AwakeError(f"could not run launchctl: {error}", 1) from error
+
+
+def _target() -> str:
+    return f"gui/{os.getuid()}/{JOB_LABEL}"
+
+
+def calendar_intervals(items: list[dict]) -> list[dict]:
+    """One StartCalendarInterval per window start. launchd numbers Sunday 0 (or 7) and Monday 1; we use Mon=0."""
+    result: list[dict] = []
+    for item in items:
+        at = _hm(item["start"])
+        if item.get("date"):
+            day = date.fromisoformat(item["date"])
+            entries = [{"Month": day.month, "Day": day.day}]
+        elif item.get("days") is None:
+            entries = [{}]
+        else:
+            entries = [{"Weekday": (d + 1) % 7} for d in item["days"]]
+        for entry in entries:
+            interval = {**entry, "Hour": at.hour, "Minute": at.minute}
+            if interval not in result:
+                result.append(interval)
+    return result
+
+
+def _write_job(items: list[dict]) -> Path:
+    binary = os.environ.get("UNLAW_BIN", "")
+    if not binary:
+        raise AwakeError(
+            "UNLAW_BIN is not set, so the launchd job cannot find ul; run this through `ul awake`",
+            1,
+        )
+    environment = {
+        key: os.environ[key]
+        for key in ("PATH", "XDG_CONFIG_HOME", "UNLAW_PYTHON", "HOME")
+        if os.environ.get(key)
+    }
+    environment.setdefault("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+    log = storage_path("runtime", "awake-launchd.log")
+    plist = {
+        "Label": JOB_LABEL,
+        "ProgramArguments": [os.path.abspath(binary), "awake", "_scheduled"],
+        "EnvironmentVariables": environment,
+        "StartCalendarInterval": calendar_intervals(items),
+        # Runs at load too, so a window that is already open starts right away.
+        "RunAtLoad": True,
+        # The supervisor of a session is a child of this job; launchd must not kill it when the job exits.
+        "AbandonProcessGroup": True,
+        "StandardOutPath": str(log),
+        "StandardErrorPath": str(log),
+    }
+    path = _job_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(prefix=".awake-plist.", dir=path.parent)
+    with os.fdopen(handle, "wb") as stream:
+        stream.write(plistlib.dumps(plist))
+    os.replace(temporary, path)
+    return path
+
+
+def remove_job() -> None:
+    """Boot the job out of launchd and delete its plist."""
+    path = _job_path()
+    if path.exists():
+        _launchctl("bootout", _target())
+        path.unlink(missing_ok=True)
+
+
+def sync_job(items: list[dict]) -> None:
+    """Make launchd match `items`: write the plist and reload it, or remove the job when nothing is scheduled."""
+    if not items:
+        remove_job()
+        return
+    path = _write_job(items)
+    _launchctl("bootout", _target())
+    result = _launchctl("bootstrap", f"gui/{os.getuid()}", str(path))
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise AwakeError(
+            f"launchctl bootstrap failed: {detail} (the schedules are saved; add or remove one to try again)",
+            1,
+        )
+
+
+# ---------------------------------------------------------------- schedule commands
+
+
+def _printable(text: str) -> str:
+    return CONTROL.sub("?", text)
+
+
+def _fmt(timestamp: float | None) -> str:
+    return "-" if timestamp is None else f"{_local(timestamp):%Y-%m-%d %H:%M}"
+
+
+def _reject_options(args: list[str]) -> None:
+    unknown = next((arg for arg in args if arg.startswith("-")), None)
+    if unknown is not None:
+        raise AwakeError(f"unknown option: {unknown}")
+
+
+def schedule_add(args: list[str]) -> int:
+    display, lid = _flag(args, "--display"), _flag(args, "--lid")
+    days_text, date_text = _take(args, "--days"), _take(args, "--date")
+    name_text = _take(args, "--name")
+    _reject_options(args)
+    if len(args) != 1:
+        raise AwakeError("use: ul awake schedule add HH:MM-HH:MM [options]")
+    start, end = parse_window(args[0])
+    if days_text is not None and date_text is not None:
+        raise AwakeError("--days and --date cannot be used together")
+    days = None if days_text is None else parse_days(days_text)
+    day = None if date_text is None else parse_date(date_text)
+    name = _clean_name(name_text or "")
+    now = time.time()
+    item = {
+        "id": 0,
+        "start": start,
+        "end": end,
+        "days": days,
+        "date": day,
+        "display": display,
+        "lid": lid,
+        "name": name,
+        "created": _iso(now),
+    }
+    if _is_over(item, now):
+        raise AwakeError(f"that window is already over: {day} {start}-{end}")
+    if lid:
+        _require_lid_rule()
+    with _locked(SCHEDULE_LOCK):
+        items = [i for i in load_schedules() if not _is_over(i, now)]
+        item["id"] = max((i["id"] for i in items), default=0) + 1
+        items.append(item)
+        _save_schedules(items)
+        sync_job(items)
+    extras = ", ".join(
+        label for label, on in (("display", display), ("lid", lid)) if on
+    )
+    print(
+        f"Scheduled {item['id']}: {start}-{end} {_days_label(item)}"
+        + (f" ({extras})" if extras else "")
+        + f". Next start: {_fmt(next_start(item, now))}."
+    )
+    return 0
+
+
+def schedule_list(args: list[str]) -> int:
+    as_json = _flag(args, "--json")
+    _reject_options(args)
+    if args:
+        raise AwakeError("use: ul awake schedule list [--json]")
+    now = time.time()
+    items = load_schedules()
+    if as_json:
+        rows = []
+        for item in items:
+            upcoming = next_start(item, now)
+            rows.append(
+                {**item, "next_start": None if upcoming is None else _iso(upcoming)}
+            )
+        print(json.dumps({"schedules": rows}, indent=2))
+        return 0
+    if not items:
+        print("No schedules. Add one with: ul awake schedule add HH:MM-HH:MM")
+        return 0
+    table = [("ID", "WINDOW", "DAYS", "FLAGS", "NAME", "NEXT START")]
+    for item in items:
+        flags = ",".join(
+            label
+            for label, on in (("display", item["display"]), ("lid", item["lid"]))
+            if on
+        )
+        table.append(
+            (
+                str(item["id"]),
+                f"{item['start']}-{item['end']}",
+                _days_label(item),
+                flags or "-",
+                _printable(item.get("name") or "-"),
+                _fmt(next_start(item, now)),
+            )
+        )
+    widths = [max(len(row[column]) for row in table) for column in range(6)]
+    for row in table:
+        print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
+    return 0
+
+
+def schedule_rm(args: list[str]) -> int:
+    everything = _flag(args, "--all")
+    _reject_options(args)
+    if everything == bool(args) or len(args) > 1:
+        raise AwakeError("use: ul awake schedule rm ID | --all")
+    wanted = None
+    if args:
+        if not re.fullmatch(r"[0-9]{1,9}", args[0]):
+            raise AwakeError(f"not a schedule id: {args[0]!r}")
+        wanted = int(args[0])
+    with _locked(SCHEDULE_LOCK):
+        items = load_schedules()
+        removed = [i for i in items if wanted is None or i["id"] == wanted]
+        if wanted is not None and not removed:
+            raise AwakeError(f"no schedule with id {wanted}", 1)
+        keep = [i for i in items if i not in removed]
+        session = live_session()
+        if session is not None and session.get("source") in {
+            f"schedule:{i['id']}" for i in removed
+        }:
+            stop_session(session)
+        _save_schedules(keep)
+        sync_job(keep)
+    print("Removed all schedules." if wanted is None else f"Removed schedule {wanted}.")
+    return 0
+
+
+def schedule_main(args: list[str]) -> int:
+    if not args:
+        raise AwakeError(SCHEDULE_USAGE)
+    action, rest = args[0], list(args[1:])
+    if action == "add":
+        return schedule_add(rest)
+    if action in {"list", "ls"}:
+        return schedule_list(rest)
+    if action in {"rm", "remove"}:
+        return schedule_rm(rest)
+    raise AwakeError(f"unknown schedule action: {action!r}; {SCHEDULE_USAGE}")
+
+
+# ---------------------------------------------------------------- the launchd run
+
+
+def _parse_now(text: str | None) -> float:
+    if text is None:
+        return time.time()
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError as error:
+        raise AwakeError(f"not an ISO time: {text!r}") from error
+
+
+def _start_due(items: list[dict], now: float) -> None:
+    """Start a session for the open window that ends last, unless a better session already runs."""
+    due = [(window[1], item) for item in items if (window := open_window(item, now))]
+    if not due:
+        return
+    end, item = max(due, key=lambda pair: pair[0])
+    source = f"schedule:{item['id']}"
+    current = live_session()
+    if current is not None:
+        if current.get("kind") == "command":
+            _log(f"{source} not started: a `-- command` session is running")
+            return
+        current_end = (
+            datetime.fromisoformat(current["ends"]).timestamp()
+            if current.get("ends")
+            else None
+        )
+        if current_end is None or current_end > end + 0.5:
+            _log(
+                f"{source} not started: the running {current.get('source', 'manual')} session lasts longer"
+            )
+            return
+        if current.get("source") == source and abs(current_end - end) < 1:
+            return
+    lid = bool(item.get("lid"))
+    if lid and not lid_rule_works():
+        _note(
+            f"{source}: the sudoers rule for --lid is gone, keeping awake with the lid open only (run `ul awake lid setup`)"
+        )
+        lid = False
+    plan = Plan(
+        "until",
+        seconds=max(1, math.ceil(end - now)),
+        ends=end,
+        display=bool(item.get("display")),
+        lid=lid,
+        source=source,
+    )
+    replaced = start_session(plan)
+    _log(
+        f"started {source} until {_iso(end)}"
+        + (f" (replaced: {replaced})" if replaced else "")
+    )
+
+
+def run_scheduled(args: list[str]) -> int:
+    """`ul awake _scheduled [--now ISO]`: what the launchd job runs. Exit 0 when there is nothing to do."""
+    now_text = _take(args, "--now")
+    if args:
+        raise AwakeError("_scheduled takes only --now ISO")
+    now = _parse_now(now_text)
+    code = 0
+    with _locked(SCHEDULE_LOCK):
+        items = load_schedules()
+        live = [i for i in items if not _is_over(i, now)]
+        try:
+            _start_due(live, now)
+        except AwakeError as error:
+            _note(str(error))
+            code = 1
+        if len(live) != len(items):
+            _log(f"dropped {len(items) - len(live)} past one-off schedule(s)")
+            _save_schedules(live)
+            if live:
+                # Rewritten, not reloaded: bootout would kill this very run; launchd reads it at the next load.
+                _write_job(live)
+            else:
+                remove_job()  # last, because launchd stops this job as part of the bootout
+    return code
+
+
 # ---------------------------------------------------------------- CLI
 
 
@@ -928,6 +1463,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _dispatch(args: list[str], command: list[str] | None) -> int:
+    if args[:1] == ["_scheduled"] and command is None:
+        return run_scheduled(args[1:])
+    if args[:1] == ["schedule"]:
+        if command is not None:
+            raise AwakeError("schedule does not take `-- command`")
+        return schedule_main(args[1:])
     as_json, yes = _flag(args, "--json"), _flag(args, "--yes")
     display, lid = _flag(args, "--display"), _flag(args, "--lid")
     pid_text = _take(args, "--pid")

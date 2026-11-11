@@ -682,6 +682,36 @@ disabled and `ul awake off` retries. On battery, a closed MacBook in a bag gets
 hot and drains the battery (`--lid` warns). `lid remove` deletes the rule,
 `lid status` checks that it works.
 
+### Schedules
+
+```bash
+ul awake schedule add 23:00-06:00                       # every night; may cross midnight
+ul awake schedule add 09:00-17:30 --days weekdays --display
+ul awake schedule add 14:00-16:00 --date 2026-12-01 --name "backup"   # once
+ul awake schedule list [--json]                         # id, window, days, flags, name, next start
+ul awake schedule rm 2                                  # or --all
+```
+
+`--days` is `daily` (default), `weekdays`, `weekends` or English short names
+(`mon,wed,sat`, any case); `--date` makes a one-off and excludes `--days`.
+`--lid` needs the lid rule when you add the schedule (launchd cannot ask for a
+password); without it `add` points you to `ul awake lid setup`.
+
+Schedules are stored in `storage.root/runtime/awake-schedules.json`. One
+LaunchAgent, `~/Library/LaunchAgents/com.unlaw.awake.plist`, runs
+`ul awake _scheduled` at each window start (and when it is loaded, so a window
+that is already open starts at once); it is rewritten on every `add`/`rm` and
+removed with the last schedule. A scheduled session lasts until the end of the
+window. It never replaces a `-- command` session and never cuts short a manual
+session that ends later or has no end. `schedule rm` also stops the session
+that schedule started. Finished one-offs are dropped. `ul remove`,
+`ul remove awake` and `ul features remove awake` boot the job out and delete
+the plist.
+
+A sleeping Mac is not woken at the start time: the window begins when the Mac
+is awake. On wake launchd runs the missed start, which begins the session if
+the window is still open. Runs are logged in `storage.root/runtime/awake.log`.
+
 ## Quick apps
 
 ```bash

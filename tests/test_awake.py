@@ -116,7 +116,9 @@ def wait_for(condition, timeout: float = 8.0) -> bool:
     return bool(condition())
 
 
-class AwakeTests(CoreTestCase):
+class AwakeBase(CoreTestCase):
+    """Fake tools, a sandboxed config and helpers shared with the schedule tests."""
+
     def setUp(self) -> None:
         super().setUp()
         self.fake = self.root / "fake"
@@ -198,6 +200,55 @@ class AwakeTests(CoreTestCase):
     def seconds_of(self, call: list[str]) -> int:
         return int(call[call.index("-t") + 1])
 
+    def run_in_background(self, *args: str) -> subprocess.Popen[str]:
+        process = subprocess.Popen(
+            [str(binary()), "awake", *args],
+            env=self.env,
+            cwd=self.root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        self.addCleanup(lambda: (process.kill(), process.wait()))
+        return process
+
+    def waiting_script(self, started: Path, release: Path) -> str:
+        return (
+            "import os, time\n"
+            f"open({str(started)!r}, 'w').write(str(os.getpid()))\n"
+            f"while not os.path.exists({str(release)!r}):\n"
+            "    time.sleep(0.05)\n"
+        )
+
+    def test_command_session_cannot_be_replaced_or_stopped_from_outside(self) -> None:
+        started, release = self.root / "started", self.root / "release"
+        wrapper = self.run_in_background(
+            "--", sys.executable, "-c", self.waiting_script(started, release)
+        )
+        self.assertTrue(wait_for(started.exists))
+        result = self.ul("awake", "1h")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("command", result.stderr)
+        self.assertEqual(self.ul("awake", "off").returncode, 1)
+        self.assertIsNone(wrapper.poll(), "the user's command must keep running")
+        release.write_text("")
+        self.assertEqual(wrapper.wait(timeout=10), 0)
+        self.assertTrue(wait_for(lambda: self.state() is None))
+
+    def test_termination_of_the_wrapper_stops_the_child_and_cleans_up(self) -> None:
+        started, release = self.root / "started", self.root / "release"
+        wrapper = self.run_in_background(
+            "--", sys.executable, "-c", self.waiting_script(started, release)
+        )
+        self.assertTrue(wait_for(started.exists))
+        os.kill(self.state()["supervisor_pid"], signal.SIGTERM)
+        self.assertEqual(wrapper.wait(timeout=10), 143)
+        self.assertTrue(wait_for(lambda: self.state() is None))
+        self.assertTrue(wait_for(lambda: not alive(int(started.read_text()))))
+
+
+class AwakeTests(AwakeBase):
     # ---------------------------------------------------------------- help
 
     def test_help_has_no_side_effects_and_stays_short(self) -> None:
@@ -463,53 +514,6 @@ class AwakeTests(CoreTestCase):
         self.assertEqual(result.returncode, 127)
         self.assertIn("no-such-tool-here", result.stderr)
         self.assertIsNone(self.state())
-
-    def run_in_background(self, *args: str) -> subprocess.Popen[str]:
-        process = subprocess.Popen(
-            [str(binary()), "awake", *args],
-            env=self.env,
-            cwd=self.root,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-        self.addCleanup(lambda: (process.kill(), process.wait()))
-        return process
-
-    def waiting_script(self, started: Path, release: Path) -> str:
-        return (
-            "import os, time\n"
-            f"open({str(started)!r}, 'w').write(str(os.getpid()))\n"
-            f"while not os.path.exists({str(release)!r}):\n"
-            "    time.sleep(0.05)\n"
-        )
-
-    def test_command_session_cannot_be_replaced_or_stopped_from_outside(self) -> None:
-        started, release = self.root / "started", self.root / "release"
-        wrapper = self.run_in_background(
-            "--", sys.executable, "-c", self.waiting_script(started, release)
-        )
-        self.assertTrue(wait_for(started.exists))
-        result = self.ul("awake", "1h")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("command", result.stderr)
-        self.assertEqual(self.ul("awake", "off").returncode, 1)
-        self.assertIsNone(wrapper.poll(), "the user's command must keep running")
-        release.write_text("")
-        self.assertEqual(wrapper.wait(timeout=10), 0)
-        self.assertTrue(wait_for(lambda: self.state() is None))
-
-    def test_termination_of_the_wrapper_stops_the_child_and_cleans_up(self) -> None:
-        started, release = self.root / "started", self.root / "release"
-        wrapper = self.run_in_background(
-            "--", sys.executable, "-c", self.waiting_script(started, release)
-        )
-        self.assertTrue(wait_for(started.exists))
-        os.kill(self.state()["supervisor_pid"], signal.SIGTERM)
-        self.assertEqual(wrapper.wait(timeout=10), 143)
-        self.assertTrue(wait_for(lambda: self.state() is None))
-        self.assertTrue(wait_for(lambda: not alive(int(started.read_text()))))
 
     # ---------------------------------------------------------------- --pid
 
