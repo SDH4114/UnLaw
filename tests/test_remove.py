@@ -65,6 +65,34 @@ class RemoveTests(CoreTestCase):
         self.assertEqual([call[0] for call in self.calls(self.launchctl)], ["bootout"])
         self.assertTrue(self.calls(self.launchctl)[0][1].endswith("/com.unlaw.awake"))
 
+    def clip_job(self) -> Path:
+        job = self.home / "Library" / "LaunchAgents" / "com.unlaw.clip.plist"
+        job.parent.mkdir(parents=True, exist_ok=True)
+        job.write_text("<plist/>")
+        return job
+
+    def test_removing_clip_boots_out_its_watcher_and_leaves_the_awake_job(self) -> None:
+        job, awake = self.clip_job(), self.awake_job()
+        self.assertTrue((self.unlaw / "commands" / "clip").is_dir())
+        result = self.ok("remove", "clip", "--yes")
+        self.assertFalse(job.exists())
+        self.assertTrue(awake.exists())
+        self.assertEqual([call[0] for call in self.calls(self.launchctl)], ["bootout"])
+        self.assertTrue(self.calls(self.launchctl)[0][1].endswith("/com.unlaw.clip"))
+        self.assertIn("clipboard history", result.stdout)
+
+    def test_features_remove_clip_boots_out_its_watcher(self) -> None:
+        job = self.clip_job()
+        self.ok("features", "remove", "clip", "--no-build")
+        self.assertFalse(job.exists())
+        self.assertTrue(self.calls(self.launchctl)[0][1].endswith("/com.unlaw.clip"))
+
+    def test_removing_another_command_leaves_the_clip_watcher(self) -> None:
+        job = self.clip_job()
+        self.ok("remove", "music", "--yes")
+        self.assertTrue(job.exists())
+        self.assertEqual(self.calls(self.launchctl), [])
+
     def lid_rule(self) -> tuple[Path, dict[str, str]]:
         rule = self.root / "unlaw-awake-rule"
         rule.write_text("rule")
@@ -137,6 +165,7 @@ class RemoveTests(CoreTestCase):
         agents.mkdir(parents=True)
         (agents / "com.unlaw.agent.plist").write_text("<plist/>")
         (agents / "com.unlaw.awake.plist").write_text("<plist/>")
+        (agents / "com.unlaw.clip.plist").write_text("<plist/>")
 
     def test_remove_asks_and_cancelling_keeps_everything(self) -> None:
         self.install_fakes()
@@ -163,9 +192,11 @@ class RemoveTests(CoreTestCase):
         self.assertFalse((self.home / "Library" / "LaunchAgents" / "com.unlaw.agent.plist").exists())
         self.assertEqual((self.home / ".zshrc").read_text(), "export A=1\nalias b=c\n")
         self.assertFalse((self.home / "Library" / "LaunchAgents" / "com.unlaw.awake.plist").exists())
+        self.assertFalse((self.home / "Library" / "LaunchAgents" / "com.unlaw.clip.plist").exists())
         bootouts = [call[1].split("/")[-1] for call in self.calls(self.launchctl) if call[0] == "bootout"]
-        self.assertEqual(sorted(bootouts), ["com.unlaw.agent", "com.unlaw.awake"])
+        self.assertEqual(sorted(bootouts), ["com.unlaw.agent", "com.unlaw.awake", "com.unlaw.clip"])
         self.assertIn("awake schedules", result.stdout)
+        self.assertIn("clipboard history", result.stdout)
         self.assertEqual([call[0] for call in self.calls(self.cargo)], ["uninstall", "uninstall"])
 
 

@@ -24,6 +24,8 @@ const BINARIES: [&str; 5] = ["ul", "unlaw", "ula", "unlawagent", "ule"];
 const AGENT_LABEL: &str = "com.unlaw.agent";
 /// The launchd job of `ul awake schedule` (awake.py `JOB_LABEL`).
 const AWAKE_LABEL: &str = "com.unlaw.awake";
+/// The launchd job of `ul clip on` (clip.py `LABEL`).
+const CLIP_LABEL: &str = "com.unlaw.clip";
 
 /// `[y/N]` on stdin; anything but y/yes, or the end of input, is no.
 fn confirm(question: &str) -> bool {
@@ -53,6 +55,10 @@ fn awake_job_path() -> std::path::PathBuf {
     home().join("Library").join("LaunchAgents").join(format!("{AWAKE_LABEL}.plist"))
 }
 
+fn clip_job_path() -> std::path::PathBuf {
+    home().join("Library").join("LaunchAgents").join(format!("{CLIP_LABEL}.plist"))
+}
+
 /// The lid rule of `ul awake lid setup` (awake.py `SUDOERS_FILE`); UNLAW_AWAKE_SUDOERS replaces the path in tests.
 fn lid_rule_file() -> std::path::PathBuf {
     env::var_os("UNLAW_AWAKE_SUDOERS").map(std::path::PathBuf::from).unwrap_or_else(|| "/etc/sudoers.d/unlaw-awake".into())
@@ -72,13 +78,21 @@ pub fn note_lid_rule() {
 
 /// Boots the `ul awake schedule` job out of launchd and deletes its plist; false when there was none.
 pub fn remove_awake_job() -> io::Result<bool> {
-    let plist = awake_job_path();
-    if !exists(&plist) {
+    remove_launchd_job(&awake_job_path(), AWAKE_LABEL)
+}
+
+/// Boots the `ul clip on` watcher out of launchd and deletes its plist; false when there was none.
+pub fn remove_clip_job() -> io::Result<bool> {
+    remove_launchd_job(&clip_job_path(), CLIP_LABEL)
+}
+
+fn remove_launchd_job(plist: &Path, label: &str) -> io::Result<bool> {
+    if !exists(plist) {
         return Ok(false);
     }
-    let domain = format!("gui/{}/{AWAKE_LABEL}", unsafe { libc::getuid() });
+    let domain = format!("gui/{}/{label}", unsafe { libc::getuid() });
     let _ = Command::new("launchctl").args(["bootout", &domain]).stdout(Stdio::null()).stderr(Stdio::null()).status();
-    remove_tree(&plist).map(|()| true)
+    remove_tree(plist).map(|()| true)
 }
 
 fn home_relative(path: &Path) -> String {
@@ -259,6 +273,9 @@ fn remove_everything(yes: bool) -> i32 {
     if exists(&awake_job_path()) {
         println!("  - the awake schedules' background job ({AWAKE_LABEL})");
     }
+    if exists(&clip_job_path()) {
+        println!("  - the clipboard history's background watcher ({CLIP_LABEL})");
+    }
     if shell_block.is_some() {
         println!("  - the shell integration block in ~/.zshrc");
     }
@@ -295,6 +312,9 @@ fn remove_everything(yes: bool) -> i32 {
     }
     if exists(&awake_job_path()) {
         report("the awake schedules' background job".into(), remove_awake_job().map(|_| ()));
+    }
+    if exists(&clip_job_path()) {
+        report("the clipboard history's background watcher".into(), remove_clip_job().map(|_| ()));
     }
     if !skill_installs.is_empty() {
         report("the agent skill".into(), skills::remove_all());
@@ -404,6 +424,17 @@ fn remove_commands(names: &[&str], yes: bool) -> i32 {
             }
         }
         note_lid_rule();
+    }
+    // The watcher of `ul clip on` would keep calling the deleted command.
+    if unique.contains(&"clip") {
+        match remove_clip_job() {
+            Ok(true) => println!("Removed the clipboard history's background watcher"),
+            Ok(false) => {}
+            Err(error) => {
+                eprintln!("unlaw remove: Could not remove the clipboard history's background watcher: {error}");
+                code = 1;
+            }
+        }
     }
     // A default command that stays in core.features would be seeded again on the next run.
     let seeds: Vec<&str> = unique.iter().copied().filter(|name| features::find(name).is_some_and(|feature| feature.seed)).collect();
