@@ -92,8 +92,9 @@ Usage: ul clip [list [N] [--json]]
 Text only (no images or files), at most 100 KB per item, duplicates move to the top, at most
 clip.max_items items (default 200); clip.interval (default 1 s) is how often the pasteboard is checked.
 Privacy: items marked concealed, transient or auto-generated (password managers set these) are
-never stored. The history is a plain file with mode 0600 in <storage.root>/clip/; use pause when
-copying something sensitive that an app does not mark. Needs macOS osascript.
+never stored. The history is plain text (file mode 0600) in <storage.root>/clip/ and syncs if that
+sits in iCloud/Dropbox; use pause for secrets an app does not mark. Needs macOS osascript; if copies
+stop being stored, `status` shows the newest item and the watcher log.
 Examples: ul clip on
   ul clip search token
   ul clip copy 3

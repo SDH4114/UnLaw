@@ -24,7 +24,7 @@
   {
    "name": "clip",
    "summary": "Clipboard history in the background: list, search and copy again.",
-   "sha256": "6492b5e36b1336f0103e817c27d826952ebc698154d85b6577b2836fdcbb520a"
+   "sha256": "faa088db619a9f081187eb31c418c029fac76cfc605887e3cdb28d532513660c"
   },
   {
    "name": "cpp",

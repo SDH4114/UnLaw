@@ -2,7 +2,7 @@
 """Clipboard history in the background: list, search and copy again."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Clipboard history in the background: list, search and copy again.\nUsage: ul clip [list [N] [--json]]\n       ul clip search <words...> [--json] | show <n> | copy <n> | rm <n> | clear [--yes]\n       ul clip on | off | status | pause | resume\n  list        Numbered, newest first (default 20 items, one-line previews)\n  search      Items that contain every word, any case; numbers stay valid for copy/show/rm\n  copy <n>    Put item n back on the clipboard (it becomes the newest)\n  show <n>    The full text (control characters escaped on a terminal)\n  clear       Delete all items after a y/N question (--yes skips it)\n  on / off    Install / remove the background watcher (LaunchAgent com.unlaw.clip); off keeps the history\n  pause       The watcher keeps running but ignores copies until `resume`\nText only (no images or files), at most 100 KB per item, duplicates move to the top, at most\nclip.max_items items (default 200); clip.interval (default 1 s) is how often the pasteboard is checked.\nPrivacy: items marked concealed, transient or auto-generated (password managers set these) are\nnever stored. The history is a plain file with mode 0600 in <storage.root>/clip/; use pause when\ncopying something sensitive that an app does not mark. Needs macOS osascript.\nExamples: ul clip on\n  ul clip search token\n  ul clip copy 3\n'
+COMMAND_HELP = 'Clipboard history in the background: list, search and copy again.\nUsage: ul clip [list [N] [--json]]\n       ul clip search <words...> [--json] | show <n> | copy <n> | rm <n> | clear [--yes]\n       ul clip on | off | status | pause | resume\n  list        Numbered, newest first (default 20 items, one-line previews)\n  search      Items that contain every word, any case; numbers stay valid for copy/show/rm\n  copy <n>    Put item n back on the clipboard (it becomes the newest)\n  show <n>    The full text (control characters escaped on a terminal)\n  clear       Delete all items after a y/N question (--yes skips it)\n  on / off    Install / remove the background watcher (LaunchAgent com.unlaw.clip); off keeps the history\n  pause       The watcher keeps running but ignores copies until `resume`\nText only (no images or files), at most 100 KB per item, duplicates move to the top, at most\nclip.max_items items (default 200); clip.interval (default 1 s) is how often the pasteboard is checked.\nPrivacy: items marked concealed, transient or auto-generated (password managers set these) are\nnever stored. The history is plain text (file mode 0600) in <storage.root>/clip/ and syncs if that\nsits in iCloud/Dropbox; use pause for secrets an app does not mark. Needs macOS osascript; if copies\nstop being stored, `status` shows the newest item and the watcher log.\nExamples: ul clip on\n  ul clip search token\n  ul clip copy 3\n'
 
 import copy
 import os
@@ -110,7 +110,7 @@ function run(argv) {
   for (;;) {
     var count = Number(pasteboard.changeCount);
     if (count !== last) {
-      last = count;
+      var line = null;
       try {
         var types = ObjC.deepUnwrap(pasteboard.types) || [];
         var text = null;
@@ -119,9 +119,16 @@ function run(argv) {
           text = ObjC.unwrap(value);
           if (text.length > maxChars) text = null;
         }
-        var line = JSON.stringify({count: count, types: types, text: text}) + "\n";
-        out.writeData($(line).dataUsingEncoding($.NSUTF8StringEncoding));
+        // Types and text must come from one copy: if the pasteboard changed while they were read (a password
+        // manager copying right after another app), the sample is dropped and the same change is read again.
+        if (Number(pasteboard.changeCount) === count) {
+          line = JSON.stringify({count: count, types: types, text: text}) + "\n";
+        }
       } catch (error) {}
+      if (line !== null) {
+        last = count;
+        out.writeData($(line).dataUsingEncoding($.NSUTF8StringEncoding));
+      }
     }
     if (Number($.getppid()) !== parent) return;
     delay(interval);
@@ -430,13 +437,26 @@ def status() -> int:
         job = "running"
     else:
         job = "installed but not loaded (`ul clip on` loads it)"
+    newest = ""
     try:
-        stored = _count_text(len(_read()))
+        items = _read()
+        stored = _count_text(len(items))
+        if items:
+            newest = _when(items[0])
     except ClipError as error:
         stored = f"unreadable ({error})"
     print(f"Background watcher: {job}")
     print(f"Recording: {'paused (`ul clip resume`)' if _paused() else 'on'}")
     print(f"History: {stored} in {history_file()}")
+    if newest:
+        print(f"Newest item: {newest}")
+    # Whether macOS lets the background helper read the pasteboard cannot be asked directly, so these are the
+    # two clues: nothing new for a long time while copying, or osascript errors in the watcher's log.
+    log = clip_dir() / "watch.log"
+    if log.exists() and log.stat().st_size > 0:
+        print(
+            f"Watcher log: {log} ({log.stat().st_size} bytes; read it if copies are not being stored)"
+        )
     return 0
 
 
@@ -591,10 +611,20 @@ def remove_item(text: str) -> int:
     return 0
 
 
+def _damaged_copies() -> list[Path]:
+    return sorted(clip_dir().glob(f"{history_file().name}.damaged-*"))
+
+
+def _delete_damaged_copies() -> None:
+    for path in _damaged_copies():
+        path.unlink(missing_ok=True)
+
+
 def clear(yes: bool) -> int:
     with _locked():
         count = len(_read(repair=True))
         if count == 0:
+            _delete_damaged_copies()
             print("The clipboard history is already empty.")
             return 0
         if not yes:
@@ -610,6 +640,7 @@ def clear(yes: bool) -> int:
                 print("Cancelled; nothing was removed.")
                 return 1
         history_file().unlink(missing_ok=True)
+        _delete_damaged_copies()
     print(f"Deleted {_count_text(count)}.")
     return 0
 
