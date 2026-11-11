@@ -10,7 +10,7 @@ Read this before you write or edit anything for Unlaw. The rules in "Hard rules"
 4. Never edit a default command (`git`, `yt`, `desk`, ...; `ul features list` names them). An edited default stops receiving updates and `ul reinstall` moves it to a backup. To change one, copy its folder to a new name and edit the copy.
 5. Never use the name of a system command, a built-in, a default command (current or retired) or an alias. `ul create command` refuses them; choose another name such as `my-<name>`.
 6. Ask the owner before installing any third-party dependency (pip, npm, brew, cargo crates). Python commands use Python 3.11+ and the standard library.
-7. Verify before you say it is done: `ul commands check <name>` (runs `ul <name> --help` with no stdin and a timeout; reports the exit code, a Usage line and the description), `ul <name> --help`, `ul commands --describe` (your line is there), `ul doctor`.
+7. Verify before you say it is done: `ul commands check <name>` (runs `ul <name> --help` with no stdin and a timeout; reports the exit code, a Usage line and the description; it fails while the scaffold text "Custom Unlaw command." is left in the docstring or help; a Rust command is built first, outside the timeout), `ul <name> --help`, `ul commands --describe` (your line is there), `ul doctor`.
 
 ## Where a command lives
 

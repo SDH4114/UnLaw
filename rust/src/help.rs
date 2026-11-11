@@ -79,8 +79,11 @@ Usage:
   ul commands search [words...] [--list]   Browse the catalog on GitHub
   ul commands get <name>...                Download commands from the catalog
   ul commands check <name> [--timeout <seconds>]
-                                           Run <name> --help (no stdin) and report exit code,
-                                           Usage line and description
+                                           Run <name> --help (no stdin, killed after the timeout
+                                           with everything it started; default 30 s) and report
+                                           exit code, Usage line and description. A scaffold's
+                                           placeholder text fails. A Rust command is built first,
+                                           outside the timeout.
 Options: --verbose includes source/path; --describe adds one-line descriptions
 read from help.txt, the main.py docstring or a script's first comment (the
 command is not run); --json prints structured records.

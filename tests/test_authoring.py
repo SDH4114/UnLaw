@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import shutil
+import signal
+import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -11,7 +15,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "src"))
 
-from ulbin import CoreTestCase
+from ulbin import CoreTestCase, binary
 
 from unlawful.config import DEFAULT_COMMAND_NAMES
 
@@ -195,13 +199,84 @@ class AuthoringGuideTests(CoreTestCase):
 
 
 class CommandsCheckTests(CoreTestCase):
-    def test_a_scaffolded_command_passes(self) -> None:
+    def test_an_unedited_scaffold_fails_on_its_placeholder_description(self) -> None:
         self.ok("create", "command", "hello")
-        result = self.ok("commands", "check", "hello")
-        self.assertIn("ok", result.stdout)
+        result = self.ul("commands", "check", "hello")
+        self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("--help exits 0", result.stdout)
         self.assertIn("Usage line", result.stdout)
-        self.assertIn("description: Custom Unlaw command.", result.stdout)
+        self.assertIn(
+            "FAIL  description is still the scaffold placeholder", result.stdout
+        )
+
+    def test_a_placeholder_only_in_the_help_text_fails_too(self) -> None:
+        self.ok("create", "command", "hello")
+        script = self.unlaw / "commands" / "hello" / "main.py"
+        script.write_text(
+            script.read_text().replace(
+                '"""Custom Unlaw command."""', '"""Says hello."""', 1
+            )
+        )
+        result = self.ul("commands", "check", "hello")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("help text is still the scaffold placeholder", result.stdout)
+
+    def test_an_edited_scaffold_passes(self) -> None:
+        self.ok("create", "command", "hello")
+        script = self.unlaw / "commands" / "hello" / "main.py"
+        script.write_text(
+            script.read_text().replace("Custom Unlaw command.", "Says hello.")
+        )
+        result = self.ok("commands", "check", "hello")
+        self.assertIn("description: Says hello.", result.stdout)
+        self.assertNotIn("FAIL", result.stdout)
+
+    def test_a_background_process_holding_the_pipes_does_not_stall_the_check(
+        self,
+    ) -> None:
+        self.command(
+            "bg",
+            '#!/bin/sh\n# Background.\n(sleep 25 &)\necho "Usage: ul bg"\nexit 0\n',
+            "main.sh",
+        )
+        started = time.monotonic()
+        result = self.ul("commands", "check", "bg", "--timeout", "3", timeout=20)
+        self.assertLess(time.monotonic() - started, 12)
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_ctrl_c_stops_the_checked_command(self) -> None:
+        pidfile = self.root / "pid"
+        self.command(
+            "napper",
+            f"#!/bin/sh\n# Naps.\necho $$ > {pidfile}\nexec sleep 47\n",
+            "main.sh",
+        )
+        process = subprocess.Popen(
+            [str(binary()), "commands", "check", "napper", "--timeout", "40"],
+            env=self.env,
+            cwd=self.root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        for _ in range(100):
+            if pidfile.exists() and pidfile.read_text().strip():
+                break
+            time.sleep(0.1)
+        child = int(pidfile.read_text())
+        process.send_signal(signal.SIGINT)
+        process.communicate(timeout=15)
+        for _ in range(50):
+            try:
+                os.kill(child, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            os.kill(child, signal.SIGKILL)
+            self.fail("the checked command survived Ctrl-C")
+        self.assertEqual(process.returncode, 130)
 
     def test_problems_are_reported_and_fail(self) -> None:
         cases = {

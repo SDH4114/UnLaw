@@ -5,6 +5,7 @@ use std::env;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -70,6 +71,9 @@ fn usage(text: &str) -> i32 {
     2
 }
 
+/// The description every scaffold starts with; a finished command replaces it.
+const PLACEHOLDER: &str = "Custom Unlaw command.";
+
 /// `ul commands check <name>`: runs the command's own `--help` (no stdin, a
 /// deadline) and reports what an agent should have got right.
 fn check_command(args: &[String]) -> i32 {
@@ -108,6 +112,10 @@ fn check_command(args: &[String]) -> i32 {
     process.args(&line[1..]).envs(commands::environment(&command, &config));
     match run_command_with_timeout(process, Duration::from_secs(seconds)) {
         Err(error) if error == "timed out" => report(false, format!("--help did not finish within {seconds} s (it must print help and exit)")),
+        Err(error) if error == "interrupted" => {
+            println!("  interrupted; the command was stopped");
+            return 130;
+        }
         Err(error) => report(false, format!("--help could not run: {error}")),
         Ok((status, stdout, stderr)) => {
             match status.code() {
@@ -115,11 +123,17 @@ fn check_command(args: &[String]) -> i32 {
                 Some(code) => report(false, format!("--help exited with {code}, expected 0")),
                 None => report(false, "--help was stopped by a signal".into()),
             }
+            if stdout.lines().chain(stderr.lines()).any(|line| line.trim() == PLACEHOLDER) {
+                report(false, format!("help text is still the scaffold placeholder \"{PLACEHOLDER}\"; describe the command"));
+            }
             let has_usage = format!("{stdout}\n{stderr}").to_lowercase().contains("usage");
             report(has_usage, if has_usage { "the help has a Usage line".into() } else { "no Usage line in the help".into() });
         }
     }
     match commands::summary(&command) {
+        Some(summary) if summary == PLACEHOLDER => {
+            report(false, format!("description is still the scaffold placeholder \"{PLACEHOLDER}\"; say what the command does"))
+        }
         Some(summary) => report(true, format!("description: {summary}")),
         None => report(false, "no description for `ul commands --describe` (add help.txt, a docstring or a first comment)".into()),
     }
@@ -705,23 +719,58 @@ fn run_command_with_timeout(mut command: Command, timeout: Duration) -> Result<(
         let _ = stderr.read_to_string(&mut text);
         text
     });
+    let group = -(child.id() as libc::pid_t);
+    let _signals = StopSignals::new();
     let started = Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() >= timeout => {
-                unsafe {
-                    libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
-                }
+                unsafe { libc::kill(group, libc::SIGKILL) };
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err("timed out".into());
+            }
+            Ok(None) if STOP_SIGNAL.load(Ordering::Relaxed) != 0 => {
+                unsafe { libc::kill(group, libc::SIGKILL) };
+                let _ = child.wait();
+                return Err("interrupted".into());
             }
             Ok(None) => thread::sleep(Duration::from_millis(20)),
             Err(error) => return Err(error.to_string()),
         }
     };
+    // A grandchild (a daemon, `sleep &`) may still hold the pipes open, which
+    // would block the readers below: the command is done, so end its group.
+    unsafe { libc::kill(group, libc::SIGKILL) };
     Ok((status, out.join().unwrap_or_default(), err.join().unwrap_or_default()))
+}
+
+static STOP_SIGNAL: AtomicI32 = AtomicI32::new(0);
+
+extern "C" fn remember_stop(signal: libc::c_int) {
+    STOP_SIGNAL.store(signal, Ordering::Relaxed);
+}
+
+/// While a probe runs in its own process group, Ctrl-C and SIGTERM reach only
+/// Unlaw; this turns them into a flag so the probe's group is killed first.
+struct StopSignals(libc::sighandler_t, libc::sighandler_t);
+
+impl StopSignals {
+    fn new() -> Self {
+        STOP_SIGNAL.store(0, Ordering::Relaxed);
+        let handler = remember_stop as *const () as libc::sighandler_t;
+        unsafe { StopSignals(libc::signal(libc::SIGINT, handler), libc::signal(libc::SIGTERM, handler)) }
+    }
+}
+
+impl Drop for StopSignals {
+    fn drop(&mut self) {
+        unsafe {
+            libc::signal(libc::SIGINT, self.0);
+            libc::signal(libc::SIGTERM, self.1);
+        }
+    }
 }
 
 fn harness_permissions(executable: Option<&Path>) -> (bool, String) {
