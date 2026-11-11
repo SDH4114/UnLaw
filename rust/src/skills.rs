@@ -22,6 +22,9 @@ use crate::system::{records, Record};
 use crate::util::{atomic_write, expand_user, home};
 
 const SKILL: &str = "unlaw";
+/// Name of the authoring guide (`reference/authoring.md`); commands cannot take it.
+pub const AUTHORING: &str = "authoring";
+const AUTHORING_GUIDE: &str = include_str!("../assets/authoring.md");
 /// Present in every folder `ul skills install` wrote; nothing else is touched.
 const MARKER: &str = ".unlaw-skill";
 const USAGE: &str = "Usage: ul skills install|remove [--project|--path <dir>] [--claude]
@@ -190,8 +193,20 @@ description: Use the `ul` (Unlaw) command line on this Mac. It runs the user's p
 - Change settings with `ul config get <key>` and `ul config set <key> <value>` (validated, atomic, keeps comments). Do not edit `config.toml` by hand. `ul config show` prints it, `ul config check` validates it.
 - Ask the user before commands with outside effects: sending Telegram messages (`ul tg`), committing or pushing (`ul git`), `ul update`, deleting models (`ul lm rm`), opening apps.
 - `ul doctor` diagnoses setup problems; `ul doctor --json` returns a report.
-- New commands: `ul create command <name>` creates `commands/<name>/main.py` in the Unlaw config directory (`ul init` prints its location). Commands use Python 3.11+ and the standard library, and must support `--help`.
+- New commands and templates: follow the next section.
 - Files Unlaw produces (captures, downloads, models) live under `ul config get storage.root`.
+
+## Creating or changing commands and templates
+
+Read `reference/authoring.md` (or run `ul skills show authoring`) before you write anything for Unlaw. Hard rules:
+
+- Create a command only with `ul create command <name>` (`--lang rust` for Rust); never make its folder by hand. It lives in `${XDG_CONFIG_HOME:-~/.config}/unlaw/commands/<name>/`; work only inside that folder.
+- Never edit Unlaw itself (its source repository, installed binaries, the core) or `config.toml` by hand (use `ul config get|set`).
+- Never edit a default command (`git`, `yt`, `desk`, ...): it stops receiving updates. Copy it to a new name and edit the copy. Never use the name of a system, built-in or default command or an alias.
+- Every command handles `--help` and `-h` first (exit 0, no side effects) and uses exit codes 0 ok, 1 failure, 2 usage.
+- Keep a command's settings in `config.toml` inside its folder and its data in `$UNLAW_STORAGE/<name>/`.
+- Ask the owner before installing third-party dependencies.
+- Verify with `ul commands check <name>`, `ul commands --describe` and `ul doctor`.
 
 ## Commands
 
@@ -224,12 +239,16 @@ description: Use the `ul` (Unlaw) command line on this Mac. It runs the user's p
 fn render(config: &Config) -> Vec<(PathBuf, String)> {
     let records = records(config, true);
     let mut files = vec![(PathBuf::from("SKILL.md"), skill_markdown(&records))];
-    for record in &records {
+    for record in records.iter().filter(|record| record.name != AUTHORING) {
         files.push((
             Path::new("reference").join(format!("{}.md", record.name)),
             reference(record),
         ));
     }
+    files.push((
+        Path::new("reference").join(format!("{AUTHORING}.md")),
+        AUTHORING_GUIDE.to_string(),
+    ));
     files
 }
 
