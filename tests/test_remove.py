@@ -65,6 +65,35 @@ class RemoveTests(CoreTestCase):
         self.assertEqual([call[0] for call in self.calls(self.launchctl)], ["bootout"])
         self.assertTrue(self.calls(self.launchctl)[0][1].endswith("/com.unlaw.awake"))
 
+    def lid_rule(self) -> tuple[Path, dict[str, str]]:
+        rule = self.root / "unlaw-awake-rule"
+        rule.write_text("rule")
+        return rule, {"UNLAW_AWAKE_SUDOERS": str(rule)}
+
+    def test_the_lid_rule_that_stays_is_reported_by_every_removal(self) -> None:
+        rule, env = self.lid_rule()
+        for args in (
+            ("remove", "awake", "--yes"),
+            ("features", "remove", "awake", "--no-build"),
+            ("remove", "--yes"),
+        ):
+            with self.subTest(args=args):
+                self.ok("init", env=env)
+                self.ok("features", "add", "awake", "--no-build", env=env)
+                result = self.ok(*args, env=env)
+                self.assertIn(str(rule), result.stdout)
+                self.assertIn(f"sudo rm {rule}", result.stdout)
+                self.assertIn("ul awake lid remove", result.stdout)
+                self.assertTrue(rule.exists(), "only reported, never touched")
+
+    def test_nothing_is_said_about_a_lid_rule_that_does_not_exist(self) -> None:
+        env = {"UNLAW_AWAKE_SUDOERS": str(self.root / "nope")}
+        for args in (("remove", "awake", "--yes"), ("remove", "--yes")):
+            with self.subTest(args=args):
+                self.ok("init", env=env)
+                result = self.ok(*args, env=env)
+                self.assertNotIn("sudo rm", result.stdout)
+
     def test_removing_another_command_leaves_the_awake_job(self) -> None:
         job = self.awake_job()
         self.ok("remove", "music", "--yes")

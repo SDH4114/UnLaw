@@ -74,17 +74,17 @@ Options:
   --lid          Keep a MacBook awake with the lid closed (needs lid setup, see below)
 A new session replaces the running one, except a `-- command` session (stop that command).
 Schedules: a window (may cross midnight) every day (--days daily|weekdays|weekends|mon,tue,..)
-  or once (--date), with --display/--lid; --lid needs lid setup first. A launchd job
-  (com.unlaw.awake) starts it, never cutting short a longer manual session. A sleeping Mac is
-  not woken at the start: the window begins once the Mac is awake and still inside it.
+  or once (--date), with --display/--lid (lid setup first). A launchd job (com.unlaw.awake)
+  starts it, never cutting short a longer manual session; `off` skips the rest of that
+  window. A sleeping Mac is not woken at the start: it begins once awake and inside the window.
 Lid: caffeinate cannot do this, `pmset -a disablesleep 1` can but needs root. `ul awake lid
   setup` installs a sudoers rule (/etc/sudoers.d/unlaw-awake) that allows exactly
   `pmset -a disablesleep 0|1` without a password; `lid remove` deletes it (--yes skips the
-  question). The setting is restored when the session ends; if that fails, `status` says so
-  and `ul awake off` retries. On battery, a closed MacBook in a bag gets hot and drains.
+  question). The setting is restored when the session ends, after a crash or reboot at the
+  next login or any `ul awake` call; if that fails, `status` says so and `off` retries.
+  On battery, a closed MacBook in a bag gets hot and drains.
 Settings: storage.root (state in runtime/awake.json).
 Examples: ul awake 2h --display
-          ul awake until 18:30
           ul awake --lid -- make build
           ul awake schedule add 23:00-06:00 --days weekdays
 ''',

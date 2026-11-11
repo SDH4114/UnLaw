@@ -253,6 +253,7 @@ pub fn apply(current: &[&str], next: &[&'static str], no_build: bool) -> i32 {
             Ok(false) => {}
             Err(error) => eprintln!("unlaw features: could not remove the awake schedules' background job: {error}"),
         }
+        crate::remove::note_lid_rule();
     }
     for name in kept {
         println!("Kept commands/{name}: you edited it. Delete the folder to remove it.");

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
+import pwd
 import signal
 import subprocess
 import sys
@@ -35,20 +37,27 @@ while end is None or time.time() < end:
 """
 
 # Logs argv. `-n -l` answers from the rule file; `-n /usr/bin/pmset ...` runs the fake pmset.
-FAKE_SUDO = """import json, os, subprocess, sys
+FAKE_SUDO = """import json, os, shutil, subprocess, sys
 a = sys.argv[1:]
 d = os.environ["FAKE_DIR"]
 open(d + "/sudo.log", "a").write(json.dumps(a) + "\\n")
 has_rule = os.path.exists(d + "/rule_ok")
 if a[:2] == ["-n", "-l"]:
-    raise SystemExit(0 if has_rule else 1)
+    # sudo -l answers 0 for any NOPASSWD rule of the user, not only ours
+    raise SystemExit(0 if has_rule or os.path.exists(d + "/any_nopasswd") else 1)
+if a[:2] == ["/bin/sh", "-c"]:
+    shutil.copy(a[4], d + "/candidate.seen")
+    raise SystemExit(1 if os.path.exists(d + "/sudo_fail_other") else 0)
 if a[:2] == ["-n", "/usr/bin/pmset"]:
     if not has_rule or os.path.exists(d + "/sudo_fail"):
         raise SystemExit(1)
     if a[-1] == "0" and os.path.exists(d + "/sudo_fail_restore"):
         raise SystemExit(1)
     here = os.path.dirname(os.path.abspath(sys.argv[0]))
-    raise SystemExit(subprocess.call([here + "/pmset", *a[2:]]))
+    code = subprocess.call([here + "/pmset", *a[2:]])
+    if a[-1] == "1" and os.path.exists(d + "/die_after_disable"):
+        os.kill(os.getppid(), 9)  # the caller dies right after the lid was disabled
+    raise SystemExit(code)
 raise SystemExit(1 if os.path.exists(d + "/sudo_fail_other") else 0)
 """
 
@@ -78,6 +87,11 @@ if a[0] == "-cf":
 raise SystemExit(1 if os.path.exists(d + "/visudo_fail") else 0)
 """
 
+# A --lid session installs a login job; the real launchctl must never be reached (it would load a job).
+FAKE_LAUNCHCTL = """import json, os, sys
+open(os.environ["FAKE_DIR"] + "/launchctl.log", "a").write(json.dumps(sys.argv[1:]) + "\\n")
+"""
+
 SUDOERS_PATH = "/etc/sudoers.d/unlaw-awake"
 JSON_KEYS = {
     "active",
@@ -93,6 +107,12 @@ JSON_KEYS = {
     "sleep_disabled",
     "lid_restore_failed",
 }
+
+
+def load_awake():
+    """The seed module itself, for tests of pure functions (nothing here touches the config)."""
+    sys.path.insert(0, str(HERE.parent / "src"))
+    return importlib.import_module("unlawful.awake")
 
 
 def now() -> datetime:
@@ -126,11 +146,13 @@ class AwakeBase(CoreTestCase):
         self.env["FAKE_DIR"] = str(self.fake)
         self.env["PATH"] = f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin"
         self.env["LOGNAME"] = "tester"
+        self.env["UNLAW_AWAKE_SUDO"] = str(self.bin / "sudo")
         for name, body in (
             ("caffeinate", FAKE_CAFFEINATE),
             ("sudo", FAKE_SUDO),
             ("pmset", FAKE_PMSET),
             ("visudo", FAKE_VISUDO),
+            ("launchctl", FAKE_LAUNCHCTL),
         ):
             self.tool(name, f"#!{sys.executable}\n{body}")
         self.addCleanup(self.kill_leftovers)
@@ -675,53 +697,69 @@ class AwakeTests(AwakeBase):
 
     def test_lid_setup_writes_the_exact_rule_after_confirmation(self) -> None:
         result = self.ok("awake", "lid", "setup", input="y\n")
-        line = "tester ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1"
-        seen = self.read("visudo.seen")
-        self.assertIn(line, seen.splitlines())
+        user = pwd.getpwuid(os.getuid()).pw_name
+        line = f"{user} ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1"
+        seen = self.read("candidate.seen")
         self.assertEqual(
-            [
-                entry
-                for entry in seen.splitlines()
-                if not entry.startswith("#") and entry
-            ],
-            [line],
+            [e for e in seen.splitlines() if not e.startswith("#") and e], [line]
         )
-        self.assertTrue(self.read("visudo.log").startswith("-cf|"))
-        install = next(call for call in self.jlog("sudo.log") if call[0] == "install")
-        self.assertEqual(install[1:7], ["-m", "0440", "-o", "root", "-g", "wheel"])
-        self.assertEqual(install[-1], SUDOERS_PATH)
-        self.assertFalse(Path(install[-2]).exists(), "the temporary file is removed")
         self.assertIn(SUDOERS_PATH, result.stdout)
         self.assertIn(line, result.stdout)
+
+    def test_lid_setup_is_one_sudo_call_with_a_fixed_script(self) -> None:
+        self.ok("awake", "lid", "setup", "--yes")
+        (call,) = self.jlog("sudo.log")
+        self.assertEqual(call[:2], ["/bin/sh", "-c"])
+        script = call[2]
+        self.assertEqual(call[3], "sh")
+        candidate, target = call[4], call[5]
+        self.assertEqual(target, SUDOERS_PATH)
+        self.assertFalse(Path(candidate).exists(), "the temporary file is removed")
+        # data reaches the script only as positional arguments
+        user = pwd.getpwuid(os.getuid()).pw_name
+        for text in (candidate, target, user):
+            self.assertNotIn(text, script)
+        # root-side steps use absolute paths, validate the root-owned copy, then move it into place
+        for tool in ("/usr/bin/install", "/usr/sbin/visudo -cf", "/bin/mv", "/bin/rm"):
+            self.assertIn(tool, script)
+        self.assertLess(script.index("/usr/sbin/visudo"), script.index("/bin/mv"))
+        self.assertIn('"$tmp"', script)
+        self.assertIn(".$base", script)  # a dot-named temp file: sudo ignores it
 
     def test_lid_setup_needs_confirmation(self) -> None:
         result = self.ul("awake", "lid", "setup", input="n\n")
         self.assertEqual(result.returncode, 1)
         self.assertEqual(self.read("sudo.log"), "")
-        self.assertEqual(self.read("visudo.log"), "")
         self.assertEqual(self.ul("awake", "lid", "setup", input="").returncode, 1)
         self.assertEqual(self.read("sudo.log"), "")
         self.ok("awake", "lid", "setup", "--yes")
-        self.assertTrue(any(call[0] == "install" for call in self.jlog("sudo.log")))
+        self.assertEqual(len(self.jlog("sudo.log")), 1)
 
-    def test_lid_setup_refuses_a_bad_user_name_and_a_rule_visudo_rejects(self) -> None:
-        for name in ("bad name", "a;b", "x\nroot", "a,b"):
-            result = self.ul(
-                "awake", "lid", "setup", "--yes", env={"LOGNAME": name, "USER": name}
-            )
-            self.assertNotEqual(result.returncode, 0, repr(name))
-        self.assertEqual(self.read("sudo.log"), "")
-        (self.fake / "visudo_fail").write_text("")
+    def test_lid_setup_reports_a_failed_install(self) -> None:
+        (self.fake / "sudo_fail_other").write_text("")
         result = self.ul("awake", "lid", "setup", "--yes")
         self.assertEqual(result.returncode, 1)
-        self.assertFalse(any(call[0] == "install" for call in self.jlog("sudo.log")))
+        self.assertIn("not installed", result.stderr)
+
+    def test_lid_setup_ignores_the_environment_for_the_user_name(self) -> None:
+        self.ok(
+            "awake", "lid", "setup", "--yes", env={"LOGNAME": "evil", "USER": "evil"}
+        )
+        self.assertNotIn("evil", self.read("candidate.seen"))
+
+    def test_sudoers_rule_refuses_dangerous_user_names(self) -> None:
+        awake = load_awake()
+        for name in ("bad name", "a;b", "x\nroot", "a,b", "ALL", "ADMINS", "A_B1", ""):
+            with self.subTest(name=name), self.assertRaises(awake.AwakeError):
+                awake.sudoers_rule(name)
+        self.assertIn("haos ALL=(root)", awake.sudoers_rule("haos"))
 
     def test_lid_remove_deletes_only_our_file_after_confirmation(self) -> None:
         self.assertEqual(self.ul("awake", "lid", "remove", input="n\n").returncode, 1)
         self.assertEqual(self.read("sudo.log"), "")
         result = self.ok("awake", "lid", "remove", input="y\n")
         self.assertIn(SUDOERS_PATH, result.stdout)
-        self.assertEqual(self.jlog("sudo.log"), [["rm", "-f", SUDOERS_PATH]])
+        self.assertEqual(self.jlog("sudo.log"), [["/bin/rm", "-f", SUDOERS_PATH]])
 
     def test_lid_status_reports_whether_the_rule_works(self) -> None:
         result = self.ul("awake", "lid", "status")
@@ -730,8 +768,25 @@ class AwakeTests(AwakeBase):
         self.allow_lid()
         result = self.ok("awake", "lid", "status")
         self.assertIn("ready", result.stdout.lower())
-        calls = self.jlog("sudo.log")
-        self.assertIn(["-n", "-l", "/usr/bin/pmset", "-a", "disablesleep", "1"], calls)
+        # a real no-op: the setting is written with its current value
+        self.assertIn(
+            ["-n", "/usr/bin/pmset", "-a", "disablesleep", "0"], self.jlog("sudo.log")
+        )
+        self.assertEqual(self.sleep_disabled(), "0")
+        (self.fake / "sleepdisabled").write_text("1")
+        self.ok("awake", "lid", "status")
+        self.assertEqual(self.sleep_disabled(), "1")
+        self.assertEqual(self.jlog("sudo.log")[-1][-1], "1")
+
+    def test_another_nopasswd_rule_is_not_ours(self) -> None:
+        (self.fake / "any_nopasswd").write_text(
+            ""
+        )  # sudo -l says yes, running pmset says no
+        self.assertEqual(self.ul("awake", "lid", "status").returncode, 1)
+        result = self.ul("awake", "1h", "--lid")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("ul awake lid setup", result.stderr)
+        self.assertIsNone(self.state())
 
     def test_unknown_lid_action_is_a_usage_error(self) -> None:
         self.assertEqual(self.ul("awake", "lid", "nope").returncode, 2)

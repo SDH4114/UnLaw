@@ -2,7 +2,7 @@
 """Keep the Mac from sleeping for a while, until a time or while something runs; lid closed too."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Keep the Mac from sleeping for a while, until a time or while something runs; lid closed too.\nUsage: ul awake [status [--json]]\n       ul awake <duration> | until [YYYY-MM-DD] HH:MM | on | off\n       ul awake --pid PID | -- <command...>\n       ul awake lid setup|remove|status\n       ul awake schedule add HH:MM-HH:MM [--days D | --date YYYY-MM-DD] [--name TEXT] | list [--json] | rm ID|--all\n  <duration>     30m, 2h, 1h30m, 45s or bare minutes (90); at most 7 days\n  until HH:MM    Until that local time (tomorrow if it has passed)\n  on / off       No end, until `off` / stop the session and restore the lid setting\n  --pid PID      While that process lives\n  -- <command>   Run it in the foreground, awake while it runs; exits with its code\nOptions:\n  --display      The screen stays on too (caffeinate -d)\n  --lid          Keep a MacBook awake with the lid closed (needs lid setup, see below)\nA new session replaces the running one, except a `-- command` session (stop that command).\nSchedules: a window (may cross midnight) every day (--days daily|weekdays|weekends|mon,tue,..)\n  or once (--date), with --display/--lid; --lid needs lid setup first. A launchd job\n  (com.unlaw.awake) starts it, never cutting short a longer manual session. A sleeping Mac is\n  not woken at the start: the window begins once the Mac is awake and still inside it.\nLid: caffeinate cannot do this, `pmset -a disablesleep 1` can but needs root. `ul awake lid\n  setup` installs a sudoers rule (/etc/sudoers.d/unlaw-awake) that allows exactly\n  `pmset -a disablesleep 0|1` without a password; `lid remove` deletes it (--yes skips the\n  question). The setting is restored when the session ends; if that fails, `status` says so\n  and `ul awake off` retries. On battery, a closed MacBook in a bag gets hot and drains.\nSettings: storage.root (state in runtime/awake.json).\nExamples: ul awake 2h --display\n          ul awake until 18:30\n          ul awake --lid -- make build\n          ul awake schedule add 23:00-06:00 --days weekdays\n'
+COMMAND_HELP = 'Keep the Mac from sleeping for a while, until a time or while something runs; lid closed too.\nUsage: ul awake [status [--json]]\n       ul awake <duration> | until [YYYY-MM-DD] HH:MM | on | off\n       ul awake --pid PID | -- <command...>\n       ul awake lid setup|remove|status\n       ul awake schedule add HH:MM-HH:MM [--days D | --date YYYY-MM-DD] [--name TEXT] | list [--json] | rm ID|--all\n  <duration>     30m, 2h, 1h30m, 45s or bare minutes (90); at most 7 days\n  until HH:MM    Until that local time (tomorrow if it has passed)\n  on / off       No end, until `off` / stop the session and restore the lid setting\n  --pid PID      While that process lives\n  -- <command>   Run it in the foreground, awake while it runs; exits with its code\nOptions:\n  --display      The screen stays on too (caffeinate -d)\n  --lid          Keep a MacBook awake with the lid closed (needs lid setup, see below)\nA new session replaces the running one, except a `-- command` session (stop that command).\nSchedules: a window (may cross midnight) every day (--days daily|weekdays|weekends|mon,tue,..)\n  or once (--date), with --display/--lid (lid setup first). A launchd job (com.unlaw.awake)\n  starts it, never cutting short a longer manual session; `off` skips the rest of that\n  window. A sleeping Mac is not woken at the start: it begins once awake and inside the window.\nLid: caffeinate cannot do this, `pmset -a disablesleep 1` can but needs root. `ul awake lid\n  setup` installs a sudoers rule (/etc/sudoers.d/unlaw-awake) that allows exactly\n  `pmset -a disablesleep 0|1` without a password; `lid remove` deletes it (--yes skips the\n  question). The setting is restored when the session ends, after a crash or reboot at the\n  next login or any `ul awake` call; if that fails, `status` says so and `off` retries.\n  On battery, a closed MacBook in a bag gets hot and drains.\nSettings: storage.root (state in runtime/awake.json).\nExamples: ul awake 2h --display\n          ul awake --lid -- make build\n          ul awake schedule add 23:00-06:00 --days weekdays\n'
 
 import copy
 import os
@@ -48,11 +48,11 @@ def storage_path(*parts: str) -> Path:
     return root.joinpath(*parts)
 
 import fcntl
-import getpass
 import json
 import math
 import os
 import plistlib
+import pwd
 import re
 import shlex
 import shutil
@@ -107,7 +107,22 @@ STATE_VERSION = 1
 MAX_SECONDS = 7 * 24 * 3600
 PMSET = "/usr/bin/pmset"
 SUDOERS_FILE = "/etc/sudoers.d/unlaw-awake"
-USER_NAME = re.compile(r"[A-Za-z0-9._-]+")
+SUDO = "/usr/bin/sudo"
+# A sudoers user name: not a keyword or alias (those are all upper case: ALL, ADMINS, ...), nothing to quote.
+USER_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]*")
+SUDOERS_ALIAS = re.compile(r"[A-Z][A-Z0-9_]*")
+# Runs as root in ONE sudo call. $1 = the candidate rule, $2 = the target; no user data is in the text itself.
+# The copy is root-owned in a dot-named file (sudo ignores names with a dot) and is checked there before it moves.
+SETUP_SCRIPT = """set -eu
+src=$1; target=$2
+dir=${target%/*}; base=${target##*/}
+tmp=$dir/.$base.new
+trap '/bin/rm -f "$tmp"' EXIT
+/usr/bin/install -m 0440 -o root -g wheel "$src" "$tmp"
+/usr/sbin/visudo -cf "$tmp"
+/bin/mv -f "$tmp" "$target"
+"""
+KINDS = ("duration", "until", "on", "pid", "command")
 DURATION = re.compile(r"(?:([0-9]{1,9})h)?(?:([0-9]{1,9})m)?(?:([0-9]{1,9})s)?")
 SELF = os.path.abspath(__file__)
 KINDS_WITH_TIMER = ("duration", "until")
@@ -244,12 +259,59 @@ def _locked(name: str = "awake.lock") -> Iterator[None]:
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_iso(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _valid_state(data: dict) -> bool:
+    """Types of a state file; a hand-edited or half-written file must not crash anything that reads it."""
+    if data.get("kind") not in KINDS:
+        return False
+    if any(
+        data.get(key) is not None and not _is_int(data.get(key))
+        for key in ("supervisor_pid", "caffeinate_pid", "watch_pid")
+    ):
+        return False
+    if any(
+        key in data and not isinstance(data[key], bool)
+        for key in ("display", "lid", "lid_restore_failed", "starting")
+    ):
+        return False
+    previous = data.get("lid_previous")
+    if previous is not None and not (_is_int(previous) and previous in (0, 1)):
+        return False
+    if any(
+        data.get(key) is not None and not _is_iso(data.get(key))
+        for key in ("started", "ends")
+    ):
+        return False
+    return all(
+        data.get(key) is None or isinstance(data.get(key), str)
+        for key in (
+            "source",
+            "command",
+            "supervisor_lstart",
+            "caffeinate_lstart",
+        )
+    )
+
+
 def _read() -> dict | None:
     try:
         data = json.loads(state_file().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None  # missing or damaged: no session
-    return data if isinstance(data, dict) else None
+    return data if isinstance(data, dict) and _valid_state(data) else None
 
 
 def _write(state: dict) -> None:
@@ -332,19 +394,85 @@ def _command_of(pid: int) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def _lstart(pid: int) -> str:
+    """When the process started (`ps -o lstart=`): a reused pid has another start time."""
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "lstart="],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return " ".join(result.stdout.split()) if result.returncode == 0 else ""
+
+
+def _same_start(pid: int, recorded: object) -> bool:
+    """True when no start time was recorded, or the process still has it."""
+    return not recorded or _lstart(pid) == " ".join(str(recorded).split())
+
+
+def _is_python(word: str) -> bool:
+    return os.path.basename(word).lower().startswith("python")
+
+
+def _seed_arguments(command: str) -> str | None:
+    """The arguments after `<python> <this file>` in a `ps` command line, or None for any other process."""
+    parts = command.split(None, 1)
+    if len(parts) != 2 or not _is_python(parts[0]):
+        return None
+    if parts[1] == SELF:
+        return ""
+    return parts[1][len(SELF) + 1 :] if parts[1].startswith(SELF + " ") else None
+
+
 def is_ours(state: dict) -> bool:
-    """True when the supervisor pid in `state` is alive and `ps` shows it is this command, not a reused pid."""
+    """True when the supervisor pid in `state` is alive, runs this file (not a reused pid) and started when recorded."""
     pid = state.get("supervisor_pid")
     if not _alive(pid):
         return False
-    command = _command_of(pid)
-    if state.get("kind") == "command":
-        return "awake" in command
-    return "_supervise" in command and SELF in command
+    arguments = _seed_arguments(_command_of(pid))
+    if arguments is None:
+        return False
+    if state.get("kind") != "command" and arguments.split(None, 1)[:1] != [
+        "_supervise"
+    ]:
+        return False
+    return _same_start(pid, state.get("supervisor_lstart"))
 
 
-def _caffeinate_is_ours(pid: object) -> bool:
-    return _alive(pid) and "caffeinate" in _command_of(pid)  # type: ignore[arg-type]
+def _is_caffeinate(command: str) -> bool:
+    """caffeinate itself (or a script of that name run by an interpreter), not a process that mentions it."""
+    words = command.split()
+    if not words:
+        return False
+    if os.path.basename(words[0]) == "caffeinate":
+        return True
+    return (
+        _is_python(words[0])
+        and len(words) > 1
+        and os.path.basename(words[1]) == "caffeinate"
+    )
+
+
+def _caffeinate_is_ours(pid: object, started: object = None) -> bool:
+    return (
+        _alive(pid)
+        and _is_caffeinate(_command_of(pid))  # type: ignore[arg-type]
+        and _same_start(pid, started)  # type: ignore[arg-type]
+    )
+
+
+def _signal(pid: int, number: int) -> None:
+    """kill(2) for a pid that may have just exited (back-to-back windows) or is not ours to signal."""
+    try:
+        os.kill(pid, number)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        _log(f"not permitted to signal pid {pid}")
 
 
 def _wait_gone(pid: int, timeout: float) -> bool:
@@ -422,7 +550,8 @@ def set_sleep_disabled(disabled: bool) -> bool:
 
 
 def lid_rule_works() -> bool:
-    return all(_sudo("-l", PMSET, "-a", "disablesleep", value) for value in ("1", "0"))
+    """Run the command itself with the value it already has. `sudo -l` answers yes for ANY NOPASSWD rule."""
+    return set_sleep_disabled(bool(read_sleep_disabled()))
 
 
 def _require_lid_rule() -> None:
@@ -441,6 +570,8 @@ def _base_state(plan: Plan, lid_previous: int | None) -> dict:
         "version": STATE_VERSION,
         "supervisor_pid": None,
         "caffeinate_pid": None,
+        "supervisor_lstart": None,
+        "caffeinate_lstart": None,
         "started": _iso(time.time()),
         "ends": None if plan.ends is None else _iso(plan.ends),
         "kind": plan.kind,
@@ -494,6 +625,8 @@ def live_session() -> dict | None:
         return None  # a marker, not a session (see lid_restore_failed)
     if is_ours(state):
         return state
+    if state.get("starting") and _alive(state["supervisor_pid"]):
+        return None  # another `ul awake` is between disabling the lid and starting its supervisor
     _settle_stale(state)
     return None
 
@@ -501,8 +634,8 @@ def live_session() -> dict | None:
 def _settle_stale(state: dict) -> None:
     """A session whose supervisor died (kill -9, reboot): stop its caffeinate and repay the lid setting."""
     pid = state.get("caffeinate_pid")
-    if _caffeinate_is_ours(pid):
-        os.kill(pid, signal.SIGTERM)
+    if _caffeinate_is_ours(pid, state.get("caffeinate_lstart")):
+        _signal(pid, signal.SIGTERM)
     if state.get("lid_previous") == 0 and not set_sleep_disabled(False):
         _mark_restore_failed(state, owner=state.get("supervisor_pid"))
         return
@@ -551,12 +684,18 @@ def stop_session(state: dict) -> None:
             f"a `ul awake -- {state.get('command')}` session (pid {pid}) is running; stop that command to end it",
             1,
         )
-    os.kill(pid, signal.SIGTERM)
+    _signal(pid, signal.SIGTERM)
     if _wait_gone(pid, 10):
+        # A supervisor that cleaned up removed its state; one that died without cleanup left it.
+        left = read_state()
+        if left is not None and left.get("supervisor_pid") == pid:
+            _settle_stale(left)
         return
     if is_ours(state):
-        os.kill(pid, signal.SIGKILL)
+        _signal(pid, signal.SIGKILL)
         _wait_gone(pid, 5)
+    if _alive(pid) and is_ours(state):
+        raise AwakeError(f"could not stop the session (pid {pid})", 1)
     _settle_stale(state)
 
 
@@ -586,7 +725,20 @@ def _prepare(plan: Plan) -> tuple[int | None, str | None]:
             _note(
                 "warning: on battery power; a closed MacBook stays awake and gets hot in a bag and drains the battery"
             )
+        if lid_previous == 0:
+            # Written first: if this process dies right after the next call, the next `ul awake` run or the
+            # login job finds the marker (dead pid, lid_previous 0) and repays the lid.
+            write_state(
+                {
+                    **_pending_state(plan, lid_previous),
+                    "starting": True,
+                }
+            )
         if not set_sleep_disabled(True):
+            if lid_previous == 0:
+                clear_state(
+                    owner=os.getpid()
+                )  # nothing was disabled, so nothing is owed
             raise AwakeError(
                 "could not run `sudo -n pmset -a disablesleep 1`: run `ul awake lid setup`",
                 1,
@@ -594,45 +746,91 @@ def _prepare(plan: Plan) -> tuple[int | None, str | None]:
     return lid_previous, replaced
 
 
+def _pending_state(plan: Plan, lid_previous: int | None) -> dict:
+    """The record of a start in progress: owned by this process, so a crash leaves a debt others can repay."""
+    return {
+        **_base_state(plan, lid_previous),
+        "supervisor_pid": os.getpid(),
+        "supervisor_lstart": _lstart(os.getpid()),
+    }
+
+
 def _repay_lid(lid_previous: int | None) -> None:
     if lid_previous == 0:
         set_sleep_disabled(False)
 
 
-def start_session(plan: Plan) -> str | None:
+def _lid_owed() -> bool:
+    """True when a session (or a failed restore) still has to give the lid setting back."""
+    state = read_state()
+    return state is not None and state.get("lid_previous") == 0
+
+
+def _ensure_settle_job() -> None:
+    """A lid session leaves a login job behind: after a crash or reboot it repays the lid (RunAtLoad)."""
+    if _job_path().exists():
+        return
+    try:
+        with _locked(SCHEDULE_LOCK):
+            sync_job(load_schedules())
+    except AwakeError as error:
+        _note(
+            f"could not install the login job that repays the lid after a crash: {error}"
+        )
+
+
+def start_session(plan: Plan, settle_job: bool = True) -> str | None:
     """Start a detached session (every kind except "command"). Returns the description of a replaced session."""
     lid_previous, replaced = _prepare(plan)
-    caffeinate = shutil.which("caffeinate")
-    spec = {
-        "state": _base_state(plan, lid_previous),
-        "caffeinate": caffeinate,
-        "seconds": plan.seconds,
-        "watch_pid": plan.watch_pid,
-    }
-    supervisor = subprocess.Popen(
-        [sys.executable, SELF, "_supervise", json.dumps(spec)],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-        close_fds=True,
-    )
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        state = read_state()
-        if (
+    pending = _pending_state(plan, lid_previous)
+    try:
+        caffeinate = shutil.which("caffeinate")
+        spec = {
+            "state": _base_state(plan, lid_previous),
+            "caffeinate": caffeinate,
+            "seconds": plan.seconds,
+            "watch_pid": plan.watch_pid,
+        }
+        try:
+            supervisor = subprocess.Popen(
+                [sys.executable, SELF, "_supervise", json.dumps(spec)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+            )
+        except OSError as error:
+            raise AwakeError(f"could not start the supervisor: {error}", 1) from error
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            state = read_state()
+            if (
+                state
+                and state.get("supervisor_pid") == supervisor.pid
+                and state.get("caffeinate_pid")
+            ):
+                break
+            if supervisor.poll() is not None:
+                break
+            time.sleep(0.05)
+        else:
+            state = None
+        if not (
             state
             and state.get("supervisor_pid") == supervisor.pid
             and state.get("caffeinate_pid")
         ):
-            return replaced
-        if supervisor.poll() is not None:
-            break
-        time.sleep(0.05)
-    if supervisor.poll() is None:
-        supervisor.terminate()
-    _repay_lid(lid_previous)
-    raise AwakeError("the session did not start (see runtime/awake.log)", 1)
+            if supervisor.poll() is None:
+                supervisor.terminate()
+            raise AwakeError("the session did not start (see runtime/awake.log)", 1)
+    except BaseException:
+        # Whatever stopped the start (an error, Ctrl-C): give the lid back and drop the record of the start.
+        _finish(pending)
+        raise
+    if plan.lid and lid_previous == 0 and settle_job:
+        _ensure_settle_job()
+    return replaced
 
 
 def supervise(spec: dict) -> int:
@@ -659,7 +857,13 @@ def supervise(spec: dict) -> int:
         _note(f"could not start caffeinate: {error}")
         _repay_lid(state.get("lid_previous"))
         return 1
-    state = {**state, "supervisor_pid": os.getpid(), "caffeinate_pid": process.pid}
+    state = {
+        **state,
+        "supervisor_pid": os.getpid(),
+        "caffeinate_pid": process.pid,
+        "supervisor_lstart": _lstart(os.getpid()),
+        "caffeinate_lstart": _lstart(process.pid),
+    }
     try:
         write_state(state)
         while process.poll() is None and not stopped:
@@ -684,18 +888,20 @@ def run_command(plan: Plan) -> int:
     lid_previous, replaced = _prepare(plan)
     if replaced:
         print(f"Replaced: {replaced}")
+    state = _pending_state(plan, lid_previous)
     try:
         child = subprocess.Popen(plan.command)
     except FileNotFoundError:
-        _repay_lid(lid_previous)
+        _finish(state)
         print(f"unlaw awake: command not found: {plan.command[0]}", file=sys.stderr)
         return 127
     except OSError as error:
-        _repay_lid(lid_previous)
+        _finish(state)
         print(f"unlaw awake: cannot run {plan.command[0]}: {error}", file=sys.stderr)
         return 126
-    state = _base_state(plan, lid_previous)
-    state["supervisor_pid"] = os.getpid()
+    except BaseException:
+        _finish(state)
+        raise
     caffeinate = None
     previous: dict[int, object] = {}
     try:
@@ -718,7 +924,10 @@ def run_command(plan: Plan) -> int:
             stderr=subprocess.DEVNULL,
         )
         state["caffeinate_pid"] = caffeinate.pid
+        state["caffeinate_lstart"] = _lstart(caffeinate.pid)
         write_state(state)
+        if plan.lid and lid_previous == 0:
+            _ensure_settle_job()
         code = child.wait()
     finally:
         if child.poll() is None:
@@ -786,6 +995,8 @@ def stop_command() -> int:
     if session is not None:
         description = describe(session)
         stop_session(session)
+        if str(session.get("source", "")).startswith("schedule:"):
+            _skip_open_windows(session)
         marker = read_state()
         if marker and marker.get("lid_restore_failed"):
             print(
@@ -797,12 +1008,14 @@ def stop_command() -> int:
                 file=sys.stderr,
             )
             return 1
+        _drop_idle_job()
         print(f"Awake stopped ({description}).")
         return 0
     marker = read_state()
     if marker and marker.get("lid_restore_failed"):
         if set_sleep_disabled(False):
             clear_state()
+            _drop_idle_job()
             print("Lid sleep restored.")
             return 0
         raise AwakeError(
@@ -828,17 +1041,22 @@ def _confirm(yes: bool) -> bool:
 
 
 def sudoers_rule(user: str) -> str:
-    if not USER_NAME.fullmatch(user):
+    if not USER_NAME.fullmatch(user) or SUDOERS_ALIAS.fullmatch(user):
         raise AwakeError(
-            f"user name {user!r} has characters that are not allowed in the sudoers rule"
+            f"user name {user!r} cannot be used in the sudoers rule (odd characters, or a sudoers keyword like ALL)"
         )
     return f"{user} ALL=(root) NOPASSWD: {PMSET} -a disablesleep 0, {PMSET} -a disablesleep 1"
 
 
+def _sudo_path() -> str:
+    """The absolute sudo that gets the password. UNLAW_AWAKE_SUDO replaces it in tests only."""
+    return os.environ.get("UNLAW_AWAKE_SUDO") or SUDO
+
+
 def lid_setup(yes: bool) -> int:
     try:
-        user = getpass.getuser()
-    except (KeyError, OSError) as error:
+        user = pwd.getpwuid(os.getuid()).pw_name  # the account database, not $USER
+    except KeyError as error:
         raise AwakeError(f"could not find the current user name: {error}", 1) from error
     rule = sudoers_rule(user)
     print(f"Will install a sudoers rule in {SUDOERS_FILE} (root:wheel, mode 0440):")
@@ -847,42 +1065,25 @@ def lid_setup(yes: bool) -> int:
         "It lets you run exactly those two pmset commands without a password, nothing else."
     )
     print(
-        "Steps: check it with `visudo -cf`, then `sudo install ...` (sudo asks for your password once)."
+        "One sudo call (it asks for your password once) copies it as root to a hidden file in the same folder,"
     )
+    print("checks that copy with `visudo -cf`, and only then moves it into place.")
     if not _confirm(yes):
         print("Cancelled.")
         return 1
     content = f"# Written by `ul awake lid setup`. Remove with `ul awake lid remove`.\n{rule}\n"
-    visudo = shutil.which("visudo") or "/usr/sbin/visudo"
     with tempfile.TemporaryDirectory(prefix="unlaw-awake-") as folder:
         candidate = Path(folder) / "unlaw-awake"
         candidate.write_text(content, encoding="utf-8")
         candidate.chmod(0o600)
         try:
-            check = subprocess.run(
-                [visudo, "-cf", str(candidate)],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError as error:
-            raise AwakeError(f"could not run visudo: {error}", 1) from error
-        if check.returncode != 0:
-            detail = (check.stdout + check.stderr).strip()
-            raise AwakeError(
-                f"visudo rejected the rule, nothing was installed: {detail}", 1
-            )
-        try:
             install = subprocess.run(
                 [
-                    "sudo",
-                    "install",
-                    "-m",
-                    "0440",
-                    "-o",
-                    "root",
-                    "-g",
-                    "wheel",
+                    _sudo_path(),
+                    "/bin/sh",
+                    "-c",
+                    SETUP_SCRIPT,
+                    "sh",
                     str(candidate),
                     SUDOERS_FILE,
                 ],
@@ -891,7 +1092,10 @@ def lid_setup(yes: bool) -> int:
         except OSError as error:
             raise AwakeError(f"could not run sudo: {error}", 1) from error
     if install.returncode != 0:
-        raise AwakeError("sudo could not install the rule", 1)
+        raise AwakeError(
+            "the rule was not installed (sudo, install or visudo failed; nothing was changed)",
+            1,
+        )
     print(f"Installed {SUDOERS_FILE}. `ul awake --lid` is ready.")
     return 0
 
@@ -905,7 +1109,9 @@ def lid_remove(yes: bool) -> int:
         print("Cancelled.")
         return 1
     try:
-        result = subprocess.run(["sudo", "rm", "-f", SUDOERS_FILE], check=False)
+        result = subprocess.run(
+            [_sudo_path(), "/bin/rm", "-f", SUDOERS_FILE], check=False
+        )
     except OSError as error:
         raise AwakeError(f"could not run sudo: {error}", 1) from error
     if result.returncode != 0:
@@ -935,60 +1141,172 @@ def _damaged(path: Path, why: str) -> AwakeError:
     return AwakeError(f"{path} is damaged ({why}); fix or delete it", 1)
 
 
-def _valid_schedule(item: object) -> bool:
-    if not isinstance(item, dict):
+SCHEDULE_KEYS = (
+    "id",
+    "start",
+    "end",
+    "days",
+    "date",
+    "display",
+    "lid",
+    "name",
+    "created",
+)
+
+
+def _valid_clock(value: object) -> bool:
+    if not isinstance(value, str) or not CLOCK.fullmatch(value):
         return False
-    days = item.get("days")
-    day = item.get("date")
     try:
-        if day is not None:
-            date.fromisoformat(day)
-    except (TypeError, ValueError):
+        _hm(value)
+    except ValueError:
         return False
+    return True
+
+
+def _valid_day(value: object) -> bool:
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value
+    ):
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _valid_schedule(item: object) -> bool:
+    """Every key present with the right type and range: the file may have been edited by hand."""
+    if not isinstance(item, dict) or any(key not in item for key in SCHEDULE_KEYS):
+        return False
+    days, day = item["days"], item["date"]
     return (
-        isinstance(item.get("id"), int)
-        and all(
-            isinstance(item.get(key), str) and CLOCK.fullmatch(item[key])
-            for key in ("start", "end")
-        )
+        _is_int(item["id"])
+        and item["id"] >= 1
+        and _valid_clock(item["start"])
+        and _valid_clock(item["end"])
+        and item["start"] != item["end"]
         and (
             days is None
             or (
                 isinstance(days, list)
-                and all(isinstance(d, int) and 0 <= d <= 6 for d in days)
+                and bool(days)
+                and len(set(days)) == len(days)
+                and all(_is_int(d) and 0 <= d <= 6 for d in days)
             )
         )
+        and (day is None or _valid_day(day))
+        and not (days is not None and day is not None)
+        and isinstance(item["display"], bool)
+        and isinstance(item["lid"], bool)
+        and isinstance(item["name"], str)
+        and isinstance(item["created"], str)
     )
 
 
-def load_schedules() -> list[dict]:
-    """The stored schedules; a missing file is none, a damaged one an error (it is never overwritten)."""
+def _valid_skip(entry: object) -> bool:
+    return (
+        isinstance(entry, dict)
+        and _is_int(entry.get("id"))
+        and _is_iso(entry.get("until"))
+    )
+
+
+def load_document() -> tuple[list[dict], list[dict]]:
+    """(schedules, skipped windows). A missing file is empty, a damaged one an error (it is never overwritten)."""
     path = schedules_file()
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return []
+        return [], []
     except OSError as error:
         raise AwakeError(f"cannot read {path}: {error}", 1) from error
     try:
         data = json.loads(text)
     except ValueError as error:
         raise _damaged(path, "not JSON") from error
-    items = data.get("schedules") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or data.get("version") != SCHEDULE_VERSION:
+        raise _damaged(path, "unknown version")
+    items, skipped = data.get("schedules"), data.get("skipped", [])
     if not isinstance(items, list) or not all(_valid_schedule(i) for i in items):
-        raise _damaged(path, "unexpected content")
-    return items
+        raise _damaged(path, "a schedule has a missing or wrong field")
+    if len({i["id"] for i in items}) != len(items):
+        raise _damaged(path, "duplicate ids")
+    if not isinstance(skipped, list) or not all(_valid_skip(e) for e in skipped):
+        raise _damaged(path, "bad skipped list")
+    return items, skipped
 
 
-def _save_schedules(items: list[dict]) -> None:
+def load_schedules() -> list[dict]:
+    return load_document()[0]
+
+
+def _save_schedules(items: list[dict], skipped: list[dict] | None = None) -> None:
+    """Write the schedules; `skipped` defaults to the stored list, minus entries of schedules that are gone."""
+    if skipped is None:
+        skipped = load_document()[1]
+    ids = {i["id"] for i in items}
+    skipped = [e for e in skipped if e["id"] in ids]
     path = schedules_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, temporary = tempfile.mkstemp(prefix=".awake-schedules.", dir=path.parent)
     with os.fdopen(handle, "w", encoding="utf-8") as stream:
-        json.dump({"version": SCHEDULE_VERSION, "schedules": items}, stream, indent=2)
+        json.dump(
+            {"version": SCHEDULE_VERSION, "schedules": items, "skipped": skipped},
+            stream,
+            indent=2,
+        )
         stream.flush()
         os.fsync(stream.fileno())
     os.replace(temporary, path)
+
+
+def _is_skipped(skipped: list[dict], schedule_id: int, end: float) -> bool:
+    """`off` was run during this very window of this schedule."""
+    return any(
+        e["id"] == schedule_id
+        and abs(datetime.fromisoformat(e["until"]).timestamp() - end) < 1
+        for e in skipped
+    )
+
+
+def _skip_open_windows(session: dict) -> None:
+    """`ul awake off` ended a schedule's session: its window, and every other open one, must not restart."""
+    now = time.time()
+    try:
+        with _locked(SCHEDULE_LOCK):
+            items, skipped = load_document()
+            wanted: dict[tuple[int, int], dict] = {}
+            source = str(session.get("source", ""))
+            if source.partition(":")[2].isdigit() and session.get("ends"):
+                entry = {"id": int(source.partition(":")[2]), "until": session["ends"]}
+                wanted[(entry["id"], round(_ts(entry["until"])))] = entry
+            for item in items:
+                window = open_window(item, now)
+                if window:
+                    entry = {"id": item["id"], "until": _iso(window[1])}
+                    wanted[(item["id"], round(window[1]))] = entry
+            known = {(e["id"], round(_ts(e["until"]))) for e in skipped}
+            added = [e for key, e in wanted.items() if key not in known]
+            if added:
+                _save_schedules(items, skipped + added)
+    except AwakeError as error:
+        _log(f"could not record the skipped window: {error}")
+
+
+def _ts(text: str) -> float:
+    return datetime.fromisoformat(text).timestamp()
+
+
+def _drop_idle_job() -> None:
+    """The login job without schedules exists only to repay the lid: once nothing is owed it goes."""
+    try:
+        with _locked(SCHEDULE_LOCK):
+            if not load_schedules() and not _lid_owed():
+                remove_job()
+    except AwakeError as error:
+        _log(f"could not check the login job: {error}")
 
 
 def parse_window(text: str) -> tuple[str, str]:
@@ -1166,7 +1484,6 @@ def _write_job(items: list[dict]) -> Path:
         "Label": JOB_LABEL,
         "ProgramArguments": [os.path.abspath(binary), "awake", "_scheduled"],
         "EnvironmentVariables": environment,
-        "StartCalendarInterval": calendar_intervals(items),
         # Runs at load too, so a window that is already open starts right away.
         "RunAtLoad": True,
         # The supervisor of a session is a child of this job; launchd must not kill it when the job exits.
@@ -1174,6 +1491,10 @@ def _write_job(items: list[dict]) -> Path:
         "StandardOutPath": str(log),
         "StandardErrorPath": str(log),
     }
+    if (
+        items
+    ):  # without schedules the job only runs at load, to repay a lid left disabled
+        plist["StartCalendarInterval"] = calendar_intervals(items)
     path = _job_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -1185,16 +1506,17 @@ def _write_job(items: list[dict]) -> Path:
 
 
 def remove_job() -> None:
-    """Boot the job out of launchd and delete its plist."""
+    """Delete the plist, then boot the job out by label (that works without the file)."""
     path = _job_path()
     if path.exists():
-        _launchctl("bootout", _target())
         path.unlink(missing_ok=True)
+        _launchctl("bootout", _target())
 
 
 def sync_job(items: list[dict]) -> None:
-    """Make launchd match `items`: write the plist and reload it, or remove the job when nothing is scheduled."""
-    if not items:
+    """Make launchd match `items`: write the plist and reload it. No schedules: the job stays only while a
+    lid session or an unrepaid lid needs the login run, otherwise it is removed."""
+    if not items and not _lid_owed():
         remove_job()
         return
     path = _write_job(items)
@@ -1365,13 +1687,24 @@ def _parse_now(text: str | None) -> float:
         raise AwakeError(f"not an ISO time: {text!r}") from error
 
 
-def _start_due(items: list[dict], now: float) -> None:
+def _settle() -> None:
+    """Repay a lid that a crashed session or a failed restore left disabled (stale state is settled by the lookup)."""
+    if live_session() is None:
+        _lid_debt()
+
+
+def _start_due(items: list[dict], now: float, skipped: list[dict]) -> None:
     """Start a session for the open window that ends last, unless a better session already runs."""
-    due = [(window[1], item) for item in items if (window := open_window(item, now))]
+    due = []
+    for item in items:
+        window = open_window(item, now)
+        if window and not _is_skipped(skipped, item["id"], window[1]):
+            due.append((window[1], item))
     if not due:
         return
     end, item = max(due, key=lambda pair: pair[0])
     source = f"schedule:{item['id']}"
+    display, lid = bool(item.get("display")), bool(item.get("lid"))
     current = live_session()
     if current is not None:
         if current.get("kind") == "command":
@@ -1389,8 +1722,15 @@ def _start_due(items: list[dict], now: float) -> None:
             return
         if current.get("source") == source and abs(current_end - end) < 1:
             return
-    lid = bool(item.get("lid"))
+        # The longer session replaces a shorter one: it keeps what that one held.
+        display = display or bool(current.get("display"))
+        lid = lid or bool(current.get("lid"))
     if lid and not lid_rule_works():
+        if current is not None and current.get("lid"):
+            _note(
+                f"{source} not started: the running session holds the lid and the sudoers rule is gone (run `ul awake lid setup`)"
+            )
+            return
         _note(
             f"{source}: the sudoers rule for --lid is gone, keeping awake with the lid open only (run `ul awake lid setup`)"
         )
@@ -1399,11 +1739,11 @@ def _start_due(items: list[dict], now: float) -> None:
         "until",
         seconds=max(1, math.ceil(end - now)),
         ends=end,
-        display=bool(item.get("display")),
+        display=display,
         lid=lid,
         source=source,
     )
-    replaced = start_session(plan)
+    replaced = start_session(plan, settle_job=False)
     _log(
         f"started {source} until {_iso(end)}"
         + (f" (replaced: {replaced})" if replaced else "")
@@ -1418,21 +1758,29 @@ def run_scheduled(args: list[str]) -> int:
     now = _parse_now(now_text)
     code = 0
     with _locked(SCHEDULE_LOCK):
-        items = load_schedules()
-        live = [i for i in items if not _is_over(i, now)]
         try:
-            _start_due(live, now)
+            _settle()  # first: a lid left disabled by a crash is repaid even when no window is open
         except AwakeError as error:
             _note(str(error))
             code = 1
-        if len(live) != len(items):
-            _log(f"dropped {len(items) - len(live)} past one-off schedule(s)")
-            _save_schedules(live)
-            if live:
-                # Rewritten, not reloaded: bootout would kill this very run; launchd reads it at the next load.
-                _write_job(live)
-            else:
-                remove_job()  # last, because launchd stops this job as part of the bootout
+        items, skipped = load_document()
+        live = [i for i in items if not _is_over(i, now)]
+        still = [e for e in skipped if _ts(e["until"]) > now]
+        try:
+            _start_due(live, now, still)
+        except AwakeError as error:
+            _note(str(error))
+            code = 1
+        dropped = len(live) != len(items)
+        if dropped or len(still) != len(skipped):
+            if dropped:
+                _log(f"dropped {len(items) - len(live)} past one-off schedule(s)")
+            _save_schedules(live, still)
+        if not live and not _lid_owed():
+            remove_job()  # last, because launchd stops this job as part of the bootout
+        elif dropped:
+            # Rewritten, not reloaded: bootout would kill this very run; launchd reads it at the next load.
+            _write_job(live)
     return code
 
 

@@ -53,6 +53,23 @@ fn awake_job_path() -> std::path::PathBuf {
     home().join("Library").join("LaunchAgents").join(format!("{AWAKE_LABEL}.plist"))
 }
 
+/// The lid rule of `ul awake lid setup` (awake.py `SUDOERS_FILE`); UNLAW_AWAKE_SUDOERS replaces the path in tests.
+fn lid_rule_file() -> std::path::PathBuf {
+    env::var_os("UNLAW_AWAKE_SUDOERS").map(std::path::PathBuf::from).unwrap_or_else(|| "/etc/sudoers.d/unlaw-awake".into())
+}
+
+/// Says that the root-owned lid rule is not removed with Unlaw (it only checks that the file exists, never runs sudo).
+pub fn note_lid_rule() {
+    let file = lid_rule_file();
+    if fs::symlink_metadata(&file).is_ok() {
+        println!(
+            "Kept {} (the lid rule of `ul awake --lid`; changing it needs root): remove it with `sudo rm {}` (`ul awake lid remove` does the same while the awake command is installed).",
+            file.display(),
+            file.display()
+        );
+    }
+}
+
 /// Boots the `ul awake schedule` job out of launchd and deletes its plist; false when there was none.
 pub fn remove_awake_job() -> io::Result<bool> {
     let plist = awake_job_path();
@@ -317,6 +334,7 @@ fn remove_everything(yes: bool) -> i32 {
         let result = binaries.iter().try_for_each(|name| remove_tree(&bin.join(name)));
         report(format!("{} from {}", binaries.join(", "), home_relative(&bin)), result);
     }
+    note_lid_rule();
     if code == 0 {
         println!("Unlaw is removed. Open a new terminal so the shell forgets it.");
     }
@@ -385,6 +403,7 @@ fn remove_commands(names: &[&str], yes: bool) -> i32 {
                 code = 1;
             }
         }
+        note_lid_rule();
     }
     // A default command that stays in core.features would be seeded again on the next run.
     let seeds: Vec<&str> = unique.iter().copied().filter(|name| features::find(name).is_some_and(|feature| feature.seed)).collect();
