@@ -63,8 +63,24 @@ Usage: ul timer
 Example: ul timer
 ''',
     "clip": '''Clipboard history in the background: list, search and copy again.
-Usage: ul clip
-Example: ul clip
+Usage: ul clip [list [N] [--json]]
+       ul clip search <words...> [--json] | show <n> | copy <n> | rm <n> | clear [--yes]
+       ul clip on | off | status | pause | resume
+  list        Numbered, newest first (default 20 items, one-line previews)
+  search      Items that contain every word, any case; numbers stay valid for copy/show/rm
+  copy <n>    Put item n back on the clipboard (it becomes the newest)
+  show <n>    The full text (control characters escaped on a terminal)
+  clear       Delete all items after a y/N question (--yes skips it)
+  on / off    Install / remove the background watcher (LaunchAgent com.unlaw.clip); off keeps the history
+  pause       The watcher keeps running but ignores copies until `resume`
+Text only (no images or files), at most 100 KB per item, duplicates move to the top, at most
+clip.max_items items (default 200); clip.interval (default 1 s) is how often the pasteboard is checked.
+Privacy: items marked concealed, transient or auto-generated (password managers set these) are
+never stored. The history is a plain file with mode 0600 in <storage.root>/clip/; use pause when
+copying something sensitive that an app does not mark. Needs macOS osascript.
+Examples: ul clip on
+  ul clip search token
+  ul clip copy 3
 ''',
     "weather": '''Weather now and the forecast from Open-Meteo (no API key).
 Usage: ul weather

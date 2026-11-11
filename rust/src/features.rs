@@ -255,6 +255,14 @@ pub fn apply(current: &[&str], next: &[&'static str], no_build: bool) -> i32 {
         }
         crate::remove::note_lid_rule();
     }
+    // The watcher of `ul clip on` would keep calling the removed command.
+    if removed.contains(&"clip") && !kept.contains(&"clip") {
+        match crate::remove::remove_clip_job() {
+            Ok(true) => println!("Removed the clipboard history's background watcher."),
+            Ok(false) => {}
+            Err(error) => eprintln!("unlaw features: could not remove the clipboard history's background watcher: {error}"),
+        }
+    }
     for name in kept {
         println!("Kept commands/{name}: you edited it. Delete the folder to remove it.");
     }
