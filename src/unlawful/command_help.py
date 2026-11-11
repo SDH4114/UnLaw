@@ -71,8 +71,25 @@ Usage: ul weather
 Example: ul weather
 ''',
     "sys": '''Computer stats: CPU, GPU, RAM, disk, battery and charge cycles.
-Usage: ul sys
-Example: ul sys
+Usage: ul sys [cpu|gpu|mem|disk|battery|top] [--json] [--watch [seconds]]
+  (none)         One-screen summary of everything below
+  cpu            Usage (user/system), load average, performance/efficiency cores
+  gpu            GPU utilization (Apple Silicon)
+  mem            Used (app, wired, compressed), swap, memory pressure
+  disk           Mounted volumes: used, free, a bar
+  battery        Charge, time left, cycles, condition, max capacity (laptops only)
+  top            Top 5 processes by CPU and by memory
+Options:
+  --json             Machine-readable output: stable keys, numbers, null for n/a
+  --watch [seconds]  Refresh in place (default 2); Ctrl+C exits
+Notes:
+  CPU takes two samples, about 1.3 s. A tool that is missing or fails shows as n/a.
+  Everything is read-only and needs no sudo; CPU and fan temperatures would, so they are left out.
+  Colors only on a terminal; NO_COLOR turns them off.
+Examples:
+  ul sys
+  ul sys battery --json
+  ul sys --watch 5 cpu
 ''',
     "awake": '''Keep the Mac from sleeping for a while, until a time or while something runs; lid closed too.
 Usage: ul awake [status [--json]]
