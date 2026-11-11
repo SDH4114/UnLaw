@@ -1,0 +1,31 @@
+  PID  %CPU    RSS COMM
+    1   0.6  23248 /sbin/launchd
+  544   0.5  37408 /usr/libexec/logd
+  546   0.0   2112 /usr/libexec/smd
+  616  19.7 211856 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+  745   0.0   2208 /System/Library/CoreServices/Software Update.app/Contents/Resources/suhelperd
+  795   6.9  33664 /usr/sbin/coreaudiod
+  801   0.0   5184 Core Audio Driver (BlackHole2ch.driver)
+  805   0.0   6400 Core Audio Driver (MSTeamsAudioDevice.driver)
+  807   0.0   3392 Core Audio Driver (VoicemodAudioDevice.driver)
+ 1301   3.8  58640 /System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter
+ 1626   0.0 144064 /System/Library/CoreServices/Finder.app/Contents/MacOS/Finder
+ 1635   2.7  62864 /System/Applications/Siri AI.app/Contents/MacOS/Siri AI
+26106  27.9 119840 /Applications/Zen.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container
+26110   0.2 293600 /Applications/Zen.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container
+36102  91.9 228080 /System/Library/PrivateFrameworks/MediaAnalysis.framework/Versions/A/mediaanalysisd
+52225   0.0 231952 /Applications/Zen.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container
+54414   0.0 238160 /Applications/Zen.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container
+54433   0.0 231984 /Applications/Zen.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container
+56374   7.0  16368 /System/Library/Frameworks/CoreGraphics.framework/Versions/A/XPCServices/CGPDFService.xpc/Contents/MacOS/CGPDFService
+56376   3.3   3328 /bin/zsh
+56377  22.9  17648 /opt/homebrew/Cellar/python@3.14/3.14.8/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python
+65766   2.6 295024 /Applications/Claude.app/Contents/MacOS/Claude
+65871 201.8 522928 /Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)
+66173   0.0 165728 /System/Applications/Reminders.app/Contents/MacOS/Reminders
+69884   9.7 431728 /Applications/Zen.app/Contents/MacOS/zen
+69950  36.3 110928 /Applications/Zen.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Zen GPU Helper
+69961   0.0 244304 /Applications/Zen.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container
+69989   4.2 489584 /Applications/Zen.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container
+89551   0.4 349440 /Applications/WhatsApp.app/Contents/MacOS/WhatsApp
+64806  18.9 545440 claude

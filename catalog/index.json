@@ -94,7 +94,7 @@
   {
    "name": "sys",
    "summary": "Computer stats: CPU, GPU, RAM, disk, battery and charge cycles.",
-   "sha256": "9816132c2bfe5466c9965d62f3714430d8cc06f930100c87a7fd3d81cef24a8e"
+   "sha256": "55e0a5a233eb604172674e234680a31a87176b30cccbdc8b15d27d26fb7a55c8"
   },
   {
    "name": "tg",
