@@ -59,16 +59,44 @@ Examples:
   ula server
 ''',
     "timer": '''Countdown timers and alarms with macOS notifications.
-Usage: ul timer
-Example: ul timer
+Usage: ul timer <duration> [label...]   Start a timer in the background
+       ul timer at HH:MM [label...]     Alarm at that time (tomorrow if it has passed)
+       ul timer [list] [--json]         Running timers with the time left
+       ul timer cancel ID|--all         Stop one timer or all of them
+       ul timer wait <duration> [label...]   Count down here (Ctrl+C cancels)
+  <duration>   30s, 5m, 1h30m or bare minutes (25); at most 7 days
+A timer runs as a detached process, so you can close the terminal. When it ends a
+notification appears (with a sound unless timer.sound is false). `wait` shows the
+countdown on one line and notifies too. Labels must not contain control characters.
+State: storage.root/runtime/timers.json. Entries whose process is gone are dropped.
+Needs: macOS `osascript` for the notification.
+Settings: timer.sound (true/false), storage.root.
+Examples:
+  ul timer 25m write report
+  ul timer at 18:30 leave
+  ul timer wait 90s tea
+  ul timer cancel 2
 ''',
     "clip": '''Clipboard history in the background: list, search and copy again.
 Usage: ul clip
 Example: ul clip
 ''',
     "weather": '''Weather now and the forecast from Open-Meteo (no API key).
-Usage: ul weather
-Example: ul weather
+Usage: ul weather [city...] [--days N] [--units metric|imperial] [--json]
+  city...            City name, several words allowed (default: weather.city)
+  --days N           Days in the table, today included: 1-16 (default 3)
+  --units U          metric (C, km/h, mm) or imperial (F, mph, inch); default weather.units
+  --json             Print the location, current conditions and daily rows as JSON
+Shows the place, the conditions now and a table with conditions, high/low, chance
+of rain, sunrise and sunset per day. The first matching city of the Open-Meteo
+geocoder is used; add the country to be exact ("Paris France").
+Needs the internet (api.open-meteo.com, geocoding-api.open-meteo.com); nothing is
+cached or stored, and no personal data is sent besides the city name.
+Settings: weather.city (set it with: ul config set weather.city "Baku"), weather.units.
+Examples:
+  ul weather Baku
+  ul weather New York --days 7 --units imperial
+  ul weather --json
 ''',
     "sys": '''Computer stats: CPU, GPU, RAM, disk, battery and charge cycles.
 Usage: ul sys

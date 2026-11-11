@@ -104,12 +104,12 @@
   {
    "name": "timer",
    "summary": "Countdown timers and alarms with macOS notifications.",
-   "sha256": "df1887f16ad1d9adee483b660aa36d728b4520c5969d29043ad276214cf6f63e"
+   "sha256": "dc8e864e7c9d0058e2bb7dc2a90a5d9b9d8575702c112b01c4e09772a1f9beb4"
   },
   {
    "name": "weather",
    "summary": "Weather now and the forecast from Open-Meteo (no API key).",
-   "sha256": "e1027e037ff94eaaaf23c5d9c5be66bce9d2c0fff090646da52abb331f060999"
+   "sha256": "9c031cdc04fc8b2a9cb8485976fb5303183d61f841803e56bb90d293566448c0"
   },
   {
    "name": "work",
