@@ -782,8 +782,12 @@ ul clip pause                 # ignore copies for now; resume, status
 ```
 Text only, up to 100 KB per item, duplicates move to the top, `clip.max_items` (200) items.
 Copies that apps mark concealed, transient or auto-generated (password managers) are never stored.
-The history is a plain file (mode 0600) in `<storage.root>/clip/`; `pause` before copying secrets
-that an app does not mark. `clip.interval` (1 s) is the check interval.
+The history is plain text (file mode 0600) in `<storage.root>/clip/`; if `storage.root` sits in a synced
+folder (iCloud, Dropbox, a vault) it syncs too. `pause` before copying secrets that an app does not mark;
+`clear` also deletes the `history.json.damaged-*` copies. `clip.interval` (1 s) is the check interval.
+The watcher is exempt from `core.command_timeout`. If copies stop being stored (for example macOS denies
+the background helper pasteboard access), `ul clip status` shows the newest item and the watcher log
+(`clip/watch.log`); macOS gives no direct way to ask whether access is denied.
 
 ### ul sys
 Computer stats without root: `ul sys` shows model, chip, macOS, uptime, CPU, GPU, memory (app, wired, compressed, swap, pressure), disks, battery (charge, cycles, condition, max capacity) and the top 5 processes. `ul sys cpu|gpu|mem|disk|battery|top` shows one part, `--json` gives stable keys with numbers, `--watch [seconds]` refreshes in place (Ctrl+C to quit). A tool that is missing or fails shows as n/a. Colors only on a terminal (NO_COLOR turns them off).

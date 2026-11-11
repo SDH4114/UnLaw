@@ -291,7 +291,9 @@ pub fn main_with(argv: Vec<String>) -> i32 {
             }
         };
     };
-    let timeout = config.int("core.command_timeout").max(0) as u64;
+    // The watcher of `ul clip on` runs for as long as the Mac is logged in; a timeout would only restart it.
+    let background = name == "clip" && rest.first().is_some_and(|word| word == "_watch");
+    let timeout = if background { 0 } else { config.int("core.command_timeout").max(0) as u64 };
     let options = RunOptions {
         dry_run,
         verbose: verbose || config.flag("core.verbose") || config.flag("core.show_timing"),

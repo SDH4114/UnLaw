@@ -65,7 +65,7 @@ function run(argv) {
   for (;;) {
     var count = Number(pasteboard.changeCount);
     if (count !== last) {
-      last = count;
+      var line = null;
       try {
         var types = ObjC.deepUnwrap(pasteboard.types) || [];
         var text = null;
@@ -74,9 +74,16 @@ function run(argv) {
           text = ObjC.unwrap(value);
           if (text.length > maxChars) text = null;
         }
-        var line = JSON.stringify({count: count, types: types, text: text}) + "\n";
-        out.writeData($(line).dataUsingEncoding($.NSUTF8StringEncoding));
+        // Types and text must come from one copy: if the pasteboard changed while they were read (a password
+        // manager copying right after another app), the sample is dropped and the same change is read again.
+        if (Number(pasteboard.changeCount) === count) {
+          line = JSON.stringify({count: count, types: types, text: text}) + "\n";
+        }
       } catch (error) {}
+      if (line !== null) {
+        last = count;
+        out.writeData($(line).dataUsingEncoding($.NSUTF8StringEncoding));
+      }
     }
     if (Number($.getppid()) !== parent) return;
     delay(interval);
@@ -385,13 +392,24 @@ def status() -> int:
         job = "running"
     else:
         job = "installed but not loaded (`ul clip on` loads it)"
+    newest = ""
     try:
-        stored = _count_text(len(_read()))
+        items = _read()
+        stored = _count_text(len(items))
+        if items:
+            newest = _when(items[0])
     except ClipError as error:
         stored = f"unreadable ({error})"
     print(f"Background watcher: {job}")
     print(f"Recording: {'paused (`ul clip resume`)' if _paused() else 'on'}")
     print(f"History: {stored} in {history_file()}")
+    if newest:
+        print(f"Newest item: {newest}")
+    # Whether macOS lets the background helper read the pasteboard cannot be asked directly, so these are the
+    # two clues: nothing new for a long time while copying, or osascript errors in the watcher's log.
+    log = clip_dir() / "watch.log"
+    if log.exists() and log.stat().st_size > 0:
+        print(f"Watcher log: {log} ({log.stat().st_size} bytes; read it if copies are not being stored)")
     return 0
 
 
@@ -546,10 +564,20 @@ def remove_item(text: str) -> int:
     return 0
 
 
+def _damaged_copies() -> list[Path]:
+    return sorted(clip_dir().glob(f"{history_file().name}.damaged-*"))
+
+
+def _delete_damaged_copies() -> None:
+    for path in _damaged_copies():
+        path.unlink(missing_ok=True)
+
+
 def clear(yes: bool) -> int:
     with _locked():
         count = len(_read(repair=True))
         if count == 0:
+            _delete_damaged_copies()
             print("The clipboard history is already empty.")
             return 0
         if not yes:
@@ -565,6 +593,7 @@ def clear(yes: bool) -> int:
                 print("Cancelled; nothing was removed.")
                 return 1
         history_file().unlink(missing_ok=True)
+        _delete_damaged_copies()
     print(f"Deleted {_count_text(count)}.")
     return 0
 

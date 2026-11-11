@@ -257,6 +257,14 @@ class WatchTests(ClipBase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.texts(), ["ok"])
 
+    def test_the_watcher_is_exempt_from_core_command_timeout(self) -> None:
+        self.ok("config", "set", "core.command_timeout", "1")
+        line = json.dumps(entry("late"))
+        self.tool("osascript", f"#!{sys.executable}\nimport time\ntime.sleep(2.5)\nprint({line!r})\n")
+        result = self.ul("clip", "_watch")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.texts(), ["late"])
+
     def test_a_failing_helper_ends_the_watcher_with_an_error(self) -> None:
         (self.fake / "osascript_exit").write_text("3")
         result = self.ul("clip", "_watch")
@@ -286,6 +294,21 @@ class WatchTests(ClipBase):
         ]
         self.assertEqual(len(kept), 1)
         self.assertEqual(kept[0].read_text(), "{broken")
+
+
+class HelperScriptTests(unittest.TestCase):
+    """The JXA helper only runs on a real pasteboard, so its race guard is checked on the script text."""
+
+    def test_a_sample_is_dropped_when_the_pasteboard_changed_while_it_was_read(self) -> None:
+        sys.path.insert(0, str(HERE.parent / "src"))
+        from unlawful.clip import HELPER
+
+        read_text = HELPER.index("stringForType")
+        recheck = HELPER.index("changeCount", read_text)
+        advance = HELPER.index("last = count", read_text)
+        self.assertLess(read_text, recheck, "changeCount is read again after the text")
+        self.assertLess(recheck, advance, "the sample counts as seen only after the re-check")
+        self.assertEqual(HELPER.count("last = count"), 1)
 
 
 class ListTests(ClipBase):
@@ -409,6 +432,21 @@ class ActionTests(ClipBase):
             self.assertIn("Cancelled", result.stdout)
         self.assertEqual(len(self.texts()), 3)
 
+    def test_clear_also_deletes_damaged_copies_and_keeps_the_pause_flag(self) -> None:
+        folder = self.history_path.parent
+        (folder / "history.json.damaged-20260101-000000").write_text("secret")
+        self.ok("clip", "pause")
+        self.ok("clip", "clear", "--yes")
+        self.assertEqual(sorted(p.name for p in folder.iterdir() if p.name.startswith("history.json")), [])
+        self.assertTrue((folder / "paused").exists())
+
+    def test_clear_with_only_damaged_copies_left_still_removes_them(self) -> None:
+        folder = self.history_path.parent
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "history.json.damaged-20260101-000000").write_text("secret")
+        self.ok("clip", "clear", "--yes")
+        self.assertEqual(list(folder.glob("history.json.damaged-*")), [])
+
     def test_clear_with_yes_on_stdin_or_the_flag(self) -> None:
         self.ok("clip", "clear", input="y\n")
         self.assertEqual(self.texts(), [])
@@ -491,6 +529,19 @@ class JobTests(ClipBase):
     def test_off_without_a_job_still_boots_out_by_label_and_succeeds(self) -> None:
         result = self.ok("clip", "off")
         self.assertIn("not", result.stdout.lower())
+
+    def test_status_shows_the_newest_item_time_and_the_watcher_log(self) -> None:
+        self.assertNotIn("Watcher log", self.ok("clip", "status").stdout)
+        self.fill("a")
+        self.assertIn("Newest item:", self.ok("clip", "status").stdout)
+        (self.history_path.parent / "watch.log").write_text("osascript: not allowed\n")
+        self.assertIn("watch.log", self.ok("clip", "status").stdout)
+
+    def test_help_says_the_history_is_plain_text_and_may_sync(self) -> None:
+        text = self.ok("clip", "--help").stdout.lower()
+        self.assertIn("plain", text)
+        self.assertIn("sync", text)
+        self.assertLess(len(text.splitlines()), 26)
 
     def test_status_reports_job_pause_and_count(self) -> None:
         text = self.ok("clip", "status").stdout.lower()
