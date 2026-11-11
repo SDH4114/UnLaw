@@ -27,11 +27,11 @@ The core is always installed: `ul`/`unlaw`, the `ule` editor, system commands,
 
 | Group | Features |
 |---|---|
-| AI | `lm` (local models), `agent` (needs `lm`; adds `ula`), `tg`, `gpt` |
+| AI | `lm` (local models), `agent` (needs `lm`; adds `ula`), `tg`, `gpt`, `claude` |
 | Media | `yt`, `music`, `lofi`, `netflix`, `capture` |
-| Productivity | `desk`, `obsidian`, `work` |
+| Productivity | `desk`, `obsidian`, `work`, `timer`, `clip`, `weather` |
 | Development | `git`, `py`, `rust`, `cpp`, `zed` |
-| System | `awake`, `mac`, `steam`, `minecraft` |
+| System | `awake`, `sys`, `mac`, `steam`, `minecraft` |
 | Fun | `game` |
 
 Re-running the installer on a machine that already has Unlaw is an update: it keeps
@@ -420,7 +420,12 @@ an alias.
 ul create command anime
 ```
 
-This creates `~/.config/unlaw/commands/anime/main.py`. Arguments are in
+This creates `~/.config/unlaw/commands/anime/main.py` plus `AGENTS.md` and
+`CLAUDE.md` with the rules for AI coding agents. Names of system, built-in,
+default (also removed ones like `todo`) commands and aliases are refused, so a
+user command never clashes with one. `ul commands check anime` runs its
+`--help` with no input and a timeout and reports whether it exits 0, has a
+Usage line and a description. Arguments are in
 `sys.argv[1:]`, and the script's exit code is returned to the shell. A user
 command can be fully rewritten by hand. Automatic updates never overwrite an
 existing `main.py`.
@@ -455,10 +460,26 @@ running the command: the first line of `help.txt` in the command folder, otherwi
 the first line of the `main.py` docstring, otherwise the first `#`/`//` comment in
 other scripts. `--help` inside the command itself is still required.
 
+A command keeps its own settings in `commands/<name>/config.toml` and its data
+in `$UNLAW_STORAGE/<name>/`, not in Unlaw's `config.toml` (`ul reinstall` resets
+that file). Updates, `ul init`, feature changes and catalog downloads never touch
+user commands or templates; `ul reinstall` moves a user folder that has a default
+command's name into `backups/reinstall-<time>/`.
+
+### Writing commands with an AI agent
+
+Run `ul skills install --claude` once, then ask the agent for the command. The
+skill's guide (`ul skills show authoring`) tells it to create the command with
+`ul create command <name>`, stay inside that folder, never edit Unlaw itself, its
+`config.toml` or the default commands, and verify with `ul commands check <name>`.
+The `AGENTS.md` in the command folder repeats those rules for agents that work
+inside it.
+
 Your own template for new commands:
 
 ```text
 ~/.config/unlaw/templates/commands/main.py
+~/.config/unlaw/templates/commands/AGENTS.md
 ~/.config/unlaw/templates/commands/rust/      # Cargo.toml + src/, {{command_name}} is substituted
 ```
 
@@ -726,6 +747,50 @@ with `ul awake lid remove`, or `sudo rm /etc/sudoers.d/unlaw-awake`).
 A sleeping Mac is not woken at the start time: the window begins when the Mac
 is awake. On wake launchd runs the missed start, which begins the session if
 the window is still open. Runs are logged in `storage.root/runtime/awake.log`.
+
+## Timers, clipboard, weather and stats
+
+### ul timer
+Countdowns and alarms that survive closing the terminal, with a macOS notification.
+```bash
+ul timer 25m write report     # also 30s, 1h30m, bare number = minutes (max 7 days)
+ul timer at 18:30 leave       # alarm, tomorrow if the time has passed
+ul timer                      # running timers (also: list --json)
+ul timer cancel 2             # or --all
+ul timer wait 90s tea         # count down in the terminal, Ctrl+C cancels
+```
+Setting: timer.sound (default true).
+
+### ul weather
+Weather from Open-Meteo (no API key).
+```bash
+ul config set weather.city "Baku"
+ul weather                    # default city, 3 days
+ul weather New York --days 7 --units imperial
+ul weather --json
+```
+Settings: weather.city, weather.units (metric|imperial). Needs the internet.
+
+### ul clip
+`ul clip on` starts a background watcher (LaunchAgent `com.unlaw.clip`) that keeps the text you copy.
+```bash
+ul clip on                    # start the watcher (off stops it)
+ul clip                       # history, newest first; list N, --json
+ul clip search invoice        # items containing every word
+ul clip copy 3                # back onto the clipboard; also show N, rm N, clear [--yes]
+ul clip pause                 # ignore copies for now; resume, status
+```
+Text only, up to 100 KB per item, duplicates move to the top, `clip.max_items` (200) items.
+Copies that apps mark concealed, transient or auto-generated (password managers) are never stored.
+The history is a plain file (mode 0600) in `<storage.root>/clip/`; `pause` before copying secrets
+that an app does not mark. `clip.interval` (1 s) is the check interval.
+
+### ul sys
+Computer stats without root: `ul sys` shows model, chip, macOS, uptime, CPU, GPU, memory (app, wired, compressed, swap, pressure), disks, battery (charge, cycles, condition, max capacity) and the top 5 processes. `ul sys cpu|gpu|mem|disk|battery|top` shows one part, `--json` gives stable keys with numbers, `--watch [seconds]` refreshes in place (Ctrl+C to quit). A tool that is missing or fails shows as n/a. Colors only on a terminal (NO_COLOR turns them off).
+
+### ul claude
+
+`ul claude` opens the Claude desktop app, like `ul gpt` opens ChatGPT.
 
 ## Quick apps
 
