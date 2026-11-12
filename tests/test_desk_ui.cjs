@@ -30,8 +30,9 @@ function harness() {
   }
   const ids = new Map([
     'boards', 'tabs', 'viewer', 'recPill', 'play', 'skip', 'stop', 'obsidian', 'lofi',
-    'filter', 'helpButton', 'help', 'theme', 'search', 'toast',
+    'filter', 'helpButton', 'help', 'theme', 'search', 'toast', 'favicon',
   ].map(id => [id, new Element(id)]));
+  Object.assign(ids.get('favicon').dataset, {light: 'data:light', dark: 'data:dark'});
   const document = {
     hidden: false,
     getElementById: id => ids.get(id) || null,
@@ -78,7 +79,7 @@ function harness() {
       renderCanvas, cvDown, cvMove, cvUp, cvWheel, cvSetTool, cvEndEdit, cvSelect, cvGroup, cvExport, paintScene, cvPalette,
       fillable, fillTarget, applyFill, setBackground, cvBackground, canvasKey, cvStyle, cvNew, cvRename, cvChoose, CV_BY_KEY,
       floodRegion, growMask, traceMask, paintFromMask, paintContains, cutElement, eraseAt, cvBucket, cvToolClick,
-      widthToSlider, sliderToWidth, cvStepWidth, cvBuildBar, cvTypedWidth};
+      widthToSlider, sliderToWidth, cvStepWidth, cvBuildBar, cvTypedWidth, loadBoards, applyTheme};
   `, context);
   return {context, a: context.audit, listeners, timers, intervals, frames, ids,
     run: code => vm.runInContext(code, context)};
@@ -972,6 +973,29 @@ const tests = {
   assert.deepEqual(saved.at(-1)[1].rough, 0);
   a.cvToolClick('rectangle');
   assert.equal(on.has('on'), false, 'clicking the button again closes it');
+ },
+ async boards_menu_is_one_flat_list() {
+  const h = harness();
+  h.context.fetch = async () => response({
+    reminders: true, current: '/v/work/TODO.md', boards_dir: '/c/boards',
+    recent: ['/v/work/TODO.md', '/c/boards/Ideas.md'], boards: ['/c/boards/Ideas.md', '/c/boards/Games.md'],
+  });
+  await h.a.loadBoards();
+  const [trigger, menu] = h.ids.get('boards').children;
+  assert.equal(trigger.children[0].textContent, 'TODO', 'the button names the open board');
+  const rows = menu.children.map(node => node.className === 'sep' ? '---' : node.children[0].textContent);
+  assert.deepEqual(rows, ['Reminders', 'TODO', 'Ideas', 'Games', '---', 'New board…', 'Open another board…'],
+    'Reminders, recent and folder boards share one list without group headings, each board once');
+  assert.equal(menu.children[1].className, 'on', 'the open board is marked');
+  assert.equal(menu.children[1].children[1].textContent, 'work', 'with its folder under the name');
+ },
+ async favicon_follows_the_page_theme() {
+  const h = harness();
+  const icon = h.ids.get('favicon');
+  h.a.applyTheme('dark');
+  assert.equal(icon.href, 'data:dark', 'dark theme shows the dark logo in the tab');
+  h.a.applyTheme('light');
+  assert.equal(icon.href, 'data:light', 'light theme shows the light logo');
  },
 };
 if (!tests[process.argv[2]]) throw Error('unknown UI regression');

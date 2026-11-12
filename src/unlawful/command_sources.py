@@ -389,6 +389,27 @@ LEGACY_SOURCE_HASHES["todo"].add("4bc83452c4e515ee0965775e8c2cd281600787f6ffbfb1
 # Desk seed of 3.17.0 to 3.18.1 (also the copy on the maintainer machine), before Chess joined the Games tab.
 LEGACY_SOURCE_HASHES["desk"].add("56194cd44f36f16638b0d1df1356e4a5a98ca2ee57744d8900e5493170d0de70")
 LEGACY_NORMALIZED_HASHES["desk"].add("f2e1568329b915728a1f382a215abaca7ff50662a3ac22c3541cb3db769533e9")
+# Desk seed of 3.19.0 (580df6c) and the 3.19.0 dev build on the maintainer machine, before the redesign.
+LEGACY_SOURCE_HASHES["desk"].update({
+    "8ef37d0a5e98bc82bbf4133aaea9611aee7cf327389eab40bd96d31be561fa9c",
+    "45b3b7f66a6660079fc3a6add05980b4a65fa2ab603d787241b1ed694d66359e",
+})
+LEGACY_NORMALIZED_HASHES["desk"].update({
+    "af92b1214fbc66b8912f7a1df0bf80687963c5d2d75135c3ed2420c53ae7bcb8",
+    "d1a1083eeb446d6d988b2beb7eb979acd8453b904883b397deddd0c7df7f7013",
+})
+# A 3.19.1 dev build of the redesign that reached the maintainer machine, before the canvas bar fit one row.
+LEGACY_SOURCE_HASHES["desk"].add("0be6f689d7940fb07c6e910eb5fde1b0c5cd0adf2ed6aa47294cce84b073c4ff")
+LEGACY_NORMALIZED_HASHES["desk"].add("0570219fffee545759d9836fe3e2cda0abe78e75b52c8ce1896da84cc120abe4")
+# The next 3.19.1 dev build installed there from the working tree, before the flatter look.
+LEGACY_SOURCE_HASHES["desk"].add("f5d175b5da7a96f590df5cf78c33b88b1f5fbd0c213e91b224f72e953239eeed")
+LEGACY_NORMALIZED_HASHES["desk"].add("ba26555541aa39323ceae9a8076f545be7f0e21725b0f6492c6dc354568eed45")
+# And the one after it, before the logo.
+LEGACY_SOURCE_HASHES["desk"].add("e89809049e5cff8b67351f30bb026668a4ee8aef99b02d1a8c228080c2214c5e")
+LEGACY_NORMALIZED_HASHES["desk"].add("f1f4eafce6b482d1d0bbe7576f07461a88040efe4c2ee6d8c6770c1d7a6b38da")
+# The logo build installed there, before the dark logo.
+LEGACY_SOURCE_HASHES["desk"].add("a2522ffb3f979645d870899936e9d28095271a46fe9b3cef6487a6e450095be7")
+LEGACY_NORMALIZED_HASHES["desk"].add("ad262bd7a55c8743f0e3fe2866ae743cc63827534b6167444d44349a7aa6a065")
 
 # Commands now built into the Rust core, or removed (`todo`, replaced by
 # `ul desk`). Untouched seeds with these hashes are removed so the built-in

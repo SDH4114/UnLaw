@@ -65,6 +65,12 @@ class DeskUITests(unittest.TestCase):
     def test_arcade_box_corners_and_tees_connect_the_correct_edges(self) -> None:
         self.run_case("box_edges")
 
+    def test_boards_menu_is_one_flat_list(self) -> None:
+        self.run_case("boards_menu_is_one_flat_list")
+
+    def test_favicon_follows_the_page_theme(self) -> None:
+        self.run_case("favicon_follows_the_page_theme")
+
     def test_canvas_fill_tool(self) -> None:
         self.run_case("canvas_fill_tool")
 
@@ -121,3 +127,30 @@ class DeskUITests(unittest.TestCase):
 
     def test_canvas_pointer_flows_create_move_connect_and_erase(self) -> None:
         self.run_case("canvas_interaction_flow")
+
+
+class DeskLogoTests(unittest.TestCase):
+    def test_page_uses_the_logo_files(self) -> None:
+        import re
+        import sys
+        from urllib.parse import unquote
+
+        sys.path.insert(0, str(ROOT / "src"))
+        try:
+            from unlawful.desk_ui import PAGE
+        finally:
+            sys.path.pop(0)
+        light = (ROOT / "assets" / "logo.svg").read_text().strip()
+        dark = (ROOT / "assets" / "logo-dark.svg").read_text().strip()
+        header = PAGE.split('<span class="brand">', 1)[1].split("Desk</span>", 1)[0]
+        self.assertEqual(
+            header,
+            light.replace("<svg ", '<svg class="mark light" aria-hidden="true" ', 1)
+            + dark.replace("<svg ", '<svg class="mark dark" aria-hidden="true" ', 1),
+        )
+        link = re.search(r'<link rel="icon" id="favicon" href="([^"]*)" data-light="([^"]*)" data-dark="([^"]*)">', PAGE)
+        self.assertIsNotNone(link)
+        href, icon_light, icon_dark = link.groups()
+        self.assertEqual(href, icon_light, "the light icon is the default before the script runs")
+        self.assertEqual(unquote(icon_light.removeprefix("data:image/svg+xml,")), light)
+        self.assertEqual(unquote(icon_dark.removeprefix("data:image/svg+xml,")), dark)
