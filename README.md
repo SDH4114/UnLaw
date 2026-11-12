@@ -634,7 +634,7 @@ brush, `g` fill, `e` eraser, `[`/`]` width, `d` default color, Cmd+G group,
 Cmd+0 fit.
 
 **Games** plays the `ul game` arcade (Tetris, Snake, Minesweeper, Space Invaders,
-Chomp, Dash, Ping Pong) in the page with keyboard and mouse. The desk runs `ul game --stream`, so
+Chomp, Dash, Ping Pong, Chess) in the page with keyboard and mouse. The desk runs `ul game --stream`, so
 these are the same Rust games, and best scores are shared with the terminal in
 `storage.root/runtime/arcade.toml`. Leaving the tab pauses a game.
 
@@ -884,6 +884,8 @@ ul game minesweeper normal
 ul game invaders hard
 ul game chomp
 ul game dash
+ul game pingpong
+ul game chess hard
 ```
 
 The games are built into the Rust core and support keyboard and mouse. Each screen
@@ -899,6 +901,7 @@ Enter or a click plays again, Esc returns to the menu. Best scores are stored in
 | Space Invaders | 5×11 formation, three alien types, speeds up as they fall, only the bottom row shoots, one player bullet on screen, bunkers, UFO, lives and waves, extra life at 1500 | cannon follows the cursor, click — fire |
 | Chomp | original maze chase: a new symmetric maze every level, pellets and power pellets, four hunters with their own habits (Hound chases, Fox cuts off the junction ahead, Owl goes where it heard you eat, Moth guards the power pellets), rest/hunt phases, 200→1600 combo, bonus items, extra life at 10 000 | click — turn toward the click |
 | Dash | original endless runner with the mechanics of the browser offline game (a fox, not a dinosaur): auto-run on the left, fixed-height gravity jump (`Space`/`↑`/`W`/click), duck (`↓`/`S`, ~0.35 s, key repeat extends it; `↓` in the air drops fast), cacti of three sizes in groups of 1–3, birds with a wing flap at three heights (jump the low one, duck or jump the middle one, run under the high one), speed rising to a maximum with gaps that grow with it, score ≈10/s with a flash every 100 and night from 700, parallax clouds and scrolling ground | click — jump |
+| Chess | full rules (castling, en passant, promotion with a piece picker, check, mate, stalemate, 50-move rule, threefold repetition, insufficient material); start screen: play the bot (then White, Black or Random) or a friend on one keyboard, then the time control: no clock, or minutes per side and increment typed in (or `−`/`+`, or presets 1+0 … 15+10); the clock can be hidden with `T`; the board on the left with the last move, the selected piece, its targets and a king in check highlighted; on the right the players, clocks, captured pieces with the material lead and the move list in algebraic notation; `U` takes back (your move and the bot's reply), `F` flips the board, pieces are drawn big with block characters on large squares, `L` switches to font glyphs or letters, `R` twice resigns; the record is the fewest moves to beat the bot (take-backs, draws and 2-player games record nothing) | click a piece, then its square (arrows + `Enter` work too) |
 
 Difficulty: `easy` — slow start and assists (Tetris has a ghost piece and 3 pieces
 in Next, the snake passes through walls, 5 lives in Invaders and Chomp); `normal` — classic;
@@ -906,7 +909,8 @@ in Next, the snake passes through walls, 5 lives in Invaders and Chomp); `normal
 garbage rising from below, the snake gets obstacles and double growth, Minesweeper
 is Expert without a guaranteed opening, aliens fire nonstop and you have 2 lives, Chomp hunters are as fast as you and
 fright lasts 2 s (gone from level 5), Dash starts fast with tight gaps, mixed cacti and birds from the first obstacle
-(`easy`: slower, wider gaps, no high birds).
+(`easy`: slower, wider gaps, no high birds); the Chess bot searches ~3 s per move on `hard`,
+~0.8 s on `normal`, and on `easy` plays a shallow search with noise, so it misses tactics.
 Set the default with `ul config set games.difficulty hard`.
 
 ## Telegram

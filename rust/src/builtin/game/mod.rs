@@ -1,9 +1,10 @@
-//! `ul game`: Tetris, Snake, Minesweeper, Space Invaders, Chomp, Dash and Ping Pong in the terminal,
+//! `ul game`: Tetris, Snake, Minesweeper, Space Invaders, Chomp, Dash, Ping Pong and Chess in the terminal,
 //! playable with keyboard or mouse.
 //!
 //! Every game is a state machine (input → update → draw) that talks only to
 //! the [`Screen`] trait, so it runs on a real terminal and headless in tests.
 
+mod chess;
 mod chomp;
 mod dash;
 mod invaders;
@@ -24,7 +25,7 @@ use toml_edit::DocumentMut;
 use crate::config::Config;
 
 pub const HELP: &str = "Play a terminal arcade game; no arguments opens the game menu.
-Usage: ul game [tetris|snake|minesweeper|invaders|chomp|dash|pingpong] [easy|normal|hard]
+Usage: ul game [tetris|snake|minesweeper|invaders|chomp|dash|pingpong|chess] [easy|normal|hard]
        ul game --stream [--size ROWSxCOLS] [game] [difficulty]
 Games:
   tetris        7-bag pieces, next/hold, ghost, wall kicks, levels every 10 lines
@@ -38,6 +39,9 @@ Games:
   pingpong      old-arcade table tennis, first to 11: 1 player against the bot
                 or 2 players on one keyboard (chosen when it starts); where the
                 ball meets the paddle sets the angle, every hit speeds it up
+  chess         play the bot (white, black or random) or a friend on one
+                keyboard; optional clock with typed minutes and increment
+                (or presets), last move highlighted, move list, take-backs
 Controls (shown in every game): arrows/WASD, Space, P pause, Q or Esc leaves.
 Dash: Space/Up/W jump (fixed height), Down/S duck (~0.35 s, key repeat extends it)
 or drop fast in the air.
@@ -45,6 +49,9 @@ Ping Pong: 1 player W/S or ↑/↓; 2 players: left W/S, right ↑/↓. Holding 
 sides at once needs a terminal with the kitty keyboard protocol (Ghostty, kitty,
 WezTerm, iTerm2 with CSI u) or the desk page; elsewhere each press moves the
 paddle briefly and key repeat keeps it going.
+Chess: click a piece, then its square (or arrows + Enter); U undo, F flip,
+L cycles big drawn pieces / font glyphs / letters, T hides the clock,
+R twice resigns.
 Mouse: click menus; Tetris follows the pointer (left click drops, right rotates);
 Snake steers toward a click; Minesweeper left reveals, right flags;
 Invaders follow the pointer and click to fire; Chomp steers toward a click;
@@ -62,7 +69,8 @@ Difficulty (default: games.difficulty):
            paddles, a fast ball and a bot that aims for steep returns
            (easy: big paddles, a slow ball, a bot that misses often)
 Ping Pong records the winning margin against the bot (2-player games and
-losses record nothing).
+losses record nothing). Chess records the fewest moves to beat the bot
+(take-backs, draws and 2-player games record nothing).
 Best scores: storage.root/runtime/arcade.toml, shared by the terminal and
 `ul desk` (Games tab); every finished game rereads the file first.
 --stream plays without a terminal for `ul desk`: JSON-line input on stdin
@@ -71,8 +79,8 @@ stdin ends the game. --size sets the grid (default 30x100).
 Examples: ul game snake hard; ul game --stream --size 40x120 tetris
 ";
 
-pub const GAMES: [(&str, &str); 7] =
-    [("tetris", "Tetris"), ("snake", "Snake"), ("minesweeper", "Minesweeper"), ("invaders", "Space Invaders"), ("chomp", "Chomp"), ("dash", "Dash"), ("pingpong", "Ping Pong")];
+pub const GAMES: [(&str, &str); 8] =
+    [("tetris", "Tetris"), ("snake", "Snake"), ("minesweeper", "Minesweeper"), ("invaders", "Space Invaders"), ("chomp", "Chomp"), ("dash", "Dash"), ("pingpong", "Ping Pong"), ("chess", "Chess")];
 
 /// Seconds per frame of the real-time games.
 pub const FRAME: f64 = 1.0 / 30.0;
@@ -85,6 +93,7 @@ pub enum Key {
     Right,
     Enter,
     Esc,
+    Backspace,
     Char(char),
 }
 
@@ -137,6 +146,16 @@ pub enum Color {
     DarkYellow,
     DarkBlue,
     DarkCyan,
+    /// Chess squares, highlights and pieces.
+    BoardLight,
+    BoardDark,
+    LastLight,
+    LastDark,
+    Selected,
+    Target,
+    Check,
+    PieceWhite,
+    PieceBlack,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -435,7 +454,16 @@ pub struct Scores {
 }
 
 pub fn lower_is_better(game: &str) -> bool {
-    game == "minesweeper"
+    matches!(game, "minesweeper" | "chess")
+}
+
+/// Unit after a best score: seconds for Minesweeper, moves for Chess.
+pub fn score_unit(game: &str) -> &'static str {
+    match game {
+        "minesweeper" => "s",
+        "chess" => " moves",
+        _ => "",
+    }
 }
 
 pub fn is_better(game: &str, score: u64, best: Option<u64>) -> bool {
@@ -554,7 +582,7 @@ pub fn finish(screen: &mut dyn Screen, title: &str, details: &[String], score: O
         if is_better(game, score, best) {
             lines.push(("★ New best! ★".into(), Style::fg(Color::Green).bold()));
         } else if let Some(best) = best {
-            let unit = if lower_is_better(game) { "s" } else { "" };
+            let unit = score_unit(game);
             lines.push((format!("Best {best}{unit}"), Style::fg(Color::Gray)));
         }
     }
@@ -632,6 +660,7 @@ fn describe(name: &str) -> &'static str {
         "invaders" => "5x11 formation, shields, UFO, waves",
         "chomp" => "maze chase with 4 hunters",
         "pingpong" => "first to 11, vs bot or a friend",
+        "chess" => "vs bot or a friend, optional clock",
         _ => "",
     }
 }
@@ -739,7 +768,7 @@ pub fn game_menu(screen: &mut dyn Screen, scores: &Scores, level: Level) -> io::
             label: label.to_string(),
             detail: describe(name).to_string(),
             note: match scores.best(name, level) {
-                Some(best) if lower_is_better(name) => format!("best {best}s"),
+                Some(best) if lower_is_better(name) => format!("best {best}{}", score_unit(name)),
                 Some(best) => format!("best {best}"),
                 None => String::new(),
             },
@@ -774,6 +803,7 @@ pub fn play_once(screen: &mut dyn Screen, game: &str, level: Level, rng: &mut Rn
         "chomp" => chomp::play(screen, level, rng, best, scores),
         "dash" => dash::play(screen, level, rng, best, scores),
         "pingpong" => pingpong::play(screen, level, rng, best, scores),
+        "chess" => chess::play(screen, level, rng, best, scores),
         _ => invaders::play(screen, level, rng, best, scores),
     }
 }
@@ -800,7 +830,7 @@ pub fn arcade(screen: &mut dyn Screen, default: Level, rng: &mut Rng, scores: &m
 }
 
 fn usage() -> i32 {
-    eprintln!("Usage: ul game [--stream [--size ROWSxCOLS]] [tetris|snake|minesweeper|invaders|chomp|dash|pingpong] [easy|normal|hard]");
+    eprintln!("Usage: ul game [--stream [--size ROWSxCOLS]] [tetris|snake|minesweeper|invaders|chomp|dash|pingpong|chess] [easy|normal|hard]");
     2
 }
 
@@ -990,9 +1020,10 @@ mod tests {
         let scores = Scores::load(None);
         let pick = |inputs: &[Option<Input>]| game_menu(&mut Fake::new((40, 120)).keys(inputs), &scores, Level::Normal).unwrap();
         assert_eq!(pick(&[special(Key::Down), key('j'), special(Key::Enter)]), Some("minesweeper"));
-        assert_eq!(pick(&[key('k'), special(Key::Enter)]), Some("pingpong"));
+        assert_eq!(pick(&[key('k'), special(Key::Enter)]), Some("chess"));
         assert_eq!(pick(&[key('6')]), Some("dash"));
         assert_eq!(pick(&[key('7')]), Some("pingpong"));
+        assert_eq!(pick(&[key('8')]), Some("chess"));
         assert_eq!(pick(&[key('2')]), Some("snake"));
         assert_eq!(pick(&[key('9'), special(Key::Esc)]), None);
         let first = menu_first_row(40, GAMES.len());

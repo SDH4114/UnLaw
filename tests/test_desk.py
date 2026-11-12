@@ -568,16 +568,21 @@ class DeskGameTests(unittest.TestCase):
         self.use_ul()
         runtime = self.root / "config" / "unlaw" / "data" / "runtime"
         runtime.mkdir(parents=True, exist_ok=True)
-        (runtime / "arcade.toml").write_text("[snake]\nnormal = 12\n[minesweeper]\neasy = 40\n", encoding="utf-8")
+        (runtime / "arcade.toml").write_text("[snake]\nnormal = 12\n[minesweeper]\neasy = 40\n[chess]\nhard = 31\n", encoding="utf-8")
         port, token = self.start()
         status, data = self.call(port, token, "/api/games")
         self.assertEqual(status, 200)
         self.assertTrue(data["available"])
         games = {game["name"]: game for game in data["games"]}
-        self.assertEqual(list(games), ["tetris", "snake", "minesweeper", "invaders", "chomp", "dash", "pingpong"])
+        self.assertEqual(list(games), ["tetris", "snake", "minesweeper", "invaders", "chomp", "dash", "pingpong", "chess"])
         self.assertEqual(games["snake"]["best"], {"normal": 12})
         self.assertEqual(games["minesweeper"]["best"], {"easy": 40})
         self.assertTrue(games["minesweeper"]["lower"])
+        self.assertEqual(games["minesweeper"]["unit"], "s")
+        self.assertEqual(games["chess"]["best"], {"hard": 31})
+        self.assertTrue(games["chess"]["lower"])
+        self.assertEqual(games["chess"]["unit"], " moves")
+        self.assertFalse(games["snake"]["lower"])
         self.assertEqual(self.request(port, "GET", "/api/games")[0], 403)
 
     def test_a_game_streams_frames_takes_input_and_ends_with_esc(self) -> None:

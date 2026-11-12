@@ -1512,9 +1512,12 @@ GAMES = {
     "chomp": "Chomp",
     "dash": "Dash",
     "pingpong": "Ping Pong",
+    "chess": "Chess",
 }
+# Games whose best score is the lowest, and the unit shown after it.
+SCORE_UNITS = {"minesweeper": "s", "chess": " moves"}
 LEVELS = ("easy", "normal", "hard")
-GAME_KEYS = {"up", "down", "left", "right", "enter", "esc"}
+GAME_KEYS = {"up", "down", "left", "right", "enter", "esc", "backspace"}
 GAME_ROWS = (24, 80)
 GAME_COLS = (72, 200)
 MAX_EVENTS = 64
@@ -1609,7 +1612,15 @@ class Arcade:
                 for level in LEVELS
                 if isinstance(table.get(level), int) and not isinstance(table.get(level), bool)
             }
-            games.append({"name": name, "label": label, "lower": name == "minesweeper", "best": best})
+            games.append(
+                {
+                    "name": name,
+                    "label": label,
+                    "lower": name in SCORE_UNITS,
+                    "unit": SCORE_UNITS.get(name, ""),
+                    "best": best,
+                }
+            )
         return {"available": self.available(), "difficulty": self.difficulty, "games": games}
 
     def start(self, game: object, level: object, rows: object, cols: object) -> str:

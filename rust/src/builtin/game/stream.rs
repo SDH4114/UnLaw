@@ -66,6 +66,7 @@ fn parse(line: &str) -> Option<Message> {
             "right" => Key::Right,
             "enter" => Key::Enter,
             "esc" => Key::Esc,
+            "backspace" => Key::Backspace,
             other => {
                 let mut characters = other.chars();
                 match (characters.next(), characters.next()) {
@@ -121,6 +122,15 @@ fn color_name(color: Color) -> &'static str {
         Color::DarkYellow => "darkyellow",
         Color::DarkBlue => "darkblue",
         Color::DarkCyan => "darkcyan",
+        Color::BoardLight => "boardlight",
+        Color::BoardDark => "boarddark",
+        Color::LastLight => "lastlight",
+        Color::LastDark => "lastdark",
+        Color::Selected => "selected",
+        Color::Target => "target",
+        Color::Check => "check",
+        Color::PieceWhite => "piecewhite",
+        Color::PieceBlack => "pieceblack",
     }
 }
 
@@ -350,6 +360,10 @@ mod tests {
         assert_eq!(
             parse(r#"{"key":"esc"}"#),
             Some(Message::Input(Input::Key(Key::Esc)))
+        );
+        assert_eq!(
+            parse(r#"{"key":"backspace"}"#),
+            Some(Message::Input(Input::Key(Key::Backspace)))
         );
         assert_eq!(
             parse(r#"{"key":"W"}"#),

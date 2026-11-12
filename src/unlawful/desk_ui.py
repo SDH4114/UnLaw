@@ -749,9 +749,11 @@ const GAME_INFO = {
   chomp: "Maze chase with four hunters; new maze each level",
   dash: "Endless runner: jump, duck, faster and faster",
   pingpong: "Table tennis to 11: vs the bot or a friend (W/S and ↑/↓)",
+  chess: "vs the bot or a friend, optional clock; click a piece, then its square",
 };
-const PALETTE = { red: "#ff5f57", green: "#3ed67a", yellow: "#ffd84d", blue: "#4d8dff", magenta: "#d77bff", cyan: "#4fd8e8", white: "#f4f5f7", gray: "#8b8f98", darkred: "#c0392b", darkyellow: "#c9971c", darkblue: "#3159c9", darkcyan: "#1f9aa8" };
+const PALETTE = { red: "#ff5f57", green: "#3ed67a", yellow: "#ffd84d", blue: "#4d8dff", magenta: "#d77bff", cyan: "#4fd8e8", white: "#f4f5f7", gray: "#8b8f98", darkred: "#c0392b", darkyellow: "#c9971c", darkblue: "#3159c9", darkcyan: "#1f9aa8", boardlight: "#b58c63", boarddark: "#78563a", lastlight: "#aaa23a", lastdark: "#8a8228", selected: "#608c56", target: "#b05448", check: "#d63a3a", piecewhite: "#ffffff", pieceblack: "#000000" };
 const SCREEN_BG = "#0e1014", SCREEN_FG = "#d9dce3";
+const QUADRANTS = { "▘": 1, "▝": 2, "▖": 4, "▌": 5, "▞": 6, "▛": 7, "▗": 8, "▚": 9, "▐": 10, "▜": 11, "▙": 13, "▟": 14 };
 const BOX = { "─": "0101", "│": "1010", "┌": "0110", "┐": "0011", "└": "1100", "┘": "1001", "├": "1110", "┤": "1011", "┬": "0111", "┴": "1101", "┼": "1111", "═": "0101", "║": "1010" };
 const arcade = { info: null, level: localStorage.getItem("desk-level") || "", game: null, session: "", frame: null, queue: [], sending: false, abort: null, cell: { w: 10, h: 20, font: 16 }, grid: { rows: 30, cols: 100 }, hover: "", drawPending: false, ended: "" };
 
@@ -765,7 +767,7 @@ async function loadGames() {
 
 function bestText(game, level) {
   const best = game.best[level];
-  return best === undefined ? null : game.lower ? best + "s" : String(best);
+  return best === undefined ? null : best + (game.unit ?? (game.lower ? "s" : ""));
 }
 
 function renderGames(main) {
@@ -933,6 +935,17 @@ function drawCell(context, char, x, y, w, h, color) {
     context.globalAlpha = alpha;
     return;
   }
+  // Quadrant blocks (chess pieces): each set quarter is a rectangle on the snapped grid.
+  const quad = QUADRANTS[char];
+  if (quad) {
+    const midX = Math.round(x + w / 2), midY = Math.round(y + h / 2);
+    context.fillStyle = color;
+    if (quad & 1) context.fillRect(left, top, midX - left, midY - top);
+    if (quad & 2) context.fillRect(midX, top, right - midX, midY - top);
+    if (quad & 4) context.fillRect(left, midY, midX - left, bottom - midY);
+    if (quad & 8) context.fillRect(midX, midY, right - midX, bottom - midY);
+    return;
+  }
   if (char === "▀" || char === "▄") {
     const middle = Math.round(y + h / 2);
     context.fillStyle = color;
@@ -940,7 +953,9 @@ function drawCell(context, char, x, y, w, h, color) {
     return;
   }
   context.fillStyle = color;
-  context.fillText(char, x + w / 2, y + h / 2 + 1);
+  // Chess pieces (U+2654..265F) get the text-style selector: some fonts draw ♟ as a color emoji.
+  const piece = char >= "\u2654" && char <= "\u265f";
+  context.fillText(piece ? char + "\ufe0e" : char, x + w / 2, y + h / 2 + 1);
 }
 
 function drawGame() {
@@ -1073,7 +1088,7 @@ function pauseGame() {
   if (arcade.session && arcade.frame && !frameText().includes("PAUSED") && arcade.game) sendGame([{ key: "p" }]);
 }
 
-const GAME_KEYS = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right", Enter: "enter", Escape: "esc" };
+const GAME_KEYS = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right", Enter: "enter", Escape: "esc", Backspace: "backspace" };
 function gameKey(event) {
   if (state.view !== "games" || !arcade.session || event.metaKey || event.ctrlKey || event.altKey) return false;
   if (/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) return false;

@@ -386,6 +386,10 @@ LEGACY_SOURCE_HASHES["desk"].add("9da7aa188890adfbb9b4d7cde2efec5e93c41adbd2a15b
 LEGACY_NORMALIZED_HASHES["desk"].add("9f229bea3c7843f9f5c3cc74a165452dfe9373b6f6f5c5c5ff300d2b1c050f20")
 LEGACY_SOURCE_HASHES["todo"].add("4bc83452c4e515ee0965775e8c2cd281600787f6ffbfb17af5ec81f37f18f4aa")
 
+# Desk seed of 3.17.0 to 3.18.1 (also the copy on the maintainer machine), before Chess joined the Games tab.
+LEGACY_SOURCE_HASHES["desk"].add("56194cd44f36f16638b0d1df1356e4a5a98ca2ee57744d8900e5493170d0de70")
+LEGACY_NORMALIZED_HASHES["desk"].add("f2e1568329b915728a1f382a215abaca7ff50662a3ac22c3541cb3db769533e9")
+
 # Commands now built into the Rust core, or removed (`todo`, replaced by
 # `ul desk`). Untouched seeds with these hashes are removed so the built-in
 # runs; edited copies stay and override it.

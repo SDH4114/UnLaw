@@ -57,6 +57,16 @@ fn palette(color: Color) -> Option<(u8, Option<Rgb>)> {
         Color::DarkYellow => (33, Some((226, 140, 64))),
         Color::DarkBlue => (34, Some((64, 100, 214))),
         Color::DarkCyan => (36, Some((42, 161, 152))),
+        // Chess: mid-tone squares so both white and black pieces stand out.
+        Color::BoardLight => (37, Some((181, 140, 99))),
+        Color::BoardDark => (90, Some((120, 86, 58))),
+        Color::LastLight => (93, Some((170, 162, 58))),
+        Color::LastDark => (33, Some((138, 130, 40))),
+        Color::Selected => (32, Some((96, 140, 86))),
+        Color::Target => (31, Some((176, 84, 72))),
+        Color::Check => (91, Some((214, 58, 58))),
+        Color::PieceWhite => (97, Some((255, 255, 255))),
+        Color::PieceBlack => (30, Some((0, 0, 0))),
     })
 }
 
@@ -497,6 +507,7 @@ impl Screen for Terminal {
                         KeyCode::Right => Key::Right,
                         KeyCode::Enter => Key::Enter,
                         KeyCode::Esc => Key::Esc,
+                        KeyCode::Backspace => Key::Backspace,
                         KeyCode::Char(character) => Key::Char(character),
                         _ => continue,
                     };
