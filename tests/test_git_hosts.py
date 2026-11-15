@@ -544,7 +544,8 @@ class TokenTests(HostTestCase):
         store = self.root / "store"
         self.tools.add(
             "security",
-            f"""case "$1" in
+            f"""if [ "$1" = -i ]; then read -r line; eval "set -- $line"; fi
+case "$1" in
   add-generic-password) shift; while [ $# -gt 0 ]; do [ "$1" = -w ] && printf %s "$2" > "{store}"; shift; done;;
   find-generic-password) [ -f "{store}" ] && cat "{store}" && echo && exit 0; exit 44;;
 esac
@@ -553,29 +554,32 @@ exit 0""",
         self.assertIsNone(gh.token("gitlab"))
         gh.save_token("gitlab", SECRET)
         self.assertEqual(gh.token("gitlab"), SECRET)
-        add = self.tools.calls("security")[1]
-        self.assertEqual(
-            add,
-            [
-                "add-generic-password",
-                "-a",
-                "unlaw",
-                "-s",
-                "unlaw.git.gitlab.com",
-                "-w",
-                SECRET,
-                "-U",
-            ],
-        )
+        # The command goes to `security -i` on stdin: the token is in no process's argv.
+        self.assertEqual(self.tools.calls("security")[1], ["-i"])
+        self.assertFalse(any(SECRET in word for call in self.tools.calls("security") for word in call))
 
     def test_tokens_are_kept_per_server(self) -> None:
-        self.tools.add("security", "exit 0")
+        # `security -i` gets the add command on stdin; the read-back that follows names the service in argv.
+        commands = self.root / "commands"
+        self.tools.add("security", f'if [ "$1" = -i ]; then cat >> "{commands}"; exit 0; fi\necho "{SECRET}"')
         gh.save_token("gitea", SECRET, base_url="https://git.example.org")
         gh.save_token("codeberg", SECRET)
-        services = [call[4] for call in self.tools.calls("security")]
+        services = [call[4] for call in self.tools.calls("security") if call[0] == "find-generic-password"]
         self.assertEqual(services, ["unlaw.git.git.example.org", "unlaw.git.codeberg.org"])
+        self.assertEqual(
+            commands.read_text().splitlines(),
+            [f'add-generic-password -a unlaw -s "unlaw.git.{server}" -U -w "{SECRET}"' for server in ("git.example.org", "codeberg.org")],
+        )
+        self.assertFalse(any(SECRET in word for call in self.tools.calls("security") for word in call))
         with self.assertRaises(gh.HostError):
             gh.save_token("gitea", SECRET)  # self-hosted needs its address
+
+    def test_a_token_that_cannot_be_read_back_is_an_error(self) -> None:
+        self.tools.add("security", 'if [ "$1" = -i ]; then exit 0; fi\nexit 44')
+        with self.assertRaises(gh.HostError) as ctx:
+            gh.save_token("gitlab", SECRET)
+        self.assertIn("could not write the macOS Keychain", str(ctx.exception))
+        self.assertNotIn(SECRET, str(ctx.exception))
 
     def test_prompt_token_never_puts_the_token_in_argv(self) -> None:
         self.tools.add("security", "exit 0")

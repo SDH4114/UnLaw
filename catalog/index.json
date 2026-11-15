@@ -4,7 +4,7 @@
   {
    "name": "agent",
    "summary": "Your local AI agent: files, TODO board and schedule, in the console or Telegram.",
-   "sha256": "a25dad1283cd3efd144e628c76b4366ca36916850596b2daf9421f92716fe088"
+   "sha256": "1e155072cdce84816a4a6944e14e5a700bcee4845a61857ea13c34c700399ebc"
   },
   {
    "name": "awake",
@@ -39,7 +39,7 @@
   {
    "name": "git",
    "summary": "Stage, commit and push the current Git project, or run a Git action.",
-   "sha256": "2ed6a1f750feb8638f7279a75947b2f744a620aa94b18dedc9bf483fff0f03f8"
+   "sha256": "73fedcdeeac6278dd60f6a3c8513a95771543b477b42af765c107c4d610abe64"
   },
   {
    "name": "gpt",
@@ -99,7 +99,7 @@
   {
    "name": "tg",
    "summary": "Open Telegram, or send and download messages/files through your bot.",
-   "sha256": "6ab4158e9c3784514d7bc6bab7845629dc43ab0d023f2e4499632ee0046a39a6"
+   "sha256": "74702cd5d8ebcda0c11da6a5d7ce70f02aa924520e4df050bedfe57e28ebf768"
   },
   {
    "name": "timer",

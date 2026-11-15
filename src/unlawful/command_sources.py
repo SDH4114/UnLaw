@@ -425,6 +425,16 @@ LEGACY_NORMALIZED_HASHES.setdefault("yt", set()).add("318bf5f1003c84f7a4ba73156f
 LEGACY_SOURCE_HASHES.setdefault("clip", set()).add("faa088db619a9f081187eb31c418c029fac76cfc605887e3cdb28d532513660c")
 LEGACY_NORMALIZED_HASHES.setdefault("clip", set()).add("2c5cd1d752c7fb88d267cd63cde9ff740c224c7274b43b22831532d3db953950")
 
+# agent seed of 3.19.2 (6d6a700, also the copy on the maintainer machine), before the 3.19.3 audit fixes.
+LEGACY_SOURCE_HASHES.setdefault("agent", set()).add("a25dad1283cd3efd144e628c76b4366ca36916850596b2daf9421f92716fe088")
+LEGACY_NORMALIZED_HASHES.setdefault("agent", set()).add("7307bba625d3188c23b80beb568c5c7dd820df3bd3174b641bf08a07be60b6e4")
+# tg seed of 3.19.2 (6d6a700, also the copy on the maintainer machine), before the 3.19.3 audit fixes.
+LEGACY_SOURCE_HASHES.setdefault("tg", set()).add("6ab4158e9c3784514d7bc6bab7845629dc43ab0d023f2e4499632ee0046a39a6")
+LEGACY_NORMALIZED_HASHES.setdefault("tg", set()).add("bd85f0ee508f373c5f4905cf9126137a90138ab455cb7b8dcbdecd7e2244ae11")
+# git seed of 3.19.2 (6d6a700, also the copy on the maintainer machine), before the 3.19.3 audit fixes.
+LEGACY_SOURCE_HASHES.setdefault("git", set()).add("2ed6a1f750feb8638f7279a75947b2f744a620aa94b18dedc9bf483fff0f03f8")
+LEGACY_NORMALIZED_HASHES.setdefault("git", set()).add("eae2d1a9507e19b95ce73f5d9eaa89cf6969fde35991882ed692556d0503f406")
+
 # Commands now built into the Rust core, or removed (`todo`, replaced by
 # `ul desk`). Untouched seeds with these hashes are removed so the built-in
 # runs; edited copies stay and override it.

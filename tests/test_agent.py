@@ -255,6 +255,8 @@ class AgentCase(CoreTestCase):
             "security",
             f"#!{sys.executable}\nimport sys, pathlib\nstore = pathlib.Path({str(self.keychain)!r})\n"
             "args = sys.argv[1:]\n"
+            "open(str(store) + '.argv', 'a').write(repr(args) + '\\n')\n"
+            "if args == ['-i']:\n    import shlex; args = shlex.split(sys.stdin.read())\n"
             "if args[0] == 'add-generic-password':\n    store.write_text(args[args.index('-w') + 1]); raise SystemExit(0)\n"
             "if store.exists(): print(store.read_text()); raise SystemExit(0)\n"
             "raise SystemExit(44)\n",
@@ -842,6 +844,7 @@ class SetupTests(AgentCase):
         self.assertIn("@unlaw_test_bot", result.stdout)
         self.assertEqual(self.keychain.read_text(encoding="utf-8"), "123:abc")
         self.assertIn("macOS Keychain", result.stdout)
+        self.assertNotIn("123:abc", Path(str(self.keychain) + ".argv").read_text(), "the token is in no process's argv")
         # The old .env token is dropped so only one token is in use; other lines stay.
         self.assertEqual((self.unlaw / ".env").read_text(encoding="utf-8"), "OTHER=1\n")
         self.assertNotIn("123:abc", (self.unlaw / "config.toml").read_text(encoding="utf-8"))

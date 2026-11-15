@@ -131,6 +131,9 @@ class TelegramTests(ServiceTestCase):
             "import sys, pathlib\n"
             f"store = pathlib.Path({str(self.keychain)!r})\n"
             "args = sys.argv[1:]\n"
+            "open(str(store) + '.argv', 'a').write(repr(args) + '\\n')\n"
+            "if args == ['-i']:\n"
+            "    import shlex; args = shlex.split(sys.stdin.read())\n"
             "if args[0] == 'add-generic-password':\n"
             "    store.write_text(args[args.index('-w') + 1]); raise SystemExit(0)\n"
             "if store.exists(): print(store.read_text()); raise SystemExit(0)\n"
@@ -288,6 +291,7 @@ class TelegramTests(ServiceTestCase):
         self.assertEqual(code, 0, error)
         self.assertEqual(out, "Telegram connected: @fresh_bot\n")
         self.assertEqual(self.keychain.read_text(), new)
+        self.assertNotIn(new, Path(str(self.keychain) + ".argv").read_text(), "the token is in no process's argv")
         from unlawful.config import config_dir, load_config
 
         self.assertFalse((config_dir() / ".env").exists(), "nothing is written to .env")

@@ -89,7 +89,7 @@ _HINTS = {
 
 
 def _hosts_run(
-    argv: list[str], timeout: float = _TOOL_TIMEOUT
+    argv: list[str], timeout: float = _TOOL_TIMEOUT, stdin: str | None = None
 ) -> subprocess.CompletedProcess[str]:
     """Run a program from PATH with an argument list; missing or hung tools become HostError."""
     program = argv[0]
@@ -104,7 +104,7 @@ def _hosts_run(
             text=True,
             check=False,
             timeout=timeout,
-            stdin=subprocess.DEVNULL,
+            **({"stdin": subprocess.DEVNULL} if stdin is None else {"input": stdin}),
         )
     except subprocess.TimeoutExpired:
         raise HostError(f"`{program}` timed out after {timeout:g}s") from None
@@ -286,28 +286,19 @@ def save_token(host: str, value: str, base_url: str | None = None) -> None:
     value = value.strip()
     if not value or any(ch.isspace() or ord(ch) < 32 for ch in value):
         raise HostError("the token must be one word without spaces")
-    # Same call as telegram.py/agent.py. The value is briefly visible in this process's argv (`ps`).
-    result = _hosts_run(
-        [
-            "security",
-            "add-generic-password",
-            "-a",
-            "unlaw",
-            "-s",
-            service,
-            "-w",
-            value,
-            "-U",
-        ]
-    )
-    if result.returncode != 0:
+    # `security -i` reads the command from stdin, so the value never appears in argv (`ps`).
+    def quote(text: str) -> str:
+        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    result = _hosts_run(["security", "-i"], stdin=f"add-generic-password -a unlaw -s {quote(service)} -U -w {quote(value)}\n")
+    # It exits 0 even when its command failed, so the token is read back.
+    if result.returncode != 0 or token(host, base_url) != value:
         detail = _hosts_scrub(_hosts_last_line(result.stderr), value)
         raise HostError(
             f"could not write the macOS Keychain: {detail}"
             if detail
             else "could not write the macOS Keychain"
         )
-
 
 
 def prompt_token(host: str, base_url: str | None = None) -> None:

@@ -2831,6 +2831,25 @@ def _keychain_token(service: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def _keychain_store(service: str, token: str) -> None:
+    """`security -i` reads the command from stdin, so the token never appears in a process's arguments (`ps`)."""
+    if any(ord(character) < 32 or character == "\x7f" for character in service + token):
+        raise ValueError("the token and the Keychain service name must not contain control characters")
+
+    def quote(text: str) -> str:
+        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    command = f"add-generic-password -a unlaw -s {quote(service)} -U -w {quote(token)}\n"
+    try:
+        result = subprocess.run(["security", "-i"], input=command, capture_output=True, text=True, check=False)
+    except OSError as error:
+        raise RuntimeError(f"could not run security: {error}") from error
+    # `security -i` exits 0 even when its command failed, so the token is read back.
+    if result.returncode != 0 or _keychain_token(service) != token:
+        detail = (result.stderr or "").replace(token, "***").strip()
+        raise RuntimeError(detail or "could not write the macOS Keychain")
+
+
 def stored_token(keychain_service: str) -> str:
     """The macOS Keychain first; .env only when the Keychain has no token."""
     return _keychain_token(keychain_service) or _env_token()
@@ -2841,14 +2860,7 @@ def store_token(token: str, keychain_service: str) -> None:
     token = token.strip()
     if not token or any(character.isspace() for character in token):
         raise ValueError("the token must be one word without spaces")
-    result = subprocess.run(
-        ["security", "add-generic-password", "-a", "unlaw", "-s", keychain_service, "-w", token, "-U"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or "could not write the macOS Keychain").strip())
+    _keychain_store(keychain_service, token)
     path = env_file()
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
