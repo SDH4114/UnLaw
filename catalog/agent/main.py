@@ -762,6 +762,7 @@ import re
 import select
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import termios
@@ -870,7 +871,14 @@ def _write_atomic(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:6]}.tmp")
     try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        mode = None  # a new file gets the usual mode
+    try:
         temporary.write_text(text, encoding="utf-8")
+        if mode is not None:
+            # An edited script stays executable and a private file stays private.
+            os.chmod(temporary, mode)
         os.replace(temporary, path)
     finally:
         if temporary.exists():
@@ -1027,6 +1035,11 @@ class Model:
                 return json.loads(response.read().decode("utf-8") or "null")
         except urllib.error.HTTPError as error:
             raise RuntimeError(_model_error(error.read(), str(error))) from error
+        except (ValueError, http.client.HTTPException) as error:
+            raise RuntimeError(f"local model: malformed answer ({type(error).__name__})") from error
+        except OSError as error:
+            # Connection refused, reset or timed out: the same kind of failure for every caller.
+            raise RuntimeError(f"local model: {getattr(error, 'reason', None) or error}") from error
 
     def _alive(self) -> bool:
         try:
@@ -1170,7 +1183,12 @@ class Model:
                 data = line[5:].strip()
                 if data == "[DONE]":
                     break
-                chunk = json.loads(data)
+                try:
+                    chunk = json.loads(data)
+                except ValueError:
+                    raise RuntimeError("local model: malformed stream") from None
+                if not isinstance(chunk, dict):
+                    continue
                 if "error" in chunk:
                     raise RuntimeError("local model: " + str(chunk["error"].get("message", chunk["error"])))
                 if chunk.get("usage"):
@@ -1309,10 +1327,23 @@ class Schedule:
     def __init__(self) -> None:
         self.path = agent_dir("schedule.json")
 
+    def _load(self) -> tuple[list, bool]:
+        """(entries, damaged). A missing file is empty; one that is not `{"jobs": [...]}` is damaged."""
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return [], False
+        except (OSError, ValueError):
+            return [], True
+        try:
+            stored = json.loads(text)
+        except ValueError:
+            return [], True
+        jobs = stored.get("jobs") if isinstance(stored, dict) else None
+        return (jobs, False) if isinstance(jobs, list) else ([], True)
+
     def _stored(self) -> list:
-        stored = _read_json(self.path, {})
-        jobs = stored.get("jobs", []) if isinstance(stored, dict) else []
-        return jobs if isinstance(jobs, list) else []
+        return self._load()[0]
 
     def jobs(self) -> list[dict]:
         # A hand-edited or damaged entry must never stop the server's tick, but it stays in the file.
@@ -1330,6 +1361,11 @@ class Schedule:
                 fcntl.flock(handle, fcntl.LOCK_UN)
 
     def _save(self, jobs: list[dict]) -> None:
+        if self._load()[1]:
+            # A cut-off or hand-broken file may still hold the user's jobs: it is kept, never written over.
+            aside = self.path.with_name(f"{self.path.name}.damaged-{now():%Y%m%d-%H%M%S}")
+            os.replace(self.path, aside)
+            print(f"unlaw agent: {self.path} was damaged; kept as {aside.name}", file=sys.stderr)
         _write_atomic(
             self.path, json.dumps({"jobs": jobs}, ensure_ascii=False, indent=2) + "\n"
         )
@@ -2916,8 +2952,13 @@ class Telegram:
         except urllib.error.HTTPError as error:
             try:
                 payload = json.loads(error.read().decode("utf-8"))
-            except ValueError:
+            except (ValueError, http.client.HTTPException):
                 raise RuntimeError(f"Telegram: {error}") from error
+        except (ValueError, http.client.HTTPException) as error:
+            # A captive portal or proxy answering with a web page, or a connection cut mid-answer.
+            raise RuntimeError(f"Telegram: the answer is not JSON ({type(error).__name__})") from error
+        if not isinstance(payload, dict):
+            raise RuntimeError("Telegram: unexpected answer")
         if not payload.get("ok"):
             raise RuntimeError(f"Telegram: {payload.get('description', 'API error')}")
         return payload.get("result")
@@ -3034,6 +3075,9 @@ class Bot:
         if "offset" in self.state:
             fields["offset"] = self.state["offset"]
         updates = self.telegram.call("getUpdates", fields, timeout=timeout + 30) or []
+        if not isinstance(updates, list):
+            raise RuntimeError("Telegram: unexpected answer")
+        updates = [update for update in updates if isinstance(update, dict) and isinstance(update.get("update_id"), int)]
         if updates:
             self.state["offset"] = max(update["update_id"] for update in updates) + 1
             self._save_state()
@@ -3270,20 +3314,30 @@ class Bot:
         audit(chat_id, "scheduled", job["prompt"], "ran")
 
     def run(self, polls: int | None = None) -> int:
-        self.skip_backlog()
+        while True:
+            try:
+                self.skip_backlog()
+                break
+            except (OSError, RuntimeError) as error:
+                if polls is not None:
+                    raise
+                # No network yet (a login before Wi-Fi is up): wait instead of leaving launchd to restart us.
+                self.log(f"Telegram: {error}")
+                time.sleep(5)
         count = 0
         while polls is None or count < polls:
             count += 1
-            # A network error or timeout on Telegram's side must never end the server.
+            # Nothing on Telegram's side (no network, a proxy's web page, an update of an odd shape)
+            # may end the server: every step is logged and the loop goes on.
             try:
                 self.tick()
-            except (OSError, RuntimeError) as error:
+            except Exception as error:  # noqa: BLE001
                 self.log(f"Telegram: {error}")
             while self.backlog:
                 self.safe_handle(self.backlog.pop(0))
             try:
                 updates = self.fetch(self.poll_timeout)
-            except (RuntimeError, OSError, urllib.error.URLError) as error:
+            except Exception as error:  # noqa: BLE001
                 if "conflict" in str(error).casefold():
                     self.log("another `ula server` reads this bot (the background one or another terminal); stop it")
                 else:
@@ -3297,8 +3351,9 @@ class Bot:
     def safe_handle(self, update: dict) -> None:
         try:
             self.handle(update)
-        except (OSError, RuntimeError) as error:
-            self.log(f"update {update.get('update_id', '?')} failed: {error}")
+        except Exception as error:  # noqa: BLE001
+            number = update.get("update_id", "?") if isinstance(update, dict) else "?"
+            self.log(f"update {number} failed: {type(error).__name__}: {error}")
 
 
 def server(config: dict) -> int:

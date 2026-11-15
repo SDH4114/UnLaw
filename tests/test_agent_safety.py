@@ -138,6 +138,104 @@ class AgentSafetyTests(unittest.TestCase):
                 schedule.path.write_text(json.dumps({"jobs": value}))
                 self.assertEqual(schedule.jobs(), [])
 
+    def test_a_cut_off_schedule_is_kept_aside_not_overwritten(self) -> None:
+        schedule = agent.Schedule()
+        schedule.path.parent.mkdir(parents=True, exist_ok=True)
+        cut = '{"jobs": [{"id": "aaaaaa", "prompt": "keep me", "next": "2099-01-01T10:00:00", "repeat": "once"}'
+        schedule.path.write_text(cut)
+        self.assertEqual(schedule.jobs(), [], "reading never fails")
+        self.assertEqual(schedule.take_due(agent.now()), [])
+        self.assertEqual(schedule.path.read_text(), cut, "reading never rewrites")
+        with patch.object(sys, "stderr"):
+            added = schedule.add("new", agent.now() + dt.timedelta(hours=1), "once", "terminal")
+        self.assertEqual(schedule.jobs(), [added])
+        kept = list(schedule.path.parent.glob("schedule.json.damaged-*"))
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0].read_text(), cut)
+
+    def test_writes_keep_the_mode_of_the_file(self) -> None:
+        class Approve:
+            can_send_files = False
+
+            def confirm(self, *args, **kwargs):
+                return True
+
+        tools = agent.Tools(self.config, Approve(), "terminal", "full", self.root)
+        script, private = self.root / "run.sh", self.root / "notes.txt"
+        script.write_text("#!/bin/sh\necho one\n")
+        script.chmod(0o755)
+        private.write_text("mine")
+        private.chmod(0o600)
+        self.assertIn("Edited", tools.call("edit_file", {"path": str(script), "old": "one", "new": "two"}))
+        self.assertIn("Wrote", tools.call("write_file", {"path": str(private), "content": "still mine"}))
+        self.assertEqual(script.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(private.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(private.read_text(), "still mine")
+
+    def test_a_web_page_instead_of_json_does_not_stop_the_telegram_server(self) -> None:
+        # A captive portal or proxy answers 200 with HTML; json.loads used to raise through Bot.run.
+        import http.server
+        import threading
+
+        answers = []
+
+        class Portal(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                first = not answers
+                answers.append(self.path)
+                body = b'{"ok": true, "result": []}' if first else b"<html>Sign in to Wi-Fi</html>"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Portal)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        telegram = agent.Telegram("123:TOKEN", f"http://127.0.0.1:{server.server_port}")
+        self.config["agent"]["digest_time"] = ""
+        bot = agent.Bot(self.config, telegram, agent.Model(self.config))
+        bot.poll_timeout = 0
+        lines: list[str] = []
+        bot.log = lines.append
+        with patch.object(agent.time, "sleep"), patch.object(agent, "load_config", return_value=self.config):
+            self.assertEqual(bot.run(polls=2), 0)
+        self.assertEqual(len(answers), 3, "the backlog call and two polls")
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(all("not JSON" in line and "TOKEN" not in line for line in lines), lines)
+        with self.assertRaises(RuntimeError):
+            telegram.call("getMe", {})
+
+    def test_updates_of_an_odd_shape_are_skipped(self) -> None:
+        server = FakeServer(lambda method, path, body, headers: (200, {"ok": True, "result": [7, {"no": "id"}, {"update_id": 5, "message": "text"}]}))
+        self.addCleanup(server.close)
+        bot = agent.Bot(self.config, agent.Telegram("123:TOKEN", server.url), agent.Model(self.config))
+        lines: list[str] = []
+        bot.log = lines.append
+        updates = bot.fetch(0)
+        self.assertEqual([update["update_id"] for update in updates], [5])
+        with patch.object(agent, "load_config", return_value=self.config):
+            bot.safe_handle(updates[0])  # "message" is not an object: logged, never raised
+        self.assertEqual(len(lines), 1)
+        self.assertIn("update 5 failed", lines[0])
+
+    def test_a_model_server_that_is_gone_is_an_ordinary_error(self) -> None:
+        import socket
+
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        with patch.dict(os.environ, {"UNLAW_AGENT_LM_URL": f"http://127.0.0.1:{port}"}):
+            model = agent.Model(self.config)
+        with self.assertRaises(RuntimeError) as failure:
+            model.chat([{"role": "user", "content": "hi"}], [])
+        self.assertIn("local model", str(failure.exception))
+
     def test_text_reads_allocate_by_read_limit_not_total_file_size(self) -> None:
         file = self.root / "large.log"
         with file.open("wb") as handle:
