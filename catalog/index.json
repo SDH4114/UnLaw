@@ -4,7 +4,7 @@
   {
    "name": "agent",
    "summary": "Your local AI agent: files, TODO board and schedule, in the console or Telegram.",
-   "sha256": "6719c604ca78f09ee6454a7e7454a5f6ef02ef4e6d786f309ac25818b8725b6b"
+   "sha256": "e565fe372736318df391de1cd6d97f344267ce1a9b432bd710ecad71d4a7e1a5"
   },
   {
    "name": "awake",
@@ -34,12 +34,12 @@
   {
    "name": "desk",
    "summary": "Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser.",
-   "sha256": "8a1f3ce375b91e857ecd6fcb11b1939131c278c5ff21ac421e944d371f858672"
+   "sha256": "ca302c69961b2c794a72b0f8b85b36bb7fc0ac0483760e80cf28048871a2c31a"
   },
   {
    "name": "git",
    "summary": "Stage, commit and push the current Git project, or run a Git action.",
-   "sha256": "73fedcdeeac6278dd60f6a3c8513a95771543b477b42af765c107c4d610abe64"
+   "sha256": "a4e96c942da41a514e8cc6afac36c714d7b153985f6464aaed779d660c4da6e7"
   },
   {
    "name": "gpt",

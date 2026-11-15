@@ -97,7 +97,7 @@ class GitTests(ToolTestCase):
     def test_failures_stop_the_workflow(self) -> None:
         log = self.tool("git", exit_code=1)
         self.assertEqual(self.run_main(git_command.main, ["sync", "msg"])[0], 1)
-        self.assertEqual(self.lines(log), ["pull|--rebase"])
+        self.assertEqual(self.lines(log), ["pull|--rebase|--autostash"])
         os.environ["PATH"] = "/nonexistent"
         code, _, error = self.run_main(git_command.main, ["commit", "x"])
         self.assertEqual(code, 1)

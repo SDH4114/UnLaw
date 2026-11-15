@@ -241,7 +241,10 @@ Actions:
                               origin (-u). `ul git status` and `ul git pull` were removed:
                               use git status / git pull
   commit [message]            Stage and commit without pushing
-  sync [message]              Pull with rebase, then stage, commit and push
+                              A message word starting with - is refused as an unknown
+                              option; put such a message after -- (ul git -- -x fix)
+  sync [message]              Pull with rebase (local changes are stashed and put back),
+                              then stage, commit and push
   init                        Create a repository on branch main (refuses inside one), merge a
                               .gitignore for the detected project types (pyproject.toml or
                               requirements.txt = python, Cargo.toml = rust, CMakeLists.txt = cpp,

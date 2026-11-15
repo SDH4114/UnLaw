@@ -293,8 +293,9 @@ def _git_secrets_guard(allow: bool) -> int:
         return 0
     # Literal pathspecs from stdin: a file named `:(exclude)x` must not unstage everything else,
     # and a long list cannot hit the argument limit.
+    # The names are relative to the repository root; run reset there, not in a subfolder.
     reset = _git_out(
-        "--literal-pathspecs", "reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul",
+        "-C", root, "--literal-pathspecs", "reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul",
         stdin="\0".join(path for path, _ in found),
     )
     if reset.returncode:
@@ -335,9 +336,30 @@ def _commit_workflow(
     return _git_push_all()
 
 
+def _git_shown(url: str) -> str:
+    """A remote URL for printing: a user:password@ part (a token) is masked."""
+    return _git_clean(re.sub(r"(://)[^/@\s]+@", r"\1***@", url))
+
+
 def _git_commit_args(args: list[str]) -> tuple[list[str], bool]:
-    allow = "--allow-secrets" in args
-    return [arg for arg in args if arg != "--allow-secrets"], allow
+    """The message words and --allow-secrets. Any other option is refused, so a typo like
+    `ul git --amend` never becomes a commit message that is pushed at once; words after `--`
+    are message text even when they start with -."""
+    allow = False
+    tokens: list[str] = []
+    literal = False
+    for arg in args:
+        if literal:
+            tokens.append(arg)
+        elif arg == "--":
+            literal = True
+        elif arg == "--allow-secrets":
+            allow = True
+        elif arg.startswith("-") and arg != "-":
+            raise _GitUsage(f"unknown option {arg} (a message starting with - goes after --)")
+        else:
+            tokens.append(arg)
+    return tokens, allow
 
 
 def _git_detect_types() -> list[str]:
@@ -454,7 +476,7 @@ def _git_verify_remote(target: str) -> int:
     result = _git_out("ls-remote", "--end-of-options", target)
     if result.returncode:
         return _git_fail(
-            f"cannot access {target}: {_git_clean(result.stderr.strip()) or 'ls-remote failed'}"
+            f"cannot access {_git_shown(target)}: {_git_clean(result.stderr.strip()) or 'ls-remote failed'}"
         )
     return 0
 
@@ -476,18 +498,18 @@ def _git_connect(args: list[str]) -> int:
         url = existing
     elif existing and not force and is_host_name(spec):
         return _git_fail(
-            f"origin already points to {existing}; use --force to replace it."
+            f"origin already points to {_git_shown(existing)}; use --force to replace it."
         )
     else:
         url = _git_resolve_remote(spec, options)
     if existing and existing != url and not force:
         return _git_fail(
-            f"origin already points to {existing}; use --force to replace it with {url}."
+            f"origin already points to {_git_shown(existing)}; use --force to replace it with {_git_shown(url)}."
         )
     if existing is None:
         code = _run_all([["git", "remote", "add", "origin", url]])
     elif existing != url:
-        print(f"Replacing origin (was {existing}).")
+        print(f"Replacing origin (was {_git_shown(existing)}).")
         code = _run_all([["git", "remote", "set-url", "origin", url]])
     else:
         code = 0
@@ -521,7 +543,7 @@ def _git_mirror(args: list[str]) -> int:
         if not mirrors:
             print("No mirrors. Add one with: ul git mirror add <host|URL>")
         for name in mirrors:
-            print(f"{name}\t{_git_remote_url(name) or ''}")
+            print(f"{name}\t{_git_shown(_git_remote_url(name) or '')}")
         return 0
     if action == "remove":
         if len(rest) != 1:
@@ -561,7 +583,7 @@ def _git_mirror(args: list[str]) -> int:
         return code
     code = _run_all([["git", "remote", "add", remote, url]])
     if not code:
-        print(f"Added {remote} -> {url}. `ul git push` now pushes there too.")
+        print(f"Added {remote} -> {_git_shown(url)}. `ul git push` now pushes there too.")
     return code
 
 
@@ -584,7 +606,7 @@ def _git_open(args: list[str]) -> int:
         return _git_fail("no origin remote; run `ul git connect` first.")
     page = web_url(origin)
     if not page:
-        return _git_fail(f"cannot work out a web page for {origin}.")
+        return _git_fail(f"cannot work out a web page for {_git_shown(origin)}.")
     page = page.rstrip("/")
     branch = _git_branch()
     host = host_of(origin)
@@ -630,7 +652,7 @@ def _git_pr(args: list[str]) -> int:
         return _run_all([["gh", "pr", "create", "--fill", "--base", base]])
     page = pr_url(origin, branch, base)
     if not page:
-        return _git_fail(f"cannot work out a pull request page for {origin}.")
+        return _git_fail(f"cannot work out a pull request page for {_git_shown(origin)}.")
     return _git_open_url(page)
 
 
@@ -727,7 +749,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             if action == "commit":
                 return _commit_workflow(tokens, push=False, allow_secrets=allow)
             if action == "sync":
-                code = _run_all([["git", "pull", "--rebase"]])
+                # --autostash: local changes are what sync is for; a plain rebase refuses a dirty tree.
+                code = _run_all([["git", "pull", "--rebase", "--autostash"]])
                 return code or _commit_workflow(tokens, push=True, allow_secrets=allow)
             return _commit_workflow(tokens, push=True, allow_secrets=allow)
         handlers = {

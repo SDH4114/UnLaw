@@ -2,7 +2,7 @@
 """Stage, commit and push the current Git project, or run a Git action."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Stage, commit and push the current Git project, or run a Git action.\nUsage: ul git [message]\n       ul git push [message] | commit [message] | sync [message]\n       ul git init [--connect SPEC] [--public] [--name NAME]\n       ul git connect SPEC [--public] [--name NAME] [--url BASE] [--force]\n       ul git mirror add SPEC [--name N] | list | remove NAME\n       ul git token HOST | open | pr [--base BRANCH] | undo [--list | COMMIT]\nActions:\n  no arguments / <message>    git add ., commit, then push (prompts "Commit message:" when\n                              missing; with nothing to commit it only pushes)\n  push [message]              Same as above. A branch without an upstream is published on\n                              origin (-u). `ul git status` and `ul git pull` were removed:\n                              use git status / git pull\n  commit [message]            Stage and commit without pushing\n  sync [message]              Pull with rebase, then stage, commit and push\n  init                        Create a repository on branch main (refuses inside one), merge a\n                              .gitignore for the detected project types (pyproject.toml or\n                              requirements.txt = python, Cargo.toml = rust, CMakeLists.txt = cpp,\n                              package.json = node; only missing lines are added, yours are kept\n                              and .env, keys and .DS_Store are always ignored), then make the\n                              first commit "Initial commit"\n  connect SPEC                Set origin and push the current branch with -u\n  mirror add|list|remove      Extra remotes named mirror-*; every push also pushes to them\n  token HOST [--url BASE]     Save an API token: the Keychain\'s own hidden prompt asks for it\n                              twice, so it never appears in argv (`ps`)\n  open                        Open the origin page of the current branch in the browser\n  pr                          Push the current branch, then open a pull request (GitHub with\n                              gh when installed, otherwise the host\'s compare page). Commit\n                              first: a branch with no commits beyond the base is refused\n  undo                        Undo the last commit, keeping its changes staged\n  undo --list                 Show the commits of this branch, newest first; (local) marks the\n                              ones not pushed yet\n  undo COMMIT                 Go back to COMMIT (a hash, or its message or a unique part of it):\n                              it stays, every later commit is undone and their changes stay\n                              staged. Refused when any undone commit is already on a remote\n                              branch (use git revert)\nOptions:\n  --connect SPEC     (init) run connect afterwards\n  --public           Create the repository public (default: private)\n  --name NAME        Repository name to create (default: the folder name); for mirror add with a\n                     URL it is the mirror name (remote mirror-NAME)\n  --url BASE         Server for gitea or a self-hosted gitlab, for example https://git.example.com\n                     (also for token: the token is saved for that server only)\n  --force            Replace an origin that points somewhere else\n  --base BRANCH      (pr) target branch, default main\n  --allow-secrets    Commit even when secrets or files over 50 MB are staged\n  -h, --help         Show this help\nSPEC is a host name (github, gitlab, codeberg, gitea: creates the repository through its API),\n  a short form (gh:owner/repo, gl:..., cb:...) or a full URL or path. Short forms become SSH URLs.\nSecrets guard: every commit path unstages .env and .env.* (not .env.example), .netrc, .pypirc,\n  *.pem, *.key, *.p8, *.p12, *.pfx, *.jks, *.keystore, id_rsa*, id_ed25519*, id_ecdsa*, id_dsa*\n  (not .pub; names compared ignoring case) and files over 50 MB, explains why and stops with\n  exit 1. Fix it with .gitignore, or pass --allow-secrets. Deleting such a file is always allowed.\n  init never writes through a .gitignore that is a symlink.\nMirrors: they exist only as Git remotes named mirror-* in the repository. A failing mirror is\n  reported as a warning and does not fail the push when origin succeeded.\nSSH: for SSH remotes of a known host connect checks the login. When it fails it offers to\n  create ~/.ssh/id_ed25519, prints the public key and opens the host\'s key page; add the key\n  and run the command again. An unknown host key is never accepted silently: check the\n  fingerprint and accept it once with `ssh -T git@HOST`.\nTokens: stored in the macOS Keychain per server, service unlaw.git.<server> (for example\n  unlaw.git.gitlab.com), and only ever sent to that server. Scopes: gitlab and gitea or\n  codeberg need an access token that can create repositories (gitlab: api; gitea/codeberg:\n  write:repository and write:user). GitHub uses `gh auth login` instead of a token.\nDependencies: git; ssh; gh (optional, for GitHub pull requests); the macOS `open` command.\nExamples: ul git "Fix downloader"\n  ul git init --connect github\n  ul git connect gh:me/project --force\n  ul git mirror add codeberg\n  ul git token codeberg\n  ul git token gitea --url https://git.example.com\n  ul git pr --base develop\n  ul git undo --list\n  ul git undo "add parser"\n'
+COMMAND_HELP = 'Stage, commit and push the current Git project, or run a Git action.\nUsage: ul git [message]\n       ul git push [message] | commit [message] | sync [message]\n       ul git init [--connect SPEC] [--public] [--name NAME]\n       ul git connect SPEC [--public] [--name NAME] [--url BASE] [--force]\n       ul git mirror add SPEC [--name N] | list | remove NAME\n       ul git token HOST | open | pr [--base BRANCH] | undo [--list | COMMIT]\nActions:\n  no arguments / <message>    git add ., commit, then push (prompts "Commit message:" when\n                              missing; with nothing to commit it only pushes)\n  push [message]              Same as above. A branch without an upstream is published on\n                              origin (-u). `ul git status` and `ul git pull` were removed:\n                              use git status / git pull\n  commit [message]            Stage and commit without pushing\n                              A message word starting with - is refused as an unknown\n                              option; put such a message after -- (ul git -- -x fix)\n  sync [message]              Pull with rebase (local changes are stashed and put back),\n                              then stage, commit and push\n  init                        Create a repository on branch main (refuses inside one), merge a\n                              .gitignore for the detected project types (pyproject.toml or\n                              requirements.txt = python, Cargo.toml = rust, CMakeLists.txt = cpp,\n                              package.json = node; only missing lines are added, yours are kept\n                              and .env, keys and .DS_Store are always ignored), then make the\n                              first commit "Initial commit"\n  connect SPEC                Set origin and push the current branch with -u\n  mirror add|list|remove      Extra remotes named mirror-*; every push also pushes to them\n  token HOST [--url BASE]     Save an API token: the Keychain\'s own hidden prompt asks for it\n                              twice, so it never appears in argv (`ps`)\n  open                        Open the origin page of the current branch in the browser\n  pr                          Push the current branch, then open a pull request (GitHub with\n                              gh when installed, otherwise the host\'s compare page). Commit\n                              first: a branch with no commits beyond the base is refused\n  undo                        Undo the last commit, keeping its changes staged\n  undo --list                 Show the commits of this branch, newest first; (local) marks the\n                              ones not pushed yet\n  undo COMMIT                 Go back to COMMIT (a hash, or its message or a unique part of it):\n                              it stays, every later commit is undone and their changes stay\n                              staged. Refused when any undone commit is already on a remote\n                              branch (use git revert)\nOptions:\n  --connect SPEC     (init) run connect afterwards\n  --public           Create the repository public (default: private)\n  --name NAME        Repository name to create (default: the folder name); for mirror add with a\n                     URL it is the mirror name (remote mirror-NAME)\n  --url BASE         Server for gitea or a self-hosted gitlab, for example https://git.example.com\n                     (also for token: the token is saved for that server only)\n  --force            Replace an origin that points somewhere else\n  --base BRANCH      (pr) target branch, default main\n  --allow-secrets    Commit even when secrets or files over 50 MB are staged\n  -h, --help         Show this help\nSPEC is a host name (github, gitlab, codeberg, gitea: creates the repository through its API),\n  a short form (gh:owner/repo, gl:..., cb:...) or a full URL or path. Short forms become SSH URLs.\nSecrets guard: every commit path unstages .env and .env.* (not .env.example), .netrc, .pypirc,\n  *.pem, *.key, *.p8, *.p12, *.pfx, *.jks, *.keystore, id_rsa*, id_ed25519*, id_ecdsa*, id_dsa*\n  (not .pub; names compared ignoring case) and files over 50 MB, explains why and stops with\n  exit 1. Fix it with .gitignore, or pass --allow-secrets. Deleting such a file is always allowed.\n  init never writes through a .gitignore that is a symlink.\nMirrors: they exist only as Git remotes named mirror-* in the repository. A failing mirror is\n  reported as a warning and does not fail the push when origin succeeded.\nSSH: for SSH remotes of a known host connect checks the login. When it fails it offers to\n  create ~/.ssh/id_ed25519, prints the public key and opens the host\'s key page; add the key\n  and run the command again. An unknown host key is never accepted silently: check the\n  fingerprint and accept it once with `ssh -T git@HOST`.\nTokens: stored in the macOS Keychain per server, service unlaw.git.<server> (for example\n  unlaw.git.gitlab.com), and only ever sent to that server. Scopes: gitlab and gitea or\n  codeberg need an access token that can create repositories (gitlab: api; gitea/codeberg:\n  write:repository and write:user). GitHub uses `gh auth login` instead of a token.\nDependencies: git; ssh; gh (optional, for GitHub pull requests); the macOS `open` command.\nExamples: ul git "Fix downloader"\n  ul git init --connect github\n  ul git connect gh:me/project --force\n  ul git mirror add codeberg\n  ul git token codeberg\n  ul git token gitea --url https://git.example.com\n  ul git pr --base develop\n  ul git undo --list\n  ul git undo "add parser"\n'
 
 """Git hosting services: remote shortcuts, repository creation, tokens, SSH keys and web links."""
 
@@ -835,8 +835,9 @@ def _git_secrets_guard(allow: bool) -> int:
         return 0
     # Literal pathspecs from stdin: a file named `:(exclude)x` must not unstage everything else,
     # and a long list cannot hit the argument limit.
+    # The names are relative to the repository root; run reset there, not in a subfolder.
     reset = _git_out(
-        "--literal-pathspecs", "reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul",
+        "-C", root, "--literal-pathspecs", "reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul",
         stdin="\0".join(path for path, _ in found),
     )
     if reset.returncode:
@@ -877,9 +878,30 @@ def _commit_workflow(
     return _git_push_all()
 
 
+def _git_shown(url: str) -> str:
+    """A remote URL for printing: a user:password@ part (a token) is masked."""
+    return _git_clean(re.sub(r"(://)[^/@\s]+@", r"\1***@", url))
+
+
 def _git_commit_args(args: list[str]) -> tuple[list[str], bool]:
-    allow = "--allow-secrets" in args
-    return [arg for arg in args if arg != "--allow-secrets"], allow
+    """The message words and --allow-secrets. Any other option is refused, so a typo like
+    `ul git --amend` never becomes a commit message that is pushed at once; words after `--`
+    are message text even when they start with -."""
+    allow = False
+    tokens: list[str] = []
+    literal = False
+    for arg in args:
+        if literal:
+            tokens.append(arg)
+        elif arg == "--":
+            literal = True
+        elif arg == "--allow-secrets":
+            allow = True
+        elif arg.startswith("-") and arg != "-":
+            raise _GitUsage(f"unknown option {arg} (a message starting with - goes after --)")
+        else:
+            tokens.append(arg)
+    return tokens, allow
 
 
 def _git_detect_types() -> list[str]:
@@ -996,7 +1018,7 @@ def _git_verify_remote(target: str) -> int:
     result = _git_out("ls-remote", "--end-of-options", target)
     if result.returncode:
         return _git_fail(
-            f"cannot access {target}: {_git_clean(result.stderr.strip()) or 'ls-remote failed'}"
+            f"cannot access {_git_shown(target)}: {_git_clean(result.stderr.strip()) or 'ls-remote failed'}"
         )
     return 0
 
@@ -1018,18 +1040,18 @@ def _git_connect(args: list[str]) -> int:
         url = existing
     elif existing and not force and is_host_name(spec):
         return _git_fail(
-            f"origin already points to {existing}; use --force to replace it."
+            f"origin already points to {_git_shown(existing)}; use --force to replace it."
         )
     else:
         url = _git_resolve_remote(spec, options)
     if existing and existing != url and not force:
         return _git_fail(
-            f"origin already points to {existing}; use --force to replace it with {url}."
+            f"origin already points to {_git_shown(existing)}; use --force to replace it with {_git_shown(url)}."
         )
     if existing is None:
         code = _run_all([["git", "remote", "add", "origin", url]])
     elif existing != url:
-        print(f"Replacing origin (was {existing}).")
+        print(f"Replacing origin (was {_git_shown(existing)}).")
         code = _run_all([["git", "remote", "set-url", "origin", url]])
     else:
         code = 0
@@ -1063,7 +1085,7 @@ def _git_mirror(args: list[str]) -> int:
         if not mirrors:
             print("No mirrors. Add one with: ul git mirror add <host|URL>")
         for name in mirrors:
-            print(f"{name}\t{_git_remote_url(name) or ''}")
+            print(f"{name}\t{_git_shown(_git_remote_url(name) or '')}")
         return 0
     if action == "remove":
         if len(rest) != 1:
@@ -1103,7 +1125,7 @@ def _git_mirror(args: list[str]) -> int:
         return code
     code = _run_all([["git", "remote", "add", remote, url]])
     if not code:
-        print(f"Added {remote} -> {url}. `ul git push` now pushes there too.")
+        print(f"Added {remote} -> {_git_shown(url)}. `ul git push` now pushes there too.")
     return code
 
 
@@ -1126,7 +1148,7 @@ def _git_open(args: list[str]) -> int:
         return _git_fail("no origin remote; run `ul git connect` first.")
     page = web_url(origin)
     if not page:
-        return _git_fail(f"cannot work out a web page for {origin}.")
+        return _git_fail(f"cannot work out a web page for {_git_shown(origin)}.")
     page = page.rstrip("/")
     branch = _git_branch()
     host = host_of(origin)
@@ -1172,7 +1194,7 @@ def _git_pr(args: list[str]) -> int:
         return _run_all([["gh", "pr", "create", "--fill", "--base", base]])
     page = pr_url(origin, branch, base)
     if not page:
-        return _git_fail(f"cannot work out a pull request page for {origin}.")
+        return _git_fail(f"cannot work out a pull request page for {_git_shown(origin)}.")
     return _git_open_url(page)
 
 
@@ -1269,7 +1291,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             if action == "commit":
                 return _commit_workflow(tokens, push=False, allow_secrets=allow)
             if action == "sync":
-                code = _run_all([["git", "pull", "--rebase"]])
+                # --autostash: local changes are what sync is for; a plain rebase refuses a dirty tree.
+                code = _run_all([["git", "pull", "--rebase", "--autostash"]])
                 return code or _commit_workflow(tokens, push=True, allow_secrets=allow)
             return _commit_workflow(tokens, push=True, allow_secrets=allow)
         handlers = {

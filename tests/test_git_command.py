@@ -367,6 +367,47 @@ class SecretsGuardTests(GitCommandCase):
         self.assertEqual(self.git("diff", "--cached", "--name-only"), "")
 
 
+class AuditGitTests(GitCommandCase):
+    def test_the_guard_unstages_from_a_subfolder(self) -> None:
+        self.make_repo()
+        sub = self.work / "sub"
+        sub.mkdir()
+        (sub / ".env").write_text("TOKEN=x\n", encoding="utf-8")
+        os.chdir(sub)
+        code, _, err = self.ul("msg")
+        self.assertEqual(code, 1)
+        self.assertIn("sub/.env", err)
+        self.assertEqual(self.git("diff", "--cached", "--name-only"), "", "the secret is really unstaged")
+
+    def test_sync_works_with_local_changes(self) -> None:
+        bare = self.make_repo()
+        self.change("README.md", "edited\n")  # tracked: a plain pull --rebase refuses this tree
+        code, _, err = self.ul("sync", "m2")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.subjects(bare)[0], "m2")
+
+    def test_options_are_never_commit_messages(self) -> None:
+        bare = self.make_repo()
+        self.change()
+        for args in (["--amend"], ["push", "-n"], ["commit", "--no-verify", "x"], ["--dry-run-typo"]):
+            with self.subTest(args=args):
+                code, _, err = self.ul(*args)
+                self.assertEqual(code, 2)
+                self.assertIn("unknown option", err)
+        self.assertEqual(self.subjects(bare), ["first"])
+        code, _, err = self.ul("--", "-x", "fix")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.subjects(bare)[0], "-x fix")
+
+    def test_remote_credentials_are_never_printed(self) -> None:
+        self.make_repo(origin=False)
+        self.git("remote", "add", "origin", "https://user:SECRET@example.invalid/x.git")
+        code, out, err = self.ul("connect", "https://example.invalid/other.git")
+        self.assertNotEqual(code, 0)
+        self.assertNotIn("SECRET", out + err)
+        self.assertIn("***@example.invalid", out + err)
+
+
 class InitTests(GitCommandCase):
     def test_refuses_inside_a_work_tree(self) -> None:
         self.make_repo(origin=False)
