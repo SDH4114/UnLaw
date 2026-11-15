@@ -1398,8 +1398,14 @@ class Session:
             self.path.unlink()
 
 
+def _function(call: object) -> dict:
+    """A tool call's `function` object; models sometimes send a string or nothing."""
+    function = call.get("function") if isinstance(call, dict) else None
+    return function if isinstance(function, dict) else {}
+
+
 def _arguments(call: dict) -> dict:
-    raw = call.get("function", {}).get("arguments") or {}
+    raw = _function(call).get("arguments") or {}
     if isinstance(raw, str):
         try:
             raw = json.loads(raw or "{}")
@@ -1523,7 +1529,9 @@ def respond(config: dict, model: Model, tools: Tools, session: Session, content:
             else:
                 message = model.chat([system, *session.messages], specs)
             calls = message.get("tool_calls") or []
-            text = (message.get("content") or "").strip()
+            calls = [call for call in calls if isinstance(call, dict)] if isinstance(calls, list) else []
+            text = message.get("content") or ""
+            text = (text if isinstance(text, str) else str(text)).strip()
             if not calls and specs:
                 calls = text_tool_calls(text, specs)
             reply: dict[str, Any] = {"role": "assistant", "content": text}
@@ -1548,7 +1556,8 @@ def respond(config: dict, model: Model, tools: Tools, session: Session, content:
                 return answer
             called = True
             for index, call in enumerate(calls):
-                name = call.get("function", {}).get("name", "")
+                name = _function(call).get("name") or ""
+                name = name if isinstance(name, str) else ""
                 arguments = _arguments(call)
                 if on_tool:
                     on_tool(name, arguments)
@@ -2063,6 +2072,12 @@ class Console:
         print(self.paint(f"Model: {choice}" + (" · calls tools" if works else " · chat only"), GREEN if works else YELLOW))
 
 
+def _failure(error: BaseException) -> str:
+    """An unexpected error as one line for the console (no traceback)."""
+    text = printable(str(error)).strip()
+    return f"{type(error).__name__}: {text}" if text else type(error).__name__
+
+
 def console(config: dict, model: Model, first: str | None, resume: bool) -> int:
     paint = Paint(colors(config, sys.stdout))
     ui = Console(config, model, paint)
@@ -2096,17 +2111,26 @@ def console(config: dict, model: Model, first: str | None, resume: bool) -> int:
         if not line:
             continue
         ui.echo(line)
-        if line.startswith("/"):
-            if not ui.command(line, session):
-                return 0
+        # One failing line (a vanished folder, a full disk, an odd model answer) is
+        # reported and the console goes on with the same session.
+        try:
+            if line.startswith("/"):
+                if not ui.command(line, session):
+                    return 0
+                continue
+            if line.startswith("!!"):
+                run_shell(line[2:].strip(), Path.cwd(), paint)
+                continue
+            if line.startswith("!"):
+                shared.append(run_shell(line[1:].strip(), Path.cwd(), paint))
+                continue
+            content = attach(line, Path.cwd())
+        except (KeyboardInterrupt, Aborted):
+            print(paint("■ stopped", YELLOW))
             continue
-        if line.startswith("!!"):
-            run_shell(line[2:].strip(), Path.cwd(), paint)
+        except Exception as error:  # noqa: BLE001
+            print(paint(f"✗ {_failure(error)}", RED))
             continue
-        if line.startswith("!"):
-            shared.append(run_shell(line[1:].strip(), Path.cwd(), paint))
-            continue
-        content = attach(line, Path.cwd())
         if shared:
             prefix = "\n\n".join(shared) + "\n\n"
             content = prefix + content if isinstance(content, str) else [{"type": "text", "text": prefix + content[0]["text"]}, *content[1:]]
@@ -2123,6 +2147,9 @@ def console(config: dict, model: Model, first: str | None, resume: bool) -> int:
             except RuntimeError as error:
                 ui.end_message()
                 print(paint(f"✗ {error}", RED))
+            except Exception as error:  # noqa: BLE001
+                ui.end_message()
+                print(paint(f"✗ {_failure(error)}", RED))
             else:
                 ui.last_answer = answer
                 if not ui.streamed:

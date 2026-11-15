@@ -1019,6 +1019,17 @@ class ConsoleTests(AgentCase):
         self.assertTrue(model.requests[0]["stream"])
         self.assertEqual(terminal.quit(), 0)
 
+    def test_an_odd_model_answer_does_not_end_the_console(self) -> None:
+        # A tool call whose "function" is not an object used to end the console with a traceback.
+        terminal, _ = self.console([{"content": "", "tool_calls": [{"id": "c1", "type": "function", "function": "oops"}]},
+                                    {"content": "still here"}])
+        terminal.send("first\r")
+        terminal.prompt("first")
+        self.assertNotIn("Traceback", terminal.output)
+        terminal.send("second\r")
+        terminal.expect("still here")
+        self.assertEqual(terminal.quit("still here"), 0)
+
     def test_slash_opens_a_command_menu(self) -> None:
         terminal, _ = self.console([])
         terminal.send("/")
