@@ -350,9 +350,10 @@ impl Languages {
             "patch" => "diff",
             other => other,
         };
-        self.list.iter().position(|language| language.name == alias).or_else(|| {
-            self.list.iter().position(|language| language.extensions.contains(&name))
-        })
+        self.list
+            .iter()
+            .position(|language| language.name == alias)
+            .or_else(|| self.list.iter().position(|language| language.extensions.contains(&name)))
     }
 
     /// By file name, extension, then the shebang of the first line.
@@ -367,9 +368,7 @@ impl Languages {
             let extension =
                 path.extension().and_then(|extension| extension.to_str()).unwrap_or("").to_ascii_lowercase();
             if !extension.is_empty() {
-                if let Some(index) =
-                    self.list.iter().position(|language| language.extensions.contains(&extension))
-                {
+                if let Some(index) = self.list.iter().position(|language| language.extensions.contains(&extension)) {
                     return Some(index);
                 }
             }

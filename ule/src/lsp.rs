@@ -565,7 +565,13 @@ pub fn request_completion(ed: &mut Editor) -> bool {
     let (word_start, _) = crate::motion::word_before(&ed.doc().text, cursor);
     let client_id = ed.lsp.clients[client].id;
     if let Some((existing, _, wanted_doc, line, start, answered)) = ed.lsp.completion {
-        if existing == client_id && wanted_doc == doc && line == cursor.line && start == word_start && !answered && before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+        if existing == client_id
+            && wanted_doc == doc
+            && line == cursor.line
+            && start == word_start
+            && !answered
+            && before.is_some_and(|c| c.is_alphanumeric() || c == '_')
+        {
             return true;
         }
     }
@@ -698,7 +704,8 @@ pub fn apply_code_action(ed: &mut Editor, client: usize, action: Value) -> Resul
     };
     // A bare Command has a string `command`; a CodeAction has an edit and/or a Command object.
     if action.get("command").and_then(Value::as_str).is_some() {
-        let params = json!({ "command": action["command"], "arguments": action.get("arguments").cloned().unwrap_or(json!([])) });
+        let params =
+            json!({ "command": action["command"], "arguments": action.get("arguments").cloned().unwrap_or(json!([])) });
         ed.lsp.clients[index].request_raw("workspace/executeCommand", params, Pending::Other)?;
         return Ok(());
     }

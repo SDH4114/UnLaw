@@ -21,9 +21,10 @@ pub struct State {
 }
 
 fn strings(value: &Value, key: &str) -> Vec<String> {
-    value.get(key).and_then(Value::as_array).map_or_else(Vec::new, |items| {
-        items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect()
-    })
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map_or_else(Vec::new, |items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect())
 }
 
 fn push_unique(list: &mut Vec<String>, item: &str, max: usize) {
@@ -66,8 +67,7 @@ impl State {
         let Some(path) = &self.path else {
             return;
         };
-        let positions: Vec<Value> =
-            self.positions.iter().map(|(path, pos)| json!([path, pos.line, pos.col])).collect();
+        let positions: Vec<Value> = self.positions.iter().map(|(path, pos)| json!([path, pos.line, pos.col])).collect();
         let value = json!({
             "commands": self.commands,
             "searches": self.searches,

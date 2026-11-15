@@ -302,7 +302,8 @@ mod tests {
             .env("ULE_TEST_TRASH_LINK", &link)
             .env("HOME", &root)
             .env("PATH", root.join("bin"))
-            .output().unwrap();
+            .output()
+            .unwrap();
         assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
         assert!(target.exists(), "trashing a link must never trash the target");
         assert!(!link.is_symlink());

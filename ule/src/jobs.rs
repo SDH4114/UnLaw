@@ -3,8 +3,8 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
 use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::thread;
@@ -63,7 +63,9 @@ impl Drop for Jobs {
 
 fn stop(job: &mut Job) {
     // Each shell owns its process group, including commands and their children.
-    unsafe { libc::kill(-(job.child.id() as i32), libc::SIGKILL); }
+    unsafe {
+        libc::kill(-(job.child.id() as i32), libc::SIGKILL);
+    }
     let _ = job.child.kill();
     let _ = job.child.wait();
 }
@@ -289,7 +291,9 @@ pub fn run_current(ed: &mut Editor, extra: &[String]) -> Result<(), String> {
     let project = project_dir(&path, lang.as_ref().map(|lang| lang.roots.clone()).unwrap_or_default());
     let runs_in = project.clone().unwrap_or_else(|| ed.cwd.clone());
     // Paths inside the folder the command runs in are shown relative: `python3 app.py`.
-    let shown = path.strip_prefix(&runs_in).map_or_else(|_| path.to_string_lossy().into_owned(), |relative| relative.to_string_lossy().into_owned());
+    let shown = path
+        .strip_prefix(&runs_in)
+        .map_or_else(|_| path.to_string_lossy().into_owned(), |relative| relative.to_string_lossy().into_owned());
     command = command
         .replace("{file}", &quote(&shown))
         .replace("{dir}", &quote(&dir.to_string_lossy()))
@@ -616,7 +620,11 @@ mod tests {
         let mut ed = Editor::new(config);
         let pidfile = std::env::temp_dir().join(format!("ule-review-child-{}.pid", std::process::id()));
         let _ = std::fs::remove_file(&pidfile);
-        let command = format!("ULE_JOB_PID={} {} --ignored --exact jobs::tests::review_fake_job_descendant; :", quote(&pidfile.to_string_lossy()), quote(&std::env::current_exe().unwrap().to_string_lossy()));
+        let command = format!(
+            "ULE_JOB_PID={} {} --ignored --exact jobs::tests::review_fake_job_descendant; :",
+            quote(&pidfile.to_string_lossy()),
+            quote(&std::env::current_exe().unwrap().to_string_lossy())
+        );
         let doc = ed.output_doc("[fake]");
         spawn(&mut ed, "fake", &command, None, doc, JobKind::Output).unwrap();
         let deadline = Instant::now() + std::time::Duration::from_secs(5);
@@ -629,11 +637,18 @@ mod tests {
         ed.jobs.kill_all();
         // Give the shell time to reap its child after the process-group signal.
         let deadline = Instant::now() + std::time::Duration::from_secs(2);
-        while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline { thread::sleep(std::time::Duration::from_millis(10)); }
+        while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline {
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
         let alive = unsafe { libc::kill(pid, 0) } == 0;
-        if alive { unsafe { libc::kill(pid, libc::SIGKILL); } }
-        for job in ed.jobs.running.values_mut() { let _ = job.child.wait(); }
+        if alive {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+        for job in ed.jobs.running.values_mut() {
+            let _ = job.child.wait();
+        }
         assert!(!alive, "stopping a shell must also stop the command it spawned");
     }
-
 }

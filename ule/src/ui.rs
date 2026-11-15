@@ -1,8 +1,8 @@
 //! Draws the editor into a Surface: views, gutters, status lines, bufferline,
 //! explorer, command line, and overlays (picker, completion, popups, which-key).
 
-use std::path::Path;
 use std::io::Read;
+use std::path::Path;
 
 use crate::config::LineNumbers;
 use crate::display::{col_to_display, fit, fit_start, str_width, width_at, wrap_rows};

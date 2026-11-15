@@ -19,7 +19,8 @@ pub fn set(text: &str) {
     if !enabled() {
         return;
     }
-    let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+    let Ok(mut child) =
+        Command::new("pbcopy").stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
     else {
         return;
     };

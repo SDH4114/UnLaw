@@ -960,7 +960,9 @@ fn normal_operator(ed: &mut Editor, op: Op, target: Target, register: Option<cha
             let mut end = cursor;
             for index in 0..n * inner.unwrap_or(1) {
                 let before = end;
-                let at_word_end = text.next(end).is_none_or(|next| motion::class_of(text, next, big) != motion::class_of(text, end, big));
+                let at_word_end = text
+                    .next(end)
+                    .is_none_or(|next| motion::class_of(text, next, big) != motion::class_of(text, end, big));
                 if !(index == 0 && at_word_end) {
                     end = motion::word_end(text, end, big);
                     if end == before {
@@ -978,13 +980,15 @@ fn normal_operator(ed: &mut Editor, op: Op, target: Target, register: Option<cha
             motion_range(ed, motion, n * inner.unwrap_or(1), true)
         }
         Target::Object(object, kind, inner) => {
-            motion::object(&ed.doc().text, cursor, object, kind, n * inner.unwrap_or(1)).map(|(start, end, linewise)| {
-                if linewise {
-                    (start, Pos::new(end.line, 0), true)
-                } else {
-                    (start, end, false)
-                }
-            })
+            motion::object(&ed.doc().text, cursor, object, kind, n * inner.unwrap_or(1)).map(
+                |(start, end, linewise)| {
+                    if linewise {
+                        (start, Pos::new(end.line, 0), true)
+                    } else {
+                        (start, end, false)
+                    }
+                },
+            )
         }
     };
     let Some((start, end, linewise)) = range else {
@@ -1690,22 +1694,22 @@ pub fn leave_insert(ed: &mut Editor) {
             insert_text(ed, &text.repeat(count - 1));
             ed.vim.replaying -= 1;
         } else {
-        let count = if count > MAX_INSERT_REPEAT {
-            ed.info(format!("count limited to {MAX_INSERT_REPEAT}"));
-            MAX_INSERT_REPEAT
-        } else {
-            count
-        };
-        ed.vim.replaying += 1;
-        for _ in 1..count {
-            if open_line {
-                edit::open_line(ed, true);
+            let count = if count > MAX_INSERT_REPEAT {
+                ed.info(format!("count limited to {MAX_INSERT_REPEAT}"));
+                MAX_INSERT_REPEAT
+            } else {
+                count
+            };
+            ed.vim.replaying += 1;
+            for _ in 1..count {
+                if open_line {
+                    edit::open_line(ed, true);
+                }
+                for key in &keys {
+                    insert_action(ed, *key);
+                }
             }
-            for key in &keys {
-                insert_action(ed, *key);
-            }
-        }
-        ed.vim.replaying -= 1;
+            ed.vim.replaying -= 1;
         }
     }
     let cursor = ed.cursor();

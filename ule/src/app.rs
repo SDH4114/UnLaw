@@ -163,7 +163,8 @@ pub fn prepare(launch: &Launch) -> Editor {
         ed.show_doc(id);
     }
     // Resolve every CLI path before a directory argument changes the process cwd.
-    let files: Vec<_> = launch.files.iter().map(|(path, line, col)| (crate::document::absolute(path), *line, *col)).collect();
+    let files: Vec<_> =
+        launch.files.iter().map(|(path, line, col)| (crate::document::absolute(path), *line, *col)).collect();
     let mut first = true;
     for (path, line, col) in &files {
         let opened = if path.is_dir() {
@@ -560,7 +561,6 @@ fn bufferline_click(ed: &mut Editor, x: u16) {
     }
 }
 
-
 #[cfg(test)]
 mod review_tests {
     use super::*;
@@ -589,9 +589,14 @@ mod review_tests {
     fn review_relative_directory_launch_uses_original_cwd() {
         if std::env::var_os("ULE_DIR_PROBE").is_none() {
             let status = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "app::review_tests::review_relative_directory_launch_uses_original_cwd", "--nocapture"])
+                .args([
+                    "--exact",
+                    "app::review_tests::review_relative_directory_launch_uses_original_cwd",
+                    "--nocapture",
+                ])
                 .env("ULE_DIR_PROBE", "1")
-                .status().unwrap();
+                .status()
+                .unwrap();
             assert!(status.success());
             return;
         }
@@ -602,7 +607,12 @@ mod review_tests {
         std::env::set_var("ULE_UL", root.join("no-ul"));
         std::env::set_current_dir(&root).unwrap();
         let root = std::env::current_dir().unwrap();
-        let ed = prepare(&Launch { files: vec![(PathBuf::from("child"), None, None)], stdin: None, readonly: false, clean: true });
+        let ed = prepare(&Launch {
+            files: vec![(PathBuf::from("child"), None, None)],
+            stdin: None,
+            readonly: false,
+            clean: true,
+        });
         assert_eq!(ed.cwd, root.join("child"));
         assert_eq!(ed.explorer.as_ref().map(|explorer| &explorer.root), Some(&root.join("child")));
         assert!(ed.doc().path.is_none());

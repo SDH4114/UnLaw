@@ -80,7 +80,11 @@ fn text_objects() {
     assert_eq!(content(&run("one two three", "wdiw")), "one  three");
     assert_eq!(content(&run("f(a, bb, c)", "fbdia")), "f(a, , c)");
     assert_eq!(content(&run("f(a, bb, c)", "fbdaa")), "f(a, c)");
-    assert_eq!(content(&run("fn a() {\n    x;\n    y;\n}", "jci{z<esc>")), "fn a() {\n    z\n}", "the inner block keeps its indent");
+    assert_eq!(
+        content(&run("fn a() {\n    x;\n    y;\n}", "jci{z<esc>")),
+        "fn a() {\n    z\n}",
+        "the inner block keeps its indent"
+    );
     assert_eq!(content(&run("p1\np1\n\np2", "dap")), "p2");
 }
 
@@ -340,20 +344,170 @@ fn random_keys_never_panic() {
         "<div class=\"a\"><b>bold</b></div>",
     ];
     let pieces = [
-        "h", "j", "k", "l", "w", "b", "e", "W", "B", "E", "0", "^", "$", "gg", "G", "%", "{", "}", "(", ")", "f", "t", "F", "T",
-        ";", ",", "x", "X", "dd", "dw", "cw", "ciw", "di(", "da\"", "dap", "yy", "p", "P", "u", "<C-r>", ".", "~", "J", "gJ",
-        "v", "V", "<C-v>", "o", "O", "i", "a", "A", "I", "<esc>", "<cr>", "<bs>", "<tab>", "<s-tab>", "<del>", ">>", "<<",
-        "gcc", "guu", "gUiw", "<C-a>", "<C-x>", "qa", "q", "@a", "@@", "ma", "'a", "`a", "*", "#", "n", "N", 
-            "r", "R", "s", "S", "C", "D", "Y", "3", "2", "\"a", "\"_",
-        "<C-d>", "<C-u>", "<C-e>", "<C-y>", "zz", "H", "M", "L", "gv", "gi", "<C-o>", "<C-i>", "<A-j>", "<A-k>", "Q",
-        "日", "😀", " ", "(", "\"", "'", "}", "<C-w>", "<C-u>", "<C-n>", "<left>", "<right>", "<up>", "<down>", "<home>",
-        "<end>",  "<C-w>v", "<C-w>q", "]d", "[b", "<C-^>",
-        "<S-right>", "<S-left>", "<S-up>", "<S-down>", "<S-home>", "<S-end>", "<C-S-left>", "<C-S-right>", "<C-c>",
-        "<C-x>", "<C-v>", "<C-z>", "<C-y>", "<C-bs>", "<C-del>", "<A-d>", "<C-k>", "<C-S-k>", "<A-up>", "<A-down>",
-        "<A-S-up>", "<A-S-down>", "<C-home>", "<C-end>", "<C-g>", "<C-f>", "<C-a>", "<C-e>", "<A-left>", "<A-right>",
-        "<C-left>", "<C-right>", "<pageup>", "<pagedown>", "<C-q>", "<A-v>", "<A-a>",
+        "h",
+        "j",
+        "k",
+        "l",
+        "w",
+        "b",
+        "e",
+        "W",
+        "B",
+        "E",
+        "0",
+        "^",
+        "$",
+        "gg",
+        "G",
+        "%",
+        "{",
+        "}",
+        "(",
+        ")",
+        "f",
+        "t",
+        "F",
+        "T",
+        ";",
+        ",",
+        "x",
+        "X",
+        "dd",
+        "dw",
+        "cw",
+        "ciw",
+        "di(",
+        "da\"",
+        "dap",
+        "yy",
+        "p",
+        "P",
+        "u",
+        "<C-r>",
+        ".",
+        "~",
+        "J",
+        "gJ",
+        "v",
+        "V",
+        "<C-v>",
+        "o",
+        "O",
+        "i",
+        "a",
+        "A",
+        "I",
+        "<esc>",
+        "<cr>",
+        "<bs>",
+        "<tab>",
+        "<s-tab>",
+        "<del>",
+        ">>",
+        "<<",
+        "gcc",
+        "guu",
+        "gUiw",
+        "<C-a>",
+        "<C-x>",
+        "qa",
+        "q",
+        "@a",
+        "@@",
+        "ma",
+        "'a",
+        "`a",
+        "*",
+        "#",
+        "n",
+        "N",
+        "r",
+        "R",
+        "s",
+        "S",
+        "C",
+        "D",
+        "Y",
+        "3",
+        "2",
+        "\"a",
+        "\"_",
+        "<C-d>",
+        "<C-u>",
+        "<C-e>",
+        "<C-y>",
+        "zz",
+        "H",
+        "M",
+        "L",
+        "gv",
+        "gi",
+        "<C-o>",
+        "<C-i>",
+        "<A-j>",
+        "<A-k>",
+        "Q",
+        "日",
+        "😀",
+        " ",
+        "(",
+        "\"",
+        "'",
+        "}",
+        "<C-w>",
+        "<C-u>",
+        "<C-n>",
+        "<left>",
+        "<right>",
+        "<up>",
+        "<down>",
+        "<home>",
+        "<end>",
+        "<C-w>v",
+        "<C-w>q",
+        "]d",
+        "[b",
+        "<C-^>",
+        "<S-right>",
+        "<S-left>",
+        "<S-up>",
+        "<S-down>",
+        "<S-home>",
+        "<S-end>",
+        "<C-S-left>",
+        "<C-S-right>",
+        "<C-c>",
+        "<C-x>",
+        "<C-v>",
+        "<C-z>",
+        "<C-y>",
+        "<C-bs>",
+        "<C-del>",
+        "<A-d>",
+        "<C-k>",
+        "<C-S-k>",
+        "<A-up>",
+        "<A-down>",
+        "<A-S-up>",
+        "<A-S-down>",
+        "<C-home>",
+        "<C-end>",
+        "<C-g>",
+        "<C-f>",
+        "<C-a>",
+        "<C-e>",
+        "<A-left>",
+        "<A-right>",
+        "<C-left>",
+        "<C-right>",
+        "<pageup>",
+        "<pagedown>",
+        "<C-q>",
+        "<A-v>",
+        "<A-a>",
     ];
-    let mut seed: u64 = std::env::var("ULE_FUZZ_SEED").ok().and_then(|value| value.parse().ok()).unwrap_or(0x5eed_1234_abcd_ef01);
+    let mut seed: u64 =
+        std::env::var("ULE_FUZZ_SEED").ok().and_then(|value| value.parse().ok()).unwrap_or(0x5eed_1234_abcd_ef01);
     let mut next = || {
         seed ^= seed << 13;
         seed ^= seed >> 7;
@@ -377,7 +531,11 @@ fn random_keys_never_panic() {
             crate::vim::handle_key(&mut ed, key);
             // Random keys must not reach the file system: no :commands, prompts,
             // explorer or pickers (searches are harmless and stay).
-            if ed.prompt.as_ref().is_some_and(|prompt| !matches!(prompt.kind, crate::widgets::PromptKind::Search { .. })) {
+            if ed
+                .prompt
+                .as_ref()
+                .is_some_and(|prompt| !matches!(prompt.kind, crate::widgets::PromptKind::Search { .. }))
+            {
                 ed.prompt = None;
             }
             ed.explorer = None;
@@ -388,8 +546,19 @@ fn random_keys_never_panic() {
             // The cursor must always be inside the text.
             let cursor = ed.cursor();
             let doc = ed.doc();
-            assert!(cursor.line < doc.text.len_lines(), "round {round}, key {:?}, cursor {cursor:?}, mode {:?}: {sequence}", key, ed.mode);
-            assert!(cursor.col <= doc.text.line_len(cursor.line), "round {round}, key {:?}, cursor {cursor:?}, len {}, mode {:?}: {sequence}", key, doc.text.line_len(cursor.line), ed.mode);
+            assert!(
+                cursor.line < doc.text.len_lines(),
+                "round {round}, key {:?}, cursor {cursor:?}, mode {:?}: {sequence}",
+                key,
+                ed.mode
+            );
+            assert!(
+                cursor.col <= doc.text.line_len(cursor.line),
+                "round {round}, key {:?}, cursor {cursor:?}, len {}, mode {:?}: {sequence}",
+                key,
+                doc.text.line_len(cursor.line),
+                ed.mode
+            );
         }
         ed.prompt = None;
         crate::ui::draw(&mut ed);
@@ -415,7 +584,11 @@ fn standard_keys_undo_copy_paste() {
     assert_eq!(content(&run("a\nb\nc", "j<C-x>")), "a\nc");
     assert_eq!(content(&run("a\nb\nc", "<C-c>jj<C-v>")), "a\nb\na\nc");
     // A shift-selection copies exactly what is highlighted.
-    assert_eq!(content(&run("hello world", "i<S-right><S-right><C-c><esc><esc>$<C-v>")), "hello worldhe", "Esc clears the selection, a second Esc leaves insert");
+    assert_eq!(
+        content(&run("hello world", "i<S-right><S-right><C-c><esc><esc>$<C-v>")),
+        "hello worldhe",
+        "Esc clears the selection, a second Esc leaves insert"
+    );
     assert_eq!(content(&run("hello world", "i<S-end><C-x>")), "");
     // Vim's visual selection works with Ctrl-C too.
     assert_eq!(content(&run("one two", "viw<C-c>$<C-v>")), "one twoone");
@@ -483,10 +656,16 @@ fn replay_debug() {
         ed.explorer = None;
         ed.picker = None;
         let cursor = ed.cursor();
-        eprintln!("{:<40} {:?} {:?} len={} line={:?}", key.notation(), ed.mode, cursor, ed.doc().text.line_len(cursor.line.min(ed.doc().text.last_line())), ed.doc().text.line(cursor.line));
+        eprintln!(
+            "{:<40} {:?} {:?} len={} line={:?}",
+            key.notation(),
+            ed.mode,
+            cursor,
+            ed.doc().text.line_len(cursor.line.min(ed.doc().text.last_line())),
+            ed.doc().text.line(cursor.line)
+        );
     }
 }
-
 
 #[test]
 fn review_scratch_changes_block_quit_and_close() {

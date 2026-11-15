@@ -322,7 +322,11 @@ pub fn open_keymaps(ed: &mut Editor) {
         })
         .collect();
     for (keys, description) in crate::standard::KEYS {
-        items.push(Item { label: format!("{keys:<16} {description}"), detail: "standard".into(), data: Data::Keys(String::new()) });
+        items.push(Item {
+            label: format!("{keys:<16} {description}"),
+            detail: "standard".into(),
+            data: Data::Keys(String::new()),
+        });
     }
     for (keys, description) in crate::help::VIM_KEYS {
         items.push(Item {

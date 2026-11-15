@@ -157,8 +157,9 @@ impl Document {
                 if bytes.iter().take(8000).any(|byte| *byte == 0) {
                     return Err(io::Error::new(io::ErrorKind::InvalidData, "binary file"));
                 }
-                let content = String::from_utf8(bytes)
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("file is not UTF-8: {error}")))?;
+                let content = String::from_utf8(bytes).map_err(|error| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("file is not UTF-8: {error}"))
+                })?;
                 doc.load(&content);
                 doc.mtime = fs::metadata(&path).and_then(|meta| meta.modified()).ok();
                 doc.readonly = fs::metadata(&path).map(|meta| meta.permissions().readonly()).unwrap_or(false);
@@ -678,12 +679,15 @@ mod tests {
             let status = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "document::tests::review_new_save_respects_private_umask", "--nocapture"])
                 .env("ULE_UMASK_PROBE", "1")
-                .status().unwrap();
+                .status()
+                .unwrap();
             assert!(status.success());
             return;
         }
         // This subprocess runs only this test, so its process-wide umask cannot affect other tests.
-        unsafe { libc::umask(0o077); }
+        unsafe {
+            libc::umask(0o077);
+        }
         let path = temp("review-private.txt");
         let _ = fs::remove_file(&path);
         let mut doc = Document::scratch(1, "private", DocKind::File);
@@ -691,5 +695,4 @@ mod tests {
         doc.save_to(&path, false).unwrap();
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
     }
-
 }

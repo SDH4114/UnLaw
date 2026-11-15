@@ -240,7 +240,9 @@ pub fn accept(ed: &mut Editor) {
     let cursor = ed.cursor();
     let (start, replace_end, raw) = match &item.edit {
         Some((start, end, text)) => (*start, (*end).max(cursor), text.clone()),
-        None => (completion.start, cursor, if item.insert.is_empty() { item.label.clone() } else { item.insert.clone() }),
+        None => {
+            (completion.start, cursor, if item.insert.is_empty() { item.label.clone() } else { item.insert.clone() })
+        }
     };
     let (start, replace_end) = if start.line == cursor.line && start.col <= cursor.col {
         (start, replace_end)
@@ -304,10 +306,13 @@ mod tests {
                 edit: Some((Pos::default(), Pos::new(0, 5), "printf".into())),
                 ..CompletionItem::default()
             }],
-            shown: vec![0], selected: Some(0), start: Pos::default(), from_lsp: true, offset: 0,
+            shown: vec![0],
+            selected: Some(0),
+            start: Pos::default(),
+            from_lsp: true,
+            offset: 0,
         });
         accept(&mut ed);
         assert_eq!(ed.doc().text.to_string_lf(), "printf");
     }
-
 }
