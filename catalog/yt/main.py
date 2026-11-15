@@ -2,7 +2,7 @@
 """Open YouTube, search, or download one YouTube video."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Open YouTube, search, or download one YouTube video.\nUsage:\n  ul yt                                 Open YouTube homepage\n  ul yt <query>                         Search YouTube in your default browser\n  ul yt download <URL> [options]         Download one video (not its playlist)\nOptions:\n  --format mov|mp4|raw Video format (default: mov); raw keeps the source container\n  --audio              Save only MP3 (cannot combine with --quality or --format)\n  --sub                Save only subtitles as .md, original language by default\n  --sub-lang [code]    Choose ru/en/etc.; no value selects original. Implies --sub\n                       unless --full is used; unknown codes list available languages\n  --full               Save video with sound, separate MP3 and .md subtitles\n  --podcast            Save a small mono MP3 (64 kbps, title/channel/cover tags)\n                       into yt.podcast_dir, by default iCloud Drive/Podcasts\n  --quality <height>   Maximum video height, e.g. 720, 1080, 2160\n  --output <directory> Save into this directory (created if needed)\n  -h, --help           Show this help, also after download\nModes --audio, --podcast, --sub and --full cannot be combined.\nSubtitle-only mode cannot use --quality or --format; --full supports both.\nMarkdown starts with the video link, then title, language/source and cleaned text.\nAuthored captions are preferred; automatic captions may contain recognition errors.\n--full downloads media once and extracts MP3 locally. Missing/failed subtitles\nproduce a clear warning and a nonzero exit code while retaining saved media.\nDefaults: MOV video with audio; storage.root/youtube.\n--podcast saves into yt.podcast_dir (setting; --output overrides it). Its parent\nfolder must exist, so a disabled iCloud Drive is reported instead of filled locally.\nMOV/MP4 conversion uses H.264/AAC when conversion is needed; it can take time.\nRaw preserves the source codecs/container (possibly WebM); it is not camera RAW.\nDependencies: yt-dlp; video/audio also need ffmpeg/ffprobe. Deno supports YouTube.\nInstall: brew install yt-dlp ffmpeg deno\nExisting files are not overwritten. Download progress appears in the terminal.\nExamples:\n  ul yt "omarchy linux"\n  ul yt download "https://www.youtube.com/watch?v=VIDEO_ID"\n  ul yt download "https://youtu.be/VIDEO_ID" --format mp4\n  ul yt download "https://youtu.be/VIDEO_ID" --format raw\n  ul yt download "https://youtu.be/VIDEO_ID" --audio\n  ul yt download "https://youtu.be/VIDEO_ID" --podcast\n  ul yt download "https://youtu.be/VIDEO_ID" --sub\n  ul yt download "https://youtu.be/VIDEO_ID" --sub-lang\n  ul yt download "https://youtu.be/VIDEO_ID" --sub-lang ru\n  ul yt download "https://youtu.be/VIDEO_ID" --full --sub-lang en --format mp4\n  ul yt download "https://youtu.be/VIDEO_ID" --quality 1080 --output ~/Downloads\n'
+COMMAND_HELP = 'Open YouTube, search, or download one YouTube video.\nUsage:\n  ul yt                                 Open YouTube homepage\n  ul yt <query>                         Search YouTube in your default browser\n  ul yt download <URL> [options]         Download one video (not its playlist)\nOptions:\n  --format mov|mp4|raw Video format (default: mov); raw keeps the source container\n  --audio              Save only MP3 (cannot combine with --quality or --format)\n  --sub                Save only subtitles as .md, original language by default\n  --sub-lang [code]    Choose ru/en/etc.; no value selects original. Implies --sub\n                       unless --full is used; unknown codes list available languages\n  --full               Save video with sound, separate MP3 and .md subtitles\n  --podcast            Save a small mono MP3 (64 kbps, title/channel/cover tags)\n                       into yt.podcast_dir, by default iCloud Drive/Podcasts\n  --quality <height>   Maximum video height, e.g. 720, 1080, 2160\n  --output <directory> Save into this directory (created if needed)\n  --json               One JSON line on stdout at the end: {"ok", "exit", "files": [{"path",\n                       "status": "saved"|"exists"}]}; messages and progress go to stderr\n  -h, --help           Show this help, also after download\nModes --audio, --podcast, --sub and --full cannot be combined.\nSubtitle-only mode cannot use --quality or --format; --full supports both.\nMarkdown starts with the video link, then title, language/source and cleaned text.\nAuthored captions are preferred; automatic captions may contain recognition errors.\n--full downloads media once and extracts MP3 locally. Missing/failed subtitles\nproduce a clear warning and a nonzero exit code while retaining saved media.\nDefaults: MOV video with audio; storage.root/youtube.\n--podcast saves into yt.podcast_dir (setting; --output overrides it). Its parent\nfolder must exist, so a disabled iCloud Drive is reported instead of filled locally.\nMOV/MP4 conversion uses H.264/AAC when conversion is needed; it can take time.\nRaw preserves the source codecs/container (possibly WebM); it is not camera RAW.\nDependencies: yt-dlp; video/audio also need ffmpeg/ffprobe. Deno supports YouTube.\nInstall: brew install yt-dlp ffmpeg deno\nExisting files are not overwritten: a video, MP3 or podcast that is already there is\nfound before anything is downloaded. Download progress appears in the terminal.\nExit codes: 0 saved or already there, 1 failure, 2 wrong arguments, 124 metadata timeout,\n130 Ctrl-C, 143 terminated; a failing yt-dlp/ffmpeg passes its own code. A stopped download\nremoves its temporary folder.\nExamples:\n  ul yt "omarchy linux"\n  ul yt download "https://www.youtube.com/watch?v=VIDEO_ID"\n  ul yt download "https://youtu.be/VIDEO_ID" --format mp4\n  ul yt download "https://youtu.be/VIDEO_ID" --format raw\n  ul yt download "https://youtu.be/VIDEO_ID" --audio\n  ul yt download "https://youtu.be/VIDEO_ID" --podcast\n  ul yt download "https://youtu.be/VIDEO_ID" --sub\n  ul yt download "https://youtu.be/VIDEO_ID" --sub-lang\n  ul yt download "https://youtu.be/VIDEO_ID" --sub-lang ru\n  ul yt download "https://youtu.be/VIDEO_ID" --full --sub-lang en --format mp4\n  ul yt download "https://youtu.be/VIDEO_ID" --quality 1080 --output ~/Downloads\n'
 
 import copy
 import os
@@ -56,9 +56,11 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -205,21 +207,96 @@ def _copy_new(source: Path, destination: Path) -> bool:
     return True
 
 
+# `--json`: stdout carries one JSON object at the end, so messages and the tools' progress go to stderr.
+_JSON = False
+_RESULTS: list[dict] = []
+
+
+def _say(text: str) -> None:
+    print(text, file=sys.stderr if _JSON else sys.stdout, flush=True)
+
+
+def _saved(path: Path) -> None:
+    _RESULTS.append({"path": str(path), "status": "saved"})
+    _say(f"Saved: {path}")
+
+
+def _exists(path: Path) -> None:
+    _RESULTS.append({"path": str(path), "status": "exists"})
+    _say(f"Already exists: {path}")
+
+
+def _tool(command: list[str]) -> int:
+    """Run yt-dlp or ffmpeg with its progress on the terminal (on stderr with --json)."""
+    return subprocess.run(command, check=False, **({"stdout": 2} if _JSON else {})).returncode
+
+
+class _Stopped(KeyboardInterrupt):
+    """SIGTERM or SIGHUP: unwind like Ctrl-C, so temporary folders are removed and the tool is stopped."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__()
+        self.code = 128 + signum
+
+
+def _catch_termination():
+    """Turn SIGTERM/SIGHUP into _Stopped; returns a function that puts the old handlers back."""
+    def stop(signum: int, frame: object) -> None:
+        raise _Stopped(signum)
+
+    previous = {}
+    try:
+        for number in (signal.SIGTERM, signal.SIGHUP):
+            previous[number] = signal.signal(number, stop)
+    except ValueError:
+        pass  # not the main thread (tests): signals keep their handlers
+
+    def restore() -> None:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+    return restore
+
+
+def _sweep(output: Path) -> None:
+    """Remove staging folders a killed download left behind (older than a day, so never a running one)."""
+    limit = time.time() - 24 * 3600
+    for stale in output.glob(".unlaw-yt-*"):
+        try:
+            if stale.is_dir() and not stale.is_symlink() and stale.stat().st_mtime < limit:
+                shutil.rmtree(stale, ignore_errors=True)
+        except OSError:
+            continue
+
+
+def _probe(executable: str, url: str, stage: Path) -> Path | None:
+    """One metadata request, saved as `<title> [<id>].info.json` in `stage`: its name is the file name the
+    download will get, so an existing file is found before downloading, and the download reuses the metadata.
+    None when it fails; the download then runs as before and reports the error itself."""
+    probe = subprocess.run(
+        [executable, "--ignore-config", "--no-playlist", "--skip-download", "--write-info-json", "--paths", str(stage),
+         "--output", "%(title).180B [%(id)s].%(ext)s", "--", url],
+        check=False, capture_output=True, text=True, timeout=120,
+    )
+    found = list(stage.glob("*.info.json"))
+    return found[0] if probe.returncode == 0 and len(found) == 1 else None
+
+
 def _publish(source: Path, destination: Path) -> None:
     # Both paths are on the same filesystem: hard-link publishes atomically,
     # including when another process creates the destination concurrently.
     try:
         os.link(source, destination)
     except FileExistsError:
-        print(f"Already exists: {destination}", flush=True)
+        _exists(destination)
         return
     except OSError as error:
         if error.errno not in _NO_HARD_LINKS:
             raise
         if not _copy_new(source, destination):
-            print(f"Already exists: {destination}", flush=True)
+            _exists(destination)
             return
-    print(f"Saved: {destination}", flush=True)
+    _saved(destination)
 
 
 def _podcast_dir() -> Path:
@@ -240,7 +317,7 @@ def _selector(height: int | None) -> str:
 
 
 def _subtitle_bundle(options, executable: str, output: Path) -> int:
-    print("Checking video and subtitle languages...", flush=True)
+    _say("Checking video and subtitle languages...")
     probe = subprocess.run(
         [executable, "--ignore-config", "--no-playlist", "--skip-download", "--dump-single-json", "--", options.url],
         check=False, capture_output=True, text=True, timeout=120,
@@ -266,14 +343,14 @@ def _subtitle_bundle(options, executable: str, output: Path) -> int:
             language, automatic = selected
             destination = output / f"{stem}.{_safe_name(language)}.md"
             if destination.exists():
-                print(f"Already exists: {destination}", flush=True)
+                _exists(destination)
             else:
-                print(f"Subtitles: {language} ({'automatic' if automatic else 'authored'})", flush=True)
-                code = subprocess.run([
+                _say(f"Subtitles: {language} ({'automatic' if automatic else 'authored'})")
+                code = _tool([
                     *base, "--skip-download", "--write-auto-subs" if automatic else "--write-subs",
                     "--sub-format", "json3/vtt/srt", "--sub-langs", f"^{re.escape(language)}$",
                     "--output", "captions.%(ext)s",
-                ], check=False).returncode
+                ])
                 candidates = [p for p in stage.glob("captions.*") if p.suffix in {".json3", ".vtt", ".srt"}]
                 if code or len(candidates) != 1:
                     print("unlaw yt: Subtitles could not be downloaded; no Markdown was created.", file=sys.stderr)
@@ -300,10 +377,11 @@ def _subtitle_bundle(options, executable: str, output: Path) -> int:
                 video = next((path for path in existing if path.is_file()), None)
             # For raw, discover the real extension instead of inventing a .raw container.
             if video is not None and video.exists() and audio.exists():
-                print(f"Already exists: {video}\nAlready exists: {audio}", flush=True)
+                _exists(video)
+                _exists(audio)
             else:
-                print("Downloading video once; MP3 will be extracted locally...", flush=True)
-                code = subprocess.run([*base, "--format", _selector(options.quality), "--output", "media.%(ext)s"], check=False).returncode
+                _say("Downloading video once; MP3 will be extracted locally...")
+                code = _tool([*base, "--format", _selector(options.quality), "--output", "media.%(ext)s"])
                 if code:
                     print("unlaw yt: Video download failed; any saved Markdown is retained.", file=sys.stderr)
                     return code
@@ -324,7 +402,7 @@ def _subtitle_bundle(options, executable: str, output: Path) -> int:
                 if needs_audio:
                     command.extend(["-map", "0:a:0", "-vn", "-c:a", "libmp3lame", "-q:a", "2", str(extracted)])
                 if needs_video or needs_audio:
-                    code = subprocess.run(command, check=False).returncode
+                    code = _tool(command)
                     if code:
                         print("unlaw yt: Media conversion failed; any saved Markdown is retained.", file=sys.stderr)
                         return code
@@ -339,6 +417,23 @@ def _subtitle_bundle(options, executable: str, output: Path) -> int:
 
 
 def _download(args: list[str]) -> int:
+    """`ul yt download`: with --json the last line of stdout is {"ok", "exit", "files": [{"path", "status"}]}."""
+    global _JSON
+    wants_help = "--help" in args or "-h" in args
+    _JSON = "--json" in args and not wants_help
+    _RESULTS.clear()
+    restore = _catch_termination()
+    try:
+        code = _run_download(args)
+    finally:
+        restore()
+    if _JSON:
+        _JSON = False
+        print(json.dumps({"ok": code == 0, "exit": code, "files": list(_RESULTS)}, ensure_ascii=False), flush=True)
+    return code
+
+
+def _run_download(args: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="ul yt download", description="Download one YouTube video.")
     parser.add_argument("url", help="YouTube video URL")
     parser.add_argument("--format", choices=("mov", "mp4", "raw"), help="video container (default: mov); raw keeps the source format")
@@ -350,6 +445,7 @@ def _download(args: list[str]) -> int:
     parser.add_argument("--sub-lang", nargs="?", const="original", help="subtitle language; omitted value selects original and implies --sub")
     parser.add_argument("--quality", type=_quality, help="maximum video height, e.g. 1080")
     parser.add_argument("--output", type=Path, help="output directory (default: storage.root/youtube)")
+    parser.add_argument("--json", action="store_true", help="print one JSON result on stdout; progress goes to stderr")
     if "--help" in args or "-h" in args:
         print(COMMAND_HELP, end="")
         return 0
@@ -403,6 +499,7 @@ def _download(args: list[str]) -> int:
             output = _podcast_dir() if options.podcast else storage_path("youtube")
         output = output.resolve()
         output.mkdir(parents=True, exist_ok=True)
+        _sweep(output)
         if subtitles_only or options.full:
             return _subtitle_bundle(options, executable, output)
         command = [
@@ -429,15 +526,25 @@ def _download(args: list[str]) -> int:
                     "VideoConvertor+ffmpeg_o:-c:v libx264 -crf 18 -preset medium "
                     "-c:a aac -b:a 192k -pix_fmt yuv420p -vf pad=ceil(iw/2)*2:ceil(ih/2)*2 -movflags +faststart",
                 ])
-        print(f"Saving to: {output}", flush=True)
+        _say(f"Saving to: {output}")
         # Converter postprocessors may ignore --no-post-overwrites. Keep every
         # intermediate/conversion in a private directory and publish without replacing.
         with tempfile.TemporaryDirectory(prefix=".unlaw-yt-", dir=output) as temporary:
             stage = Path(temporary)
             command[command.index("--paths") + 1] = str(stage)
+            source_arguments = ["--", options.url]
+            info = _probe(executable, options.url, stage)
+            if info is not None:
+                # The real container of a raw download is unknown until it is downloaded.
+                extension = "mp3" if audio_only else options.format or "mov"
+                finished = output / f"{info.name.removesuffix('.info.json')}.{extension}"
+                if extension != "raw" and finished.is_file():
+                    _exists(finished)
+                    return 0
+                source_arguments = ["--load-info-json", str(info)]
             manifest = stage / "result.json"
-            command.extend(["--no-simulate", "--print-to-file", "after_move:%(filepath)j", str(manifest), "--", options.url])
-            code = subprocess.run(command, check=False).returncode
+            command.extend(["--no-simulate", "--print-to-file", "after_move:%(filepath)j", str(manifest), *source_arguments])
+            code = _tool(command)
             if code:
                 return code
             source = Path(json.loads(manifest.read_text())).resolve()
@@ -452,9 +559,9 @@ def _download(args: list[str]) -> int:
     except (ConfigError, OSError, ValueError, KeyError, TypeError) as error:
         print(f"unlaw yt: {error}", file=sys.stderr)
         return 2 if isinstance(error, ValueError) else 1
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as stop:
         print("\nunlaw yt: download cancelled.", file=sys.stderr)
-        return 130
+        return getattr(stop, "code", 130)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

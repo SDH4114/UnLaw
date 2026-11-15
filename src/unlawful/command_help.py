@@ -416,6 +416,8 @@ Options:
                        into yt.podcast_dir, by default iCloud Drive/Podcasts
   --quality <height>   Maximum video height, e.g. 720, 1080, 2160
   --output <directory> Save into this directory (created if needed)
+  --json               One JSON line on stdout at the end: {"ok", "exit", "files": [{"path",
+                       "status": "saved"|"exists"}]}; messages and progress go to stderr
   -h, --help           Show this help, also after download
 Modes --audio, --podcast, --sub and --full cannot be combined.
 Subtitle-only mode cannot use --quality or --format; --full supports both.
@@ -430,7 +432,11 @@ MOV/MP4 conversion uses H.264/AAC when conversion is needed; it can take time.
 Raw preserves the source codecs/container (possibly WebM); it is not camera RAW.
 Dependencies: yt-dlp; video/audio also need ffmpeg/ffprobe. Deno supports YouTube.
 Install: brew install yt-dlp ffmpeg deno
-Existing files are not overwritten. Download progress appears in the terminal.
+Existing files are not overwritten: a video, MP3 or podcast that is already there is
+found before anything is downloaded. Download progress appears in the terminal.
+Exit codes: 0 saved or already there, 1 failure, 2 wrong arguments, 124 metadata timeout,
+130 Ctrl-C, 143 terminated; a failing yt-dlp/ffmpeg passes its own code. A stopped download
+removes its temporary folder.
 Examples:
   ul yt "omarchy linux"
   ul yt download "https://www.youtube.com/watch?v=VIDEO_ID"

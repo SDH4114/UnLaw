@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
@@ -236,6 +237,95 @@ class HelpAndYouTubeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn(str(home / "Library/Mobile Documents/com~apple~CloudDocs"), result.stderr)
         self.assertIn("iCloud Drive", result.stderr)
+
+
+
+class DownloadFlowTests(unittest.TestCase):
+    """The plain download: one metadata probe, then the download; fake yt-dlp, no network."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.commands = []
+        self.stop_download = None
+
+    def tool(self, command, **kwargs):
+        self.commands.append(command)
+        stage = Path(command[command.index("--paths") + 1])
+        if "--write-info-json" in command:
+            (stage / "Clip [abc].info.json").write_text("{}")
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if self.stop_download is not None:
+            (stage / "partial.part").write_bytes(b"half")
+            raise self.stop_download
+        media = stage / ("Clip [abc].mp3" if "--extract-audio" in command else "Clip [abc].mov")
+        media.write_bytes(b"media")
+        Path(command[command.index("--print-to-file") + 2]).write_text(json.dumps(str(media)))
+        return subprocess.CompletedProcess(command, 0)
+
+    def download(self, *flags):
+        from unlawful.desktop import youtube
+        with patch.object(youtube.shutil, "which", side_effect=lambda name: f"/tools/{name}"), patch.object(
+            youtube.subprocess, "run", side_effect=self.tool
+        ), redirect_stdout(StringIO()) as out, redirect_stderr(StringIO()) as error:
+            code = youtube.main(["download", "https://youtu.be/abc", "--output", str(self.root), *flags])
+        return code, out.getvalue(), error.getvalue()
+
+    def test_an_existing_file_is_found_before_anything_is_downloaded(self):
+        (self.root / "Clip [abc].mov").write_bytes(b"mine")
+        code, out, _ = self.download()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.commands), 1, "only the metadata probe may run")
+        self.assertIn("Already exists", out)
+        self.assertEqual((self.root / "Clip [abc].mov").read_bytes(), b"mine")
+        (self.root / "Clip [abc].mp3").write_bytes(b"mine")
+        self.commands.clear()
+        self.assertEqual(self.download("--audio")[0], 0)
+        self.assertEqual(len(self.commands), 1)
+
+    def test_the_download_reuses_the_probed_metadata(self):
+        code, out, _ = self.download()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.commands), 2)
+        download = self.commands[1]
+        self.assertEqual(Path(download[download.index("--load-info-json") + 1]).name, "Clip [abc].info.json")
+        self.assertNotIn("https://youtu.be/abc", download)
+        self.assertEqual((self.root / "Clip [abc].mov").read_bytes(), b"media")
+        self.assertIn("Saved:", out)
+
+    def test_json_prints_one_result_object_and_keeps_messages_off_stdout(self):
+        code, out, error = self.download("--json")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out), {"ok": True, "exit": 0, "files": [{"path": str(self.root / "Clip [abc].mov"), "status": "saved"}]})
+        self.assertIn("Saved:", error)
+        code, out, _ = self.download("--json")
+        self.assertEqual(json.loads(out)["files"], [{"path": str(self.root / "Clip [abc].mov"), "status": "exists"}])
+        from unlawful.desktop import youtube
+        with redirect_stdout(StringIO()) as out, redirect_stderr(StringIO()):
+            code = youtube.main(["download", "https://example.com/x", "--json"])
+        self.assertEqual(json.loads(out.getvalue()), {"ok": False, "exit": 2, "files": []})
+
+    def test_a_terminated_download_removes_its_staging_folder(self):
+        from unlawful.desktop import youtube
+        self.stop_download = youtube._Stopped(15)
+        code, _, error = self.download()
+        self.assertEqual(code, 143)
+        self.assertIn("cancelled", error)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_stale_staging_folders_are_swept_and_fresh_ones_kept(self):
+        stale, fresh, other = self.root / ".unlaw-yt-old", self.root / ".unlaw-yt-new", self.root / "keep"
+        for folder in (stale, fresh, other):
+            folder.mkdir()
+            (folder / "x.part").write_bytes(b"x")
+        two_days_ago = time.time() - 2 * 24 * 3600
+        os.utime(stale, (two_days_ago, two_days_ago))
+        os.utime(other, (two_days_ago, two_days_ago))
+        self.assertEqual(self.download()[0], 0)
+        self.assertFalse(stale.exists())
+        self.assertTrue(fresh.is_dir() and other.is_dir())
+
 
 if __name__ == "__main__":
     unittest.main()
