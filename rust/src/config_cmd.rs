@@ -15,6 +15,11 @@ fn edit() -> i32 {
     if code != 0 {
         return code;
     }
+    if crate::editor::returns_at_once(config.as_ref()) {
+        // `open -t` returns before anything was edited; checking now would check the old file.
+        println!("Opened config.toml; after saving run `ul config check`.");
+        return 0;
+    }
     // Report problems right away instead of on the next command.
     match config::load() {
         Ok(_) => {

@@ -60,6 +60,27 @@ class EditTests(CoreTestCase):
         result = self.ul_without_ule("doctor", "--verbose", env=env)
         self.assertIn("ule is not installed", result.stdout)
 
+    def test_an_editor_path_with_spaces_works_quoted_or_whole(self) -> None:
+        folder = self.root / "My Apps"
+        folder.mkdir()
+        log = self.root / "spaced.log"
+        editor = folder / "edit tool"
+        editor.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$@\" >> {log}\n")
+        editor.chmod(0o755)
+        self.ok("config", "set", "core.editor", str(editor))
+        self.ok("edit", "a.txt")
+        self.ok("config", "set", "core.editor", f"'{editor}' --wait")
+        self.ok("edit", "b.txt")
+        self.assertEqual(log.read_text().splitlines(), ["a.txt", "--wait", "b.txt"])
+
+    def test_config_edit_with_open_does_not_check_an_unedited_file(self) -> None:
+        # `open -t` returns at once; "config.toml is valid" would describe the old file.
+        self.tool("open", "#!/bin/sh\nexit 0\n")
+        result = self.ul_without_ule("config", "edit")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("is valid", result.stdout)
+        self.assertIn("ul config check", result.stdout)
+
     def test_unknown_option(self) -> None:
         result = self.ul("edit", "--bogus")
         self.assertEqual(result.returncode, 2)

@@ -155,7 +155,10 @@ Example: ul doctor --verbose
 Usage: ul edit [file[:line[:col]]]...
 Editor: core.editor (default \"auto\": ule when installed, then $VISUAL,
 $EDITOR, then `open -t`). Set it to \"nvim\", \"zed --wait\" or \"ule\".
-ul config edit uses the same editor and checks config.toml afterwards.
+The value is split into words like a shell would (quote a path with spaces);
+a value naming an executable file as a whole needs no quotes.
+ul config edit uses the same editor and checks config.toml afterwards
+(with `open -t`, which returns at once, run `ul config check` after saving).
 Examples:
   ul edit src/main.rs:42
   ul config set core.editor nvim
