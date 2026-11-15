@@ -97,6 +97,30 @@ impl Drop for Screen {
     }
 }
 
+/// The SIGTERM/SIGHUP that asked ule to stop (0: none). The handler only records it;
+/// the event loop notices within one poll, saves recovery copies and cleans up.
+static TERMINATED: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+extern "C" fn record_termination(signal: libc::c_int) {
+    TERMINATED.store(signal, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn catch_termination() {
+    let handler = record_termination as *const () as libc::sighandler_t;
+    // SAFETY: the handler only stores into an atomic.
+    unsafe {
+        libc::signal(libc::SIGTERM, handler);
+        libc::signal(libc::SIGHUP, handler);
+    }
+}
+
+fn terminated() -> Option<i32> {
+    match TERMINATED.load(std::sync::atomic::Ordering::SeqCst) {
+        0 => None,
+        signal => Some(signal),
+    }
+}
+
 fn restore_terminal_on_panic() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -180,6 +204,7 @@ pub fn run(launch: Launch) -> io::Result<i32> {
     }
     let mut ed = prepare(&launch);
     restore_terminal_on_panic();
+    catch_termination();
     let mut screen = Screen::enter(ed.options.mouse)?;
     let (width, height) = terminal::size()?;
     ed.size = (width, height);
@@ -190,10 +215,30 @@ pub fn run(launch: Launch) -> io::Result<i32> {
     std::thread::spawn(move || {
         let _ = tx.send(Event::UlCommands(crate::ul::commands()));
     });
+    let looped = event_loop(&mut ed, &mut screen, &mut renderer);
+    // A kill, a closed terminal (SIGHUP, then read/write errors) or a lost terminal: keep
+    // unsaved work as recovery copies before anything else can fail.
+    let recovered = if terminated().is_some() || looped.is_err() { ed.write_recovery() } else { Vec::new() };
+    ed.remember_positions();
+    ed.persisted.save();
+    ed.jobs.kill_all();
+    ed.lsp.shutdown();
+    screen.leave();
+    for (title, path) in &recovered {
+        eprintln!("ule: unsaved {title} kept as {}", path.display());
+    }
+    looped?;
+    Ok(terminated().map_or(0, |signal| 128 + signal))
+}
+
+fn event_loop(ed: &mut Editor, screen: &mut Screen, renderer: &mut Terminal) -> io::Result<()> {
     let mut out = io::BufWriter::with_capacity(1 << 16, io::stdout());
     let mut mouse_anchor: Option<(usize, Pos)> = None;
     loop {
-        let surface = crate::ui::draw(&mut ed);
+        if terminated().is_some() {
+            return Ok(());
+        }
+        let surface = crate::ui::draw(ed);
         renderer.draw(&surface, &mut out)?;
         let busy = ed.jobs.busy().is_some()
             || ed.picker.as_ref().is_some_and(|picker| picker.loading)
@@ -204,7 +249,7 @@ pub fn run(launch: Launch) -> io::Result<i32> {
         if event::poll(timeout)? {
             loop {
                 let terminal_event = event::read()?;
-                handle_terminal(&mut ed, terminal_event, &mut renderer, &mut mouse_anchor);
+                handle_terminal(ed, terminal_event, renderer, &mut mouse_anchor);
                 if ed.quit || !event::poll(Duration::from_millis(0))? {
                     break;
                 }
@@ -212,12 +257,12 @@ pub fn run(launch: Launch) -> io::Result<i32> {
         }
         // Background results, including any a synchronous LSP request put aside.
         for deferred in std::mem::take(&mut ed.lsp.deferred) {
-            dispatch(&mut ed, deferred);
+            dispatch(ed, deferred);
         }
         while let Ok(background) = ed.rx.try_recv() {
-            dispatch(&mut ed, background);
+            dispatch(ed, background);
         }
-        crate::vim::tick(&mut ed);
+        crate::vim::tick(ed);
         {
             let docs: Vec<&crate::document::Document> = ed.docs.values().collect();
             ed.lsp.sync_throttled(&docs);
@@ -229,27 +274,21 @@ pub fn run(launch: Launch) -> io::Result<i32> {
             unsafe {
                 libc::raise(libc::SIGTSTP);
             }
-            screen = Screen::enter(ed.options.mouse)?;
+            *screen = Screen::enter(ed.options.mouse)?;
             renderer.invalidate();
             ed.check_disk_changes();
         }
         if let Some(handoff) = ed.handoff.take() {
             screen.leave();
             hand_off(&handoff);
-            screen = Screen::enter(ed.options.mouse)?;
+            *screen = Screen::enter(ed.options.mouse)?;
             renderer.invalidate();
             ed.check_disk_changes();
         }
         if ed.quit {
-            break;
+            return Ok(());
         }
     }
-    ed.remember_positions();
-    ed.persisted.save();
-    ed.jobs.kill_all();
-    ed.lsp.shutdown();
-    screen.leave();
-    Ok(0)
 }
 
 fn hand_off(handoff: &crate::jobs::Handoff) {

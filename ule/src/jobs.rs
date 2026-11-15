@@ -174,12 +174,19 @@ pub fn find_location(line: &str) -> Option<(String, usize, Option<usize>)> {
     None
 }
 
+/// Longest line kept from a job: longer ones (minified files, binary output) are split.
+pub const MAX_LINE_BYTES: u64 = 16 * 1024;
+/// Lines an output buffer keeps; the oldest go first, like a terminal's scrollback.
+pub const MAX_OUTPUT_LINES: usize = 20_000;
+/// What a job keeps of its own output (`ul lm` answers for ai_edit, the last line for errors).
+pub const MAX_JOB_BYTES: usize = 4 * 1024 * 1024;
+
 fn read_lines(reader: impl Read, job: usize, tx: Sender<Event>) {
     let mut reader = BufReader::new(reader);
     let mut buffer = Vec::new();
     loop {
         buffer.clear();
-        match reader.read_until(b'\n', &mut buffer) {
+        match reader.by_ref().take(MAX_LINE_BYTES).read_until(b'\n', &mut buffer) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
                 let line = String::from_utf8_lossy(&buffer).trim_end_matches(['\n']).to_string();
@@ -312,6 +319,45 @@ fn project_dir(path: &Path, roots: Vec<String>) -> Option<PathBuf> {
     }
 }
 
+/// `wait_with_output` with a limit: past `timeout` the child is killed and an error returned,
+/// so a formatter that hangs never freezes the editor.
+pub fn output_within(mut child: Child, timeout: std::time::Duration) -> Result<std::process::Output, String> {
+    fn drain(pipe: Option<impl Read + Send + 'static>) -> thread::JoinHandle<Vec<u8>> {
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    }
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() >= timeout => {
+                // The group too: a wrapper script's real formatter would keep the pipes open.
+                // SAFETY: plain kill(2) on the child's own process group.
+                unsafe {
+                    libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("timed out after {} s", timeout.as_secs()));
+            }
+            Ok(None) => thread::sleep(std::time::Duration::from_millis(10)),
+            Err(error) => return Err(error.to_string()),
+        }
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
+}
+
 /// Runs a command to completion and returns its output (for :r !cmd and :%!filter).
 pub fn capture(command: &str, cwd: &Path, input: Option<&str>) -> Result<String, String> {
     let mut child = Command::new(shell())
@@ -342,8 +388,10 @@ pub fn on_output(ed: &mut Editor, id: usize, line: String) {
     let Some(job) = ed.jobs.running.get_mut(&id) else {
         return;
     };
-    job.output.push_str(&line);
-    job.output.push('\n');
+    if job.output.len() + line.len() < MAX_JOB_BYTES {
+        job.output.push_str(&line);
+        job.output.push('\n');
+    }
     if matches!(job.kind, JobKind::AiEdit { .. }) {
         return;
     }
@@ -358,6 +406,19 @@ pub fn on_output(ed: &mut Editor, id: usize, line: String) {
         let text = if document.text.is_empty() { line } else { format!("\n{line}") };
         document.insert(end, &text, end);
         document.commit(end);
+        // Output is never undone; a revision per line would double its memory.
+        document.history.clear();
+        let lines = document.text.len_lines();
+        if lines > MAX_OUTPUT_LINES {
+            let drop = lines - MAX_OUTPUT_LINES + MAX_OUTPUT_LINES / 10;
+            document.remove(Pos::new(0, 0), Pos::new(drop, 0), Pos::new(0, 0));
+            document.commit(Pos::new(0, 0));
+            document.history.clear();
+            for view in ed.views.values_mut().filter(|view| view.doc == doc) {
+                view.cursor.line = view.cursor.line.saturating_sub(drop);
+                view.scroll = view.scroll.saturating_sub(drop);
+            }
+        }
     }
     // Views at the bottom follow new output, like `tail -f`.
     if follow {
@@ -491,6 +552,31 @@ pub fn open_under_cursor(ed: &mut Editor) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_buffers_and_lines_are_bounded() {
+        let mut ed = Editor::new(crate::config::Config::default());
+        let doc = ed.output_doc("[run]");
+        ed.show_doc(doc);
+        let command = format!("seq 1 {}; head -c 40000 /dev/zero | tr '\\0' x; echo", MAX_OUTPUT_LINES + 5_000);
+        spawn(&mut ed, "seq", &command, None, doc, JobKind::Output).unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            match ed.rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                Ok(Event::JobOutput(job, line)) => on_output(&mut ed, job, line),
+                Ok(Event::JobDone(..)) => break,
+                Ok(_) => {}
+                Err(_) => panic!("job did not finish"),
+            }
+            assert!(Instant::now() < deadline);
+        }
+        let document = &ed.docs[&doc];
+        let lines = document.text.len_lines();
+        assert!(lines <= MAX_OUTPUT_LINES, "{lines} lines kept");
+        assert!(document.text.lines().all(|line| line.len() as u64 <= MAX_LINE_BYTES));
+        assert_eq!(document.text.lines().filter(|line| line.starts_with('x')).map(str::len).sum::<usize>(), 40_000);
+        assert!(ed.docs.get_mut(&doc).unwrap().history.pop_undo().is_none(), "output keeps no undo history");
+    }
 
     #[test]
     fn locations_in_output() {

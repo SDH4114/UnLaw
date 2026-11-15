@@ -1175,6 +1175,43 @@ impl Editor {
         doc.commit(cursor);
     }
 
+    /// Writes every modified buffer to `<state>/recovered/<name>.<time>[-n]` (0600, never
+    /// over an existing file) when ule is killed; returns (title, copy) pairs.
+    pub fn write_recovery(&self) -> Vec<(String, PathBuf)> {
+        self.write_recovery_into(&crate::config::state_dir().join("recovered"))
+    }
+
+    pub fn write_recovery_into(&self, dir: &Path) -> Vec<(String, PathBuf)> {
+        use std::io::Write;
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        let mut written = Vec::new();
+        let docs: Vec<&Document> = self.docs.values().filter(|doc| doc.modified()).collect();
+        if docs.is_empty() || std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).is_err() {
+            return written;
+        }
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |time| time.as_secs());
+        for doc in docs {
+            let name: String =
+                doc.file_name().chars().map(|c| if c == '/' || c.is_control() { '_' } else { c }).collect();
+            let name = if name.is_empty() || name.starts_with('.') { format!("buffer{name}") } else { name };
+            for number in 0..100 {
+                let suffix = if number == 0 { String::new() } else { format!("-{number}") };
+                let path = dir.join(format!("{name}.{stamp}{suffix}"));
+                match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path) {
+                    Ok(mut file) => {
+                        if file.write_all(doc.content(self.options.final_newline).as_bytes()).is_ok() {
+                            written.push((doc.title(), path));
+                        }
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(_) => break,
+                }
+            }
+        }
+        written
+    }
+
     pub fn modified_docs(&self) -> Vec<String> {
         let mut names: Vec<String> = self.docs.values().filter(|doc| doc.modified()).map(Document::title).collect();
         names.sort();

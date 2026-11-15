@@ -131,5 +131,66 @@ class UleBinaryTests(CoreTestCase):
         self.assertIn("unknown option", result.stderr)
 
 
+    def test_a_kill_keeps_unsaved_work_and_restores_the_terminal(self) -> None:
+        import os
+        import pty
+        import select
+        import signal
+        import time
+
+        if shutil.which("cargo") is None:
+            self.skipTest("cargo is required")
+        program = ule_binary()
+        note = self.root / "note.txt"
+        note.write_text("original\n")
+        for number in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(signal=number.name):
+                pid, master = pty.fork()
+                if pid == 0:
+                    os.chdir(self.root)
+                    os.execve(str(program), [str(program), str(note)], {**self.env, "TERM": "xterm-256color"})
+                screen = b""
+
+                def read_for(seconds: float) -> None:
+                    nonlocal screen
+                    deadline = time.monotonic() + seconds
+                    while time.monotonic() < deadline:
+                        if select.select([master], [], [], 0.05)[0]:
+                            try:
+                                screen += os.read(master, 65536)
+                            except OSError:
+                                return
+
+                try:
+                    deadline = time.monotonic() + 10
+                    while b"\x1b[c" not in screen and time.monotonic() < deadline:
+                        read_for(0.1)
+                    # Answer the keyboard query like a terminal without the kitty protocol.
+                    os.write(master, b"\x1b[?62c")
+                    read_for(1.0)
+                    os.write(master, b"Oedited by hand\x1b")
+                    read_for(0.8)
+                    os.kill(pid, number)
+                    read_for(1.5)
+                    _, status = os.waitpid(pid, 0)
+                finally:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    os.close(master)
+                self.assertEqual(os.waitstatus_to_exitcode(status), 128 + number)
+                self.assertEqual(note.read_text(), "original\n", "the file itself is not saved")
+                copies = sorted((self.unlaw / "data" / "ule" / "recovered").glob("note.txt.*"))
+                self.assertTrue(copies, "no recovery copy")
+                self.assertEqual(copies[-1].read_text(), "edited by hand\noriginal\n")
+                self.assertEqual(copies[-1].stat().st_mode & 0o777, 0o600)
+                if number == signal.SIGTERM:
+                    self.assertIn(b"\x1b[?1049l", screen, "the alternate screen was not left")
+                    self.assertIn(b"kept as", screen)
+                for copy in copies:
+                    copy.unlink()
+
+
 if __name__ == "__main__":
     unittest.main()

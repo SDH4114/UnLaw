@@ -53,9 +53,23 @@ fn external(ed: &Editor, doc: usize) -> Option<Vec<String>> {
     Some(lang.formatter.iter().map(|arg| arg.replace("{file}", &path)).collect())
 }
 
+/// A formatter that takes longer is stopped (format-on-save must never hang the editor).
+pub const FORMAT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 fn run_formatter(command: &[String], input: &str, cwd: &Path) -> Result<String, String> {
+    run_formatter_within(command, input, cwd, FORMAT_TIMEOUT)
+}
+
+fn run_formatter_within(
+    command: &[String],
+    input: &str,
+    cwd: &Path,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    use std::os::unix::process::CommandExt;
     let mut child = Command::new(&command[0])
         .args(&command[1..])
+        .process_group(0)
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -67,7 +81,7 @@ fn run_formatter(command: &[String], input: &str, cwd: &Path) -> Result<String, 
     let writer = std::thread::spawn(move || {
         let _ = stdin.write_all(input.as_bytes());
     });
-    let output = child.wait_with_output().map_err(|error| error.to_string())?;
+    let output = crate::jobs::output_within(child, timeout).map_err(|error| format!("{}: {error}", command[0]))?;
     let _ = writer.join();
     if !output.status.success() {
         let error = String::from_utf8_lossy(&output.stderr);
@@ -193,6 +207,17 @@ pub fn on_save(ed: &mut Editor, doc: usize, path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::config::Config;
+
+    #[test]
+    fn a_hanging_formatter_is_stopped() {
+        let command: Vec<String> = ["sh", "-c", "sleep 30 & cat; wait"].map(String::from).into();
+        let started = std::time::Instant::now();
+        let result = run_formatter_within(&command, "x\n", Path::new("/"), std::time::Duration::from_millis(500));
+        assert!(result.unwrap_err().contains("timed out"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "the editor waited {:?}", started.elapsed());
+        let fine: Vec<String> = ["cat"].map(String::from).into();
+        assert_eq!(run_formatter(&fine, "a\n", Path::new("/")).unwrap(), "a\n");
+    }
 
     #[test]
     fn minimal_replacement_keeps_unchanged_lines() {
