@@ -50,6 +50,7 @@ def storage_path(*parts: str) -> Path:
     return root.joinpath(*parts)
 
 import argparse
+import errno
 import html
 import json
 import os
@@ -185,14 +186,40 @@ def _safe_name(text: str) -> str:
     return text.encode("utf-8")[:180].decode("utf-8", errors="ignore").strip(" .") or "video"
 
 
+# Volumes without hard links (exFAT, FAT, most network shares) answer link(2) with one of these.
+_NO_HARD_LINKS = {errno.ENOTSUP, errno.EOPNOTSUPP, errno.EPERM, errno.EXDEV, errno.EMLINK}
+
+
+def _copy_new(source: Path, destination: Path) -> bool:
+    """Copy into a file created exclusively; False when the destination already exists."""
+    try:
+        target = destination.open("xb")
+    except FileExistsError:
+        return False
+    try:
+        with target, source.open("rb") as stream:
+            shutil.copyfileobj(stream, target, 1024 * 1024)
+    except BaseException:
+        destination.unlink(missing_ok=True)  # never leave half a file under the final name
+        raise
+    return True
+
+
 def _publish(source: Path, destination: Path) -> None:
     # Both paths are on the same filesystem: hard-link publishes atomically,
     # including when another process creates the destination concurrently.
     try:
         os.link(source, destination)
-        print(f"Saved: {destination}", flush=True)
     except FileExistsError:
         print(f"Already exists: {destination}", flush=True)
+        return
+    except OSError as error:
+        if error.errno not in _NO_HARD_LINKS:
+            raise
+        if not _copy_new(source, destination):
+            print(f"Already exists: {destination}", flush=True)
+            return
+    print(f"Saved: {destination}", flush=True)
 
 
 def _podcast_dir() -> Path:

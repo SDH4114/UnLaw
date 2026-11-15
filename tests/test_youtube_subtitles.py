@@ -195,6 +195,25 @@ class SubtitleTests(unittest.TestCase):
             youtube._publish(source, destination)
         self.assertEqual(destination.read_text(), 'original')
 
+    def test_publish_copies_where_hard_links_are_not_supported(self):
+        # exFAT, FAT and network volumes: link(2) fails with ENOTSUP after the whole download.
+        import errno
+        source = self.root / 'staged.mov'
+        source.write_bytes(b'video')
+        refused = OSError(errno.ENOTSUP, 'Operation not supported')
+        with patch.object(youtube.os, 'link', side_effect=refused), redirect_stdout(StringIO()) as out:
+            youtube._publish(source, self.root / 'saved.mov')
+            existing = self.root / 'existing.mov'
+            existing.write_bytes(b'original')
+            youtube._publish(source, existing)
+        self.assertEqual((self.root / 'saved.mov').read_bytes(), b'video')
+        self.assertEqual(existing.read_bytes(), b'original')
+        self.assertIn('Saved:', out.getvalue())
+        self.assertIn('Already exists:', out.getvalue())
+        with patch.object(youtube.os, 'link', side_effect=PermissionError(errno.EACCES, 'denied')), self.assertRaises(PermissionError):
+            youtube._publish(source, self.root / 'other.mov')
+        self.assertFalse((self.root / 'other.mov').exists())
+
     def test_safe_names_do_not_escape_output_and_keep_utf8(self):
         name = youtube._safe_name('../' + 'я' * 200 + '\\x')
         self.assertNotIn('/', name)
