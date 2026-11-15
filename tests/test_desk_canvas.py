@@ -683,6 +683,25 @@ class CanvasFileActionTests(ServerTests):
         self.assertTrue(Path(first["path"]).exists())
         self.assertEqual(self.request("POST", "/api/canvas/rename", {"path": str(self.root / "gone.canvas"), "name": "x"})[0], 404)
 
+    def test_rename_works_on_volumes_without_hard_links(self) -> None:
+        import errno
+
+        made = self.create("canvas-1")
+        self.create("taken")
+
+        def no_links(*args, **kwargs):
+            raise OSError(errno.ENOTSUP, "Operation not supported")
+
+        with patch.object(desk_module.os, "link", no_links):
+            status, data = self.request("POST", "/api/canvas/rename", {"path": made["path"], "name": "taken"})
+            self.assertEqual(status, 400, data)
+            self.assertIn("already exists", data["error"])
+            status, data = self.request("POST", "/api/canvas/rename", {"path": made["path"], "name": "Moved"})
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["version"], made["version"])
+        self.assertFalse(Path(made["path"]).exists())
+        self.assertTrue((self.canvas_dir / "Moved.canvas").exists())
+
     def fake_osascript(self, script: str) -> Path:
         tools = self.root / "bin"
         tools.mkdir(exist_ok=True)

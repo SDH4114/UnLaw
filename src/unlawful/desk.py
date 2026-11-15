@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import fcntl
 import hmac
 import json
@@ -773,11 +774,10 @@ class Desk:
                 if target.exists():  # only the letter case changes on a case-insensitive disk
                     os.rename(path, target)
                 else:
-                    try:  # a hard link fails when the name was taken meanwhile, so nothing is overwritten
-                        os.link(path, target)
+                    try:
+                        _rename_new(path, target)
                     except FileExistsError as error:
                         raise ValueError(f"A canvas named {clean} already exists") from error
-                    os.unlink(path)
             version, canvas = read_canvas(target)
             self._canvas_shown(target)
         return self._canvas_json(target, version, canvas)
@@ -866,6 +866,23 @@ class Desk:
             self.layer = None
             self.remember()
         return self.board_json()
+
+
+def _rename_new(path: Path, target: Path) -> None:
+    """Rename without overwriting: a hard link fails when the name was taken meanwhile.
+    Volumes without hard links (exFAT, FAT, some shares) check first, then rename."""
+    try:
+        os.link(path, target)
+    except FileExistsError:
+        raise
+    except OSError as error:
+        if error.errno not in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.EPERM, errno.EXDEV, errno.EMLINK):
+            raise
+        if os.path.lexists(target):
+            raise FileExistsError(errno.EEXIST, "exists", str(target)) from error
+        os.rename(path, target)
+        return
+    os.unlink(path)
 
 
 def board_file(raw: str, create: bool = False, boards_dir: Path | None = None) -> Path:
