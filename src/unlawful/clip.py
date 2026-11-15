@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import plistlib
@@ -31,7 +32,7 @@ from .config import ConfigError, load_config, storage_path
 LABEL = "com.unlaw.clip"
 USAGE = (
     "Usage: ul clip [list [N] [--json]] | search WORDS... [--json] | show N | copy N | rm N | clear [--yes]\n"
-    "       ul clip on | off | status | pause | resume\n"
+    "       ul clip on | off | status [--json] | pause | resume\n"
 )
 DEFAULT_LIST = 20
 MAX_BYTES = 100 * 1024
@@ -278,11 +279,13 @@ def _handle_change(line: str) -> None:
     types, text = data.get("types"), data.get("text")
     if not isinstance(types, list) or not isinstance(text, str) or _paused():
         return
+    # Half of a surrogate pair (an app cut an emoji in two) cannot be written as UTF-8: it becomes U+FFFD.
+    text = text.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
     if not storable(types, text):
         return
     try:
         store(text)
-    except (OSError, ConfigError, ClipError) as error:
+    except (OSError, ValueError, ConfigError, ClipError) as error:
         # One failed write must not end the watcher; the next copy tries again.
         print(f"unlaw clip: could not store a copy: {error}", file=sys.stderr)
 
@@ -384,33 +387,53 @@ def _count_text(count: int) -> str:
     return f"{count} item" if count == 1 else f"{count} items"
 
 
-def status() -> int:
+def status(as_json: bool = False) -> int:
     plain_plist = _job_path().exists()
     if not plain_plist:
-        job = "off (`ul clip on` starts it)"
+        state, job = "off", "off (`ul clip on` starts it)"
     elif _launchctl("print", _target()).returncode == 0:
-        job = "running"
+        state, job = "running", "running"
     else:
-        job = "installed but not loaded (`ul clip on` loads it)"
+        state, job = "not_loaded", "installed but not loaded (`ul clip on` loads it)"
     newest = ""
+    count: int | None = None
     try:
         items = _read()
-        stored = _count_text(len(items))
+        count = len(items)
+        stored = _count_text(count)
         if items:
             newest = _when(items[0])
     except ClipError as error:
+        items = []
         stored = f"unreadable ({error})"
+    # Whether macOS lets the background helper read the pasteboard cannot be asked directly, so these are the
+    # two clues: nothing new for a long time while copying, or osascript errors in the watcher's log.
+    log = clip_dir() / "watch.log"
+    log_bytes = log.stat().st_size if log.exists() else 0
+    if as_json:
+        print(
+            json.dumps(
+                {
+                    "watcher": state,
+                    "paused": _paused(),
+                    "items": count,
+                    "newest": items[0]["time"] if items else None,
+                    "history": str(history_file()),
+                    "log": str(log),
+                    "log_bytes": log_bytes,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
     print(f"Background watcher: {job}")
     print(f"Recording: {'paused (`ul clip resume`)' if _paused() else 'on'}")
     print(f"History: {stored} in {history_file()}")
     if newest:
         print(f"Newest item: {newest}")
-    # Whether macOS lets the background helper read the pasteboard cannot be asked directly, so these are the
-    # two clues: nothing new for a long time while copying, or osascript errors in the watcher's log.
-    log = clip_dir() / "watch.log"
-    if log.exists() and log.stat().st_size > 0:
+    if log_bytes > 0:
         print(
-            f"Watcher log: {log} ({log.stat().st_size} bytes; read it if copies are not being stored)"
+            f"Watcher log: {log} ({log_bytes} bytes; read it if copies are not being stored)"
         )
     return 0
 
@@ -478,7 +501,7 @@ def _print_items(pairs: list[tuple[int, dict]], as_json: bool) -> None:
         print(
             json.dumps(
                 [
-                    {"n": n, "text": item["text"], "time": item["time"]}
+                    {"n": n, "id": item_id(item["text"]), "text": item["text"], "time": item["time"]}
                     for n, item in pairs
                 ],
                 ensure_ascii=False,
@@ -512,7 +535,17 @@ def search_items(words: list[str], as_json: bool) -> int:
     return 0
 
 
+def item_id(text: str) -> str:
+    """A name for an item that does not move when new copies arrive (numbers do): a hash of its text."""
+    return hashlib.sha256(text.encode("utf-8", errors="surrogatepass")).hexdigest()[:12]
+
+
 def _pick(items: list[dict], text: str) -> int:
+    if text.startswith("@"):
+        found = [index for index, item in enumerate(items) if item_id(item["text"]) == text[1:]]
+        if not found:
+            raise ClipError(f"no item with id {text[1:]!r} (see `ul clip list --json`)", 2)
+        return found[0]
     try:
         number = int(text)
     except ValueError:
@@ -582,18 +615,24 @@ def clear(yes: bool) -> int:
             _delete_damaged_copies()
             print("The clipboard history is already empty.")
             return 0
-        if not yes:
-            print(
-                f"Delete all {_count_text(count)} of clipboard history? [y/N] ",
-                end="",
-                flush=True,
-            )
-            answer = sys.stdin.readline()
-            if answer.strip().lower() not in {"y", "yes"}:
-                if not answer:
-                    print()
-                print("Cancelled; nothing was removed.")
-                return 1
+    if not yes:
+        # Asked without the lock: the watcher stores copies under it and must not wait for an answer.
+        print(
+            f"Delete all {_count_text(count)} of clipboard history? [y/N] ",
+            end="",
+            flush=True,
+        )
+        answer = sys.stdin.readline()
+        if answer.strip().lower() not in {"y", "yes"}:
+            if not answer:
+                print()
+            print("Cancelled; nothing was removed.")
+            return 1
+    with _locked():
+        try:
+            count = len(_read())  # copies that arrived while the question was open go too
+        except ClipError:
+            pass
         history_file().unlink(missing_ok=True)
         _delete_damaged_copies()
     print(f"Deleted {_count_text(count)}.")
@@ -660,10 +699,13 @@ def _dispatch(args: list[str]) -> int:
         words, flags = _split(rest, {"--yes", "-y"})
         _no_arguments(words)
         return clear(bool(flags))
+    if action == "status":
+        words, flags = _split(rest, {"--json"})
+        _no_arguments(words)
+        return status("--json" in flags)
     simple = {
         "on": job_on,
         "off": job_off,
-        "status": status,
         "pause": lambda: set_paused(True),
     }
     simple["resume"] = lambda: set_paused(False)

@@ -421,6 +421,10 @@ LEGACY_NORMALIZED_HASHES["desk"].add("ce2d61a61d91bbe3fd9e6dae618ccc3dde908299aa
 LEGACY_SOURCE_HASHES.setdefault("yt", set()).add("1351b55748106ad21a067328f269ad3f16ecd33607cddedf085fe121e13281b6")
 LEGACY_NORMALIZED_HASHES.setdefault("yt", set()).add("318bf5f1003c84f7a4ba73156fe550b0f7875ddcab29add1b47074a6c34df086")
 
+# clip seed of 3.19.2 (6d6a700, also the copy on the maintainer machine), before the 3.19.3 audit fixes.
+LEGACY_SOURCE_HASHES.setdefault("clip", set()).add("faa088db619a9f081187eb31c418c029fac76cfc605887e3cdb28d532513660c")
+LEGACY_NORMALIZED_HASHES.setdefault("clip", set()).add("2c5cd1d752c7fb88d267cd63cde9ff740c224c7274b43b22831532d3db953950")
+
 # Commands now built into the Rust core, or removed (`todo`, replaced by
 # `ul desk`). Untouched seeds with these hashes are removed so the built-in
 # runs; edited copies stay and override it.

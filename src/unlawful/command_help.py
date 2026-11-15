@@ -81,10 +81,12 @@ Examples:
     "clip": '''Clipboard history in the background: list, search and copy again.
 Usage: ul clip [list [N] [--json]]
        ul clip search <words...> [--json] | show <n> | copy <n> | rm <n> | clear [--yes]
-       ul clip on | off | status | pause | resume
+       ul clip on | off | status [--json] | pause | resume
   list        Numbered, newest first (default 20 items, one-line previews)
   search      Items that contain every word, any case; numbers stay valid for copy/show/rm
   copy <n>    Put item n back on the clipboard (it becomes the newest)
+  @<id>       In place of a number for show/copy/rm: the "id" from --json, which stays the
+              same when new copies arrive (numbers shift)
   show <n>    The full text (control characters escaped on a terminal)
   clear       Delete all items after a y/N question (--yes skips it)
   on / off    Install / remove the background watcher (LaunchAgent com.unlaw.clip); off keeps the history

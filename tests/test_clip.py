@@ -11,6 +11,7 @@ import os
 import plistlib
 import shutil
 import stat
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -574,6 +575,64 @@ class JobTests(ClipBase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("osascript", result.stderr)
         self.assertFalse(self.plist_path.exists())
+
+
+class AuditTests(ClipBase):
+    def test_half_a_surrogate_pair_does_not_end_the_watcher(self) -> None:
+        # JXA's JSON.stringify writes a lone surrogate as \ud83d; json.dump to UTF-8 used to raise on it.
+        self.watch(entry("cut \ud83d", count=1), entry("after", count=2))
+        self.assertEqual(self.texts(), ["after", "cut \ufffd"])
+        self.watch(entry("whole \ud83d\ude00", count=3))
+        self.assertEqual(self.texts()[0], "whole \U0001f600")
+
+    def test_the_clear_question_does_not_hold_the_history_lock(self) -> None:
+        self.fill("one")
+        asking = subprocess.Popen(
+            [str(binary()), "clip", "clear"], env=self.env, cwd=self.root, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            self.assertIn("Delete all 1 item", asking.stdout.read(20))
+            # A copy made while the question is open is stored at once, not after the answer.
+            self.feed(entry("two", count=2))
+            self.assertEqual(self.ul("clip", "_watch", timeout=20).returncode, 0)
+            self.assertEqual(self.texts(), ["two", "one"])
+            out, _ = asking.communicate("y\n", timeout=20)
+        finally:
+            asking.kill()
+            asking.wait()
+        self.assertEqual(asking.returncode, 0)
+        self.assertIn("Deleted 2 items", out)
+        self.assertEqual(self.texts(), [])
+
+    def test_status_json_is_stable(self) -> None:
+        status = json.loads(self.ok("clip", "status", "--json").stdout)
+        self.assertEqual(
+            sorted(status), ["history", "items", "log", "log_bytes", "newest", "paused", "watcher"]
+        )
+        self.assertEqual((status["watcher"], status["paused"], status["items"], status["newest"]), ("off", False, 0, None))
+        self.ok("clip", "on")
+        (self.fake / "loaded").write_text("")
+        self.fill("a")
+        self.ok("clip", "pause")
+        status = json.loads(self.ok("clip", "status", "--json").stdout)
+        self.assertEqual((status["watcher"], status["paused"], status["items"]), ("running", True, 1))
+        self.assertEqual(status["history"], str(self.history_path))
+        self.assertEqual(self.ul("clip", "status", "extra").returncode, 2)
+
+    def test_ids_name_the_same_item_after_new_copies(self) -> None:
+        self.fill("one", "two")
+        items = json.loads(self.ok("clip", "list", "--json").stdout)
+        wanted = next(item["id"] for item in items if item["text"] == "one")
+        self.watch(entry("three", count=9))
+        self.assertEqual(self.ok("clip", "show", f"@{wanted}").stdout, "one")
+        self.ok("clip", "copy", f"@{wanted}")
+        self.assertEqual(self.read("pbcopy.txt"), "one")
+        self.ok("clip", "rm", f"@{wanted}")
+        self.assertEqual(self.texts(), ["three", "two"])
+        missing = self.ul("clip", "show", "@000000000000")
+        self.assertEqual(missing.returncode, 2)
+        self.assertIn("no item with id", missing.stderr)
 
 
 if __name__ == "__main__":
