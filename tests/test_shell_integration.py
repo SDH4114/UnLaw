@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from ulbin import CoreTestCase  # noqa: E402
+from ulbin import CoreTestCase, binary  # noqa: E402
 
 
 class ShellIntegrationTests(CoreTestCase):
@@ -58,6 +58,29 @@ class ShellIntegrationTests(CoreTestCase):
         # --dry-run and invalid arguments leave the shell where it is.
         self.assertLess(script.index("--focus|--no-focus) ;;"), script.index("builtin cd --"))
         self.assertEqual(self.ul("_shell-init", "bash").returncode, 2)
+
+    def test_zsh_runs_ul_once_for_a_command_and_twice_only_for_templates(self) -> None:
+        import shutil
+        import subprocess
+
+        if shutil.which("zsh") is None:
+            self.skipTest("zsh is required")
+        self.save_template("hearme", self.project)
+        log = self.root / "ul-calls.log"
+        real = self.root / "realul"
+        real.mkdir()
+        (real / "ul").write_text(f"#!/bin/sh\necho \"$1\" >> {log}\nexec {binary()} \"$@\"\n")
+        (real / "ul").chmod(0o755)
+        script = self.ok("_shell-init", "zsh").stdout
+        env = {**self.env, "PATH": f"{real}:{self.env['PATH']}"}
+        self.recording_tool("open")
+        for args, calls in ((["version"], ["version"]), (["hearme"], ["_template-path", "_template-launch"])):
+            with self.subTest(args=args):
+                log.unlink(missing_ok=True)
+                result = subprocess.run(["zsh", "-f", "-c", script + "\nul " + " ".join(args)], env=env,
+                                        cwd=self.root, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(log.read_text().split(), calls)
 
     def test_rendered_zsh_sources_venv_in_current_shell(self) -> None:
         script = self.ok("_shell-init", "zsh").stdout

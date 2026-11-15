@@ -90,9 +90,12 @@ pub const ZSH_INTEGRATION: &str = r#"ul() {
       source "$_unlaw_activation"
       return $?
     fi
-    local _unlaw_path
-    _unlaw_path="$(command ul _template-path "$1" 2>/dev/null)"
-    local _unlaw_status=$?
+    # Only a name with a template file costs a second ul run; other commands go straight on.
+    local _unlaw_base="${XDG_CONFIG_HOME:-$HOME/.config}" _unlaw_path _unlaw_status=1
+    if [[ "$_unlaw_base" == "~"* || -f "$_unlaw_base/unlaw/templates/projects/$1.toml" ]]; then
+      _unlaw_path="$(command ul _template-path "$1" 2>/dev/null)"
+      _unlaw_status=$?
+    fi
     if (( _unlaw_status == 0 )); then
       local _unlaw_arg _unlaw_cd=1
       for _unlaw_arg in "${@:2}"; do
