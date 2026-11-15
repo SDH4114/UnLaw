@@ -79,6 +79,8 @@ fn version_key(version: &str) -> Vec<u64> {
         .collect()
 }
 
+const LS_REMOTE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// The commit a branch or tag points to on the remote, via `git ls-remote`.
 fn remote_commit(repository: &str, source: &Source) -> Option<String> {
     let reference = match source {
@@ -86,14 +88,37 @@ fn remote_commit(repository: &str, source: &Source) -> Option<String> {
         Source::Branch(name) => format!("refs/heads/{name}"),
         Source::Tag(name) => format!("refs/tags/{name}"),
     };
-    let output = Command::new("git")
+    let mut child = Command::new("git")
+        .args(["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=20"])
         .args(["ls-remote", repository, &reference, &format!("{reference}^{{}}")])
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(std::process::Stdio::null())
-        .output()
-        .ok()
-        .filter(|output| output.status.success())?;
-    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    // A black-holed network must not hang `ul update`: past the limit the check is
+    // treated as unknown (the caller then installs, as without git).
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = std::io::Read::read_to_string(&mut stdout, &mut text);
+        text
+    });
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break,
+            Ok(Some(_)) | Err(_) => return None,
+            Ok(None) if started.elapsed() >= LS_REMOTE_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    }
+    let text = reader.join().ok()?;
     // An annotated tag's `^{}` line names the commit; prefer it.
     let line = text.lines().find(|line| line.ends_with("^{}")).or_else(|| text.lines().next())?;
     let hash = line.split_whitespace().next()?;

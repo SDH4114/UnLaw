@@ -319,9 +319,14 @@ fn remove_everything(yes: bool) -> i32 {
     if !skill_installs.is_empty() {
         report("the agent skill".into(), skills::remove_all());
     }
-    if let Some(text) = shell_block {
-        // fs::write follows a symlinked ~/.zshrc (dotfile managers) instead of replacing it.
-        report("the shell integration from ~/.zshrc".into(), fs::write(&zshrc, text));
+    if shell_block.is_some() {
+        // Read again: ~/.zshrc may have been edited while the question waited. atomic_write
+        // writes through a symlinked ~/.zshrc (dotfile managers) and keeps its mode.
+        let result = fs::read_to_string(&zshrc).and_then(|text| match without_shell_block(&text) {
+            Some(text) => crate::util::atomic_write(&zshrc, &text, ".zshrc"),
+            None => Ok(()),
+        });
+        report("the shell integration from ~/.zshrc".into(), result);
     }
     if token {
         let deleted = Command::new("security")

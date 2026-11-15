@@ -177,6 +177,23 @@ class RemoveTests(CoreTestCase):
         self.assertTrue((self.home / ".local" / "bin" / "ul").exists())
         self.assertEqual(self.calls(self.launchctl), [])
 
+    def test_remove_keeps_zshrc_edits_made_while_it_asks(self) -> None:
+        import subprocess
+        import time
+
+        self.install_fakes()
+        zshrc = self.home / ".zshrc"
+        zshrc.chmod(0o640)
+        process = subprocess.Popen([str(binary()), "remove"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, env=self.env, cwd=self.root)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        time.sleep(1.0)  # the question is waiting for an answer now
+        zshrc.write_text(zshrc.read_text() + "export ADDED_WHILE_ASKING=1\n")
+        process.communicate("y\n", timeout=60)
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(zshrc.read_text(), "export A=1\nalias b=c\nexport ADDED_WHILE_ASKING=1\n")
+        self.assertEqual(zshrc.stat().st_mode & 0o777, 0o640)
+
     def test_remove_deletes_the_program_and_its_files(self) -> None:
         self.install_fakes()
         outside = self.root / "storage"

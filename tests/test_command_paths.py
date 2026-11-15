@@ -232,6 +232,8 @@ class CaptureTests(ToolTestCase):
             ("shot", "a.png", "b.png"): "unexpected argument: b.png",
             ("shot", "selfie"): "unknown screenshot kind",
             ("shot", "--display", "0"): "--display needs a whole number from 1",
+            ("shot", "--display", "²"): "--display needs a whole number from 1",
+            ("record", "--rect", "1,2,3,²"): "--rect needs X,Y,WIDTH,HEIGHT",
             ("stop", "now"): "stop takes no arguments",
             ("trim", "x.mov"): "usage: ul capture trim",
         }

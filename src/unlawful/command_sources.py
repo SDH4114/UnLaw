@@ -443,6 +443,13 @@ LEGACY_NORMALIZED_HASHES.setdefault("awake", set()).add("06be857be027f207c107f45
 LEGACY_SOURCE_HASHES.setdefault("desk", set()).add("2a0d645d97eb78e4574e2ba35544914f43df06bd501272ce0aeb0a21465d75a4")
 LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("a276e8b216a37a6c51ba4ba6caa0d9303c078e8c5d8923a9249b9c530bb3c0d3")
 
+# capture seed of 3.19.2 (6d6a700, also the copy on the maintainer machine), before the 3.19.3 audit fixes.
+LEGACY_SOURCE_HASHES.setdefault("capture", set()).add("e5b0af11cee8f66403673ddbfbca838190a332b307e1461859d02262fc1ca8cc")
+LEGACY_NORMALIZED_HASHES.setdefault("capture", set()).add("2ebac24e58c35978d751ae5a17263b29b6abd56b8ef46caa554338db02a3cb57")
+# sys seed of 3.19.2 (6d6a700, also the copy on the maintainer machine), before the 3.19.3 audit fixes.
+LEGACY_SOURCE_HASHES.setdefault("sys", set()).add("55e0a5a233eb604172674e234680a31a87176b30cccbdc8b15d27d26fb7a55c8")
+LEGACY_NORMALIZED_HASHES.setdefault("sys", set()).add("276e463206cbd53b99c83285f19aec59aead2bfda101d5628ee7393f936ca9ec")
+
 # Commands now built into the Rust core, or removed (`todo`, replaced by
 # `ul desk`). Untouched seeds with these hashes are removed so the built-in
 # runs; edited copies stay and override it.

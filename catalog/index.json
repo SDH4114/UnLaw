@@ -14,7 +14,7 @@
   {
    "name": "capture",
    "summary": "Screenshots and screen, camera and audio recordings on macOS.",
-   "sha256": "e5b0af11cee8f66403673ddbfbca838190a332b307e1461859d02262fc1ca8cc"
+   "sha256": "d8d409d637af098272a0fd4d4b2f9e172b831ca160e5836144f89c5307424c3f"
   },
   {
    "name": "claude",
@@ -94,7 +94,7 @@
   {
    "name": "sys",
    "summary": "Computer stats: CPU, GPU, RAM, disk, battery and charge cycles.",
-   "sha256": "55e0a5a233eb604172674e234680a31a87176b30cccbdc8b15d27d26fb7a55c8"
+   "sha256": "789e61901dc1490ccb46d390c3a6bcc40af0083be170e53e51b0581ac5513836"
   },
   {
    "name": "tg",

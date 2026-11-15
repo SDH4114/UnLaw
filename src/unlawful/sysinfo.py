@@ -163,8 +163,8 @@ def parse_df(text: str) -> list[dict]:
         if match:
             rows.append(
                 {
-                    "device": match.group("device"),
-                    "mount": match.group("mount"),
+                    "device": printable(match.group("device")),
+                    "mount": printable(match.group("mount")),
                     "total_bytes": int(match.group("blocks")) * 1024,
                     "free_bytes": int(match.group("avail")) * 1024,
                 }
@@ -213,7 +213,7 @@ def parse_ps(text: str) -> list[dict]:
             rows.append(
                 {
                     "pid": int(match.group(1)),
-                    "name": match.group(4).rsplit("/", 1)[-1],
+                    "name": printable(match.group(4).rsplit("/", 1)[-1]),
                     "cpu_percent": float(match.group(2)),
                     "memory_bytes": int(match.group(3)) * 1024,
                 }
@@ -226,6 +226,11 @@ def top_processes(rows: list[dict], by: str, count: int) -> list[dict]:
     return sorted(rows, key=lambda row: (-row[key], row["pid"]))[:count]
 
 
+def printable(text: str) -> str:
+    """Process and volume names are chosen by whoever started or mounted them: no escape codes."""
+    return re.sub(r"[\x00-\x1f\x7f-\x9f]", "", text)
+
+
 def parse_gpu(text: str) -> dict | None:
     usage = re.search(r'"Device Utilization %"\s*=\s*(\d+)', text)
     if usage is None:
@@ -235,7 +240,7 @@ def parse_gpu(text: str) -> dict | None:
     return {
         "usage_percent": int(usage.group(1)),
         "cores": int(cores.group(1)) if cores else None,
-        "name": name.group(1) if name else None,
+        "name": printable(name.group(1)) if name else None,
     }
 
 

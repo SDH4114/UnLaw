@@ -265,7 +265,7 @@ def _resolve(value: str, names: list[str], kind: str) -> str | None:
         return "default"
     if text.casefold() in {"none", "off", "no"}:
         return None
-    if text.isdigit():
+    if _digits(text):
         index = int(text)
         if index >= len(names):
             raise CaptureError(
@@ -690,7 +690,7 @@ def start_recording(
         if (
             mode != "screen"
             or len(numbers) != 4
-            or not all(number.strip().isdigit() for number in numbers)
+            or not all(_digits(number.strip()) for number in numbers)
         ):
             raise CaptureError(
                 "--rect needs X,Y,WIDTH,HEIGHT in points and only works for the screen"
@@ -1543,10 +1543,15 @@ def _flag(args: list[str], *names: str) -> bool:
     return found
 
 
+def _digits(text: str) -> bool:
+    """ASCII digits only: str.isdigit() also accepts "²", which int() refuses."""
+    return text.isascii() and text.isdigit()
+
+
 def _number(text: str | None, flag: str, default: int, minimum: int = 0) -> int:
     if text is None:
         return default
-    if not text.isdigit() or int(text) < minimum:
+    if not _digits(text) or int(text) < minimum:
         raise CaptureError(f"{flag} needs a whole number from {minimum}")
     return int(text)
 
@@ -1659,7 +1664,7 @@ def _menu() -> int:
     choice = input("Choose 1-9 (Enter cancels): ").strip()
     if not choice:
         return 0
-    if not choice.isdigit() or not 1 <= int(choice) <= len(options):
+    if not _digits(choice) or not 1 <= int(choice) <= len(options):
         raise CaptureError(f"pick a number from 1 to {len(options)}")
     options[int(choice) - 1][1]()
     return 0

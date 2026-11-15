@@ -195,6 +195,14 @@ class ParserTests(unittest.TestCase):
             row["used_percent"], round(100 * (971350180 - 366329800) / 971350180, 1)
         )
 
+    def test_names_from_ps_and_df_cannot_drive_the_terminal(self) -> None:
+        rows = sysinfo.parse_ps("  PID  %CPU    RSS COMM\n  42  10.0  2048 /tmp/evil\x1b]0;pwned\x07\x1b[2J\n")
+        self.assertEqual(rows[0]["name"], "evil]0;pwned[2J")
+        text = fixture("df.txt") + "/dev/disk5s1  1000000  250000  750000    25%  10 7500000  0%   /Volumes/X\x1b[31mY\n"
+        mounts = [row["mount"] for row in sysinfo.parse_df(text)]
+        self.assertIn("/Volumes/X[31mY", mounts)
+        self.assertFalse(any("\x1b" in mount for mount in mounts))
+
     def test_df_external_volume_with_spaces_and_junk_mounts(self) -> None:
         text = fixture("df.txt") + (
             "/dev/disk5s1  1000000  250000  750000    25%  10 7500000  0%   /Volumes/My Drive\n"
