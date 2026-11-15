@@ -37,7 +37,8 @@ fn base_url() -> Result<String, String> {
 
 fn fetch(url: &str) -> Result<Vec<u8>, String> {
     let output = Command::new("curl")
-        .args(["-fsSL", "--max-time", "30", url])
+        // Index and command sources are small; a bigger answer is not ours (curl exits 63).
+        .args(["-fsSL", "--max-time", "30", "--max-filesize", "16M", url])
         .output()
         .map_err(|error| format!("could not run curl: {error}"))?;
     if !output.status.success() {
