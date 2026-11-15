@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import fcntl
 import gzip
+import json
 import os
 import pty
 import select
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -171,6 +173,76 @@ class ZipTests(CoreTestCase):
         self.assertIn("share the name", self.zip(str(self.project), str(twin)).stderr)
         self.assertEqual(self.zip("--bogus", "x").returncode, 2)
         self.assertIn("Unknown format", self.zip(str(self.project), "-f", "cpio").stderr)
+
+    def fake_seven_zip(self, body: str) -> dict[str, str]:
+        self.tool("7zz", f"#!{sys.executable}\n{body}")
+        return {"PATH": f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin"}
+
+    def test_sigterm_stops_the_tool_and_removes_temporary_files(self) -> None:
+        marker = self.root / "tool.pid"
+        env = self.fake_seven_zip(
+            "import os, pathlib, sys, time\n"
+            f"pathlib.Path({str(marker)!r}).write_text(str(os.getpid()))\n"
+            "target = next(a for a in sys.argv[2:] if not a.startswith('-'))\n"
+            "pathlib.Path(target).write_bytes(b'partial')\n"
+            "time.sleep(60)\n"
+        )
+        process = subprocess.Popen(
+            [str(binary()), "zip", str(self.project), "-f", "7z"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env={**self.env, **env}, cwd=self.root,
+        )
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        deadline = time.monotonic() + 10
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(marker.exists(), "the tool did not start")
+        tool = int(marker.read_text())
+        process.send_signal(signal.SIGTERM)
+        _, error = process.communicate(timeout=10)
+        self.assertEqual(process.returncode, 143, error)
+        with self.assertRaises(ProcessLookupError, msg="the tool outlived Unlaw"):
+            for _ in range(40):
+                os.kill(tool, 0)
+                time.sleep(0.05)
+        leftovers = [path.name for path in self.project.parent.iterdir() if path.name != "project"]
+        self.assertEqual(leftovers, [], "temporary archive left behind")
+
+    def test_json_reports_results_and_failures(self) -> None:
+        result = self.zip(str(self.project), "-f", "tar.gz", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        created = json.loads(result.stdout)
+        self.assertEqual((created["ok"], created["action"], created["format"]), (True, "create", "tar.gz"))
+        archive = Path(created["path"])
+        self.assertTrue(archive.is_file())
+        listed = json.loads(self.zip("ls", str(archive), "--json").stdout)
+        names = {entry["path"].removeprefix("./") for entry in listed["entries"] if not entry["dir"]}
+        self.assertTrue({"project/a.txt", "project/sub/b.txt"} <= names, names)
+        tested = self.zip("test", str(archive), "--json")
+        self.assertEqual(json.loads(tested.stdout), {"ok": True, "action": "test", "archive": str(archive)})
+        out = self.root / "json-out"
+        extracted = json.loads(self.zip("x", str(archive), "-o", str(out), "--json").stdout)
+        self.assertEqual(extracted["paths"], [str(out / "project")])
+        failed = self.zip("x", str(self.root / "missing.zip"), "--json")
+        self.assertEqual(failed.returncode, 1)
+        answer = json.loads(failed.stdout)
+        self.assertEqual((answer["ok"], answer["exit"]), (False, 1))
+        self.assertIn("not found", answer["error"])
+        self.assertEqual(len(failed.stdout.splitlines()), 1)
+
+    def test_rar_password_without_a_terminal_is_refused_before_rar_runs(self) -> None:
+        log = self.root / "rar.log"
+        self.tool("rar", f"#!/bin/sh\necho ran >> {log}\n")
+        result = self.zip(str(self.project), "-f", "rar", "-p", env={"PATH": f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin"})
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("needs an interactive terminal", result.stderr)
+        self.assertFalse(log.exists())
+
+    def test_a_zip_without_seven_zip_or_zip_says_what_to_install(self) -> None:
+        empty = self.root / "nothing"
+        empty.mkdir()
+        result = self.zip(str(self.project), env={"PATH": str(empty)})
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("needs 7-Zip or zip", result.stderr)
 
     def test_rar_needs_the_rar_tool(self) -> None:
         result = self.zip(str(self.project), "-f", "rar", env={"PATH": f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin"})

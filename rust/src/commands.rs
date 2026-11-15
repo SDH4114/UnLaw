@@ -170,6 +170,7 @@ pub fn ensure_built(command: &UserCommand) -> Result<(), i32> {
         eprintln!("unlaw: {} is a Rust command but cargo was not found; install Rust from https://rustup.rs", command.name);
         return Err(1);
     };
+    let _termination = catch_termination();
     eprintln!("unlaw: building {}…", command.name);
     let mut build = Command::new(cargo);
     // An explicit target dir: a global CARGO_TARGET_DIR must not move the binary.
@@ -313,23 +314,140 @@ impl ForwardSignals {
     }
 }
 
+// ---------------------------------------------------------------- SIGTERM / SIGHUP
+//
+// A `kill` or a closed terminal reaches only Unlaw, not the tools it runs. While a
+// `Termination` guard lives, both signals are recorded and passed on to every tracked
+// child (a negative entry is a whole process group), so Unlaw outlives them, removes
+// its temporary files and exits 128+signal instead of leaving orphans behind.
+
+const TRACK_SLOTS: usize = 8;
+static TRACKED: [AtomicI32; TRACK_SLOTS] = [const { AtomicI32::new(0) }; TRACK_SLOTS];
+static TERMINATED: AtomicI32 = AtomicI32::new(0);
+
+extern "C" fn forward_termination(signal: libc::c_int) {
+    TERMINATED.store(signal, Ordering::SeqCst);
+    for slot in &TRACKED {
+        let target = slot.load(Ordering::SeqCst);
+        if target != 0 {
+            unsafe {
+                libc::kill(target, signal);
+            }
+        }
+    }
+}
+
+/// Catches SIGTERM and SIGHUP until dropped (see above).
+pub(crate) struct Termination(libc::sighandler_t, libc::sighandler_t);
+
+pub(crate) fn catch_termination() -> Termination {
+    let handler = forward_termination as *const () as libc::sighandler_t;
+    unsafe { Termination(libc::signal(libc::SIGTERM, handler), libc::signal(libc::SIGHUP, handler)) }
+}
+
+impl Drop for Termination {
+    fn drop(&mut self) {
+        unsafe {
+            libc::signal(libc::SIGTERM, self.0);
+            libc::signal(libc::SIGHUP, self.1);
+        }
+    }
+}
+
+/// The SIGTERM/SIGHUP received while a `Termination` guard lived, if any.
+pub(crate) fn terminated() -> Option<i32> {
+    match TERMINATED.load(Ordering::SeqCst) {
+        0 => None,
+        signal => Some(signal),
+    }
+}
+
+fn track(target: i32) {
+    if let Some(slot) = TRACKED.iter().find(|slot| slot.compare_exchange(0, target, Ordering::SeqCst, Ordering::SeqCst).is_ok()) {
+        // A signal that came between the spawn and this line is passed on now.
+        if let Some(signal) = terminated() {
+            unsafe {
+                libc::kill(slot.load(Ordering::SeqCst), signal);
+            }
+        }
+    }
+}
+
+fn untrack(pid: u32) {
+    for slot in &TRACKED {
+        let target = slot.load(Ordering::SeqCst);
+        if target != 0 && target.unsigned_abs() == pid {
+            slot.store(0, Ordering::SeqCst);
+        }
+    }
+}
+
+/// `child.wait()` for a tracked child: the pid leaves the table before it is reaped (waitid
+/// with WNOWAIT), so a signal can never be passed to a later process that reuses the pid.
+pub(crate) fn wait_child(child: &mut std::process::Child) -> io::Result<ExitStatus> {
+    loop {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let result = unsafe { libc::waitid(libc::P_PID, child.id() as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) };
+        if result == 0 {
+            break;
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            untrack(child.id());
+            return Err(error);
+        }
+    }
+    untrack(child.id());
+    child.wait()
+}
+
+/// `try_wait` for a tracked child, untracking it before it is reaped (see `wait_child`).
+fn has_exited(child: &mut std::process::Child) -> io::Result<Option<ExitStatus>> {
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let flags = libc::WEXITED | libc::WNOWAIT | libc::WNOHANG;
+    if unsafe { libc::waitid(libc::P_PID, child.id() as libc::id_t, &mut info, flags) } != 0 {
+        let error = io::Error::last_os_error();
+        return if error.kind() == io::ErrorKind::Interrupted { Ok(None) } else { Err(error) };
+    }
+    if unsafe { info.si_pid() } == 0 {
+        return Ok(None);
+    }
+    untrack(child.id());
+    child.wait().map(Some)
+}
+
 /// Run a helper tool to completion: Ctrl-C reaches the tool, while Unlaw keeps
 /// running so it can clean up and report (a SIGINT exit becomes 130).
 pub(crate) fn status_shielded(process: &mut Command) -> io::Result<ExitStatus> {
     let _guard = IgnoreSignals::new();
-    spawn_shielded(process)?.wait()
+    wait_child(&mut spawn_shielded(process)?)
 }
 
-/// Spawn with default signal handling in the child; pair with `shield()`.
+/// Spawn with default signal handling in the child; pair with `shield()`. The child is
+/// tracked for SIGTERM/SIGHUP; wait for it with `wait_child`.
 pub(crate) fn spawn_shielded(process: &mut Command) -> io::Result<std::process::Child> {
+    spawn_tracked(process, false)
+}
+
+/// `spawn_shielded`; with `group` the child leads its own process group and a SIGTERM
+/// reaches all of it (a shell wrapper and the real tool behind it).
+pub(crate) fn spawn_tracked(process: &mut Command, group: bool) -> io::Result<std::process::Child> {
+    if terminated().is_some() {
+        return Err(io::Error::new(io::ErrorKind::Interrupted, "terminated"));
+    }
     unsafe {
         process.pre_exec(|| {
             libc::signal(libc::SIGINT, libc::SIG_DFL);
             libc::signal(libc::SIGQUIT, libc::SIG_DFL);
+            // A handler is reset by exec anyway; an ignored SIGTERM/SIGHUP would be inherited.
+            libc::signal(libc::SIGTERM, libc::SIG_DFL);
+            libc::signal(libc::SIGHUP, libc::SIG_DFL);
             Ok(())
         });
     }
-    process.spawn()
+    let child = process.spawn()?;
+    track(if group { -(child.id() as i32) } else { child.id() as i32 });
+    Ok(child)
 }
 
 /// Ignore Ctrl-C in Unlaw itself until the returned guard is dropped.
@@ -383,20 +501,24 @@ pub fn run(command: &UserCommand, args: &[String], config: &Config, options: &Ru
         });
     }
     let started = Instant::now();
+    let _termination = catch_termination();
     let mut child = match process.spawn() {
         Ok(child) => child,
         Err(error) => return run_error(&command.name, &line[0], &error),
     };
+    // A timed command leads its own group: a SIGTERM to Unlaw reaches all of it.
+    track(if options.timeout.is_zero() { child.id() as i32 } else { -(child.id() as i32) });
     let status = if options.timeout.is_zero() {
-        child.wait()
+        wait_child(&mut child)
     } else {
         loop {
             if let Some(signals) = &signals {
                 signals.forward(child.id());
             }
-            match child.try_wait() {
+            match has_exited(&mut child) {
                 Ok(Some(status)) => break Ok(status),
                 Ok(None) if started.elapsed() >= options.timeout => {
+                    untrack(child.id());
                     unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL); }
                     let _ = child.wait();
                     drop(foreground);
@@ -404,7 +526,10 @@ pub fn run(command: &UserCommand, args: &[String], config: &Config, options: &Ru
                     return 124;
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(10)),
-                Err(error) => break Err(error),
+                Err(error) => {
+                    untrack(child.id());
+                    break Err(error);
+                }
             }
         }
     };

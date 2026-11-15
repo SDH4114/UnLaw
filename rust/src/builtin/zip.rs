@@ -4,16 +4,16 @@
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::os::unix::process::CommandExt;
-use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use crate::commands::{exit_code, shield, spawn_shielded, status_shielded};
+use crate::commands::{catch_termination, exit_code, shield, spawn_shielded, spawn_tracked, status_shielded, terminated, wait_child};
 use crate::config::{Config, Value};
-use crate::util::{home, which};
+use crate::util::{home, which, Json};
 
 pub const HELP: &str = r#"Compress files and folders, or extract almost any archive.
 Usage:
@@ -36,10 +36,18 @@ Extract options:
   -o, --output <dir>        Destination (default: next to the archive)
   --here                    Put contents directly into the destination folder
   --keep-junk               Keep __MACOSX/.DS_Store found at the archive root
+Any action:
+  --json                    One JSON line per archive on stdout instead of text:
+                            {"ok", "action", "path"/"archive", ...}; on failure
+                            {"ok": false, "exit", "error"}. ls --json lists
+                            "entries": [{"path", "size", "dir"}]
 Behavior: a single input is archived next to itself, several inputs into
 ./Archive.<ext>. A one-item archive extracts as that item; otherwise into a
 folder named after the archive. Existing files are never overwritten: a
 " 2" suffix is added. Encrypted archives ask for their password.
+Exit codes: 0 done, 1 failed, 2 wrong arguments, 130 Ctrl-C, 143/129 when
+terminated (SIGTERM/SIGHUP); a stopped run stops its tools and removes its
+temporary files.
 Levels: 0 stores without compression (zstd/gzip use their fastest), 1-3 favor
 speed, 5 is balanced, 7 gives near-best size, 9 is the slowest and smallest
 (7z/zip -mx9, rar -m5, xz -9e, zstd --ultra -22). If at least 90% of the input is
@@ -107,6 +115,67 @@ const STRIPPED_SUFFIXES: [&str; 22] = [
 ];
 
 type Result<T> = std::result::Result<T, String>;
+
+/// `--json`: results go to stdout as JSON lines, never as text.
+static JSON_MODE: AtomicBool = AtomicBool::new(false);
+
+fn json_mode() -> bool {
+    JSON_MODE.load(Ordering::Relaxed)
+}
+
+/// One result: the text for a person, or the JSON line with `--json`.
+fn report(text: String, fields: Vec<(&str, Json)>) {
+    if json_mode() {
+        let mut items = vec![("ok".to_string(), Json::Bool(true))];
+        items.extend(fields.into_iter().map(|(key, value)| (key.to_string(), value)));
+        println!("{}", one_line(&Json::Object(items)));
+    } else {
+        println!("{text}");
+    }
+}
+
+/// `Json::render` is indented; a JSON line must not be.
+fn one_line(value: &Json) -> String {
+    let text = value.render();
+    let mut out = String::with_capacity(text.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_string {
+            out.push(c);
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_string = true;
+                out.push(c);
+            }
+            '\n' => {
+                while chars.peek() == Some(&' ') {
+                    chars.next();
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn path_json(path: &Path) -> Json {
+    Json::str(path.to_string_lossy())
+}
+
+/// Stopped by Ctrl-C (130) or by SIGTERM/SIGHUP (128 + signal).
+fn stopped_code(code: i32) -> Option<i32> {
+    terminated().map(|signal| 128 + signal).or((code == 130).then_some(130))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
@@ -356,7 +425,7 @@ fn is_tty(fd: i32) -> bool {
 }
 
 fn progress() -> String {
-    if is_tty(1) { "-bsp1" } else { "-bsp0" }.into()
+    if is_tty(1) && !json_mode() { "-bsp1" } else { "-bsp0" }.into()
 }
 
 fn tar() -> String {
@@ -391,6 +460,40 @@ fn private_directory(parent: &Path, prefix: &str) -> io::Result<PathBuf> {
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Rename `from` to `to` only if `to` does not exist, atomically where the volume can
+/// (RENAME_EXCL); `AlreadyExists` when another process took the name meanwhile.
+fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let source = std::ffi::CString::new(from.as_os_str().as_bytes()).map_err(io::Error::other)?;
+    let target = std::ffi::CString::new(to.as_os_str().as_bytes()).map_err(io::Error::other)?;
+    if unsafe { libc::renamex_np(source.as_ptr(), target.as_ptr(), libc::RENAME_EXCL) } == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    match error.raw_os_error() {
+        // Volumes without RENAME_EXCL (exFAT, FAT, some network shares): check, then rename.
+        Some(libc::ENOTSUP) | Some(libc::EINVAL) => {
+            if exists(to) {
+                Err(io::Error::from(io::ErrorKind::AlreadyExists))
+            } else {
+                fs::rename(from, to)
+            }
+        }
+        _ => Err(error),
+    }
+}
+
+/// Move `from` to the first free `to`, `to 2`, ... (keeping `suffix`), never over a file.
+fn move_to_free_name(from: &Path, to: &Path, suffix: Option<&str>) -> io::Result<PathBuf> {
+    loop {
+        let target = unique(to, suffix);
+        match rename_new(from, &target) {
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            result => return result.map(|()| target),
         }
     }
 }
@@ -501,6 +604,9 @@ fn create_commands(
         }
         if options.password {
             return Err("Encrypted zip needs 7-Zip for AES-256. Install: brew install sevenzip".into());
+        }
+        if which("zip").is_none() {
+            return Err("Creating .zip needs 7-Zip or zip. Install: brew install sevenzip".into());
         }
         return Ok(sources
             .iter()
@@ -631,7 +737,7 @@ fn feed(command: &mut Command, input: Option<&str>) -> io::Result<i32> {
         None => status_shielded(command).map(exit_code),
         Some(text) => {
             let _guard = shield();
-            let mut child = spawn_shielded(without_terminal(command.stdin(Stdio::piped())))?;
+            let mut child = spawn_tracked(without_terminal(command.stdin(Stdio::piped())), true)?;
             FED_CHILD.store(child.id() as i32, Ordering::SeqCst);
             unsafe {
                 // Replaced only while it runs; the guard restores the original handlers.
@@ -642,7 +748,7 @@ fn feed(command: &mut Command, input: Option<&str>) -> io::Result<i32> {
                 Some(mut stdin) => stdin.write_all(text.as_bytes()),
                 None => Ok(()),
             };
-            let status = child.wait();
+            let status = wait_child(&mut child);
             FED_CHILD.store(0, Ordering::SeqCst);
             written?;
             status.map(exit_code)
@@ -661,9 +767,16 @@ fn run_create(commands: &[Vec<String>], format: &str, temporary: &Path, sources:
         if !writes_file {
             command.stdout(File::options().write(true).create_new(true).open(temporary)?);
         }
-        let mut compressor = spawn_shielded(&mut command)?;
-        let compressed = exit_code(compressor.wait()?);
-        let archived = exit_code(producer.wait()?);
+        let mut compressor = match spawn_shielded(&mut command) {
+            Ok(compressor) => compressor,
+            Err(error) => {
+                let _ = producer.kill();
+                let _ = wait_child(&mut producer);
+                return Err(error);
+            }
+        };
+        let compressed = exit_code(wait_child(&mut compressor)?);
+        let archived = exit_code(wait_child(&mut producer)?);
         return Ok(if archived != 0 { archived } else { compressed });
     }
     let pairs: Vec<(&Vec<String>, &PathBuf)> =
@@ -677,6 +790,9 @@ fn run_create(commands: &[Vec<String>], format: &str, temporary: &Path, sources:
         let code = feed(&mut command, input.as_deref())?;
         if code != 0 {
             return Ok(code);
+        }
+        if let Some(signal) = terminated() {
+            return Ok(128 + signal);
         }
     }
     Ok(0)
@@ -719,6 +835,10 @@ fn create(paths: &[String], output: Option<&str>, format: &str, level: Option<u8
     let parent = target.parent().unwrap_or(Path::new("/")).to_path_buf();
     // Fail on missing tools before asking for a password or touching the disk.
     create_commands(&sources, &parent.join(name_of(&target)), &options, seven.as_deref())?;
+    if password && format == "rar" && !is_tty(0) {
+        // rar asks for the password on the terminal itself.
+        return Err("A password needs an interactive terminal.".into());
+    }
     let secret = if password && format != "rar" { Some(ask_password(true)?) } else { None };
     fs::create_dir_all(&parent).map_err(|error| error.to_string())?;
     let workspace = private_directory(&parent, ".unlaw-zip-").map_err(|error| error.to_string())?;
@@ -728,7 +848,7 @@ fn create(paths: &[String], output: Option<&str>, format: &str, level: Option<u8
         let started = Instant::now();
         let code = run_create(&commands, format, &temporary, &sources, secret.as_deref()).map_err(|error| error.to_string())?;
         let elapsed = started.elapsed().as_secs_f64();
-        if code == 130 {
+        if stopped_code(code).is_some() {
             return Err(String::new());
         }
         if code != 0 || !temporary.is_file() {
@@ -736,25 +856,30 @@ fn create(paths: &[String], output: Option<&str>, format: &str, level: Option<u8
         }
         let suffix = format_suffix(format);
         let keep = name_of(&target).ends_with(suffix).then_some(suffix);
-        let target = unique(&target, keep);
-        fs::rename(&temporary, &target).map_err(|error| error.to_string())?;
+        let target = move_to_free_name(&temporary, &target, keep).map_err(|error| error.to_string())?;
         Ok((target, elapsed))
     })();
     let _ = fs::remove_dir_all(&workspace);
     let (target, elapsed) = match result {
         Ok(done) => done,
-        Err(message) if message.is_empty() => return Ok(130),
+        Err(message) if message.is_empty() => return Ok(stopped_code(130).unwrap_or(130)),
         Err(message) => return Err(message),
     };
     let after = fs::metadata(&target).map(|meta| meta.len()).unwrap_or(0);
     let ratio = if before > 0 { format!(" ({:.0}%)", after as f64 * 100.0 / before as f64) } else { String::new() };
     let lock = if password { ", encrypted" } else { "" };
-    println!(
-        "Created {}  {} → {}{ratio}  level {}, {elapsed:.1}s{lock}",
-        display(&target),
-        size(before),
-        size(after),
-        level_name(level)
+    report(
+        format!("Created {}  {} → {}{ratio}  level {}, {elapsed:.1}s{lock}", display(&target), size(before), size(after), level_name(level)),
+        vec![
+            ("action", Json::str("create")),
+            ("path", path_json(&target)),
+            ("format", Json::str(format)),
+            ("level", Json::Int(level.into())),
+            ("bytes_in", Json::Int(before as i64)),
+            ("bytes_out", Json::Int(after as i64)),
+            ("seconds", Json::Float((elapsed * 10.0).round() / 10.0)),
+            ("encrypted", Json::Bool(password)),
+        ],
     );
     Ok(0)
 }
@@ -899,9 +1024,16 @@ fn run_tar(archive: &Path, mut tar_command: Command) -> io::Result<i32> {
     let _guard = shield();
     let mut producer = spawn_shielded(Command::new(tool).args(args).arg(archive).stdin(Stdio::null()).stdout(Stdio::piped()))?;
     let pipe = producer.stdout.take().unwrap();
-    let mut reader = spawn_shielded(tar_command.arg("-f").arg("-").stdin(pipe))?;
-    let read = exit_code(reader.wait()?);
-    let decompressed = exit_code(producer.wait()?);
+    let mut reader = match spawn_shielded(tar_command.arg("-f").arg("-").stdin(pipe)) {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = producer.kill();
+            let _ = wait_child(&mut producer);
+            return Err(error);
+        }
+    };
+    let read = exit_code(wait_child(&mut reader)?);
+    let decompressed = exit_code(wait_child(&mut producer)?);
     Ok(if decompressed != 0 && read == 0 { decompressed } else { read })
 }
 
@@ -929,9 +1061,7 @@ fn extract_into(archive: &Path, kind: Kind, directory: &Path, password: Option<&
 }
 
 fn move_unique(source: &Path, destination: &Path) -> io::Result<PathBuf> {
-    let target = unique(destination, None);
-    fs::rename(source, &target)?;
-    Ok(target)
+    move_to_free_name(source, destination, None)
 }
 
 fn promote(directory: &Path, parent: &Path, name: &str, here: bool, keep_junk: bool) -> Result<Vec<PathBuf>> {
@@ -984,11 +1114,12 @@ fn extract(name: &str, output: Option<&str>, here: bool, keep_junk: bool) -> Res
     let directory = private_directory(&parent, ".unlaw-extract-").map_err(|error| error.to_string())?;
     let result = (|| {
         let code = extract_into(&archive, kind, &directory, password.as_deref())?;
-        if code == 130 {
+        if stopped_code(code).is_some() {
             return Err(String::new());
         }
         if code != 0 {
-            return Err(format!("Could not extract {} (exit {code}).", display(&archive)));
+            let hint = if password.is_some() { " Wrong password?" } else { "" };
+            return Err(format!("Could not extract {} (exit {code}).{hint}", display(&archive)));
         }
         promote(&directory, &parent, &archive_stem(&archive), here, keep_junk)
     })();
@@ -997,20 +1128,35 @@ fn extract(name: &str, output: Option<&str>, here: bool, keep_junk: bool) -> Res
     }
     let results = match result {
         Ok(results) => results,
-        Err(message) if message.is_empty() => return Ok(130),
+        Err(message) if message.is_empty() => return Ok(stopped_code(130).unwrap_or(130)),
         Err(message) => return Err(message),
     };
     let shown = match results.as_slice() {
         [only] => display(only),
         many => format!("{} items in {}", many.len(), display(&parent)),
     };
-    println!("Extracted {} → {shown}", name_of(&archive));
+    report(
+        format!("Extracted {} → {shown}", name_of(&archive)),
+        vec![
+            ("action", Json::str("extract")),
+            ("archive", path_json(&archive)),
+            ("paths", Json::Array(results.iter().map(|path| path_json(path)).collect())),
+        ],
+    );
     Ok(0)
 }
 
 fn inspect(name: &str, test: bool) -> Result<i32> {
     let archive = archive_path(name)?;
     let kind = detect(&archive).map_err(|error| error.to_string())?;
+    if json_mode() && !test {
+        let entries = list_entries(&archive, kind)?;
+        report(
+            String::new(),
+            vec![("action", Json::str("list")), ("archive", path_json(&archive)), ("entries", Json::Array(entries))],
+        );
+        return Ok(0);
+    }
     let io_error = |error: io::Error| error.to_string();
     let code = match (kind, seven_zip()) {
         (Kind::Stream(_), _) if !test => {
@@ -1034,22 +1180,99 @@ fn inspect(name: &str, test: bool) -> Result<i32> {
                 command.arg("-bso0").arg(progress());
             }
             command.arg(&archive);
+            if test && json_mode() {
+                command.stdout(Stdio::null());
+            }
             match password {
                 None => status_shielded(command.stdin(Stdio::null())).map(exit_code).map_err(io_error)?,
                 Some(secret) => feed(&mut command, Some(&format!("{secret}\n"))).map_err(io_error)?,
             }
         }
     };
-    if code == 130 {
-        return Ok(130);
+    if let Some(code) = stopped_code(code) {
+        return Ok(code);
     }
     if code != 0 {
         return Err(format!("{}: {} (exit {code}).", if test { "Test failed" } else { "Could not list" }, display(&archive)));
     }
     if test {
-        println!("OK  {}", display(&archive));
+        report(format!("OK  {}", display(&archive)), vec![("action", Json::str("test")), ("archive", path_json(&archive))]);
     }
     Ok(0)
+}
+
+/// A private file for a tool's output (removed by the caller).
+fn scratch_file() -> io::Result<(PathBuf, File)> {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    loop {
+        let path = std::env::temp_dir().join(format!(
+            "unlaw-zip-{}-{}.txt",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        match File::options().write(true).create_new(true).mode(0o600).open(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// `ls --json`: `{"path", "size", "dir"}` per entry, from `7z l -slt` or `tar -t`.
+fn list_entries(archive: &Path, kind: Kind) -> Result<Vec<Json>> {
+    let entry = |path: &str, size: Option<u64>, dir: bool| {
+        Json::Object(vec![
+            ("path".into(), Json::str(path)),
+            ("size".into(), size.map_or(Json::Null, |size| Json::Int(size as i64))),
+            ("dir".into(), Json::Bool(dir)),
+        ])
+    };
+    if let Kind::Stream(_) = kind {
+        return Ok(vec![entry(&archive_stem(archive), None, false)]);
+    }
+    let io_error = |error: io::Error| error.to_string();
+    let (path, file) = scratch_file().map_err(io_error)?;
+    let seven = seven_zip().filter(|_| kind != Kind::Tar);
+    let result = (|| {
+        let code = match &seven {
+            Some(seven) => {
+                let password = password_for(kind, archive)?;
+                let mut command = Command::new(seven);
+                command.args(["l", "-slt"]).arg(archive).stdout(file);
+                match password {
+                    None => status_shielded(command.stdin(Stdio::null())).map(exit_code).map_err(io_error)?,
+                    Some(secret) => feed(&mut command, Some(&format!("{secret}\n"))).map_err(io_error)?,
+                }
+            }
+            None => {
+                let mut command = Command::new(tar());
+                command.arg("-t").stdout(file);
+                run_tar(archive, command).map_err(io_error)?
+            }
+        };
+        if let Some(code) = stopped_code(code) {
+            return Err(format!("stopped (exit {code})"));
+        }
+        if code != 0 {
+            return Err(format!("Could not list: {} (exit {code}).", display(archive)));
+        }
+        fs::read(&path).map_err(io_error)
+    })();
+    let _ = fs::remove_file(&path);
+    let text = String::from_utf8_lossy(&result?).into_owned();
+    if seven.is_none() {
+        return Ok(text.lines().filter(|line| !line.is_empty()).map(|line| entry(line.trim_end_matches('/'), None, line.ends_with('/'))).collect());
+    }
+    // `7z l -slt`: blocks of `Key = value` lines after the `----------` separator.
+    let mut entries = Vec::new();
+    let body = text.split_once("\n----------\n").map_or("", |(_, body)| body);
+    for block in body.split("\n\n") {
+        let field = |key: &str| block.lines().find_map(|line| line.strip_prefix(key)?.strip_prefix(" = "));
+        let Some(name) = field("Path") else { continue };
+        let dir = field("Folder") == Some("+") || field("Attributes").is_some_and(|value| value.starts_with('D'));
+        entries.push(entry(name, field("Size").and_then(|size| size.parse().ok()), dir));
+    }
+    Ok(entries)
 }
 
 // --------------------------------------------------------------- arguments
@@ -1064,6 +1287,7 @@ struct Options {
     keep_junk: bool,
     here: bool,
     best: bool,
+    json: bool,
 }
 
 fn parse_options(args: &[String]) -> std::result::Result<Options, String> {
@@ -1094,6 +1318,7 @@ fn parse_options(args: &[String]) -> std::result::Result<Options, String> {
             "--keep-junk" => options.keep_junk = true,
             "--here" => options.here = true,
             "--best" => options.best = true,
+            "--json" => options.json = true,
             _ => {
                 let named = flag.strip_prefix("--").and_then(|name| LEVEL_NAMES.iter().find(|(level, _)| *level == name));
                 let numbered = flag.strip_prefix('-').filter(|digit| digit.len() == 1 && digit.as_bytes()[0].is_ascii_digit());
@@ -1137,6 +1362,7 @@ fn dispatch(args: &[String], config: &Config) -> Result<i32> {
             return Ok(2);
         }
     };
+    JSON_MODE.store(options.json, Ordering::Relaxed);
     if options.paths.is_empty() {
         eprintln!("Usage: ul zip <path>... | ul zip x <archive>... — see `ul zip --help`");
         return Ok(2);
@@ -1173,6 +1399,9 @@ fn dispatch(args: &[String], config: &Config) -> Result<i32> {
         let mut worst = 0;
         for path in &options.paths {
             worst = worst.max(inspect(path, action == Action::Test)?);
+            if terminated().is_some() {
+                break;
+            }
         }
         return Ok(worst);
     }
@@ -1182,6 +1411,9 @@ fn dispatch(args: &[String], config: &Config) -> Result<i32> {
         let mut worst = 0;
         for path in &options.paths {
             worst = worst.max(extract(path, options.output.as_deref(), options.here, keep_junk)?);
+            if terminated().is_some() {
+                break;
+            }
         }
         return Ok(worst);
     }
@@ -1219,13 +1451,25 @@ pub fn run(args: &[String], config: &Config) -> i32 {
         print!("{HELP}");
         return 0;
     }
-    match dispatch(args, config) {
-        Ok(code) => code,
-        Err(message) => {
-            eprintln!("unlaw zip: {message}");
-            1
-        }
+    // A SIGTERM/SIGHUP stops the tools, removes the temporary files and exits 128+signal.
+    let _termination = catch_termination();
+    let (code, message) = match dispatch(args, config) {
+        Ok(code) => (code, None),
+        Err(message) => (1, Some(message)),
+    };
+    let (code, message) = match terminated() {
+        Some(signal) => (128 + signal, Some("stopped".to_string())),
+        None => (code, message),
+    };
+    if let Some(message) = &message {
+        eprintln!("unlaw zip: {message}");
     }
+    if json_mode() && code != 0 {
+        let mut fields = vec![("ok".to_string(), Json::Bool(false)), ("exit".to_string(), Json::Int(code.into()))];
+        fields.push(("error".to_string(), message.map_or(Json::Null, Json::Str)));
+        println!("{}", one_line(&Json::Object(fields)));
+    }
+    code
 }
 
 #[cfg(test)]

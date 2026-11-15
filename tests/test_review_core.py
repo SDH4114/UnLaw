@@ -81,6 +81,33 @@ class CoreReviewTests(CoreTestCase):
         self.ok("init")
         self.assertIn("Usage:", self.ok("agent", "--help").stdout)
 
+    def test_sigterm_to_ul_reaches_the_command(self) -> None:
+        # A `kill` of ul used to leave the command running as an orphan.
+        started = self.root / "started"
+        caught = self.root / "caught"
+        self.command(
+            "longrun",
+            "import pathlib, signal, sys, time\n"
+            f"signal.signal(signal.SIGTERM, lambda *a: (pathlib.Path({str(caught)!r}).write_text('yes'), sys.exit(7)))\n"
+            f"pathlib.Path({str(started)!r}).write_text(str(__import__('os').getpid()))\n"
+            "time.sleep(30)\n",
+        )
+        for timeout in ("0", "60"):
+            with self.subTest(timeout=timeout):
+                started.unlink(missing_ok=True)
+                caught.unlink(missing_ok=True)
+                self.ok("config", "set", "core.command_timeout", timeout)
+                process = subprocess.Popen([str(binary()), "longrun"], env=self.env, cwd=self.root,
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.addCleanup(lambda: process.poll() is None and process.kill())
+                deadline = time.monotonic() + 10
+                while not started.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(started.exists(), "the command did not start")
+                process.send_signal(signal.SIGTERM)
+                self.assertEqual(process.wait(timeout=10), 7)
+                self.assertEqual(caught.read_text(), "yes")
+
     def test_command_timeout_stops_spawned_children(self) -> None:
         child_pid = self.root / "child.pid"
         self.command(
