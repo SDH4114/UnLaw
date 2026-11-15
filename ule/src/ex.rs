@@ -317,7 +317,18 @@ fn execute(ed: &mut Editor, line: &str) -> Result<(), String> {
                     // `:5,10w part.txt` writes only those lines.
                     let text = edit::lines_text(ed, first, last);
                     let target = absolute(path.as_deref().unwrap_or(Path::new("")));
-                    std::fs::write(&target, text).map_err(|error| format!("{}: {error}", target.display()))?;
+                    // Like :w <path>: an existing file is only replaced with `!`.
+                    let exists = target.symlink_metadata().is_ok();
+                    if exists && !bang {
+                        return Err("the destination already exists (:w! <path> overwrites)".into());
+                    }
+                    let mut options = std::fs::OpenOptions::new();
+                    // create_new for a new file: one made meanwhile is not replaced either.
+                    options.write(true).truncate(true).create_new(!exists);
+                    options
+                        .open(&target)
+                        .and_then(|mut file| std::io::Write::write_all(&mut file, text.as_bytes()))
+                        .map_err(|error| format!("{}: {error}", target.display()))?;
                     ed.info(format!("\"{}\" {} lines written", display_path(&target), last - first + 1));
                 } else {
                     let message = ed.save(doc_id, path, bang)?;
@@ -916,7 +927,8 @@ fn substitute(ed: &mut Editor, first: usize, last: usize, args: &str) -> Result<
     let mut changed_lines = 0;
     let mut total = 0;
     let mut last_changed = None;
-    for line in first..=last.min(ed.doc().text.last_line()) {
+    // Bottom up: a replacement that adds lines (`\n`) never shifts lines still to visit.
+    for line in (first..=last.min(ed.doc().text.last_line())).rev() {
         let text = ed.doc().text.line(line).to_string();
         let matches = regex.find_iter(&text).count();
         if matches == 0 {
@@ -935,7 +947,9 @@ fn substitute(ed: &mut Editor, first: usize, last: usize, args: &str) -> Result<
             let len = char_len(&text);
             ed.doc_mut().replace(Pos::new(line, 0), Pos::new(line, len), &new, cursor);
             changed_lines += 1;
-            last_changed = Some(line);
+            // The lowest changed line, moved down by the lines added above it.
+            let added = new.matches('\n').count();
+            last_changed = Some(last_changed.map_or(line, |lowest| lowest + added));
         }
     }
     if total == 0 {

@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -42,7 +42,8 @@ pub struct Client {
     pub language: String,
     pub root: PathBuf,
     child: Child,
-    stdin: ChildStdin,
+    /// Frames for the writer thread, so a server that stops reading never blocks the editor.
+    stdin: std::sync::mpsc::Sender<Vec<u8>>,
     next_request: i64,
     pending: HashMap<i64, Pending>,
     pub capabilities: Value,
@@ -94,6 +95,9 @@ pub fn uri(path: &Path) -> String {
     out
 }
 
+/// Largest LSP message read; anything bigger ends the connection.
+const MAX_MESSAGE: usize = 64 * 1024 * 1024;
+
 pub fn path_of(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file://")?;
     let bytes = rest.as_bytes();
@@ -101,7 +105,7 @@ pub fn path_of(uri: &str) -> Option<PathBuf> {
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let Ok(value) = u8::from_str_radix(&rest[index + 1..index + 3], 16) {
+            if let Some(value) = rest.get(index + 1..index + 3).and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
                 out.push(value);
                 index += 3;
                 continue;
@@ -176,7 +180,9 @@ fn read_message(reader: &mut impl BufRead) -> Option<Value> {
             length = value.trim().parse::<usize>().ok();
         }
     }
-    let mut body = vec![0; length?];
+    // A broken server (or stray output) must not make us allocate terabytes and abort.
+    let length = length.filter(|length| *length <= MAX_MESSAGE)?;
+    let mut body = vec![0; length];
     reader.read_exact(&mut body).ok()?;
     serde_json::from_slice(&body).ok()
 }
@@ -191,7 +197,16 @@ impl Client {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|error| format!("{}: {error}", command[0]))?;
-        let stdin = child.stdin.take().ok_or("no stdin")?;
+        let mut pipe = child.stdin.take().ok_or("no stdin")?;
+        let (stdin, frames) = std::sync::mpsc::channel::<Vec<u8>>();
+        thread::spawn(move || {
+            // Ends when the server stops reading (write error) or the client is dropped.
+            for frame in frames {
+                if pipe.write_all(&frame).and_then(|_| pipe.flush()).is_err() {
+                    break;
+                }
+            }
+        });
         let stdout = child.stdout.take().ok_or("no stdout")?;
         thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
@@ -282,9 +297,9 @@ impl Client {
         let body = message.to_string();
         log(self.id, "→", &body);
         let frame = format!("Content-Length: {}\r\n\r\n{body}", body.len());
-        self.stdin.write_all(frame.as_bytes()).and_then(|_| self.stdin.flush()).map_err(|error| {
+        self.stdin.send(frame.into_bytes()).map_err(|_| {
             self.dead = true;
-            format!("{}: {error}", self.name)
+            format!("{}: the language server stopped reading", self.name)
         })
     }
 
@@ -1450,6 +1465,14 @@ pub fn goto_diagnostic(ed: &mut Editor, forward: bool, errors_only: bool, count:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn odd_uris_and_huge_lengths_do_not_bring_the_editor_down() {
+        assert_eq!(super::path_of("file:///p/50%añ.txt"), Some(std::path::PathBuf::from("/p/50%añ.txt")));
+        assert_eq!(super::path_of("file:///a%20b"), Some(std::path::PathBuf::from("/a b")));
+        let frame = b"Content-Length: 1000000000000000\r\n\r\n{}";
+        assert!(super::read_message(&mut std::io::BufReader::new(&frame[..])).is_none());
+    }
+
     use super::*;
 
     #[test]

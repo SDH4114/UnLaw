@@ -13,6 +13,8 @@ use crate::text::Pos;
 use crate::widgets::LineEdit;
 
 static GENERATION: AtomicU64 = AtomicU64::new(1);
+/// The grep fallback (no ripgrep) skips files larger than this.
+const MAX_GREP_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub enum Data {
@@ -186,28 +188,36 @@ fn walk(root: &Path, hidden: bool, out: &mut Vec<PathBuf>, limit: usize) {
 /// Files of the project: `git ls-files` when in a repository (respects .gitignore), else a walk.
 fn list_files(root: &Path, hidden: bool, changed_only: bool) -> Vec<PathBuf> {
     if root.join(".git").exists() || changed_only {
+        // -z: names come raw and NUL-separated (otherwise git quotes non-ASCII names as "\321\202...").
         let args: &[&str] = if changed_only {
-            &["status", "--porcelain", "--untracked-files=all"]
+            &["status", "--porcelain", "-z", "--untracked-files=all"]
         } else {
-            &["ls-files", "--cached", "--others", "--exclude-standard"]
+            &["ls-files", "-z", "--cached", "--others", "--exclude-standard"]
         };
         if let Ok(output) = Command::new("git").args(args).current_dir(root).stderr(Stdio::null()).output() {
             if output.status.success() {
                 let text = String::from_utf8_lossy(&output.stdout);
-                let mut files: Vec<PathBuf> = text
-                    .lines()
-                    .map(|line| {
-                        if changed_only {
-                            line.get(3..).unwrap_or("").rsplit(" -> ").next().unwrap_or("")
-                        } else {
-                            line
-                        }
-                    })
+                let mut names = Vec::new();
+                let mut entries = text.split('\0');
+                while let Some(entry) = entries.next() {
+                    if !changed_only {
+                        names.push(entry);
+                        continue;
+                    }
+                    // `XY name`; a rename or copy is followed by its old name, which is skipped.
+                    let (status, name) = (entry.get(..2).unwrap_or(""), entry.get(3..).unwrap_or(""));
+                    if status.contains(['R', 'C']) {
+                        entries.next();
+                    }
+                    names.push(name);
+                }
+                let mut files: Vec<PathBuf> = names
+                    .into_iter()
                     .filter(|line| !line.is_empty())
                     .filter(|line| {
                         hidden || changed_only || !line.split('/').any(|part| part.starts_with('.') && part.len() > 1)
                     })
-                    .map(|line| root.join(line.trim_matches('"')))
+                    .map(|line| root.join(line))
                     .filter(|path| changed_only || path.is_file())
                     .collect();
                 files.dedup();
@@ -495,7 +505,12 @@ fn grep(root: &Path, query: &str, hidden: bool, generation: u64, tx: &std::sync:
         let stdout = child.stdout.take().expect("piped stdout");
         let mut batch = Vec::new();
         let mut total = 0;
-        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+        let mut reader = std::io::BufReader::new(stdout);
+        let mut raw = Vec::new();
+        // Bytes, not `lines()`: a match in a Latin-1 file is not UTF-8 and would end the list.
+        while matches!(reader.read_until(b'\n', &mut raw), Ok(read) if read > 0) {
+            let line = String::from_utf8_lossy(&raw).trim_end_matches(['\n', '\r']).to_string();
+            raw.clear();
             // A newer search started: stop this one.
             if GENERATION.load(Ordering::Relaxed) > generation + 1 {
                 let _ = child.kill();
@@ -527,6 +542,13 @@ fn grep(root: &Path, query: &str, hidden: bool, generation: u64, tx: &std::sync:
     };
     let mut hits = Vec::new();
     for path in list_files(root, hidden, false) {
+        // A newer search started: stop this one, as the rg branch does.
+        if GENERATION.load(Ordering::Relaxed) > generation + 1 {
+            return;
+        }
+        if std::fs::metadata(&path).map_or(true, |meta| meta.len() > MAX_GREP_BYTES) {
+            continue;
+        }
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -741,6 +763,40 @@ pub fn preview_target(item: &Item, ed: &Editor) -> Option<(PathBuf, usize, Optio
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn non_ascii_names_and_renames_are_listed() {
+        let root = std::env::temp_dir().join(format!("ule-picker-git-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let git = |args: &[&str]| {
+            let status = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+                .args(args)
+                .current_dir(&root)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "{args:?}");
+        };
+        git(&["init", "-q"]);
+        for name in ["a.txt", "тест.txt", "old.txt"] {
+            std::fs::write(root.join(name), "x").unwrap();
+        }
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "one"]);
+        let mut files = list_files(&root, false, false);
+        files.sort();
+        assert_eq!(files, ["a.txt", "old.txt", "тест.txt"].map(|name| root.join(name)));
+        git(&["mv", "old.txt", "new имя.txt"]);
+        std::fs::write(root.join("тест.txt"), "changed").unwrap();
+        let mut changed = list_files(&root, false, true);
+        changed.sort();
+        assert_eq!(changed, ["new имя.txt", "тест.txt"].map(|name| root.join(name)));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     use super::*;
 
     #[test]

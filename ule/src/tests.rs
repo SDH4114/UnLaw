@@ -525,3 +525,31 @@ fn review_save_as_requires_force_to_overwrite() {
     assert!(ed.save(id, Some(path.clone()), true).is_ok());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "new content\n");
 }
+
+#[test]
+fn substitute_that_adds_lines_reaches_every_line() {
+    let mut ed = editor("a,b,c\nd,e,f\ng,h,i");
+    crate::ex::run(&mut ed, "%s/,/\\n/g");
+    assert_eq!(content(&ed), "a\nb\nc\nd\ne\nf\ng\nh\ni");
+    assert_eq!(ed.cursor().line, 6, "the cursor goes to the last substituted line");
+    let mut ed = editor("x1\nx2\ny");
+    crate::ex::run(&mut ed, "1,2s/x/x\\nx/");
+    assert_eq!(content(&ed), "x\nx1\nx\nx2\ny");
+}
+
+#[test]
+fn a_range_write_never_replaces_an_existing_file_without_bang() {
+    let dir = std::env::temp_dir().join(format!("ule-range-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("precious.txt");
+    std::fs::write(&target, "PRECIOUS").unwrap();
+    let mut ed = editor("l1\nl2\nl3");
+    crate::ex::run(&mut ed, &format!("1,2w {}", target.display()));
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "PRECIOUS");
+    crate::ex::run(&mut ed, &format!("1,2w! {}", target.display()));
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "l1\nl2\n");
+    let fresh = dir.join("part.txt");
+    crate::ex::run(&mut ed, &format!("2,3w {}", fresh.display()));
+    assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "l2\nl3\n");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
