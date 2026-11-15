@@ -555,6 +555,26 @@ impl VideoJob {
     }
 }
 
+const MAX_VIDEO_SECONDS: f64 = 60.0;
+const MAX_VIDEO_FRAMES: u64 = 24 * 60 + 1;
+const MAX_VIDEO_QUEUE: usize = 8;
+/// Finished jobs are listed for a day and at most this many are kept.
+const KEEP_VIDEOS: usize = 256;
+
+/// Drops finished jobs older than a day, then the oldest finished ones past `KEEP_VIDEOS`
+/// (the files stay in generated/videos; only the job records go).
+fn forget_old_videos(jobs: &mut HashMap<String, VideoJob>, now: u64) {
+    let finished = |job: &VideoJob| matches!(job.status, "completed" | "failed");
+    jobs.retain(|_, job| !(finished(job) && now.saturating_sub(job.created) > 24 * 3600));
+    let mut done: Vec<(u64, String)> = jobs.values().filter(|job| finished(job)).map(|job| (job.created, job.id.clone())).collect();
+    if done.len() > KEEP_VIDEOS {
+        done.sort();
+        for (_, id) in &done[..done.len() - KEEP_VIDEOS] {
+            jobs.remove(id);
+        }
+    }
+}
+
 fn video_jobs() -> &'static Mutex<HashMap<String, VideoJob>> {
     static JOBS: OnceLock<Mutex<HashMap<String, VideoJob>>> = OnceLock::new();
     JOBS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -567,7 +587,13 @@ pub fn create_video(service: &Arc<Service>, request: &Request, stream: &mut TcpS
         let size = body["size"].as_str().map(|s| media::parse_size(s).ok_or_else(|| Failure::new("invalid_request", "size must look like 832x480"))).transpose()?;
         let model = service.resolve(body["model"].as_str(), Purpose::Video)?;
         let seconds = body["seconds"].as_str().and_then(|s| s.parse::<f64>().ok()).or(body["seconds"].as_f64());
+        if seconds.is_some_and(|s| !(s > 0.0 && s <= MAX_VIDEO_SECONDS)) {
+            return Err(Failure::new("invalid_request", format!("seconds must be more than 0 and at most {MAX_VIDEO_SECONDS}")));
+        }
         let frames = body["frames"].as_u64().or(seconds.map(|s| (s * 24.0).round() as u64 + 1));
+        if frames.is_some_and(|f| f == 0 || f > MAX_VIDEO_FRAMES) {
+            return Err(Failure::new("invalid_request", format!("frames must be 1 to {MAX_VIDEO_FRAMES}")));
+        }
         let id = random_id("video");
         // Jobs can queue before any file exists: the job id reserves its own
         // name without relying on a second-resolution timestamp and exists().
@@ -591,7 +617,16 @@ pub fn create_video(service: &Arc<Service>, request: &Request, stream: &mut TcpS
         error: None,
         size: size.map(|(w, h)| format!("{w}x{h}")).unwrap_or_default(),
     };
-    video_jobs().lock().unwrap_or_else(PoisonError::into_inner).insert(id.clone(), record.clone());
+    {
+        let mut jobs = video_jobs().lock().unwrap_or_else(PoisonError::into_inner);
+        // Waiting jobs each hold a thread: refuse past a small queue instead of piling up.
+        if jobs.values().filter(|job| matches!(job.status, "queued" | "in_progress")).count() >= MAX_VIDEO_QUEUE {
+            drop(jobs);
+            return send_error(stream, &Failure::new("busy", format!("{MAX_VIDEO_QUEUE} videos are already waiting; try again later")));
+        }
+        forget_old_videos(&mut jobs, now());
+        jobs.insert(id.clone(), record.clone());
+    }
     let service = service.clone();
     thread::spawn(move || {
         let started = Instant::now();
@@ -655,6 +690,34 @@ pub fn video(request: &Request, stream: &mut TcpStream) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_video_jobs_are_forgotten() {
+        let job = |id: &str, created: u64, status: &'static str| VideoJob {
+            id: id.into(),
+            model: String::new(),
+            prompt: String::new(),
+            status,
+            progress: 0,
+            created,
+            path: None,
+            error: None,
+            size: String::new(),
+        };
+        let now = 10 * 24 * 3600;
+        let mut jobs = HashMap::new();
+        for (id, created, status) in [("old", 0, "completed"), ("old-running", 0, "in_progress"), ("new", now, "failed")] {
+            jobs.insert(id.to_string(), job(id, created, status));
+        }
+        for number in 0..KEEP_VIDEOS + 5 {
+            let id = format!("n{number}");
+            jobs.insert(id.clone(), job(&id, now - 100 + number as u64 % 50, "completed"));
+        }
+        forget_old_videos(&mut jobs, now);
+        assert!(!jobs.contains_key("old"));
+        assert!(jobs.contains_key("old-running"), "a running job is never dropped");
+        assert_eq!(jobs.values().filter(|job| job.status != "in_progress").count(), KEEP_VIDEOS);
+    }
 
     #[test]
     fn content_parts_split_text_and_images() {

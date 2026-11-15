@@ -607,6 +607,16 @@ class LmServerTests(LmTestCase):
         contents = [self.call(f"/v1/videos/{record['id']}/content")[1] for record in records]
         self.assertEqual(contents, [b"video:collision:1", b"video:collision:2"])
 
+    def test_video_lengths_are_checked_and_the_queue_is_bounded(self) -> None:
+        for body in ({"seconds": -1}, {"seconds": "1e309"}, {"seconds": 0}, {"seconds": 61}, {"frames": 0}, {"frames": 10_000}):
+            with self.subTest(body=body):
+                status, answer = self.call("/v1/videos", {"prompt": "x", **body})
+                self.assertEqual(status, 400, answer)
+        (self.root / "worker-delay").write_text("1")
+        statuses = [self.call("/v1/videos", {"prompt": "queue", "seed": seed})[0] for seed in range(10)]
+        self.assertEqual(statuses.count(200), 8, statuses)
+        self.assertEqual(statuses[8:], [503, 503])
+
     def large_weights(self, repo: str) -> None:
         memory = int(subprocess.check_output(["/usr/sbin/sysctl", "-n", "hw.memsize"]))
         weight = self.cache / ("models--" + repo.replace("/", "--")) / "snapshots" / "abc" / "model.safetensors"

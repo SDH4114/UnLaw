@@ -47,7 +47,7 @@ impl Failure {
             "invalid_request" | "unsupported_model" | "bad_image" => 400,
             "method_not_allowed" => 405,
             "out_of_memory" => 507,
-            "worker_crashed" | "engine_unavailable" => 503,
+            "worker_crashed" | "engine_unavailable" | "busy" => 503,
             _ => 500,
         }
     }

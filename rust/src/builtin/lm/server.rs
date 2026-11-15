@@ -162,7 +162,8 @@ fn handle(service: &Arc<Service>, mut stream: TcpStream) {
     }) {
         Ok(request) => request,
         Err(ReadError::Bad(status, message)) => {
-            let _ = http::respond_json(&mut stream, status, &json!({"error": {"message": message, "type": "invalid_request"}}));
+            let kind = if status == 403 { "forbidden" } else { "invalid_request" };
+            let _ = http::respond_json(&mut stream, status, &json!({"error": {"message": message, "type": kind}}));
             return;
         }
         Err(ReadError::Io(_)) => return,
@@ -177,15 +178,37 @@ fn handle(service: &Arc<Service>, mut stream: TcpStream) {
     let _ = stream.shutdown(Shutdown::Both);
 }
 
+/// Connections served at once; more get 503 at once instead of a thread each.
+const MAX_CONNECTIONS: usize = 128;
+static OPEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+struct Slot;
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        OPEN.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 fn accept(service: Arc<Service>, listener: TcpListener) {
     for connection in listener.incoming() {
-        let Ok(stream) = connection else {
+        let Ok(mut stream) = connection else {
             // Usually EMFILE: back off instead of spinning.
             thread::sleep(Duration::from_millis(50));
             continue;
         };
+        if OPEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= MAX_CONNECTIONS {
+            OPEN.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
+            let _ = send_error(&mut stream, &Failure::new("busy", "Too many connections; try again"));
+            continue;
+        }
+        let slot = Slot;
         let service = service.clone();
-        thread::spawn(move || handle(&service, stream));
+        thread::spawn(move || {
+            let _slot = slot;
+            handle(&service, stream)
+        });
     }
 }
 

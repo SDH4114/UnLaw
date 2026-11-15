@@ -101,6 +101,13 @@ pub fn read_request_with(stream: &mut impl Read, interim: impl FnOnce() -> io::R
         }
     }
     let mut request = Request { method: method.to_ascii_uppercase(), path, headers, body: Vec::new() };
+    // Refused before the body is read: a page on another site must not make us read 64 MB.
+    if !local_host(&request) {
+        return Err(ReadError::Bad(403, "Only localhost may use this server".into()));
+    }
+    if !cors_enabled() && cross_origin(&request) {
+        return Err(ReadError::Bad(403, "Cross-origin requests are not allowed (start with --cors for local web apps)".into()));
+    }
     if request.header("expect").is_some_and(|value| value.eq_ignore_ascii_case("100-continue")) {
         interim()?;
     }
@@ -311,7 +318,7 @@ mod tests {
 
     #[test]
     fn requests_parse_with_length_chunks_and_queries() {
-        let raw = b"POST /v1/chat/completions?x=1 HTTP/1.1\r\nHost: a\r\nContent-Length: 4\r\n\r\nbodyEXTRA";
+        let raw = b"POST /v1/chat/completions?x=1 HTTP/1.1\r\nHost: localhost:8080\r\nContent-Length: 4\r\n\r\nbodyEXTRA";
         let request = read_request(&mut Cursor::new(&raw[..])).unwrap();
         assert_eq!((request.method.as_str(), request.path.as_str()), ("POST", "/v1/chat/completions"));
         assert_eq!(request.header("content-length"), Some("4"));
@@ -332,6 +339,11 @@ mod tests {
         assert_eq!(status(b"GARBAGE\r\n\r\n"), 400);
         assert_eq!(status(b"POST / HTTP/1.1\r\nContent-Length: x\r\n\r\n"), 400);
         assert_eq!(status(format!("POST / HTTP/1.1\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1).as_bytes()), 413);
+        // Host and Origin are checked before the body: it is never read for a foreign page.
+        let foreign = b"POST /v1/chat/completions HTTP/1.1\r\nHost: evil.example\r\nContent-Length: 99999999\r\n\r\n";
+        assert_eq!(status(foreign), 403);
+        let page = b"POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://evil.example\r\nContent-Length: 99999999\r\n\r\n";
+        assert_eq!(status(page), 403);
         assert_eq!(status(format!("GET / HTTP/1.1\r\nX: {}\r\n\r\n", "a".repeat(MAX_HEAD)).as_bytes()), 431);
         assert_eq!(status(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n"), 400);
         // A client that hangs up mid-body is an I/O error, never a panic.
