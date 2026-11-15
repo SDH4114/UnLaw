@@ -505,8 +505,16 @@ fn is_ident(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
+/// Lines longer than this are not highlighted.
+pub const MAX_HIGHLIGHT_BYTES: usize = 20_000;
+
 /// Highlights one line starting in `state`; returns its spans and the state the next line starts in.
 pub fn highlight(languages: &Languages, lang: &Language, line: &str, state: &State) -> (Vec<Span>, State) {
+    // Minified files and one-line dumps: some scans are quadratic in the line length, so a
+    // very long line is left plain (its state passes through unchanged).
+    if line.len() > MAX_HIGHLIGHT_BYTES {
+        return (Vec::new(), state.clone());
+    }
     match lang.kind {
         Kind::Markdown => markdown(languages, lang, line, state),
         Kind::Diff => (diff(line), State::Normal),

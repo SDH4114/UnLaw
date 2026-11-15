@@ -136,6 +136,26 @@ pub fn operator(ed: &mut Editor, op: Op, start: Pos, end: Pos, linewise: bool, r
 }
 
 /// Block (rectangular) operators for visual block mode.
+/// `r<c>` on a block selection: only the block's columns on each line become `c`.
+pub fn block_replace(ed: &mut Editor, anchor: Pos, cursor: Pos, c: char) {
+    let tab = ed.tab_width(ed.doc());
+    let (first, last) = (anchor.line.min(cursor.line), anchor.line.max(cursor.line));
+    let a = col_to_display(ed.doc().text.line(anchor.line), anchor.col, tab);
+    let b = col_to_display(ed.doc().text.line(cursor.line), cursor.col, tab);
+    let (left, right) = (a.min(b), a.max(b) + 1);
+    let position = ed.cursor();
+    for line in first..=last {
+        let text = ed.doc().text.line(line).to_string();
+        let from = display_to_col(&text, left, tab).min(char_len(&text));
+        let to = display_to_col(&text, right, tab).min(char_len(&text)).max(from);
+        if to > from {
+            let replaced: String = std::iter::repeat_n(c, to - from).collect();
+            ed.doc_mut().replace(Pos::new(line, from), Pos::new(line, to), &replaced, position);
+        }
+    }
+    ed.set_cursor(Pos::new(first, display_to_col(ed.doc().text.line(first), left, tab)));
+}
+
 pub fn block_operator(ed: &mut Editor, op: Op, anchor: Pos, cursor: Pos, register: Option<char>) {
     let tab = ed.tab_width(ed.doc());
     let (first, last) = (anchor.line.min(cursor.line), anchor.line.max(cursor.line));

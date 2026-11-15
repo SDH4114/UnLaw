@@ -553,3 +553,72 @@ fn a_range_write_never_replaces_an_existing_file_without_bang() {
     assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "l2\nl3\n");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn an_operator_count_reaches_g_and_percent() {
+    assert_eq!(content(&run("1\n2\n3\n4\n5", "d3G")), "4\n5");
+    assert_eq!(content(&run("1\n2\n3\n4\n5", "jc3Gx<esc>")), "1\nx\n4\n5");
+    assert_eq!(content(&run("1\n2\n3\n4\n5", "dG")), "");
+}
+
+#[test]
+fn r_on_a_block_replaces_only_the_block() {
+    assert_eq!(content(&run("abcd\nefgh\nijkl", "l<a-v>jlrx")), "axxd\nexxh\nijkl");
+}
+
+#[test]
+fn huge_counts_on_word_motions_finish() {
+    let started = std::time::Instant::now();
+    assert_eq!(content(&run("one two three", "99999d99999w")), "");
+    assert_eq!(content(&run("one two three", "$99999d99999b")), "e");
+    assert_eq!(content(&run("one two three", "99999c99999wx<esc>")), "x");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+}
+
+#[test]
+fn dj_and_dk_at_the_file_edges_do_nothing() {
+    assert_eq!(content(&run("a\nb\nc", "Gdj")), "a\nb\nc");
+    assert_eq!(content(&run("a\nb\nc", "dk")), "a\nb\nc");
+    assert_eq!(content(&run("a\nb\nc", "dj")), "c");
+}
+
+#[test]
+fn ctrl_r_in_a_counted_insert_repeats_and_does_not_stick() {
+    let mut ed = editor("z");
+    ed.registers.insert('a', crate::editor::Register { text: "REG".into(), linewise: false });
+    keys(&mut ed, "3i<c-r>a<esc>");
+    assert_eq!(content(&ed), "REGREGREGz");
+    keys(&mut ed, "ohello<esc>");
+    assert_eq!(content(&ed), "REGREGREGz\nhello");
+}
+
+#[test]
+fn uppercase_macro_register_appends() {
+    let mut ed = editor("abcdef");
+    keys(&mut ed, "qaxqqAxq");
+    assert_eq!(ed.registers.get(&'a').map(|register| register.text.as_str()), Some("xx"));
+}
+
+#[test]
+fn big_insert_counts_finish_quickly() {
+    let started = std::time::Instant::now();
+    let ed = run("x", "99999ihi<esc>");
+    assert_eq!(content(&ed), format!("{}x", "hi".repeat(99999)));
+    let ed = run("x", "3i(<esc>");
+    assert_eq!(content(&ed), "(((x", "replays never add auto pairs");
+    let ed = run("x", "20000ohi<esc>");
+    assert_eq!(ed.doc().text.len_lines(), 10_001, "o repeats are capped");
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
+}
+
+#[test]
+fn very_long_lines_are_highlighted_quickly() {
+    let ed = editor("");
+    let languages = &ed.languages;
+    let markdown = languages.by_name("markdown").and_then(|index| languages.get(index)).expect("markdown");
+    let line = "[".repeat(400_000);
+    let started = std::time::Instant::now();
+    let (spans, _) = crate::syntax::highlight(languages, markdown, &line, &crate::syntax::State::Normal);
+    assert!(spans.is_empty());
+    assert!(started.elapsed() < std::time::Duration::from_millis(500), "{:?}", started.elapsed());
+}

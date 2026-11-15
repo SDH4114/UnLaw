@@ -679,11 +679,17 @@ fn motion_target(ed: &mut Editor, motion: Motion, count: usize, for_operator: bo
             let max = if for_operator || matches!(ed.mode, Mode::Visual(_)) { len } else { len.saturating_sub(1) };
             pos.col = (pos.col + count).min(max);
         }
+        // `dk` on the first line and `dj` on the last fail, as in vim, instead of deleting the line.
+        Motion::Up if for_operator && pos.line == 0 => return None,
+        Motion::Down if for_operator && pos.line == text.last_line() => return None,
         Motion::Up => pos.line = pos.line.saturating_sub(count),
         Motion::Down => pos.line = (pos.line + count).min(text.last_line()),
         Motion::WordStart(big) => {
             for index in 0..count {
                 let next = motion::word_start(text, pos, big);
+                if next == pos {
+                    break; // stuck at the end of the file: `99999d99999w` must not loop 1e10 times
+                }
                 // `cw` and the last `dw` stop at the end of the line, not the next line.
                 if for_operator && index + 1 == count && next.line > pos.line {
                     pos = Pos::new(pos.line, text.line_len(pos.line));
@@ -694,17 +700,29 @@ fn motion_target(ed: &mut Editor, motion: Motion, count: usize, for_operator: bo
         }
         Motion::WordEnd(big) => {
             for _ in 0..count {
-                pos = motion::word_end(text, pos, big);
+                let next = motion::word_end(text, pos, big);
+                if next == pos {
+                    break;
+                }
+                pos = next;
             }
         }
         Motion::WordBack(big) => {
             for _ in 0..count {
-                pos = motion::word_back(text, pos, big);
+                let next = motion::word_back(text, pos, big);
+                if next == pos {
+                    break;
+                }
+                pos = next;
             }
         }
         Motion::WordEndBack(big) => {
             for _ in 0..count {
-                pos = motion::word_end_back(text, pos, big);
+                let next = motion::word_end_back(text, pos, big);
+                if next == pos {
+                    break;
+                }
+                pos = next;
             }
         }
         Motion::LineStart => pos.col = 0,
@@ -733,7 +751,11 @@ fn motion_target(ed: &mut Editor, motion: Motion, count: usize, for_operator: bo
         }
         Motion::ParagraphForward => {
             for _ in 0..count {
-                pos.line = motion::paragraph(text, pos.line, true);
+                let next = motion::paragraph(text, pos.line, true);
+                if next == pos.line {
+                    break;
+                }
+                pos.line = next;
             }
             pos.col = 0;
             if pos.line == text.last_line() && !text.line(pos.line).trim().is_empty() {
@@ -742,13 +764,21 @@ fn motion_target(ed: &mut Editor, motion: Motion, count: usize, for_operator: bo
         }
         Motion::ParagraphBack => {
             for _ in 0..count {
-                pos.line = motion::paragraph(text, pos.line, false);
+                let next = motion::paragraph(text, pos.line, false);
+                if next == pos.line {
+                    break;
+                }
+                pos.line = next;
             }
             pos.col = 0;
         }
         Motion::SentenceForward | Motion::SentenceBack => {
             for _ in 0..count {
-                pos = motion::sentence(text, pos, motion == Motion::SentenceForward);
+                let next = motion::sentence(text, pos, motion == Motion::SentenceForward);
+                if next == pos {
+                    break;
+                }
+                pos = next;
             }
         }
         Motion::MatchPair => {
@@ -929,14 +959,24 @@ fn normal_operator(ed: &mut Editor, op: Op, target: Target, register: Option<cha
             let text = &ed.doc().text;
             let mut end = cursor;
             for index in 0..n * inner.unwrap_or(1) {
+                let before = end;
                 let at_word_end = text.next(end).is_none_or(|next| motion::class_of(text, next, big) != motion::class_of(text, end, big));
                 if !(index == 0 && at_word_end) {
                     end = motion::word_end(text, end, big);
+                    if end == before {
+                        break; // at the end of the file: more counts change nothing
+                    }
                 }
             }
             Some((cursor, text.next(end).unwrap_or(text.end()), false))
         }
-        Target::Motion(motion, inner) => motion_range(ed, motion, n * inner.unwrap_or(1), true),
+        Target::Motion(motion, inner) => {
+            // `d3G`, `y50%`: a count after the operator is as explicit as one before it.
+            if inner.is_some() {
+                ed.vim.last_count_explicit = true;
+            }
+            motion_range(ed, motion, n * inner.unwrap_or(1), true)
+        }
         Target::Object(object, kind, inner) => {
             motion::object(&ed.doc().text, cursor, object, kind, n * inner.unwrap_or(1)).map(|(start, end, linewise)| {
                 if linewise {
@@ -1080,6 +1120,11 @@ fn act_on(ed: &mut Editor, act: Act, register: Option<char>, count: Option<usize
         Act::ReplaceChar(c) => {
             if let Some((start, end, kind)) = ed.selection() {
                 ed.mode = Mode::Normal;
+                if kind == VisualKind::Block {
+                    let anchor = ed.anchor;
+                    edit::block_replace(ed, anchor, cursor, c);
+                    return;
+                }
                 let (from, to) = if kind == VisualKind::Line {
                     (Pos::new(start.line, 0), Pos::new(end.line, ed.doc().text.line_len(end.line)))
                 } else {
@@ -1401,7 +1446,13 @@ fn stop_recording(ed: &mut Editor) -> bool {
         return false;
     };
     keys.pop();
-    let text = crate::keys::notation(&keys);
+    let mut text = crate::keys::notation(&keys);
+    // `qA` appends to register a, as in vim.
+    if name.is_ascii_uppercase() {
+        if let Some(existing) = ed.registers.get(&name.to_ascii_lowercase()) {
+            text = format!("{}{text}", existing.text);
+        }
+    }
     ed.registers.insert(name.to_ascii_lowercase(), crate::editor::Register { text, linewise: false });
     ed.vim.last_recorded = Some(name);
     ed.info(format!("recorded @{name}"));
@@ -1417,12 +1468,8 @@ fn insert_key(ed: &mut Editor, key: Key) {
         }
     }
     if ed.vim.insert_register {
-        ed.vim.insert_register = false;
-        if let Some(name) = key.as_char() {
-            if let Some(register) = ed.get_register(Some(name)) {
-                insert_text(ed, &register.text);
-            }
-        }
+        // The register name: never an insert-mode binding (`<C-r>j` with a "jk" mapping).
+        insert_action(ed, key);
         return;
     }
     // Insert-mode bindings like "jk": hold keys that start one.
@@ -1461,6 +1508,16 @@ fn flush_insert_pending(ed: &mut Editor, keys: Vec<Key>) {
 fn insert_action(ed: &mut Editor, key: Key) {
     if !key.is_esc() {
         ed.vim.insert_keys.push(key);
+    }
+    // After Ctrl-R: this key names the register (recorded above, so `3i<C-r>a` repeats it).
+    if ed.vim.insert_register && !key.is_esc() {
+        ed.vim.insert_register = false;
+        if let Some(name) = key.as_char() {
+            if let Some(register) = ed.get_register(Some(name)) {
+                insert_text(ed, &register.text);
+            }
+        }
+        return;
     }
     let completion_open = ed.completion.as_ref().is_some_and(|completion| !completion.shown.is_empty());
     match (key.code, key.ctrl, key.alt) {
@@ -1610,14 +1667,35 @@ pub fn insert_text(ed: &mut Editor, text: &str) {
     ed.view_mut().cursor = end;
 }
 
+/// `5ohi<Esc>`-style repeats that cannot be one insert stop here (each pass costs O(lines)).
+const MAX_INSERT_REPEAT: usize = 10_000;
+
 pub fn leave_insert(ed: &mut Editor) {
     ed.completion = None;
+    ed.vim.insert_register = false;
     if ed.vim.block_insert.is_some() {
         edit::finish_block_insert(ed);
     }
     // `3ihi<Esc>`: type the same text count-1 more times.
     if let Some((count, _, open_line)) = ed.vim.insert_repeat.take() {
         let keys = ed.vim.insert_keys.clone();
+        // Plain typed text: one insert of the whole repeat instead of `count` passes (each costs
+        // time proportional to the line, so 99999 repeats took minutes).
+        let plain: Option<String> = keys
+            .iter()
+            .map(|key| key.as_char().filter(|c| !key.ctrl && !key.alt && *c != '\n' && !c.is_control()))
+            .collect();
+        if let Some(text) = plain.filter(|text| !open_line && !text.is_empty() && count > 1) {
+            ed.vim.replaying += 1;
+            insert_text(ed, &text.repeat(count - 1));
+            ed.vim.replaying -= 1;
+        } else {
+        let count = if count > MAX_INSERT_REPEAT {
+            ed.info(format!("count limited to {MAX_INSERT_REPEAT}"));
+            MAX_INSERT_REPEAT
+        } else {
+            count
+        };
         ed.vim.replaying += 1;
         for _ in 1..count {
             if open_line {
@@ -1628,6 +1706,7 @@ pub fn leave_insert(ed: &mut Editor) {
             }
         }
         ed.vim.replaying -= 1;
+        }
     }
     let cursor = ed.cursor();
     let doc = ed.view().doc;
