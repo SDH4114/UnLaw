@@ -4,16 +4,16 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const PYTHONS: [&str; 5] = ["python3.14", "python3.13", "python3.12", "python3.11", "python3"];
 
 fn python() -> String {
     if let Ok(explicit) = env::var("UNLAW_PYTHON") {
         return explicit;
     }
     let path = env::var_os("PATH").unwrap_or_default();
-    for name in PYTHONS {
-        if env::split_paths(&path).any(|dir| dir.join(name).is_file()) {
-            return name.to_string();
+    // Newest first (a range, so a new Python is found without a release), like the runner.
+    for name in (11..=20).rev().map(|minor| format!("python3.{minor}")) {
+        if env::split_paths(&path).any(|dir| dir.join(&name).is_file()) {
+            return name;
         }
     }
     "python3".to_string()

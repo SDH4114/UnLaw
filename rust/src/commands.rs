@@ -85,7 +85,11 @@ pub fn resolve(name: &str) -> Option<UserCommand> {
     entry_point(&directory).map(|(path, kind)| UserCommand { name: name.to_string(), path, kind })
 }
 
-const PYTHONS: [&str; 5] = ["python3.14", "python3.13", "python3.12", "python3.11", "python3"];
+/// Versioned interpreters tried newest first (3.11 is the oldest with tomllib); then `python3`.
+/// A range, not a list, so a new Python (3.15 today) is found without a release.
+fn pythons() -> impl Iterator<Item = String> {
+    (11..=20).rev().map(|minor| format!("python3.{minor}")).chain(std::iter::once("python3".to_string()))
+}
 
 /// Interpreter for `main.py`: `UNLAW_PYTHON`, then `core.python`, then the
 /// newest versioned `python3.x` on PATH (macOS' /usr/bin/python3 is too old
@@ -101,7 +105,7 @@ pub fn python(config: Option<&Config>) -> Option<PathBuf> {
             return which(&crate::util::expand_user(&configured).to_string_lossy()).or(Some(configured.into()));
         }
     }
-    PYTHONS.iter().find_map(|name| which(name))
+    pythons().find_map(|name| which(&name))
 }
 
 pub fn command_line(command: &UserCommand, args: &[String], config: &Config) -> Vec<OsString> {

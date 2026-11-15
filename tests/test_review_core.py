@@ -81,6 +81,16 @@ class CoreReviewTests(CoreTestCase):
         self.ok("init")
         self.assertIn("Usage:", self.ok("agent", "--help").stdout)
 
+    def test_the_newest_python_on_path_runs_commands_even_past_3_14(self) -> None:
+        self.command("which-python", "import sys\nprint(sys.argv[0] and __import__('os').environ.get('MARK'))\n")
+        mark = self.root / "py-mark"
+        self.tool("python3.15", f"#!/bin/sh\necho 3.15 > {mark}\nexec {sys.executable} \"$@\"\n")
+        env = {key: value for key, value in self.env.items() if key != "UNLAW_PYTHON"}
+        env["PATH"] = f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin"
+        result = subprocess.run([str(binary()), "which-python"], env=env, cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(mark.read_text().strip(), "3.15")
+
     def test_sigterm_to_ul_reaches_the_command(self) -> None:
         # A `kill` of ul used to leave the command running as an orphan.
         started = self.root / "started"

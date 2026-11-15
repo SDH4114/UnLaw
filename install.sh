@@ -5,12 +5,17 @@ repository="https://github.com/SDH4114/UnLaw.git"
 root="${UNLAW_INSTALL_ROOT:-$HOME/.local}"
 
 python=""
-for candidate in python3.14 python3.13 python3.12 python3.11; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-        python="$candidate"
+# Newest first; a range so a new Python (3.15, ...) is found without a new installer.
+for minor in 20 19 18 17 16 15 14 13 12 11; do
+    if command -v "python3.$minor" >/dev/null 2>&1; then
+        python="python3.$minor"
         break
     fi
 done
+if [ -z "$python" ] && command -v python3 >/dev/null 2>&1 \
+    && python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+    python="python3"
+fi
 if [ -z "$python" ]; then
     echo "Unlaw installer: Python 3.11+ is required (brew install python)." >&2
     exit 1
