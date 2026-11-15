@@ -5,6 +5,7 @@ import fcntl
 import hmac
 import json
 import math
+import re
 import os
 import secrets
 import select
@@ -433,6 +434,16 @@ class CanvasConflict(Exception):
     """The canvas file changed since the client read it."""
 
 
+def _clean_path(value: object) -> str:
+    """A board path from the page: kept exactly (two spaces are part of a file name)."""
+    if not isinstance(value, str):
+        raise TypeError("path must be a string")
+    text = value.strip()
+    if not text or "\0" in text or len(text) > 4096:
+        raise ValueError("invalid board path")
+    return text
+
+
 def _clean_text(value: object) -> str:
     if not isinstance(value, str):
         raise TypeError("text must be a string")
@@ -828,9 +839,22 @@ class Desk:
 
         The last board is refused before anything moves, unless the Reminders layer can take its place.
         """
-        text = _clean_text(raw)
+        text = _clean_path(raw)
         path = board_file(text, boards_dir=self.boards_dir)
         _refuse_default(path, self.config)
+        # The page lists boards by their resolved path: a board in the boards folder that is a
+        # symlink shows its target. Trash that link, never the real file it points to.
+        given = Path(text).expanduser()
+        if given.is_absolute() and not given.is_symlink():
+            try:
+                link = next(
+                    (item for item in self.boards_dir.glob("*.md") if item.is_symlink() and item.resolve() == path),
+                    None,
+                )
+            except OSError:
+                link = None
+            if link is not None:
+                text = str(link)
         with self.lock:
             is_open = self.path is not None and self.path.resolve() == path
             default = _optional_board(self.config)
@@ -852,7 +876,7 @@ class Desk:
             return self.board_json()
 
     def switch(self, raw: object, create: bool) -> dict:
-        text = _clean_text(raw)
+        text = _clean_path(raw)
         if text == REMINDERS:
             if not reminders_available(self.settings["reminders"]):
                 raise ValueError("The Reminders layer is off (desk.reminders) or not on macOS")
@@ -1054,7 +1078,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body(self, limit: int = MAX_BODY) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
-        if length > limit:
+        # A negative length would read until the client closes (rfile.read(-1)).
+        if not 0 <= length <= limit:
             raise ValueError("request body is too large")
         data = json.loads(self.rfile.read(length) or b"{}")
         if not isinstance(data, dict):
@@ -2205,11 +2230,37 @@ def _parse_serve(args: list[str]) -> tuple[str | None, int | None, bool, bool]:
     return board, port, open_browser, reminders
 
 
+class _PlainText:
+    """stdout/stderr without control characters: card text, Reminders titles and file names come
+    from other programs and must not drive the terminal (newlines and tabs stay)."""
+
+    _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+    def __init__(self, stream) -> None:
+        self._stream = stream
+
+    def write(self, text: str) -> int:
+        self._stream.write(self._CONTROL.sub("", text))
+        return len(text)
+
+    def __getattr__(self, name: str):
+        return getattr(self._stream, name)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] in {"-h", "--help", "help"}:
         print(COMMAND_HELP["desk"], end="")
         return 0
+    saved = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = _PlainText(sys.stdout), _PlainText(sys.stderr)
+    try:
+        return _main(args)
+    finally:
+        sys.stdout, sys.stderr = saved
+
+
+def _main(args: list[str]) -> int:
     try:
         config = load_config()
         action = args[0] if args else ""
@@ -2251,7 +2302,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return serve(path, config, port, open_browser, REMINDERS)
         path = board_file(board, boards_dir=boards_dir) if board else default_board(config)
         return serve(path, config, port, open_browser)
-    except (ConfigError, FileNotFoundError, OSError, ValueError) as error:
+    except (ConfigError, FileNotFoundError, OSError, ValueError, OverflowError) as error:
         print(f"unlaw desk: {error}", file=sys.stderr)
         return 2
 

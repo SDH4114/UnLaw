@@ -270,8 +270,13 @@ def quick_text(text: str, today: date) -> str:
                 + (today + timedelta(days=QUICK_DATES[word.casefold()])).isoformat()
                 + "}"
             )
-        if word.startswith("+") and word[1:].isdigit():
-            return "@{" + (today + timedelta(days=int(word[1:]))).isoformat() + "}"
+        # ASCII digits, at most 5 (274 years): `@+²` or `@+99999999999` stay plain text.
+        days = word[1:]
+        if word.startswith("+") and days.isascii() and days.isdigit() and len(days) <= 5:
+            try:
+                return "@{" + (today + timedelta(days=int(days))).isoformat() + "}"
+            except OverflowError:
+                return match.group(0)
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", word):
             try:
                 return "@{" + date.fromisoformat(word).isoformat() + "}"

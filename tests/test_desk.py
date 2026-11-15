@@ -110,6 +110,20 @@ kanban-plugin: board
 """
 
 
+class QuickTextTests(unittest.TestCase):
+    def test_odd_date_offsets_stay_text(self) -> None:
+        from datetime import date
+
+        from unlawful.kanban import quick_text
+
+        today = date(2026, 11, 15)
+        self.assertEqual(quick_text("x @+3", today), "x @{2026-11-18}")
+        for word in ("@+5000000", "@+99999999999", "@+²"):
+            with self.subTest(word=word):
+                self.assertEqual(quick_text(f"x {word}", today), f"x {word}")
+        self.assertEqual(quick_text("x @+99", date(9999, 12, 1)), "x @+99", "past year 9999 stays text")
+
+
 class KanbanFileFormatTests(unittest.TestCase):
     def test_obsidian_archive_footer_is_kept_and_not_numbered(self) -> None:
         board = KanbanBoard.parse(ARCHIVE_BOARD)
@@ -302,6 +316,41 @@ class DeleteBoardTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "only board"):
             alone.delete_board(str(self.boards / "Solo.md"))
         self.assertTrue((self.boards / "Solo.md").is_file())
+
+    def test_printed_cards_cannot_drive_the_terminal(self) -> None:
+        import contextlib
+        import io
+
+        from unlawful import desk as desk_module
+
+        evil = self.board("Evil")
+        evil.write_text("## Todo\n- [ ] hi \x1b]0;pwn\x07\x1b[2J\n", encoding="utf-8")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = desk_module.main(["show", str(evil)])
+        self.assertEqual(code, 0)
+        self.assertNotIn("\x1b", out.getvalue())
+        self.assertNotIn("\x07", out.getvalue())
+        self.assertIn("hi ]0;pwn[2J", out.getvalue())
+
+    def test_the_page_path_of_a_symlinked_board_trashes_the_link(self) -> None:
+        # The page lists a linked board by its resolved target; deleting it must keep the real file.
+        real = self.root / "vault2" / "real.md"
+        real.parent.mkdir()
+        real.write_text("## Real\n", encoding="utf-8")
+        (self.boards / "linked.md").symlink_to(real)
+        self.assertIn(str(real.resolve()), self.desk.boards())
+        self.desk.delete_board(str(real.resolve()))
+        self.assertTrue(real.is_file())
+        self.assertFalse((self.boards / "linked.md").is_symlink())
+
+    def test_board_paths_are_taken_exactly(self) -> None:
+        double = self.boards / "My  board.md"
+        double.write_text("## Double\n", encoding="utf-8")
+        single = self.board("My board")
+        self.desk.delete_board(str(double))
+        self.assertFalse(double.exists())
+        self.assertTrue(single.exists(), "a path with two spaces names its own file")
 
     def test_a_symlinked_board_loses_only_the_link(self) -> None:
         real = self.root / "real.md"

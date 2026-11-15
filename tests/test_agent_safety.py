@@ -420,3 +420,32 @@ class AgentSafetyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AgentUiRobustnessTests(unittest.TestCase):
+    def test_at_menu_with_an_unknown_user_and_odd_names(self) -> None:
+        import tempfile
+
+        from unlawful import agent_ui
+
+        self.assertEqual(agent_ui.path_items("@~nosuchuser-xyz/", Path.cwd()), [])
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "a\x1b[2Jb.txt").write_text("x")
+            items = agent_ui.path_items("@a", Path(folder))
+        self.assertEqual(len(items), 1)
+        self.assertNotIn("\x1b", items[0].label)
+
+    def test_a_damaged_history_file_does_not_stop_the_console(self) -> None:
+        import tempfile
+
+        from unlawful import agent_ui
+
+        with tempfile.TemporaryDirectory() as folder:
+            history = Path(folder) / "history.txt"
+            history.write_bytes(b"first\nbroken \\u00\n\xff\xfe raw\nlast \\u00e9\n")
+            editor = agent_ui.Editor(lambda text, *styles: text, history, lambda text, cursor: ([], 0, 0))
+            self.assertEqual(editor.history[0], "first")
+            self.assertEqual(editor.history[-1], "last \u00e9")
+            editor._remember("new entry")
+            self.assertEqual(history.read_text().splitlines()[-1], "new entry")
+            self.assertEqual(sorted(path.name for path in Path(folder).iterdir()), ["history.txt"])

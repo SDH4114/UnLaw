@@ -173,19 +173,23 @@ class RawMode:
 # --- @path menu --------------------------------------------------------------
 
 
+_LABEL_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
 def path_items(token: str, cwd: Path) -> list[Item]:
     """Files and folders for `@partial/path`; folders first, hidden ones only when asked for."""
     typed = token[1:]
     folder, slash, start = typed.rpartition("/")
-    if slash:
-        base = Path(folder or "/").expanduser()
-        base = base if base.is_absolute() else cwd / base
-        prefix = f"@{folder}/"
-    else:
-        base, prefix = cwd, "@"
     try:
+        if slash:
+            # `~nosuchuser` makes expanduser raise RuntimeError; that is just no match.
+            base = Path(folder or "/").expanduser()
+            base = base if base.is_absolute() else cwd / base
+            prefix = f"@{folder}/"
+        else:
+            base, prefix = cwd, "@"
         entries = list(base.iterdir())
-    except OSError:
+    except (OSError, RuntimeError):
         return []
     wanted = start.casefold()
     hidden = start.startswith(".")
@@ -202,7 +206,7 @@ def path_items(token: str, cwd: Path) -> list[Item]:
         name = entry.name + ("/" if directory else "")
         items.append(
             Item(
-                name,
+                _LABEL_CONTROL.sub("?", name),  # a file name must not drive the terminal
                 "folder" if directory else "",
                 prefix + name + ("" if directory else " "),
             )
@@ -227,14 +231,18 @@ class Editor:
         self.resized = False
 
     def _load_history(self) -> list[str]:
+        # A cut or damaged file (another console mid-write, a crash) must not stop the console.
         try:
-            lines = self.history_path.read_text(encoding="utf-8").splitlines()
+            lines = self.history_path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             return []
-        return [
-            line.encode("utf-8").decode("unicode_escape") if "\\" in line else line
-            for line in lines
-        ][-500:]
+        history = []
+        for line in lines[-500:]:
+            try:
+                history.append(line.encode("utf-8").decode("unicode_escape") if "\\" in line else line)
+            except ValueError:
+                history.append(line)
+        return history
 
     def _remember(self, text: str) -> None:
         if not text.strip() or (self.history and self.history[-1] == text):
@@ -246,7 +254,10 @@ class Editor:
             encoded = (
                 entry.encode("unicode_escape").decode("ascii") for entry in self.history
             )
-            self.history_path.write_text("\n".join(encoded) + "\n", encoding="utf-8")
+            # Written aside and renamed, so another console never reads half a file.
+            temporary = self.history_path.with_name(f".{self.history_path.name}.{os.getpid()}")
+            temporary.write_text("\n".join(encoded) + "\n", encoding="utf-8")
+            os.replace(temporary, self.history_path)
         except OSError:
             pass
 
