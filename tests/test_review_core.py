@@ -113,6 +113,23 @@ class CoreReviewTests(CoreTestCase):
         self.assertEqual(result.stdout, COMMAND_HELP["timer"])
         self.assertTrue(log.exists(), "an edited copy runs as itself")
 
+    def test_every_seed_prints_exactly_its_shipped_help(self) -> None:
+        # ul answers --help of untouched seeds itself; that is only right while no seed's help
+        # depends on config or environment.
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        from unlawful.command_help import COMMAND_HELP
+        from unlawful.config import DEFAULT_COMMAND_NAMES
+
+        self.ok("init")
+        env = {**self.env, "UNLAW_COMMAND_DIR": "", "UNLAW_BIN": str(binary())}
+        for name in DEFAULT_COMMAND_NAMES:
+            script = self.unlaw / "commands" / name / "main.py"
+            for flag in ("--help", "-h"):
+                with self.subTest(command=name, flag=flag):
+                    result = subprocess.run([sys.executable, str(script), flag], env={**env, "UNLAW_COMMAND": name},
+                                            cwd=self.root, capture_output=True, text=True, timeout=60)
+                    self.assertEqual((result.returncode, result.stdout), (0, COMMAND_HELP[name]))
+
     def test_sigterm_to_ul_reaches_the_command(self) -> None:
         # A `kill` of ul used to leave the command running as an orphan.
         started = self.root / "started"
