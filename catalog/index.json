@@ -9,7 +9,7 @@
   {
    "name": "awake",
    "summary": "Keep the Mac from sleeping for a while, until a time or while something runs; lid closed too.",
-   "sha256": "f90f97cbbeb31d0bc75f5d4e76b9e92333b2dcbbdee35556ab8e0198d015d168"
+   "sha256": "5107cbd5fcdfd4e95b1102bfc0b8829cd905d4413b9fb90a8fe3d8e0c529bbb3"
   },
   {
    "name": "capture",

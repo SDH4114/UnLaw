@@ -864,12 +864,19 @@ def _launch_supervisor(plan: Plan, lid_previous: int | None) -> None:
     raise AwakeError("the session did not start (see runtime/awake.log)", 1)
 
 
+class _Wake(Exception):
+    """Raised by the supervisor's signal handler to leave a blocking wait."""
+
+
 def supervise(spec: dict) -> int:
     """The detached supervisor: run caffeinate, wait for it or a signal, then clean up."""
     stopped: list[int] = []
+    waiting = [False]
 
     def request_stop(signum: int, frame: object) -> None:
         stopped.append(signum)
+        if waiting[0]:
+            raise _Wake  # out of waitpid(); anywhere else the flag is enough
 
     for name in ("SIGTERM", "SIGINT", "SIGHUP"):
         signal.signal(getattr(signal, name), request_stop)
@@ -897,8 +904,16 @@ def supervise(spec: dict) -> int:
     }
     try:
         write_state(state)
+        # Blocked in waitpid() for the whole session (it can last days), instead of waking up 10 times a second.
         while process.poll() is None and not stopped:
-            time.sleep(0.1)
+            waiting[0] = True
+            try:
+                if not stopped:
+                    process.wait()
+            except _Wake:
+                pass
+            finally:
+                waiting[0] = False
     finally:
         _terminate(process)
         _finish(state)
@@ -1964,6 +1979,9 @@ def _dispatch(args: list[str], command: list[str] | None) -> int:
             lid=lid,
         )
     else:
+        if len(words) > 1 and any(re.fullmatch(r"[0-9]+", word) for word in words):
+            # "1 30" would read as 130 minutes; "1h 30m" is fine.
+            raise AwakeError(f"not a duration: {' '.join(words)!r} (use 30m, 2h, 1h30m or minutes)")
         seconds = parse_duration("".join(words))
         plan = Plan(
             "duration",

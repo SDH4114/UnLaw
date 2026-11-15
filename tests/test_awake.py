@@ -13,6 +13,7 @@ import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -317,14 +318,36 @@ class AwakeTests(AwakeBase):
             self.assertEqual(self.state()["kind"], "duration")
             self.ok("awake", "off")
 
+    def test_two_words_with_units_still_work(self) -> None:
+        self.start("1h", "30m")
+        self.assertEqual(self.seconds_of(self.caffeinate_args()), 5400)
+
+    def test_the_supervisor_waits_in_waitpid_without_polling(self) -> None:
+        # It used to wake every 0.1 s for the whole session (up to 7 days).
+        self.ok("version")
+        tool = self.root / "short-caffeinate"
+        tool.write_text("#!/bin/sh\nexec /bin/sleep 1\n")
+        tool.chmod(0o755)
+        handlers = {number: signal.getsignal(number) for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
+        self.addCleanup(lambda: [signal.signal(number, handler) for number, handler in handlers.items()])
+        keys = ("HOME", "XDG_CONFIG_HOME", "PATH")
+        with patch.dict(os.environ, {key: self.env[key] for key in keys if key in self.env}):
+            from unlawful import awake
+
+            spec = {"state": awake._base_state(awake.Plan("duration", seconds=1, ends=time.time() + 1), None),
+                    "caffeinate": str(tool), "seconds": 1, "watch_pid": None}
+            with patch.object(awake.time, "sleep", side_effect=AssertionError("the supervisor polled")):
+                self.assertEqual(awake.supervise(spec), 0)
+        self.assertIsNone(self.state())
+
     def test_display_adds_d_flag(self) -> None:
         self.start("10m", "--display")
         self.assertIn("-d", self.caffeinate_args())
         self.assertTrue(self.state()["display"])
 
     def test_bad_durations_are_refused_and_start_nothing(self) -> None:
-        for text in ("0", "0m", "abc", "-5", "169h", "10000000", "1x", "1.5h", ""):
-            result = self.ul("awake", text)
+        for text in ("0", "0m", "abc", "-5", "169h", "10000000", "1x", "1.5h", "", "1 30", "2 h"):
+            result = self.ul("awake", *text.split(" ")) if " " in text else self.ul("awake", text)
             self.assertEqual(
                 result.returncode, 2, f"{text!r}: {result.stdout}{result.stderr}"
             )
