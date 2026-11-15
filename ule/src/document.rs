@@ -54,6 +54,41 @@ pub struct Document {
     valid: usize,
 }
 
+/// Largest file ule opens: the whole file is held in memory, with highlight state per line.
+pub const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
+
+fn read_limited(path: &Path) -> io::Result<Vec<u8>> {
+    use std::io::Read;
+    let too_big = || {
+        io::Error::new(io::ErrorKind::InvalidData, format!("file is larger than {} MB", MAX_FILE_BYTES / 1024 / 1024))
+    };
+    let file = fs::File::open(path)?;
+    if file.metadata()?.len() > MAX_FILE_BYTES {
+        return Err(too_big());
+    }
+    let mut bytes = Vec::new();
+    // It may grow while it is read.
+    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(too_big());
+    }
+    Ok(bytes)
+}
+
+/// Line endings are converted only when every line ends in CRLF; a file with mixed
+/// endings keeps each `\r` as it is, so saving never rewrites lines that were not edited.
+fn all_crlf(content: &str) -> bool {
+    let lf = content.bytes().filter(|byte| *byte == b'\n').count();
+    lf > 0 && content.matches("\r\n").count() == lf
+}
+
+/// Overwrites `path` in place (truncate + write + sync), keeping its inode and mode.
+fn write_in_place(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = fs::OpenOptions::new().write(true).truncate(true).open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
 pub fn display_path(path: &Path) -> String {
     let cwd = std::env::current_dir().unwrap_or_default();
     if let Ok(relative) = path.strip_prefix(&cwd) {
@@ -117,7 +152,7 @@ impl Document {
     pub fn open(id: usize, path: &Path, languages: &Languages) -> io::Result<Self> {
         let path = absolute(path);
         let mut doc = Document::scratch(id, &display_path(&path), DocKind::File);
-        match fs::read(&path) {
+        match read_limited(&path) {
             Ok(bytes) => {
                 if bytes.iter().take(8000).any(|byte| *byte == 0) {
                     return Err(io::Error::new(io::ErrorKind::InvalidData, "binary file"));
@@ -138,7 +173,7 @@ impl Document {
     }
 
     fn load(&mut self, content: &str) {
-        self.crlf = content.contains("\r\n");
+        self.crlf = all_crlf(content);
         let normalized = if self.crlf { content.replace("\r\n", "\n") } else { content.to_string() };
         self.final_newline = normalized.ends_with('\n');
         let body = normalized.strip_suffix('\n').unwrap_or(&normalized);
@@ -275,14 +310,42 @@ impl Document {
             fs::create_dir_all(parent)?;
         }
         let permissions = fs::metadata(path).map(|meta| meta.permissions()).ok();
-        let temporary = path.with_file_name(format!(
-            ".{}.ule-{}",
-            path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
-            std::process::id()
-        ));
-        // An existing temporary path may be a symlink or belong to another save.
-        // Acquire it exclusively before entering the cleanup scope.
-        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        // A symlinked file keeps its link: write through to the target, with the temporary
+        // file next to the target (a rename cannot cross file systems).
+        let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        // An existing temporary path may be a symlink, belong to another save or be left
+        // by a crash under the same pid: acquire a free one exclusively.
+        let mut acquired = None;
+        for attempt in 0..100 {
+            let temporary = target.with_file_name(format!(
+                ".{}.ule-{}{}",
+                target.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
+                std::process::id(),
+                if attempt == 0 { String::new() } else { format!("-{attempt}") }
+            ));
+            match fs::OpenOptions::new().write(true).create_new(true).open(&temporary) {
+                Ok(file) => {
+                    acquired = Some(Ok((temporary, file)));
+                    break;
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    acquired = Some(Err(error));
+                    break;
+                }
+            }
+        }
+        let (temporary, mut file) = match acquired {
+            Some(Ok(found)) => found,
+            // The folder is not writable but the file is (a shared or system folder):
+            // write the file in place, as editors do, rather than not at all.
+            Some(Err(error)) if error.kind() == io::ErrorKind::PermissionDenied && permissions.is_some() => {
+                write_in_place(&target, content.as_bytes())?;
+                return self.finish_save(path, &content);
+            }
+            Some(Err(error)) => return Err(error),
+            None => return Err(io::Error::new(io::ErrorKind::AlreadyExists, "no free temporary file name")),
+        };
         let result = (|| {
             // Capture the umask-filtered mode for new files, then keep unfinished content private.
             let permissions = permissions.clone().unwrap_or(file.metadata()?.permissions());
@@ -290,14 +353,16 @@ impl Document {
             file.write_all(content.as_bytes())?;
             file.sync_all()?;
             fs::set_permissions(&temporary, permissions)?;
-            // A symlinked file keeps its link: write through to the target.
-            let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
             fs::rename(&temporary, &target)
         })();
         if result.is_err() {
             let _ = fs::remove_file(&temporary);
         }
         result?;
+        self.finish_save(path, &content)
+    }
+
+    fn finish_save(&mut self, path: &Path, content: &str) -> io::Result<()> {
         self.final_newline = content.ends_with('\n');
         self.mark_saved();
         self.mtime = fs::metadata(path).and_then(|meta| meta.modified()).ok();
@@ -330,13 +395,13 @@ impl Document {
     /// Rereads the file, keeping undo: the reload is one undoable change.
     pub fn reload(&mut self, cursor: Pos) -> io::Result<()> {
         let path = self.path.clone().ok_or_else(|| io::Error::other("no file"))?;
-        let bytes = fs::read(&path)?;
+        let bytes = read_limited(&path)?;
         if bytes.iter().take(8000).any(|byte| *byte == 0) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "binary file"));
         }
         let content = String::from_utf8(bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("file is not UTF-8: {error}")))?;
-        let crlf = content.contains("\r\n");
+        let crlf = all_crlf(&content);
         let normalized = if crlf { content.replace("\r\n", "\n") } else { content.clone() };
         let body = normalized.strip_suffix('\n').unwrap_or(&normalized).to_string();
         if body != self.text.to_string_lf() {
@@ -428,6 +493,59 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ule-doc-{}-{name}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         dir.join(name)
+    }
+
+    #[test]
+    fn mixed_line_endings_are_kept_as_they_are() {
+        let path = temp("mixed.txt");
+        fs::write(&path, "a\r\nb\nc\r\n").unwrap();
+        let mut doc = Document::open(1, &path, &Languages::default()).unwrap();
+        assert!(!doc.crlf);
+        let end = doc.text.end();
+        doc.insert(end, "!", end);
+        doc.save_to(&path, true).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"a\r\nb\nc\r!\n");
+        fs::write(&path, "a\r\nb\r\n").unwrap();
+        assert!(Document::open(1, &path, &Languages::default()).unwrap().crlf);
+    }
+
+    #[test]
+    fn huge_files_are_refused_before_reading() {
+        let path = temp("huge.log");
+        fs::File::create(&path).unwrap().set_len(MAX_FILE_BYTES + 1).unwrap();
+        let error = Document::open(1, &path, &Languages::default()).unwrap_err();
+        assert!(error.to_string().contains("larger than"), "{error}");
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_leftover_temporary_file_does_not_block_saving() {
+        let path = temp("leftover.txt");
+        fs::write(&path, "old\n").unwrap();
+        let stale = path.with_file_name(format!(".leftover.txt.ule-{}", std::process::id()));
+        fs::write(&stale, "from a crash").unwrap();
+        let mut doc = Document::open(1, &path, &Languages::default()).unwrap();
+        doc.insert(Pos::new(0, 0), "new ", Pos::new(0, 0));
+        doc.save_to(&path, true).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new old\n");
+        assert_eq!(fs::read_to_string(&stale).unwrap(), "from a crash", "never someone else's file");
+        fs::remove_file(&stale).unwrap();
+    }
+
+    #[test]
+    fn a_writable_file_in_a_read_only_folder_is_saved_in_place() {
+        let folder = temp("locked-folder");
+        fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("notes.txt");
+        fs::write(&path, "old\n").unwrap();
+        let mut doc = Document::open(1, &path, &Languages::default()).unwrap();
+        doc.insert(Pos::new(0, 0), "new ", Pos::new(0, 0));
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o500)).unwrap();
+        let saved = doc.save_to(&path, true);
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
+        saved.unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new old\n");
+        assert!(!doc.modified());
     }
 
     #[test]

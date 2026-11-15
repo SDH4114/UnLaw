@@ -960,7 +960,9 @@ fn prompt_with_stdin(words: &[String]) -> String {
 }
 
 pub fn run(args: &[String], config: &Config) -> i32 {
-    if args.iter().any(|arg| arg == "-h" || arg == "--help") || args.first().is_some_and(|arg| arg == "help") {
+    // After `--` everything is the prompt: `ul lm -- -h means what?` asks the model.
+    let options = args.iter().take_while(|arg| *arg != "--");
+    if options.clone().any(|arg| arg == "-h" || arg == "--help") || args.first().is_some_and(|arg| arg == "help") {
         print!("{HELP}");
         return 0;
     }

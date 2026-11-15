@@ -75,7 +75,7 @@ pub fn ask(ed: &mut Editor, question: &str, context: Option<String>) -> Result<(
         document.set_content(&header);
         document.set_language(ed.languages.by_name("markdown"));
     }
-    let command = format!("{ul} lm {}", quote(question));
+    let command = format!("{ul} lm -- {}", quote(question));
     spawn(ed, "ul lm", &command, context, doc, JobKind::Output)?;
     ed.show_in_panel(doc);
     ed.info("asking the local model… (answer in the panel, <space>o focuses it)");
@@ -97,7 +97,7 @@ pub fn ai_edit(
     let prompt = format!(
         "Rewrite the following {language} code: {instruction}. Reply with only the complete rewritten code in one code block, no explanation."
     );
-    let command = format!("{ul} lm {}", quote(&prompt));
+    let command = format!("{ul} lm -- {}", quote(&prompt));
     let output = ed.output_doc("[ai]");
     spawn(
         ed,
