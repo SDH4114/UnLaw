@@ -38,6 +38,15 @@ class DeskUITests(unittest.TestCase):
     def test_camera_permission_cannot_outlive_studio(self) -> None:
         self.run_case("camera_leave")
 
+    def test_board_dialogs(self) -> None:
+        self.run_case("board_dialogs")
+
+    def test_delete_board_asks_first(self) -> None:
+        self.run_case("delete_board_asks_first")
+
+    def test_columns_move_by_dragging_the_heading(self) -> None:
+        self.run_case("columns_move_by_dragging_the_heading")
+
     def test_camera_permission_cannot_reacquire_during_recording(self) -> None:
         self.run_case("camera_record")
 

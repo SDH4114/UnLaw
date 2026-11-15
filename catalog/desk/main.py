@@ -2,7 +2,7 @@
 """Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser.\nUsage: ul desk [board] [--reminders] [--port N] [--no-open]\n       ul desk list | show [board] | add <text> | move <n> <column> | done <n>\n       ul desk new <name> | path [board] | stats [board] | pomodoro [start|pause|stop|...]\nPage:\n  ul desk           Open the default board (todo.vault_path + todo.file) on 127.0.0.1\n  [board]           A name = <desk.boards_dir>/<name>.md, or a path to any .md board\n  --reminders       Open Apple Reminders as a board (lists = columns)\nTerminal (for you and AI agents):\n  list [--json]     Default, recent and named boards, and whether Reminders is on\n  show [board]      Columns and numbered cards; --json for scripts, --reminders\n  add <text>        New card in the first column (--column C; @today/@tomorrow dates)\n  move <n> <col>    Move card n; done <n> checks it and moves it to the Done column\n                    add/move/done take -b <board>; without it the default board\n  new <name>        Create a board with To do / Doing / Done\n  stats, pomodoro   Focus statistics and the timer the page shows too\nThe .md file is the source of truth: Obsidian, the page and these commands all\nsee every change. Tabs on the page: Board, Today, Stats, Games, Studio, Canvas.\nSettings: desk.port, desk.boards_dir, desk.canvas_dir, desk.reminders, desk.pomodoro.*,\n  todo.vault_path, todo.file, todo.completed_column.\nExamples: ul desk\n          ul desk show Work --json\n          ul desk add "Call the bank @tomorrow" -b Work\n'
+COMMAND_HELP = 'Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser.\nUsage: ul desk [board] [--reminders] [--port N] [--no-open]\n       ul desk list | show [board] | add <text> | move <n> <column> | done <n>\n       ul desk new <name> | rm <board> | path [board] | stats [board] | pomodoro [...]\nPage:\n  ul desk           Open the default board (todo.vault_path + todo.file) on 127.0.0.1\n  [board]           A name = <desk.boards_dir>/<name>.md, or a path to any .md board\n  --reminders       Open Apple Reminders as a board (lists = columns)\nTerminal (for you and AI agents):\n  list [--json]     Default, recent and named boards, and whether Reminders is on\n  show [board]      Columns and numbered cards; --json for scripts, --reminders\n  add <text>        New card in the first column (--column C; @today/@tomorrow dates)\n  move <n> <col>    Move card n; done <n> checks it and moves it to the Done column\n                    add/move/done take -b <board>; without it the default board\n  new <name>        Create a board with To do / Doing / Done\n  rm <board>        Move a board to the Trash (not the default board)\n  stats, pomodoro   Focus statistics and the timer the page shows too\nThe .md file is the source of truth: Obsidian, the page and these commands all\nsee every change. Tabs on the page: Board, Today, Stats, Games, Studio, Canvas.\nSettings: desk.port, desk.boards_dir, desk.canvas_dir, desk.reminders, desk.pomodoro.*,\n  todo.vault_path, todo.file, todo.completed_column.\nExamples: ul desk\n          ul desk show Work --json\n          ul desk add "Call the bank @tomorrow" -b Work\n'
 
 import copy
 import os
@@ -954,6 +954,7 @@ header > :not(.tabs) { margin-bottom: 8px; }
 .picker .menu button.on .label { font-weight: 600; }
 .picker .menu button.action { color: var(--muted); }
 .picker .menu button.action:hover { color: var(--text); }
+.picker .menu button.action.danger:hover { color: var(--danger); }
 .picker .menu .sep { height: 1px; background: var(--line); margin: 4px 0; }
 .tabs { display: flex; gap: 4px; align-self: stretch; align-items: stretch; }
 .tabs button { border: none; background: transparent; padding: 0 10px 8px; border-radius: 0; color: var(--muted); font-weight: 550; box-shadow: inset 0 -2px 0 transparent; }
@@ -1005,6 +1006,10 @@ main { flex: 1; overflow: auto; }
 .card { background: var(--panel); border-radius: 8px; box-shadow: var(--shadow); padding: 9px 10px; margin-bottom: 7px; display: flex; gap: 9px; align-items: flex-start; cursor: grab; position: relative; border: 1px solid var(--line); transition: border-color .12s; }
 .card:hover { border-color: color-mix(in srgb, var(--text) 22%, var(--line)); }
 .card.dragging { opacity: .4; }
+.column.dragging { opacity: .4; }
+.column h2[draggable="true"] { cursor: grab; }
+.column.col-before { box-shadow: -3px 0 0 var(--accent-ink); }
+.column.col-after { box-shadow: 3px 0 0 var(--accent-ink); }
 .card.focus { border-color: var(--energy); box-shadow: inset 2px 0 0 var(--energy); }
 .card.checked .text { color: var(--muted); text-decoration: line-through; }
 .card .check { width: 18px; height: 18px; border-radius: 50%; border: 1.6px solid color-mix(in srgb, var(--muted) 70%, transparent); flex: 0 0 17px; margin-top: 1px; padding: 0; background: transparent; position: relative; }
@@ -1267,7 +1272,7 @@ if (params.get("token")) {
 }
 const TOKEN = sessionStorage.getItem("desk-token") || "";
 const VIEWS = ["board", "today", "stats", "games", "studio", "canvas"];
-const state = { board: null, view: VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : localStorage.getItem("desk-view") || "board", query: "", tag: "", timer: null, timerAt: 0, editing: null, dragging: null, stats: null };
+const state = { board: null, view: VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : localStorage.getItem("desk-view") || "board", query: "", tag: "", timer: null, timerAt: 0, editing: null, dragging: null, draggingColumn: null, stats: null };
 if (!VIEWS.includes(state.view)) state.view = "board";
 const $ = (id) => document.getElementById(id);
 
@@ -1495,20 +1500,58 @@ function renderBoard(main) {
       if (event.key === "Escape") input.blur();
     });
     const done = column.name === board.done_column;
-    const node = h("section", { class: "column" + (column.doing ? " doing" : "") + (done ? " done" : "") },
-      h("h2", {}, h("span", { class: "name", text: column.name, title: column.name }),
+    const movable = board.layer !== "reminders";
+    const heading = h("h2", { draggable: movable ? "true" : null, title: movable ? "Drag to move the column" : null }, h("span", { class: "name", text: column.name, title: column.name }),
         h("span", { class: "count", text: state.query || state.tag ? shown + "/" + column.cards.length : column.cards.length }),
-        h("button", { title: "Add a card to " + column.name, text: "+", onclick: () => input.focus() })),
+        h("button", { title: "Add a card to " + column.name, text: "+", onclick: () => input.focus() }));
+    const node = h("section", { class: "column" + (column.doing ? " doing" : "") + (done ? " done" : "") }, heading,
       list, h("div", { class: "add" }, input));
+    if (movable) {
+      heading.addEventListener("dragstart", (event) => {
+        state.draggingColumn = c;
+        node.classList.add("dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", column.name);
+        event.dataTransfer.setDragImage(node, event.offsetX, event.offsetY);
+      });
+      heading.addEventListener("dragend", () => {
+        state.draggingColumn = null;
+        node.classList.remove("dragging");
+        for (const other of wrap.querySelectorAll(".column")) other.classList.remove("col-before", "col-after");
+      });
+    }
+    // Which side of this column a dragged column lands on: the left or right half under the pointer.
+    const columnSide = (event) => {
+      const box = node.getBoundingClientRect();
+      return event.clientX < box.left + box.width / 2 ? "before" : "after";
+    };
     node.addEventListener("dragover", (event) => {
+      if (state.draggingColumn != null) {
+        event.preventDefault();
+        const side = state.draggingColumn === c ? null : columnSide(event);
+        node.classList.toggle("col-before", side === "before");
+        node.classList.toggle("col-after", side === "after");
+        return;
+      }
       if (!state.dragging) return;
       event.preventDefault();
       node.classList.add("drop");
     });
-    node.addEventListener("dragleave", (event) => { if (!node.contains(event.relatedTarget)) node.classList.remove("drop"); });
+    node.addEventListener("dragleave", (event) => {
+      if (node.contains(event.relatedTarget)) return;
+      node.classList.remove("drop", "col-before", "col-after");
+    });
     node.addEventListener("drop", (event) => {
       event.preventDefault();
-      node.classList.remove("drop");
+      node.classList.remove("drop", "col-before", "col-after");
+      if (state.draggingColumn != null) {
+        const from = state.draggingColumn;
+        state.draggingColumn = null;
+        let to = columnSide(event) === "before" ? c : c + 1;
+        if (from < to) to -= 1;
+        if (from !== to) change({ op: "move_column", column: from, name: board.columns[from].name, to_index: to });
+        return;
+      }
       const from = state.dragging;
       if (!from) return;
       let to = dropIndex(list, event.clientY);
@@ -2608,6 +2651,7 @@ async function loadBoards() {
     menu.append(boardItem(label.name, label.where, path === data.current, () => switchBoard(path)));
   }
   menu.append(h("div", { class: "sep" }), boardItem("New board…", "", false, newBoard, "action"), boardItem("Open another board…", "", false, openOtherBoard, "action"));
+  if (data.current && data.current !== REMINDERS) menu.append(boardItem("Delete this board…", shown.name + " goes to the Trash", false, () => deleteBoard(data.current, shown.name), "action danger"));
   const root = $("boards");
   root.textContent = "";
   root.append(trigger, menu);
@@ -2624,12 +2668,40 @@ async function switchBoard(path, create) {
   loadBoards();
 }
 
-function newBoard() {
+// New/Open show the macOS save/open dialog (through the server); without osascript the page asks for a name or path.
+async function chooseBoard(create) {
+  closeBoards(false);
+  const { status, data } = await api("POST", "/api/boards/choose", { create });
+  if (status !== 200) { toast(data.error || "Could not show the file dialog"); return null; }
+  return data;
+}
+
+async function newBoard() {
+  const data = await chooseBoard(true);
+  if (!data) return;
+  if (data.path) return switchBoard(data.path, true);
+  if (!data.unavailable) return;
   const name = prompt("Name of the new board. It is saved in\n" + boardsDir + "\n(desk.boards_dir; a full path to a .md file works too)", "");
   if (name && name.trim()) switchBoard(name.trim(), true);
 }
 
-function openOtherBoard() {
+// The file goes to the Trash (the server refuses the default board); the next board opens.
+async function deleteBoard(path, name) {
+  closeBoards(false);
+  if (!confirm("Move the board \"" + name + "\" to the Trash?\n\n" + path)) return;
+  const { status, data } = await api("POST", "/api/boards/delete", { path });
+  if (status !== 200) { toast(data.error || "Could not delete the board"); return; }
+  state.tag = "";
+  setBoard(data);
+  loadBoards();
+  toast("Moved " + name + " to the Trash");
+}
+
+async function openOtherBoard() {
+  const data = await chooseBoard(false);
+  if (!data) return;
+  if (data.path) return switchBoard(data.path);
+  if (!data.unavailable) return;
   const path = prompt("Path to a Kanban board (.md), or the name of a board in " + boardsDir + ". A missing file can be created.", "~/");
   if (path && path.trim()) switchBoard(path.trim());
 }
@@ -5021,7 +5093,7 @@ async function start() {
   if (!TOKEN) { document.body.textContent = "Open the desk with `ul desk`: this page needs its token."; return; }
   await Promise.all([loadBoard(true), loadBoards(), loadTimer(), loadGames(), loadStudioInfo()]);
   render();
-  setInterval(() => { if (!document.hidden && !state.dragging && !state.editing && !["games", "studio", "canvas"].includes(state.view)) loadBoard(false); }, 2000);
+  setInterval(() => { if (!document.hidden && !state.dragging && state.draggingColumn == null && !state.editing && !["games", "studio", "canvas"].includes(state.view)) loadBoard(false); }, 2000);
   setInterval(pollCanvas, 3000);
   setInterval(() => { if (!document.hidden) loadTimer(); }, 10000);
   setInterval(() => { if (!document.hidden && state.view === "games" && arcade.session) loadGames(); }, 5000);
@@ -5067,7 +5139,7 @@ from pathlib import Path
 USAGE = (
     "Usage: ul desk [board] [--reminders] [--port N] [--no-open] | list [--json] | "
     "show [board] [--reminders] [--json] | add <text> [--column C] [-b board] | "
-    "move <n> <column> [-b board] | done <n> [-b board] | new <name> | path [board] | stats [board] | "
+    "move <n> <column> [-b board] | done <n> [-b board] | new <name> | rm <board> | path [board] | stats [board] | "
     "pomodoro [status|start [minutes] [--card <text>]|pause|resume|stop|skip]"
 )
 PHASES = {
@@ -5086,6 +5158,22 @@ CHOOSE_CANVAS_SCRIPT = (
     "on run argv",
     "activate",
     'set chosen to choose file with prompt "Open a canvas" of type {"canvas"} default location (POSIX file (item 1 of argv))',
+    "return POSIX path of chosen",
+    "end run",
+)
+# The macOS dialogs for "New board…" (save dialog, argv[2] = suggested name) and "Open another board…";
+# argv[1] is the folder they start in.
+CHOOSE_NEW_BOARD_SCRIPT = (
+    "on run argv",
+    "activate",
+    'set chosen to choose file name with prompt "New board" default name (item 2 of argv) default location (POSIX file (item 1 of argv))',
+    "return POSIX path of chosen",
+    "end run",
+)
+CHOOSE_BOARD_SCRIPT = (
+    "on run argv",
+    "activate",
+    'set chosen to choose file with prompt "Open a board" of type {"md", "net.daringfireball.markdown"} default location (POSIX file (item 1 of argv))',
     "return POSIX path of chosen",
     "end run",
 )
@@ -5612,6 +5700,13 @@ class Desk:
             ):
                 raise ValueError(f"Column '{name}' already exists")
             board.sections.append(Section(name=name))
+        elif op == "move_column":
+            # The column order is the order of the ## headings; the whole section moves with its cards.
+            index = _index(request.get("column"), len(board.sections), "column")
+            if board.sections[index].name != request.get("name"):
+                raise Conflict
+            position = _index(request.get("to_index"), len(board.sections), "to_index")
+            board.sections.insert(position, board.sections.pop(index))
         else:
             raise ValueError(f"Unknown operation: {op}")
 
@@ -5646,6 +5741,8 @@ class Desk:
                 self.reminders.delete(reminder)
         elif op == "reopen":
             raise ValueError("Completed reminders are not shown; reopen them in Reminders")
+        elif op == "move_column":
+            raise ValueError("The order of Reminders lists is set in the Reminders app")
         else:
             raise ValueError(f"Unknown operation: {op}")
 
@@ -5781,19 +5878,33 @@ class Desk:
     def canvas_choose(self) -> dict:
         """Ask for a .canvas file in the macOS open dialog: {"path": None} when cancelled,
         {"unavailable": True} without osascript (the page then asks for a path)."""
+        start = self.canvas_dir if self.canvas_dir.is_dir() else Path.home()
+        return self._choose(CHOOSE_CANVAS_SCRIPT, [str(start)])
+
+    def board_choose(self, create: bool) -> dict:
+        """The macOS save dialog for a new board (create) or the open dialog for an existing one.
+        Same answers as canvas_choose; a new board's path gets .md when the name has none."""
+        start = self.boards_dir if self.boards_dir.is_dir() else Path.home()
+        if create:
+            answer = self._choose(CHOOSE_NEW_BOARD_SCRIPT, [str(start), "board.md"])
+            if answer.get("path") and Path(answer["path"]).suffix.casefold() != ".md":
+                answer["path"] += ".md"
+            return answer
+        return self._choose(CHOOSE_BOARD_SCRIPT, [str(start)])
+
+    def _choose(self, script: tuple[str, ...], args: list[str]) -> dict:
         osascript = shutil.which("osascript")
         if osascript is None:
             return {"unavailable": True}
         if not self.choose_lock.acquire(blocking=False):
             raise ValueError("The file dialog is already open")
         try:
-            start = self.canvas_dir if self.canvas_dir.is_dir() else Path.home()
             command = [osascript]
-            for line in CHOOSE_CANVAS_SCRIPT:
+            for line in script:
                 command += ["-e", line]
             try:
                 result = subprocess.run(
-                    [*command, str(start)], capture_output=True, text=True, timeout=CHOOSE_TIMEOUT, check=False
+                    [*command, *args], capture_output=True, text=True, timeout=CHOOSE_TIMEOUT, check=False
                 )
             except subprocess.TimeoutExpired:
                 return {"path": None}
@@ -5804,6 +5915,34 @@ class Desk:
                 return {"path": None}
             raise ValueError("The file dialog failed: " + result.stderr.strip()[:300])
         return {"path": result.stdout.strip() or None}
+
+    def delete_board(self, raw: object) -> dict:
+        """Move a file board to the Trash; when it was open, the next recent (or folder, or default) board opens.
+
+        The last board is refused before anything moves, unless the Reminders layer can take its place.
+        """
+        text = _clean_text(raw)
+        path = board_file(text, boards_dir=self.boards_dir)
+        _refuse_default(path, self.config)
+        with self.lock:
+            is_open = self.path is not None and self.path.resolve() == path
+            default = _optional_board(self.config)
+            others = [
+                item
+                for item in [*self.recent(), *self.boards(), *([str(default)] if default else [])]
+                if Path(item).resolve() != path
+            ]
+            if is_open and not others and not reminders_available(self.settings["reminders"]):
+                raise ValueError("This is the only board; create another one before deleting it")
+            trash_board(text, self.config, self.boards_dir)
+            _write_json(self.directory / "recent.json", [item for item in self.recent() if item != str(path)])
+            if is_open:
+                self.path = Path(others[0]) if others else None
+                if self.path is None:
+                    self.layer = REMINDERS
+                else:
+                    self.remember()
+            return self.board_json()
 
     def switch(self, raw: object, create: bool) -> dict:
         text = _clean_text(raw)
@@ -5901,6 +6040,33 @@ def default_board(config: dict) -> Path:
             f"Kanban file not found: {path} (set todo.vault_path and todo.file, or pass a board.md)"
         )
     return path
+
+
+def _refuse_default(path: Path, config: dict) -> None:
+    default = _optional_board(config)
+    if default is not None and default.resolve() == path:
+        raise ValueError(f"{path} is the default board (todo.vault_path + todo.file); it is not deleted")
+
+
+def trash_board(raw: str, config: dict, boards_dir: Path) -> tuple[Path, Path]:
+    """Move a board to ~/.Trash (never deleted outright): (the board as resolved, its place in the Trash).
+
+    A board reached through a symlink loses only the link. The default board (todo.file) is refused:
+    `ul desk show/add/done` and the agent read it.
+    """
+    path = board_file(raw, boards_dir=boards_dir)
+    entry = Path(str(boards_dir / f"{raw}.md") if _bare_name(raw) else raw).expanduser().absolute()
+    if not entry.is_symlink():
+        entry = path
+    _refuse_default(path, config)
+    trash = Path.home() / ".Trash"
+    trash.mkdir(exist_ok=True)
+    target, number = trash / entry.name, 2
+    while target.exists() or target.is_symlink():
+        target = trash / f"{entry.stem} {number}{entry.suffix}"
+        number += 1
+    shutil.move(str(entry), str(target))
+    return path, target
 
 
 def _optional_board(config: dict) -> Path | None:
@@ -6196,6 +6362,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.desk.canvas_rename(body.get("path"), body.get("name")))
             elif path == "/api/canvas/choose":
                 self._json(200, self.desk.canvas_choose())
+            elif path == "/api/boards/delete":
+                self._json(200, self.desk.delete_board(body.get("path")))
+            elif path == "/api/boards/choose":
+                self._json(200, self.desk.board_choose(bool(body.get("create"))))
             elif path == "/api/game/start":
                 session = self.arcade.start(
                     body.get("game"), body.get("level"), body.get("rows"), body.get("cols")
@@ -7129,6 +7299,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             path = board_file(args[1], create=True, boards_dir=boards_dir)
             print(f"Board: {path}")
             return 0
+        if action == "rm" and len(args) == 2:
+            _, target = trash_board(args[1], config, boards_dir)
+            print(f"Moved to the Trash: {target}")
+            return 0
         if action == "path" and len(args) <= 2:
             print(board_file(args[1], boards_dir=boards_dir) if len(args) == 2 else default_board(config))
             return 0
@@ -7142,7 +7316,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _list_cli(args[1:], config, boards_dir)
         if action in {"add", "move", "done"}:
             return _change_cli(action, args[1:], config, boards_dir)
-        if action in {"new", "path", "stats"}:
+        if action in {"new", "rm", "path", "stats"}:
             print(USAGE, file=sys.stderr)
             return 2
         board, port, open_browser, reminders = _parse_serve(args)

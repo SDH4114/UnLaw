@@ -373,7 +373,7 @@ Example: ul tg send "Hello"
     "desk": '''Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser.
 Usage: ul desk [board] [--reminders] [--port N] [--no-open]
        ul desk list | show [board] | add <text> | move <n> <column> | done <n>
-       ul desk new <name> | path [board] | stats [board] | pomodoro [start|pause|stop|...]
+       ul desk new <name> | rm <board> | path [board] | stats [board] | pomodoro [...]
 Page:
   ul desk           Open the default board (todo.vault_path + todo.file) on 127.0.0.1
   [board]           A name = <desk.boards_dir>/<name>.md, or a path to any .md board
@@ -385,6 +385,7 @@ Terminal (for you and AI agents):
   move <n> <col>    Move card n; done <n> checks it and moves it to the Done column
                     add/move/done take -b <board>; without it the default board
   new <name>        Create a board with To do / Doing / Done
+  rm <board>        Move a board to the Trash (not the default board)
   stats, pomodoro   Focus statistics and the timer the page shows too
 The .md file is the source of truth: Obsidian, the page and these commands all
 see every change. Tabs on the page: Board, Today, Stats, Games, Studio, Canvas.

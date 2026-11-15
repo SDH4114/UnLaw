@@ -218,6 +218,23 @@ class DeskTests(unittest.TestCase):
                 self.change(**request)
         self.assertEqual(self.path.read_text(), before)
 
+    def test_move_column_keeps_cards_and_checks_the_name(self) -> None:
+        names = lambda: [column["name"] for column in self.desk.board_json()["columns"]]  # noqa: E731
+        before = names()
+        cards = self.desk.board_json()["columns"][0]["cards"]
+        self.change(op="move_column", column=0, name=before[0], to_index=len(before) - 1)
+        self.assertEqual(names(), [*before[1:], before[0]])
+        self.assertEqual(self.desk.board_json()["columns"][-1]["cards"], cards)
+        self.assertIn("Some note above the columns.", self.path.read_text())
+        self.change(op="move_column", column=len(before) - 1, name=before[0], to_index=0)
+        self.assertEqual(names(), before)
+        with self.assertRaises(Conflict):
+            self.change(op="move_column", column=0, name="Not this one", to_index=1)
+        for bad in ({"column": 9, "to_index": 0}, {"column": 0, "to_index": 9}, {"column": 0, "to_index": True}):
+            with self.subTest(request=bad), self.assertRaises(ValueError):
+                self.change(op="move_column", name=before[0], **bad)
+        self.assertEqual(names(), before)
+
     def test_switching_boards_creates_from_template_and_remembers_recent(self) -> None:
         other = self.root / "Project.md"
         with self.assertRaises(FileNotFoundError):
@@ -230,6 +247,70 @@ class DeskTests(unittest.TestCase):
         self.assertEqual(self.desk.recent(), [str(other.resolve())])
         with self.assertRaises(ValueError):
             self.desk.switch(str(self.root / "notes.txt"), create=True)
+
+
+class DeleteBoardTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.home = self.root / "home"
+        self.home.mkdir()
+        patcher = patch.dict(os.environ, {"HOME": str(self.home), "XDG_CONFIG_HOME": str(self.root / "config")})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.vault = self.root / "vault"
+        self.vault.mkdir()
+        self.default = self.vault / "TODO.md"
+        self.default.write_text(BOARD, encoding="utf-8")
+        self.boards = self.root / "boards"
+        self.boards.mkdir()
+        config = {
+            "todo": {"vault_path": str(self.vault), "file": "TODO.md", "completed_column": "Completed"},
+            "desk": {"boards_dir": str(self.boards), "reminders": False},
+        }
+        self.desk = Desk(self.default, config, self.root / "state")
+
+    def board(self, name: str) -> Path:
+        path = self.boards / f"{name}.md"
+        path.write_text("## " + name + "\n", encoding="utf-8")
+        return path
+
+    def test_deleting_the_open_board_trashes_it_and_opens_the_next(self) -> None:
+        work, ideas = self.board("Work"), self.board("Ideas")
+        self.desk.switch("Ideas", create=False)
+        self.desk.switch("Work", create=False)
+        board = self.desk.delete_board("Work")
+        self.assertFalse(work.exists())
+        self.assertEqual((self.home / ".Trash" / "Work.md").read_text(encoding="utf-8"), "## Work\n")
+        self.assertEqual(board["columns"][0]["name"], "Ideas", "the next recent board opens")
+        self.assertEqual(self.desk.path, ideas.resolve())
+        self.assertNotIn(str(work.resolve()), self.desk.recent())
+
+    def test_deleting_another_board_keeps_the_open_one(self) -> None:
+        self.board("Work")
+        self.desk.delete_board(str(self.boards / "Work.md"))
+        self.assertEqual(self.desk.path, self.default)
+        self.assertTrue((self.home / ".Trash" / "Work.md").is_file())
+
+    def test_default_board_and_last_board_are_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "default board"):
+            self.desk.delete_board(str(self.default))
+        self.assertTrue(self.default.is_file())
+        alone = Desk(self.board("Solo"), {"todo": {"vault_path": str(self.root / "none"), "file": "TODO.md"},
+                                          "desk": {"boards_dir": str(self.root / "empty"), "reminders": False}}, self.root / "s2")
+        with self.assertRaisesRegex(ValueError, "only board"):
+            alone.delete_board(str(self.boards / "Solo.md"))
+        self.assertTrue((self.boards / "Solo.md").is_file())
+
+    def test_a_symlinked_board_loses_only_the_link(self) -> None:
+        real = self.root / "real.md"
+        real.write_text("## Real\n", encoding="utf-8")
+        (self.boards / "Linked.md").symlink_to(real)
+        self.desk.delete_board("Linked")
+        self.assertTrue(real.is_file(), "the file behind the link stays")
+        self.assertFalse((self.boards / "Linked.md").is_symlink())
+        self.assertTrue((self.home / ".Trash" / "Linked.md").is_symlink())
 
 
 class PomodoroTests(unittest.TestCase):

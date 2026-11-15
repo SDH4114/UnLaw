@@ -410,6 +410,12 @@ LEGACY_NORMALIZED_HASHES["desk"].add("f1f4eafce6b482d1d0bbe7576f07461a88040efe4c
 # The logo build installed there, before the dark logo.
 LEGACY_SOURCE_HASHES["desk"].add("a2522ffb3f979645d870899936e9d28095271a46fe9b3cef6487a6e450095be7")
 LEGACY_NORMALIZED_HASHES["desk"].add("ad262bd7a55c8743f0e3fe2866ae743cc63827534b6167444d44349a7aa6a065")
+# Desk seed of 3.19.1 (9640631, also installed there), before moving columns and the board file dialogs.
+LEGACY_SOURCE_HASHES["desk"].add("040a986c41c45ffc0961099b07ea9a22c52e971686e9a92e7407dcef631ddf32")
+LEGACY_NORMALIZED_HASHES["desk"].add("396114d388df79d3c886f88dc371183b9e53a2f6a302949e808ebae1baae1272")
+# The 3.19.2 dev build installed there (column drag, board dialogs), before deleting boards.
+LEGACY_SOURCE_HASHES["desk"].add("6ce11f65058d03e607792cb6e02897670cbc482768d82f4df32079e1d5f6e721")
+LEGACY_NORMALIZED_HASHES["desk"].add("ce2d61a61d91bbe3fd9e6dae618ccc3dde908299aadf6dde7a675c386432c38f")
 
 # Commands now built into the Rust core, or removed (`todo`, replaced by
 # `ul desk`). Untouched seeds with these hashes are removed so the built-in

@@ -46,7 +46,7 @@ from .reminders import REMINDERS, Reminders, boards_folder, reminders_available
 USAGE = (
     "Usage: ul desk [board] [--reminders] [--port N] [--no-open] | list [--json] | "
     "show [board] [--reminders] [--json] | add <text> [--column C] [-b board] | "
-    "move <n> <column> [-b board] | done <n> [-b board] | new <name> | path [board] | stats [board] | "
+    "move <n> <column> [-b board] | done <n> [-b board] | new <name> | rm <board> | path [board] | stats [board] | "
     "pomodoro [status|start [minutes] [--card <text>]|pause|resume|stop|skip]"
 )
 PHASES = {
@@ -65,6 +65,22 @@ CHOOSE_CANVAS_SCRIPT = (
     "on run argv",
     "activate",
     'set chosen to choose file with prompt "Open a canvas" of type {"canvas"} default location (POSIX file (item 1 of argv))',
+    "return POSIX path of chosen",
+    "end run",
+)
+# The macOS dialogs for "New board…" (save dialog, argv[2] = suggested name) and "Open another board…";
+# argv[1] is the folder they start in.
+CHOOSE_NEW_BOARD_SCRIPT = (
+    "on run argv",
+    "activate",
+    'set chosen to choose file name with prompt "New board" default name (item 2 of argv) default location (POSIX file (item 1 of argv))',
+    "return POSIX path of chosen",
+    "end run",
+)
+CHOOSE_BOARD_SCRIPT = (
+    "on run argv",
+    "activate",
+    'set chosen to choose file with prompt "Open a board" of type {"md", "net.daringfireball.markdown"} default location (POSIX file (item 1 of argv))',
     "return POSIX path of chosen",
     "end run",
 )
@@ -591,6 +607,13 @@ class Desk:
             ):
                 raise ValueError(f"Column '{name}' already exists")
             board.sections.append(Section(name=name))
+        elif op == "move_column":
+            # The column order is the order of the ## headings; the whole section moves with its cards.
+            index = _index(request.get("column"), len(board.sections), "column")
+            if board.sections[index].name != request.get("name"):
+                raise Conflict
+            position = _index(request.get("to_index"), len(board.sections), "to_index")
+            board.sections.insert(position, board.sections.pop(index))
         else:
             raise ValueError(f"Unknown operation: {op}")
 
@@ -625,6 +648,8 @@ class Desk:
                 self.reminders.delete(reminder)
         elif op == "reopen":
             raise ValueError("Completed reminders are not shown; reopen them in Reminders")
+        elif op == "move_column":
+            raise ValueError("The order of Reminders lists is set in the Reminders app")
         else:
             raise ValueError(f"Unknown operation: {op}")
 
@@ -760,19 +785,33 @@ class Desk:
     def canvas_choose(self) -> dict:
         """Ask for a .canvas file in the macOS open dialog: {"path": None} when cancelled,
         {"unavailable": True} without osascript (the page then asks for a path)."""
+        start = self.canvas_dir if self.canvas_dir.is_dir() else Path.home()
+        return self._choose(CHOOSE_CANVAS_SCRIPT, [str(start)])
+
+    def board_choose(self, create: bool) -> dict:
+        """The macOS save dialog for a new board (create) or the open dialog for an existing one.
+        Same answers as canvas_choose; a new board's path gets .md when the name has none."""
+        start = self.boards_dir if self.boards_dir.is_dir() else Path.home()
+        if create:
+            answer = self._choose(CHOOSE_NEW_BOARD_SCRIPT, [str(start), "board.md"])
+            if answer.get("path") and Path(answer["path"]).suffix.casefold() != ".md":
+                answer["path"] += ".md"
+            return answer
+        return self._choose(CHOOSE_BOARD_SCRIPT, [str(start)])
+
+    def _choose(self, script: tuple[str, ...], args: list[str]) -> dict:
         osascript = shutil.which("osascript")
         if osascript is None:
             return {"unavailable": True}
         if not self.choose_lock.acquire(blocking=False):
             raise ValueError("The file dialog is already open")
         try:
-            start = self.canvas_dir if self.canvas_dir.is_dir() else Path.home()
             command = [osascript]
-            for line in CHOOSE_CANVAS_SCRIPT:
+            for line in script:
                 command += ["-e", line]
             try:
                 result = subprocess.run(
-                    [*command, str(start)], capture_output=True, text=True, timeout=CHOOSE_TIMEOUT, check=False
+                    [*command, *args], capture_output=True, text=True, timeout=CHOOSE_TIMEOUT, check=False
                 )
             except subprocess.TimeoutExpired:
                 return {"path": None}
@@ -783,6 +822,34 @@ class Desk:
                 return {"path": None}
             raise ValueError("The file dialog failed: " + result.stderr.strip()[:300])
         return {"path": result.stdout.strip() or None}
+
+    def delete_board(self, raw: object) -> dict:
+        """Move a file board to the Trash; when it was open, the next recent (or folder, or default) board opens.
+
+        The last board is refused before anything moves, unless the Reminders layer can take its place.
+        """
+        text = _clean_text(raw)
+        path = board_file(text, boards_dir=self.boards_dir)
+        _refuse_default(path, self.config)
+        with self.lock:
+            is_open = self.path is not None and self.path.resolve() == path
+            default = _optional_board(self.config)
+            others = [
+                item
+                for item in [*self.recent(), *self.boards(), *([str(default)] if default else [])]
+                if Path(item).resolve() != path
+            ]
+            if is_open and not others and not reminders_available(self.settings["reminders"]):
+                raise ValueError("This is the only board; create another one before deleting it")
+            trash_board(text, self.config, self.boards_dir)
+            _write_json(self.directory / "recent.json", [item for item in self.recent() if item != str(path)])
+            if is_open:
+                self.path = Path(others[0]) if others else None
+                if self.path is None:
+                    self.layer = REMINDERS
+                else:
+                    self.remember()
+            return self.board_json()
 
     def switch(self, raw: object, create: bool) -> dict:
         text = _clean_text(raw)
@@ -880,6 +947,33 @@ def default_board(config: dict) -> Path:
             f"Kanban file not found: {path} (set todo.vault_path and todo.file, or pass a board.md)"
         )
     return path
+
+
+def _refuse_default(path: Path, config: dict) -> None:
+    default = _optional_board(config)
+    if default is not None and default.resolve() == path:
+        raise ValueError(f"{path} is the default board (todo.vault_path + todo.file); it is not deleted")
+
+
+def trash_board(raw: str, config: dict, boards_dir: Path) -> tuple[Path, Path]:
+    """Move a board to ~/.Trash (never deleted outright): (the board as resolved, its place in the Trash).
+
+    A board reached through a symlink loses only the link. The default board (todo.file) is refused:
+    `ul desk show/add/done` and the agent read it.
+    """
+    path = board_file(raw, boards_dir=boards_dir)
+    entry = Path(str(boards_dir / f"{raw}.md") if _bare_name(raw) else raw).expanduser().absolute()
+    if not entry.is_symlink():
+        entry = path
+    _refuse_default(path, config)
+    trash = Path.home() / ".Trash"
+    trash.mkdir(exist_ok=True)
+    target, number = trash / entry.name, 2
+    while target.exists() or target.is_symlink():
+        target = trash / f"{entry.stem} {number}{entry.suffix}"
+        number += 1
+    shutil.move(str(entry), str(target))
+    return path, target
 
 
 def _optional_board(config: dict) -> Path | None:
@@ -1175,6 +1269,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.desk.canvas_rename(body.get("path"), body.get("name")))
             elif path == "/api/canvas/choose":
                 self._json(200, self.desk.canvas_choose())
+            elif path == "/api/boards/delete":
+                self._json(200, self.desk.delete_board(body.get("path")))
+            elif path == "/api/boards/choose":
+                self._json(200, self.desk.board_choose(bool(body.get("create"))))
             elif path == "/api/game/start":
                 session = self.arcade.start(
                     body.get("game"), body.get("level"), body.get("rows"), body.get("cols")
@@ -2108,6 +2206,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             path = board_file(args[1], create=True, boards_dir=boards_dir)
             print(f"Board: {path}")
             return 0
+        if action == "rm" and len(args) == 2:
+            _, target = trash_board(args[1], config, boards_dir)
+            print(f"Moved to the Trash: {target}")
+            return 0
         if action == "path" and len(args) <= 2:
             print(board_file(args[1], boards_dir=boards_dir) if len(args) == 2 else default_board(config))
             return 0
@@ -2121,7 +2223,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _list_cli(args[1:], config, boards_dir)
         if action in {"add", "move", "done"}:
             return _change_cli(action, args[1:], config, boards_dir)
-        if action in {"new", "path", "stats"}:
+        if action in {"new", "rm", "path", "stats"}:
             print(USAGE, file=sys.stderr)
             return 2
         board, port, open_browser, reminders = _parse_serve(args)

@@ -79,7 +79,7 @@ function harness() {
       renderCanvas, cvDown, cvMove, cvUp, cvWheel, cvSetTool, cvEndEdit, cvSelect, cvGroup, cvExport, paintScene, cvPalette,
       fillable, fillTarget, applyFill, setBackground, cvBackground, canvasKey, cvStyle, cvNew, cvRename, cvChoose, CV_BY_KEY,
       floodRegion, growMask, traceMask, paintFromMask, paintContains, cutElement, eraseAt, cvBucket, cvToolClick,
-      widthToSlider, sliderToWidth, cvStepWidth, cvBuildBar, cvTypedWidth, loadBoards, applyTheme};
+      widthToSlider, sliderToWidth, cvStepWidth, cvBuildBar, cvTypedWidth, loadBoards, applyTheme, newBoard, openOtherBoard, renderBoard, deleteBoard};
   `, context);
   return {context, a: context.audit, listeners, timers, intervals, frames, ids,
     run: code => vm.runInContext(code, context)};
@@ -984,10 +984,85 @@ const tests = {
   const [trigger, menu] = h.ids.get('boards').children;
   assert.equal(trigger.children[0].textContent, 'TODO', 'the button names the open board');
   const rows = menu.children.map(node => node.className === 'sep' ? '---' : node.children[0].textContent);
-  assert.deepEqual(rows, ['Reminders', 'TODO', 'Ideas', 'Games', '---', 'New board…', 'Open another board…'],
+  assert.deepEqual(rows, ['Reminders', 'TODO', 'Ideas', 'Games', '---', 'New board…', 'Open another board…', 'Delete this board…'],
     'Reminders, recent and folder boards share one list without group headings, each board once');
   assert.equal(menu.children[1].className, 'on', 'the open board is marked');
   assert.equal(menu.children[1].children[1].textContent, 'work', 'with its folder under the name');
+ },
+ async board_dialogs() {
+  const h = harness(), calls = [];
+  let picked = {path: '/picked/Plan.md'};
+  h.context.fetch = async (path, options) => {
+    const body = options && options.body ? JSON.parse(options.body) : null;
+    calls.push([path, body]);
+    if (path === '/api/boards/choose') return response(picked);
+    if (path === '/api/boards' && body) return {status: 400, json: async () => ({error: 'not opened in this test'})};
+    return response({boards: [], recent: []});
+  };
+  h.context.prompt = () => { throw Error('no prompt while the dialog works'); };
+  await h.a.newBoard();
+  assert.deepEqual(calls[0], ['/api/boards/choose', {create: true}], 'New board asks for the save dialog');
+  assert.deepEqual(calls[1], ['/api/boards', {path: '/picked/Plan.md', create: true}], 'and creates the picked file');
+  calls.length = 0;
+  await h.a.openOtherBoard();
+  assert.deepEqual(calls[0], ['/api/boards/choose', {create: false}]);
+  assert.deepEqual(calls[1], ['/api/boards', {path: '/picked/Plan.md', create: false}]);
+  calls.length = 0;
+  picked = {path: null};
+  await h.a.newBoard();
+  assert.deepEqual(calls.map(([path]) => path), ['/api/boards/choose'], 'Cancel opens nothing');
+  calls.length = 0;
+  picked = {unavailable: true};
+  h.context.prompt = () => 'Ideas';
+  await h.a.newBoard();
+  assert.deepEqual(calls[1], ['/api/boards', {path: 'Ideas', create: true}], 'without the dialog the page asks for a name');
+ },
+ async delete_board_asks_first() {
+  const h = harness(), calls = [];
+  h.context.fetch = async (path, options) => {
+    calls.push([path, options && options.body ? JSON.parse(options.body) : null]);
+    return {status: 400, json: async () => ({error: 'the default board'})};
+  };
+  h.context.confirm = () => false;
+  await h.a.deleteBoard('/c/boards/Work.md', 'Work');
+  assert.equal(calls.length, 0, 'No in the dialog deletes nothing');
+  h.context.confirm = () => true;
+  await h.a.deleteBoard('/c/boards/Work.md', 'Work');
+  assert.deepEqual(calls[0], ['/api/boards/delete', {path: '/c/boards/Work.md'}]);
+  assert.equal(h.ids.get('toast').textContent, 'the default board', 'a refusal is shown');
+ },
+ async columns_move_by_dragging_the_heading() {
+  const h = harness(), sent = [];
+  const Element = h.context.Node;
+  Element.prototype.addEventListener = function (type, fn) { (this.on = this.on || {})[type] = fn; };
+  const columns = ['To do', 'Doing', 'Done'].map(name => ({name, doing: false, cards: []}));
+  h.a.state.board = {version: 'v1', layer: 'file', today: '2026-11-13', done_column: 'Done', columns};
+  h.context.fetch = async (path, options) => { sent.push(JSON.parse(options.body)); return {status: 400, json: async () => ({error: 'kept'})}; };
+  const main = new Element();
+  h.a.renderBoard(main);
+  const sections = main.children[0].children.filter(node => node.tagName === 'DIV' && node.children[0] && node.children[0].on && node.children[0].on.dragstart);
+  assert.equal(sections.length, 3, 'every column heading can be dragged');
+  sections.forEach((node, i) => { node.getBoundingClientRect = () => ({left: i * 300, width: 300}); });
+  const drag = (from, to, x) => {
+    const event = {clientX: x, offsetX: 0, offsetY: 0, preventDefault() {}, dataTransfer: {setData() {}, setDragImage() {}}};
+    sections[from].children[0].on.dragstart(event);
+    sections[to].on.dragover(event);
+    sections[to].on.drop(event);
+  };
+  drag(0, 2, 800);
+  assert.deepEqual(sent.at(-1), {op: 'move_column', column: 0, name: 'To do', to_index: 2, version: 'v1'}, 'right half of the last column = to the end');
+  drag(2, 0, 10);
+  assert.deepEqual(sent.at(-1), {op: 'move_column', column: 2, name: 'Done', to_index: 0, version: 'v1'}, 'left half of the first column = to the start');
+  const before = sent.length;
+  drag(1, 0, 290);
+  drag(1, 2, 610);
+  assert.equal(sent.length, before, 'dropping next to its own place sends nothing');
+  assert.equal(h.a.state.draggingColumn, null);
+  h.a.state.board = {...h.a.state.board, layer: 'reminders'};
+  const again = new Element();
+  h.a.renderBoard(again);
+  assert.equal(again.children[0].children.some(node => node.children[0] && node.children[0].on && node.children[0].on.dragstart), false,
+    'Reminders lists keep their order');
  },
  async favicon_follows_the_page_theme() {
   const h = harness();

@@ -71,6 +71,7 @@ header > :not(.tabs) { margin-bottom: 8px; }
 .picker .menu button.on .label { font-weight: 600; }
 .picker .menu button.action { color: var(--muted); }
 .picker .menu button.action:hover { color: var(--text); }
+.picker .menu button.action.danger:hover { color: var(--danger); }
 .picker .menu .sep { height: 1px; background: var(--line); margin: 4px 0; }
 .tabs { display: flex; gap: 4px; align-self: stretch; align-items: stretch; }
 .tabs button { border: none; background: transparent; padding: 0 10px 8px; border-radius: 0; color: var(--muted); font-weight: 550; box-shadow: inset 0 -2px 0 transparent; }
@@ -122,6 +123,10 @@ main { flex: 1; overflow: auto; }
 .card { background: var(--panel); border-radius: 8px; box-shadow: var(--shadow); padding: 9px 10px; margin-bottom: 7px; display: flex; gap: 9px; align-items: flex-start; cursor: grab; position: relative; border: 1px solid var(--line); transition: border-color .12s; }
 .card:hover { border-color: color-mix(in srgb, var(--text) 22%, var(--line)); }
 .card.dragging { opacity: .4; }
+.column.dragging { opacity: .4; }
+.column h2[draggable="true"] { cursor: grab; }
+.column.col-before { box-shadow: -3px 0 0 var(--accent-ink); }
+.column.col-after { box-shadow: 3px 0 0 var(--accent-ink); }
 .card.focus { border-color: var(--energy); box-shadow: inset 2px 0 0 var(--energy); }
 .card.checked .text { color: var(--muted); text-decoration: line-through; }
 .card .check { width: 18px; height: 18px; border-radius: 50%; border: 1.6px solid color-mix(in srgb, var(--muted) 70%, transparent); flex: 0 0 17px; margin-top: 1px; padding: 0; background: transparent; position: relative; }
@@ -384,7 +389,7 @@ if (params.get("token")) {
 }
 const TOKEN = sessionStorage.getItem("desk-token") || "";
 const VIEWS = ["board", "today", "stats", "games", "studio", "canvas"];
-const state = { board: null, view: VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : localStorage.getItem("desk-view") || "board", query: "", tag: "", timer: null, timerAt: 0, editing: null, dragging: null, stats: null };
+const state = { board: null, view: VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : localStorage.getItem("desk-view") || "board", query: "", tag: "", timer: null, timerAt: 0, editing: null, dragging: null, draggingColumn: null, stats: null };
 if (!VIEWS.includes(state.view)) state.view = "board";
 const $ = (id) => document.getElementById(id);
 
@@ -612,20 +617,58 @@ function renderBoard(main) {
       if (event.key === "Escape") input.blur();
     });
     const done = column.name === board.done_column;
-    const node = h("section", { class: "column" + (column.doing ? " doing" : "") + (done ? " done" : "") },
-      h("h2", {}, h("span", { class: "name", text: column.name, title: column.name }),
+    const movable = board.layer !== "reminders";
+    const heading = h("h2", { draggable: movable ? "true" : null, title: movable ? "Drag to move the column" : null }, h("span", { class: "name", text: column.name, title: column.name }),
         h("span", { class: "count", text: state.query || state.tag ? shown + "/" + column.cards.length : column.cards.length }),
-        h("button", { title: "Add a card to " + column.name, text: "+", onclick: () => input.focus() })),
+        h("button", { title: "Add a card to " + column.name, text: "+", onclick: () => input.focus() }));
+    const node = h("section", { class: "column" + (column.doing ? " doing" : "") + (done ? " done" : "") }, heading,
       list, h("div", { class: "add" }, input));
+    if (movable) {
+      heading.addEventListener("dragstart", (event) => {
+        state.draggingColumn = c;
+        node.classList.add("dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", column.name);
+        event.dataTransfer.setDragImage(node, event.offsetX, event.offsetY);
+      });
+      heading.addEventListener("dragend", () => {
+        state.draggingColumn = null;
+        node.classList.remove("dragging");
+        for (const other of wrap.querySelectorAll(".column")) other.classList.remove("col-before", "col-after");
+      });
+    }
+    // Which side of this column a dragged column lands on: the left or right half under the pointer.
+    const columnSide = (event) => {
+      const box = node.getBoundingClientRect();
+      return event.clientX < box.left + box.width / 2 ? "before" : "after";
+    };
     node.addEventListener("dragover", (event) => {
+      if (state.draggingColumn != null) {
+        event.preventDefault();
+        const side = state.draggingColumn === c ? null : columnSide(event);
+        node.classList.toggle("col-before", side === "before");
+        node.classList.toggle("col-after", side === "after");
+        return;
+      }
       if (!state.dragging) return;
       event.preventDefault();
       node.classList.add("drop");
     });
-    node.addEventListener("dragleave", (event) => { if (!node.contains(event.relatedTarget)) node.classList.remove("drop"); });
+    node.addEventListener("dragleave", (event) => {
+      if (node.contains(event.relatedTarget)) return;
+      node.classList.remove("drop", "col-before", "col-after");
+    });
     node.addEventListener("drop", (event) => {
       event.preventDefault();
-      node.classList.remove("drop");
+      node.classList.remove("drop", "col-before", "col-after");
+      if (state.draggingColumn != null) {
+        const from = state.draggingColumn;
+        state.draggingColumn = null;
+        let to = columnSide(event) === "before" ? c : c + 1;
+        if (from < to) to -= 1;
+        if (from !== to) change({ op: "move_column", column: from, name: board.columns[from].name, to_index: to });
+        return;
+      }
       const from = state.dragging;
       if (!from) return;
       let to = dropIndex(list, event.clientY);
@@ -1725,6 +1768,7 @@ async function loadBoards() {
     menu.append(boardItem(label.name, label.where, path === data.current, () => switchBoard(path)));
   }
   menu.append(h("div", { class: "sep" }), boardItem("New board…", "", false, newBoard, "action"), boardItem("Open another board…", "", false, openOtherBoard, "action"));
+  if (data.current && data.current !== REMINDERS) menu.append(boardItem("Delete this board…", shown.name + " goes to the Trash", false, () => deleteBoard(data.current, shown.name), "action danger"));
   const root = $("boards");
   root.textContent = "";
   root.append(trigger, menu);
@@ -1741,12 +1785,40 @@ async function switchBoard(path, create) {
   loadBoards();
 }
 
-function newBoard() {
+// New/Open show the macOS save/open dialog (through the server); without osascript the page asks for a name or path.
+async function chooseBoard(create) {
+  closeBoards(false);
+  const { status, data } = await api("POST", "/api/boards/choose", { create });
+  if (status !== 200) { toast(data.error || "Could not show the file dialog"); return null; }
+  return data;
+}
+
+async function newBoard() {
+  const data = await chooseBoard(true);
+  if (!data) return;
+  if (data.path) return switchBoard(data.path, true);
+  if (!data.unavailable) return;
   const name = prompt("Name of the new board. It is saved in\n" + boardsDir + "\n(desk.boards_dir; a full path to a .md file works too)", "");
   if (name && name.trim()) switchBoard(name.trim(), true);
 }
 
-function openOtherBoard() {
+// The file goes to the Trash (the server refuses the default board); the next board opens.
+async function deleteBoard(path, name) {
+  closeBoards(false);
+  if (!confirm("Move the board \"" + name + "\" to the Trash?\n\n" + path)) return;
+  const { status, data } = await api("POST", "/api/boards/delete", { path });
+  if (status !== 200) { toast(data.error || "Could not delete the board"); return; }
+  state.tag = "";
+  setBoard(data);
+  loadBoards();
+  toast("Moved " + name + " to the Trash");
+}
+
+async function openOtherBoard() {
+  const data = await chooseBoard(false);
+  if (!data) return;
+  if (data.path) return switchBoard(data.path);
+  if (!data.unavailable) return;
   const path = prompt("Path to a Kanban board (.md), or the name of a board in " + boardsDir + ". A missing file can be created.", "~/");
   if (path && path.trim()) switchBoard(path.trim());
 }
@@ -4138,7 +4210,7 @@ async function start() {
   if (!TOKEN) { document.body.textContent = "Open the desk with `ul desk`: this page needs its token."; return; }
   await Promise.all([loadBoard(true), loadBoards(), loadTimer(), loadGames(), loadStudioInfo()]);
   render();
-  setInterval(() => { if (!document.hidden && !state.dragging && !state.editing && !["games", "studio", "canvas"].includes(state.view)) loadBoard(false); }, 2000);
+  setInterval(() => { if (!document.hidden && !state.dragging && state.draggingColumn == null && !state.editing && !["games", "studio", "canvas"].includes(state.view)) loadBoard(false); }, 2000);
   setInterval(pollCanvas, 3000);
   setInterval(() => { if (!document.hidden) loadTimer(); }, 10000);
   setInterval(() => { if (!document.hidden && state.view === "games" && arcade.session) loadGames(); }, 5000);

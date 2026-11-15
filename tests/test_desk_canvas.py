@@ -717,6 +717,44 @@ class CanvasFileActionTests(ServerTests):
             self.assertEqual(self.request("POST", "/api/canvas/choose", {}), (200, {"unavailable": True}))
 
 
+class BoardChooseTests(ServerTests):
+    def fake_osascript(self, script: str) -> Path:
+        tools = self.root / "bin"
+        tools.mkdir(exist_ok=True)
+        fake = tools / "osascript"
+        fake.write_text("#!/bin/sh\n" + script)
+        fake.chmod(0o755)
+        return tools
+
+    def test_new_board_uses_the_save_dialog_in_the_boards_folder_and_adds_md(self) -> None:
+        self.desk.boards_dir.mkdir(parents=True)
+        log = self.root / "args"
+        tools = self.fake_osascript(f'for a in "$@"; do echo "$a" >> {log}; done\necho /picked/Plan\n')
+        with patch.dict(os.environ, {"PATH": str(tools)}):
+            status, data = self.request("POST", "/api/boards/choose", {"create": True})
+        self.assertEqual((status, data), (200, {"path": "/picked/Plan.md"}))
+        args = log.read_text().splitlines()
+        self.assertEqual(args[-2:], [str(self.desk.boards_dir), "board.md"])
+        self.assertIn("choose file name", " ".join(args))
+
+    def test_open_board_uses_the_open_dialog_and_keeps_md(self) -> None:
+        log = self.root / "args"
+        tools = self.fake_osascript(f'for a in "$@"; do echo "$a" >> {log}; done\necho /picked/Work.MD\n')
+        with patch.dict(os.environ, {"PATH": str(tools)}):
+            status, data = self.request("POST", "/api/boards/choose", {})
+        self.assertEqual((status, data), (200, {"path": "/picked/Work.MD"}))
+        args = log.read_text().splitlines()
+        self.assertEqual(args[-1], str(self.root / "home"))  # no boards folder yet
+        self.assertNotIn("choose file name", " ".join(args))
+
+    def test_cancel_and_no_osascript(self) -> None:
+        tools = self.fake_osascript('echo "execution error: User canceled. (-128)" >&2\nexit 1\n')
+        with patch.dict(os.environ, {"PATH": str(tools)}):
+            self.assertEqual(self.request("POST", "/api/boards/choose", {"create": True}), (200, {"path": None}))
+        with patch.dict(os.environ, {"PATH": str(self.root / "empty")}):
+            self.assertEqual(self.request("POST", "/api/boards/choose", {"create": True}), (200, {"unavailable": True}))
+
+
 class SeedNameCollisionTests(unittest.TestCase):
     """Seeds concatenate several modules into one main.py: a top-level name defined twice silently wins for the later file."""
 

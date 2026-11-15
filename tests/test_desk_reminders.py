@@ -322,6 +322,32 @@ class SeedReminderTests(unittest.TestCase):
         )
         self.assertEqual(self.run_seed("new", "Work").returncode, 2)
 
+    def test_rm_moves_a_board_to_the_trash_but_never_the_default_board(self) -> None:
+        self.assertEqual(self.run_seed("new", "Work").returncode, 0)
+        self.assertEqual(self.run_seed("new", "Work 2").returncode, 0)
+        trash = self.root / "home" / ".Trash"
+        trash.mkdir(parents=True)
+        (trash / "Work.md").write_text("older\n", encoding="utf-8")
+        result = self.run_seed("rm", "Work")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root / "config" / "unlaw" / "boards" / "Work.md").exists())
+        self.assertEqual((trash / "Work.md").read_text(encoding="utf-8"), "older\n", "nothing in the Trash is overwritten")
+        self.assertTrue((trash / "Work 2.md").is_file())
+        self.assertIn(str(trash / "Work 2.md"), result.stdout)
+        self.assertEqual(self.run_seed("rm", "Work").returncode, 2, "a missing board is an error")
+        self.assertEqual(self.run_seed("rm").returncode, 2)
+        vault = self.root / "vault"
+        vault.mkdir()
+        (vault / "TODO.md").write_text("## To do\n", encoding="utf-8")
+        from unlawful.config import set_config_value
+
+        with patch.dict(os.environ, self.env):
+            set_config_value("todo.vault_path", str(vault))
+        refused = self.run_seed("rm", str(vault / "TODO.md"))
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("default board", refused.stderr)
+        self.assertTrue((vault / "TODO.md").is_file())
+
     def test_configured_boards_folder(self) -> None:
         from unlawful.config import set_config_value
 

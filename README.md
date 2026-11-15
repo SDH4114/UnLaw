@@ -575,12 +575,18 @@ No generator overwrites an existing directory.
 ## Desk: board, today and pomodoro in the browser
 
 `ul desk` opens the same board in the browser: drag cards between columns,
-double-click to edit, check them off (they move to `todo.completed_column`), and
+drag a column by its heading to reorder columns (file boards; Reminders keeps
+its own list order), double-click to edit, check them off (they move to `todo.completed_column`), and
 filter by `#tag` or search. Cards understand Obsidian Kanban markup: `#tags`,
 due dates `@{2026-11-01}` (quick add: `@today`, `@tomorrow`, `@завтра`, `@+3`)
 and `[[note]]` links that open in Obsidian. The Today view lists overdue cards,
 cards due today, cards in a Doing column and the next seven days; Stats shows
 focus sessions, finished tasks, the day streak and the cards you focused on most.
+"New board…" in the board menu opens the macOS save dialog in `desk.boards_dir`
+(a name without `.md` gets it), "Open another board…" the open dialog; without
+`osascript` the page asks for a name or path instead. "Delete this board…" moves
+the open board to the macOS Trash (`ul desk rm <board>` does the same from the
+terminal); the default board (`todo.file`) is never deleted.
 
 ```bash
 ul desk                                  # the default board (todo.vault_path + todo.file)
@@ -588,6 +594,7 @@ ul desk Work                             # <desk.boards_dir>/Work.md
 ul desk ~/notes/Project.md --no-open     # any Kanban .md file
 ul desk --reminders                      # Apple Reminders: lists are columns
 ul desk new Plan                         # a new board: To do / Doing / Done
+ul desk rm Plan                          # move a board to the Trash
 ul desk pomodoro start 50 --card "Write chapter 3"
 ul desk pomodoro                         # status; also pause, resume, skip, stop
 ul desk stats
