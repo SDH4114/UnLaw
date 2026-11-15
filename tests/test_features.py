@@ -299,3 +299,62 @@ class FeatureCommandTests(CoreTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InstallerShellTests(CoreTestCase):
+    """install.sh end to end with a fake cargo that installs the real test binary."""
+
+    def install(self, path_before: str = "") -> subprocess.CompletedProcess[str]:
+        from ulbin import binary
+
+        installed = self.root / "installed"
+        self.tool("cargo", f"""#!/bin/sh
+echo "$*" >> '{self.root / "cargo.log"}'
+root=""
+while [ $# -gt 0 ]; do
+    [ "$1" = --root ] && root="$2"
+    last="$1"
+    shift
+done
+mkdir -p "$root/bin"
+[ "$last" != unlaw ] || cp '{binary()}' "$root/bin/ul"
+""")
+        self.tool("xcode-select", "#!/bin/sh\necho /Library/Developer/CommandLineTools\n")
+        for name, target in {"sh": "/bin/sh", "cat": "/bin/cat", "sed": "/usr/bin/sed", "mkdir": "/bin/mkdir",
+                             "cp": "/bin/cp", "python3.14": sys.executable}.items():
+            (self.bin / name).symlink_to(target)
+        return subprocess.run(
+            ["/bin/sh", str(ROOT / "install.sh")], capture_output=True, text=True, timeout=120,
+            env={**self.env, "PATH": f"{path_before}{self.bin}", "UNLAW_FEATURES": "none",
+                 "UNLAW_INSTALL_ROOT": str(installed)},
+        )
+
+    def test_install_puts_unlaw_before_the_system_ul(self) -> None:
+        # macOS has /usr/bin/ul (an underline filter): without the PATH line `ul` hung on stdin.
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        zshrc = (self.home / ".zshrc").read_text()
+        self.assertIn(f'export PATH="{self.root / "installed" / "bin"}:$PATH"', zshrc)
+        self.assertIn("Unlaw shell integration", zshrc)
+        self.assertLess(zshrc.index("export PATH"), zshrc.index("Unlaw shell integration"))
+        self.assertIn("Open a new terminal window", result.stdout)
+        self.assertNotIn("Run: ul doctor --fix", result.stdout)
+
+    def test_install_leaves_zshrc_alone_when_path_is_already_right(self) -> None:
+        result = self.install(path_before=f"{self.root / 'installed' / 'bin'}:")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("export PATH", (self.home / ".zshrc").read_text())
+        self.assertNotIn("Open a new terminal window", result.stdout)
+
+    def test_missing_command_line_tools_stop_before_rust(self) -> None:
+        self.tool("cargo", f"#!/bin/sh\necho called > '{self.root / 'cargo.log'}'\n")
+        self.tool("curl", f"#!/bin/sh\necho called > '{self.root / 'curl.log'}'\nexit 22\n")
+        self.tool("xcode-select", "#!/bin/sh\nexit 2\n")
+        for name, target in {"sh": "/bin/sh", "cat": "/bin/cat", "sed": "/usr/bin/sed", "python3.14": sys.executable}.items():
+            (self.bin / name).symlink_to(target)
+        result = subprocess.run(["/bin/sh", str(ROOT / "install.sh")], capture_output=True, text=True, timeout=60,
+                                env={**self.env, "PATH": str(self.bin), "UNLAW_FEATURES": "none"})
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("xcode-select --install", result.stderr)
+        self.assertFalse((self.root / "cargo.log").exists())
+        self.assertFalse((self.root / "curl.log").exists())

@@ -16,7 +16,13 @@ is written in Rust and built with `cargo`; the installer sets up Rust through
 rustup if it is missing. Commands in `commands/` remain plain Python files, so
 Python 3.11+ is required (`brew install python`). The `ul`, `unlaw`, `ula` binaries
 and the `ule` editor are installed into `~/.local/bin`; the old uv-based Unlaw is
-removed automatically.
+removed automatically. Building needs the Xcode Command Line Tools
+(`xcode-select --install`). At the end the installer runs `ul doctor --fix`, which puts
+`~/.local/bin` before `/usr/bin` in `~/.zshrc` and adds the shell integration: macOS
+has its own `/usr/bin/ul` (an underline filter that silently waits for input), so open
+a new terminal window after installing. If `ul` seems to hang or `ul doctor` says
+`ul: doctor: No such file or directory`, that is the system `ul`; run
+`~/.local/bin/ul doctor --fix` and open a new window.
 
 ### Choosing features
 

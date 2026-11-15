@@ -196,6 +196,14 @@ selection=$(printf '%s\n' "$choice" | sed -n 1p)
 cargo_features=$(printf '%s\n' "$choice" | sed -n 2p)
 echo "Installing the core and: $selection"
 
+# cargo links with the system compiler; without the Command Line Tools /usr/bin/cc
+# is only a stub and the build fails late with "linker `cc` not found".
+if ! xcode-select -p >/dev/null 2>&1; then
+    echo "Unlaw installer: the Xcode Command Line Tools are required to build Unlaw." >&2
+    echo "Install them with: xcode-select --install, then run the installer again." >&2
+    exit 1
+fi
+
 if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
     PATH="$HOME/.cargo/bin:$PATH"
 fi
@@ -230,4 +238,29 @@ case " $selection " in
         fi
         ;;
 esac
-echo "Installed Unlaw into $root/bin. Change features later: ul features. Run: ul doctor --fix"
+# macOS ships its own /usr/bin/ul (an underline filter that waits on stdin), so
+# $root/bin must come before /usr/bin, or `ul` seems to hang and `ul doctor`
+# says "No such file or directory". doctor --fix adds the PATH line and the shell
+# integration to ~/.zshrc (only what is missing) and creates the data folders.
+echo "Setting up the shell (~/.zshrc)..."
+if ! "$root/bin/ul" doctor --fix; then
+    echo "Unlaw installer: some checks above need attention (ul doctor shows them again)." >&2
+fi
+echo "Installed Unlaw into $root/bin. Change features later: ul features."
+ready=no
+saved_ifs=$IFS
+IFS=:
+set -f
+for entry in $PATH; do
+    if [ "$entry" = "$root/bin" ]; then
+        ready=yes
+        break
+    fi
+    [ "$entry" != /usr/bin ] || break
+done
+set +f
+IFS=$saved_ifs
+if [ "$ready" = no ]; then
+    echo "Open a new terminal window (or run: exec zsh) before using ul: in this one"
+    echo "\`ul\` is still macOS' own /usr/bin/ul, not Unlaw."
+fi
