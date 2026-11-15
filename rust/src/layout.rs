@@ -210,6 +210,24 @@ pub fn ensure_layout() -> io::Result<PathBuf> {
     Ok(root)
 }
 
+
+/// The shipped help of a seeded command whose `main.py` is exactly the shipped seed.
+/// Every seed prints that same text for a lone `--help`/`-h` and exits, so ul can print
+/// it without starting Python (50-140 ms per call); an edited copy runs as usual.
+pub fn untouched_seed_help(command: &crate::commands::UserCommand) -> Option<&'static str> {
+    if command.kind != crate::commands::Kind::Python {
+        return None;
+    }
+    let (_, source, _, _) = SEEDS.iter().find(|(name, ..)| *name == command.name)?;
+    let help = crate::assets::SEED_HELP.iter().find(|(name, _)| *name == command.name)?.1;
+    // Same length first: an edited copy is usually rejected without reading it.
+    let meta = fs::metadata(&command.path).ok()?;
+    if meta.len() != source.len() as u64 {
+        return None;
+    }
+    (fs::read(&command.path).ok()? == source.as_bytes()).then_some(help)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

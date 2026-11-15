@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from tests.ulbin import CoreTestCase, binary
 
@@ -90,6 +91,27 @@ class CoreReviewTests(CoreTestCase):
         result = subprocess.run([str(binary()), "which-python"], env=env, cwd=self.root, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(mark.read_text().strip(), "3.15")
+
+    def test_help_of_an_untouched_seed_skips_python_and_an_edited_one_runs_it(self) -> None:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        from unlawful.command_help import COMMAND_HELP
+
+        log = self.root / "python.log"
+        self.tool("logpython", f"#!/bin/sh\necho \"$@\" >> {log}\nexec {sys.executable} \"$@\"\n")
+        env = {"UNLAW_PYTHON": str(self.bin / "logpython")}
+        self.ok("init")
+        for flag in ("--help", "-h"):
+            result = self.ul("timer", flag, env=env)
+            self.assertEqual((result.returncode, result.stdout), (0, COMMAND_HELP["timer"]))
+        self.assertFalse(log.exists(), "the untouched seed's help needs no Python")
+        self.ul("timer", "--help", "--json", env=env)
+        self.assertTrue(log.exists(), "anything but a lone --help/-h still runs the command")
+        log.unlink()
+        script = self.unlaw / "commands" / "timer" / "main.py"
+        script.write_text(script.read_text() + "\n# my change\n")
+        result = self.ul("timer", "--help", env=env)
+        self.assertEqual(result.stdout, COMMAND_HELP["timer"])
+        self.assertTrue(log.exists(), "an edited copy runs as itself")
 
     def test_sigterm_to_ul_reaches_the_command(self) -> None:
         # A `kill` of ul used to leave the command running as an orphan.
