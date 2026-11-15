@@ -761,6 +761,7 @@ import queue
 import re
 import select
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -784,6 +785,7 @@ RESULT_LIMIT = 12_000
 READ_LIMIT = 200_000
 TELEGRAM_LIMIT = 4000
 OLD_RESULT_LIMIT = 1500
+AUDIT_LIMIT = 2_000_000
 # Never readable or writable, whatever agent.roots says.
 # macOS disks ignore case, so every comparison below is casefolded:
 # ~/.SSH/id_ed25519 opens the same file as ~/.ssh/id_ed25519.
@@ -798,6 +800,38 @@ DENIED_HOME_PATHS = (
     "Library/Keychains",
     "Library/Cookies",
     "Library/Messages",
+    # Logins of other agents and cloud tools.
+    ".claude/.credentials.json",
+    ".claude.json",
+    ".codex/auth.json",
+    ".gemini",
+    ".config/gcloud",
+    ".config/glab-cli",
+    ".config/hub",
+    ".config/rclone",
+    ".config/sops",
+    ".config/age",
+    ".azure",
+    ".terraform.d",
+    ".vault-token",
+    ".password-store",
+    ".local/share/keyrings",
+    # Browser profiles (cookies, saved logins), mail, accounts and other apps' private data.
+    "Library/Application Support/Google",
+    "Library/Application Support/Firefox",
+    "Library/Application Support/BraveSoftware",
+    "Library/Application Support/Microsoft Edge",
+    "Library/Application Support/Arc",
+    "Library/Application Support/Vivaldi",
+    "Library/Application Support/com.operasoftware.Opera",
+    "Library/Application Support/1Password",
+    "Library/Application Support/Bitwarden",
+    "Library/Application Support/com.apple.TCC",
+    "Library/Application Support/AddressBook",
+    "Library/Safari",
+    "Library/Mail",
+    "Library/Accounts",
+    "Library/Group Containers",
 )
 PRIVATE_KEY_PREFIXES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519")
 SKIP_DIRS = {
@@ -910,6 +944,11 @@ def audit(who: str, action: str, detail: str, outcome: str) -> None:
     }
     path = agent_dir("audit.log")
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if path.stat().st_size > AUDIT_LIMIT:
+            os.replace(path, path.with_name("audit.log.1"))  # one older file is kept
+    except OSError:
+        pass
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
@@ -1430,15 +1469,25 @@ def describe_job(job: dict, with_date: bool = True) -> str:
 # --- Today ---------------------------------------------------------------------
 
 
-def run_ul(*args: str, timeout: float = 600) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [ul_binary(), *args],
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
+def run_group(argv: list[str], timeout: float, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    """Run to completion with the output captured. The command leads its own process group, so a timeout
+    (or Ctrl-C) stops everything it started, not only the shell in front."""
+    process = subprocess.Popen(
+        argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
     )
+    try:
+        output, errors = process.communicate(timeout=timeout)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.killpg(process.pid, signal.SIGKILL)
+        process.kill()
+        process.communicate()
+        raise
+    return subprocess.CompletedProcess(argv, process.returncode, output, errors)
+
+
+def run_ul(*args: str, timeout: float = 600) -> subprocess.CompletedProcess[str]:
+    return run_group([ul_binary(), *args], timeout)
 
 
 DONE_COLUMNS = {"done", "completed", "finished", "archive", "готово", "сделано", "выполнено", "архив"}
@@ -1655,8 +1704,8 @@ TOOLS: list[tuple[str, str, dict]] = [
         "ul",
         _spec(
             "ul",
-            'Run an Unlaw command, e.g. ["yt", "download", URL]. ["<name>", "--help"] shows usage without approval; '
-            "anything else needs approval and the command must be in agent.commands.",
+            'Run an Unlaw command, e.g. ["yt", "download", URL]. ["<name>", "--help"] shows the usage of a command in '
+            "agent.commands without approval; anything else needs approval and the command must be in agent.commands.",
             {"args": {"type": "array", "items": _S}},
             ["args"],
         ),
@@ -1929,8 +1978,24 @@ class Tools:
         shutil.move(str(origin), str(target))
         return f"Moved to {target}."
 
+    def _link_or_path(self, text: str) -> Path:
+        """Like _path, but a symlink is named itself (in its real folder), not what it points to."""
+        if not str(text).strip():
+            raise ToolError("path is empty")
+        given = Path(str(text)).expanduser()
+        given = given if given.is_absolute() else self.cwd / given
+        link = given.parent.resolve() / given.name
+        if given.name in {"", ".", ".."} or not link.is_symlink():
+            return self._path(text)
+        reason = denied(link)
+        if reason:
+            raise ToolError(f"{link}: {reason}")
+        if not any(root in link.parents for root in roots(self.config)):
+            raise ToolError(f"{link} is outside the allowed folders; see agent.roots")
+        return link
+
     def _delete(self, path: str) -> str:
-        target = self._path(path)
+        target = self._link_or_path(path)
         if not target.exists() and not target.is_symlink():
             raise ToolError(f"{target} does not exist")
         if any(target == root for root in roots(self.config)):
@@ -1946,25 +2011,22 @@ class Tools:
         folder = self._path(cwd) if cwd else self.cwd
         self._approve(f"Run in {folder}", command)
         shell = "/bin/zsh" if Path("/bin/zsh").exists() else "/bin/sh"
-        result = subprocess.run(
-            [shell, "-c", command],
-            cwd=folder,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=300,
-            check=False,
-        )
+        result = run_group([shell, "-c", command], 300, folder)
         output = (result.stdout + result.stderr).strip()
         return f"exit {result.returncode}\n{_clip(output, 8000)}"
 
     def _ul(self, args: list[str]) -> str:
         if not args or not all(isinstance(arg, str) for arg in args):
             raise ToolError("args must be a non-empty list of strings")
+        listed = args[0] in self.config["agent"]["commands"]
         if args[1:] not in (["--help"], ["-h"]):
-            if args[0] not in self.config["agent"]["commands"]:
+            if not listed:
                 allowed = ", ".join(self.config["agent"]["commands"])
                 raise ToolError(f"`ul {args[0]}` is not in agent.commands ({allowed})")
+            self._approve("Run: ul " + " ".join(args))
+        elif not listed:
+            # Help of a command outside agent.commands still runs that command (an alias, a user's own
+            # script): only the listed ones are known to print help without doing anything.
             self._approve("Run: ul " + " ".join(args))
         result = run_ul(*args)
         output = (result.stdout + result.stderr).strip()
@@ -2300,7 +2362,8 @@ def tool_label(name: str, arguments: dict) -> str:
         value = f"{value} → {arguments['destination']}"
     if key == "prompt" and "when" in arguments:
         value = f"{arguments['when']}: {value}"
-    value = value.replace("\n", " ")
+    # The model wrote these arguments: no line breaks or escape codes on the terminal or in the log.
+    value = printable(value.replace("\n", " "))
     return f"{name} {value[:70] + '…' if len(value) > 70 else value}"
 
 
@@ -2375,7 +2438,7 @@ def run_shell(command: str, cwd: Path, paint: Paint) -> str:
     """`!command` in the console; returns what the model gets to see."""
     shell = "/bin/zsh" if Path("/bin/zsh").exists() else "/bin/sh"
     try:
-        result = subprocess.run([shell, "-c", command], cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=600, check=False)
+        result = run_group([shell, "-c", command], 600, cwd)
         output, code = (result.stdout + result.stderr).rstrip(), result.returncode
     except subprocess.TimeoutExpired:
         output, code = "(stopped after 10 minutes)", 124
@@ -2402,14 +2465,23 @@ def status_text(config: dict) -> str:
 
 def log_text(count: int = 20) -> str:
     path = agent_dir("audit.log")
-    lines = path.read_text(encoding="utf-8").splitlines()[-count:] if path.exists() else []
+    try:
+        with path.open("rb") as handle:
+            # The end of the file is enough: records are at most a few hundred bytes.
+            handle.seek(max(0, path.stat().st_size - 200_000))
+            lines = handle.read().decode("utf-8", errors="replace").splitlines()[-count:]
+    except OSError:
+        lines = []
     rows = []
     for line in lines:
         try:
             record = json.loads(line)
         except ValueError:
             continue
-        rows.append(f"{record['time']}  {record['who']:<10} {record['action']:<12} {record['outcome']:<9} {record['detail']}")
+        if not isinstance(record, dict):
+            continue
+        time_, who, action, outcome, detail = (str(record.get(key, "")) for key in ("time", "who", "action", "outcome", "detail"))
+        rows.append(printable(f"{time_}  {who:<10} {action:<12} {outcome:<9} {detail}"))
     return "\n".join(rows) or "No agent actions yet."
 
 
@@ -3655,6 +3727,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         config = load_config()
         # `serve` is what 3.3.0 wrote into the launchd job.
+        if args[:1] in (["server"], ["serve"], ["setup"]) and len(args) > 1:
+            print(f"unlaw agent: `{args[0]}` takes no arguments; see `ula --help`", file=sys.stderr)
+            return 2
         if args in (["server"], ["serve"]):
             return server(config)
         if args == ["setup"]:

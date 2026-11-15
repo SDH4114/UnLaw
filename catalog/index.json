@@ -4,7 +4,7 @@
   {
    "name": "agent",
    "summary": "Your local AI agent: files, TODO board and schedule, in the console or Telegram.",
-   "sha256": "5bd1efceb080bbac42fe756f7c2cda79bc963bcd53e9131303292449fd5893f5"
+   "sha256": "1f647368f947e8e205b2c5ccecbac0ff1ff43af22faa76f78ac73608860ebb86"
   },
   {
    "name": "awake",

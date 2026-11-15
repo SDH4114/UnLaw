@@ -236,6 +236,112 @@ class AgentSafetyTests(unittest.TestCase):
             model.chat([{"role": "user", "content": "hi"}], [])
         self.assertIn("local model", str(failure.exception))
 
+    def test_logins_of_other_tools_and_browser_profiles_are_blocked(self) -> None:
+        home = Path.home().resolve()
+        guard = agent.protected()
+        for relative in (
+            ".claude/.credentials.json", ".codex/auth.json", ".config/gcloud/credentials.db", ".azure/accessTokens.json",
+            "Library/Application Support/Google/Chrome/Default/Cookies", "Library/Application Support/Firefox/Profiles/x/logins.json",
+            "Library/Mail/V10/x.emlx", "Library/Safari/History.db", "Library/Group Containers/x/data", ".password-store/a.gpg",
+        ):
+            with self.subTest(path=relative):
+                self.assertIsNotNone(agent.denied(home / relative, guard))
+        for relative in (".claude/settings.json", "Library/Application Support/Zed/settings.json", "Mail drafts/note.md"):
+            with self.subTest(path=relative):
+                self.assertIsNone(agent.denied(home / relative, guard))
+
+    def test_a_timeout_stops_everything_the_command_started(self) -> None:
+        import signal
+        import subprocess as sp
+
+        pidfile = self.root / "child.pid"
+        with self.assertRaises(sp.TimeoutExpired):
+            agent.run_group(["/bin/sh", "-c", f"/bin/sleep 30 & echo $! > {pidfile}; wait"], 1)
+        pid = int(pidfile.read_text())
+        for _ in range(50):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            import time
+
+            time.sleep(0.05)
+        else:
+            os.kill(pid, signal.SIGKILL)
+            self.fail("the grandchild outlived the timeout")
+        done = agent.run_group(["/bin/sh", "-c", "echo out; echo err >&2; exit 3"], 10)
+        self.assertEqual((done.returncode, done.stdout, done.stderr), (3, "out\n", "err\n"))
+
+    def test_help_of_a_command_outside_agent_commands_needs_approval(self) -> None:
+        asked: list[str] = []
+
+        class Decline:
+            can_send_files = False
+
+            def confirm(self, title, *args, **kwargs):
+                asked.append(title)
+                return False
+
+        self.config["agent"]["commands"] = ["yt"]
+        tools = agent.Tools(self.config, Decline(), "terminal", "full", self.root)
+        self.assertIn("exit 0", tools.call("ul", {"args": ["yt", "--help"]}))
+        self.assertEqual(asked, [], "help of a listed command runs without a question")
+        self.changed.unlink()
+        self.assertIn("declined", tools.call("ul", {"args": ["mything", "--help"]}))
+        self.assertEqual(asked, ["Run: ul mything --help"])
+        self.assertFalse(self.changed.exists(), "a declined help run never starts the command")
+
+    def test_delete_of_a_symlink_trashes_the_link_not_its_target(self) -> None:
+        class Approve:
+            can_send_files = False
+
+            def confirm(self, *args, **kwargs):
+                return True
+
+        target = self.root / "real.txt"
+        target.write_text("keep")
+        link = self.root / "link.txt"
+        link.symlink_to(target)
+        tools = agent.Tools(self.config, Approve(), "terminal", "full", self.root)
+        self.assertIn("Moved", tools.call("delete", {"path": "link.txt"}))
+        self.assertEqual(target.read_text(), "keep")
+        self.assertFalse(link.is_symlink())
+        trashed = Path.home() / ".Trash" / "link.txt"
+        self.assertTrue(trashed.is_symlink())
+        outside = self.root.parent / "elsewhere-link"
+        self.addCleanup(lambda: outside.unlink(missing_ok=True))
+        outside.symlink_to(target)
+        self.assertIn("outside the allowed folders", tools.call("delete", {"path": str(outside)}))
+
+    def test_labels_and_the_log_cannot_drive_the_terminal(self) -> None:
+        label = agent.tool_label("run", {"command": "ls\x1b[2J\x1b]0;title\x07"})
+        self.assertNotIn("\x1b", label)
+        self.assertNotIn("\x07", label)
+        log = agent.agent_dir("audit.log")
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text('[1]\n{"time": "t"}\n{"time": "t", "who": "w", "action": "a", "outcome": "ok", "detail": "\\u001b[31m"}\n')
+        text = agent.log_text()
+        self.assertNotIn("\x1b", text)
+        self.assertEqual(len(text.splitlines()), 2)
+
+    def test_the_audit_log_is_rotated(self) -> None:
+        with patch.object(agent, "AUDIT_LIMIT", 200):
+            for number in range(10):
+                agent.audit("terminal", "read_file", "x" * 50, f"ok{number}")
+        log = agent.agent_dir("audit.log")
+        self.assertTrue(log.with_name("audit.log.1").exists())
+        self.assertLess(log.stat().st_size, 400)
+        self.assertIn("ok9", log.read_text())
+
+    def test_extra_words_after_server_or_setup_are_a_usage_error(self) -> None:
+        from contextlib import redirect_stderr
+        from io import StringIO
+
+        for args in (["server", "now"], ["setup", "again"], ["serve", "x"]):
+            with self.subTest(args=args), redirect_stderr(StringIO()) as error:
+                self.assertEqual(agent.main(args), 2)
+            self.assertIn("takes no arguments", error.getvalue())
+
     def test_text_reads_allocate_by_read_limit_not_total_file_size(self) -> None:
         file = self.root / "large.log"
         with file.open("wb") as handle:
