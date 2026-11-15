@@ -1289,8 +1289,4 @@ ul yt download "https://youtu.be/VIDEO_ID" --full --sub-lang en --format mp4 --q
 
 Copyright (C) 2026 Haos
 
-Unlaw is free software: you can redistribute it and/or modify it under the terms
-of the GNU General Public License as published by the Free Software Foundation,
-either version 3 of the License, or (at your option) any later version
-(`GPL-3.0-or-later`). This program is distributed WITHOUT ANY WARRANTY. See
-[LICENSE](LICENSE) for the full text.
+Unlaw is released under the MIT License. See [LICENSE](LICENSE) for the full text.
