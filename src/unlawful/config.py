@@ -35,8 +35,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "mac": {"executable": "macos-harness", "timeout": 30},
     "todo": {
-        "vault_path": "~/aiwork/data-obsidian",
-        "file": "TODO.md",
+        "vault_path": "",
+        "file": "board.md",
         "completed_column": "Completed",
     },
     "desk": {
@@ -66,9 +66,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "yt": {"podcast_dir": "~/Library/Mobile Documents/com~apple~CloudDocs/Podcasts"},
     "apps": {
         "spotify": "Spotify",
-        "editor": "Zed",
+        "editor": "auto",
         "spotify_autoplay_delay": 2.0,
-        "browser_url": "https://duckduckgo.com/",
+        "browser_url": "https://www.google.com/",
         "lofi_url": "https://lofi-engine.vercel.app/",
         "youtube_url": "https://www.youtube.com/",
     },

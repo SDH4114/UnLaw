@@ -62,6 +62,7 @@ class ConfiguredTestCase(unittest.TestCase):
         ensure_layout()
         set_config_value("todo.vault_path", str(self.vault))
         set_config_value("todo.file", "TODO.md")
+        set_config_value("todo.file", "TODO.md")
 
 
 class DeskTerminalTests(ConfiguredTestCase):
@@ -182,7 +183,36 @@ class DesktopCommandTests(ConfiguredTestCase):
         completed = subprocess.CompletedProcess([], 0)
         with patch.object(music.subprocess, "run", return_value=completed) as run:
             self.assertEqual(music.main([]), 0)
-        run.assert_called_once_with(["open", "-a", "Spotify"], check=False)
+        run.assert_called_once_with(["open", "-a", "Spotify"], check=False, stderr=subprocess.DEVNULL)
+
+    def test_music_without_the_spotify_app_opens_the_web_player(self) -> None:
+        from unlawful.desktop import music
+
+        def run(command, **_):
+            return subprocess.CompletedProcess(command, 1 if command[:2] == ["open", "-a"] else 0)
+
+        for args, url in (([], "https://open.spotify.com/"), (["Killer", "Queen/1"], "https://open.spotify.com/search/Killer%20Queen%2F1")):
+            with self.subTest(args=args), patch.object(music.subprocess, "run", side_effect=run) as fake:
+                self.assertEqual(music.main(args), 0)
+                self.assertEqual([call.args[0] for call in fake.call_args_list], [["open", "-a", "Spotify"], ["open", url]])
+
+    def test_auto_editor_takes_the_first_installed_one_then_finder(self) -> None:
+        from unlawful.built_in_commands.zed import main as zed
+        from unlawful.desktop import work
+
+        for module in (zed, work):
+            for installed, expected in (("Cursor", ["open", "-a", "Cursor", "/tmp/project"]), (None, ["open", "/tmp/project"])):
+                def run(command, installed=installed, **_):
+                    missing = command[:2] == ["open", "-a"] and command[2] != installed
+                    return subprocess.CompletedProcess(command, 1 if missing else 0)
+
+                with self.subTest(module=module.__name__, installed=installed), patch.object(
+                    module.subprocess, "run", side_effect=run
+                ) as fake, patch.object(module.Path, "cwd", return_value=Path("/tmp/project")):
+                    self.assertEqual(module.main([]), 0)
+                    calls = [call.args[0] for call in fake.call_args_list if call.args[0][1:2] != ["https://lofi-engine.vercel.app/"]]
+                    self.assertEqual(calls[0], ["open", "-a", "Zed", "/tmp/project"])
+                    self.assertEqual(calls[-1], expected)
 
     def test_music_query_runs_spotify_search_automation(self) -> None:
         from unlawful.desktop import music

@@ -452,6 +452,25 @@ LEGACY_NORMALIZED_HASHES.setdefault("capture", set()).add("2ebac24e58c35978d751a
 LEGACY_SOURCE_HASHES.setdefault("sys", set()).add("55e0a5a233eb604172674e234680a31a87176b30cccbdc8b15d27d26fb7a55c8")
 LEGACY_NORMALIZED_HASHES.setdefault("sys", set()).add("276e463206cbd53b99c83285f19aec59aead2bfda101d5628ee7393f936ca9ec")
 
+# Seeds of 3.19.3 to 3.19.4 (also the copies on the maintainer machine), before the default board in
+# desk.boards_dir, editor "auto" and the Spotify web fallback.
+LEGACY_SOURCE_HASHES["desk"].update({
+    "8a1f3ce375b91e857ecd6fcb11b1939131c278c5ff21ac421e944d371f858672",
+    "ca302c69961b2c794a72b0f8b85b36bb7fc0ac0483760e80cf28048871a2c31a",
+    "a5704d0f96280a28a2aec80177b6cc66493fce63bf36bcb7a03ffc79e606183a",
+})
+LEGACY_NORMALIZED_HASHES["desk"].update({
+    "b3b59b84e0a8b30d433b25d0040c6762d236c93fd9e7337f72aaceb03d2da1f1",
+    "09aa64bced411f3059877de1650db16ffbfc1b73faaec6abb08c4a9cdfe827f4",
+    "0c2b71c2a250b8afca5f7058a34fdec0e6a76fcc3bea89789aaf503a1c583da0",
+})
+LEGACY_SOURCE_HASHES.setdefault("music", set()).add("89547b5e5a0231b58e8ae8d5479a0a29504f83f33b5654d8695e86a640b6a838")
+LEGACY_NORMALIZED_HASHES.setdefault("music", set()).add("eefa6f2a52d6da7cdff3105f9f9adf5953faedb4314841dff5ae8fc375e42e67")
+LEGACY_SOURCE_HASHES.setdefault("work", set()).add("68814b798020bf0f2ec5ce63f8491669cfcb674aa608ec939bd954ff8ebcae1b")
+LEGACY_NORMALIZED_HASHES.setdefault("work", set()).add("1f5766accbb28e10f74de6cc7bc974212618f26440e6c41808d926d01cc9535e")
+LEGACY_SOURCE_HASHES.setdefault("zed", set()).add("341db58fe09d6d4f9320aa2b107c7234c20cd8ffb47efcfd87303ad5b3588923")
+LEGACY_NORMALIZED_HASHES.setdefault("zed", set()).add("f15eaf936fcd831a691a273c72921070425c162bfc6ca8765294abc79b8fd5ab")
+
 # Commands now built into the Rust core, or removed (`todo`, replaced by
 # `ul desk`). Untouched seeds with these hashes are removed so the built-in
 # runs; edited copies stay and override it.
@@ -571,8 +590,8 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
     "desk": {
         "storage": {"root": "data"},
         "todo": {
-            "vault_path": "~/aiwork/data-obsidian",
-            "file": "TODO.md",
+            "vault_path": "",
+            "file": "board.md",
             "completed_column": "Completed",
         },
         "desk": {
@@ -587,13 +606,13 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
         "games": {"difficulty": "normal"},
         "apps": {"lofi_url": "https://lofi-engine.vercel.app/"},
     },
-    "work": {"apps": {"editor": "Zed", "lofi_url": "https://lofi-engine.vercel.app/"}},
+    "work": {"apps": {"editor": "auto", "lofi_url": "https://lofi-engine.vercel.app/"}},
     "yt": {
         "storage": {"root": "data"},
         "apps": {"youtube_url": "https://www.youtube.com/"},
         "yt": {"podcast_dir": "~/Library/Mobile Documents/com~apple~CloudDocs/Podcasts"},
     },
-    "zed": {"apps": {"editor": "Zed"}},
+    "zed": {"apps": {"editor": "auto"}},
 }
 
 _CONFIG_SUPPORT = r'''

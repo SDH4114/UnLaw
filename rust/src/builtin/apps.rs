@@ -14,7 +14,7 @@ Example: ul app \"Visual Studio Code\"
 pub const BROWSER_HELP: &str = "Open the configured browser homepage in your default browser.
 Usage: ul browser
 Setting: apps.browser_url
-Example: ul config set apps.browser_url \"https://duckduckgo.com/\"
+Example: ul config set apps.browser_url \"https://www.google.com/\"
 ";
 
 fn is_help(args: &[String]) -> bool {

@@ -2,7 +2,7 @@
 """Open Spotify, or search for a track and attempt to play it."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Open Spotify, or search for a track and attempt to play it.\nUsage: ul music [track]\nSettings: apps.spotify, apps.spotify_autoplay_delay.\nAutoplay requires Accessibility permission for your terminal.\nExample: ul music "Nujabes Feather"\n'
+COMMAND_HELP = 'Open Spotify, or search for a track and attempt to play it.\nUsage: ul music [track]\nSettings: apps.spotify, apps.spotify_autoplay_delay.\nAutoplay requires Accessibility permission for your terminal.\nWithout the Spotify app, opens the Spotify web player (open.spotify.com) instead.\nExample: ul music "Nujabes Feather"\n'
 
 import copy
 import os
@@ -49,6 +49,9 @@ from urllib.parse import quote
 
 
 
+WEB_PLAYER = "https://open.spotify.com/"
+
+
 def _apple_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -64,12 +67,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"unlaw music: {error}", file=sys.stderr)
         return 2
     application = str(settings["spotify"])
-    if not args:
-        return subprocess.run(["open", "-a", application], check=False).returncode
     query = " ".join(args).strip()
-    if not query:
+    if args and not query:
         print("Usage: ul music [track]", file=sys.stderr)
         return 2
+    try:
+        # `open -a` fails at once when the app is not installed; then the web player opens instead.
+        opened = subprocess.run(["open", "-a", application], check=False, stderr=subprocess.DEVNULL).returncode == 0
+        if not opened:
+            url = WEB_PLAYER + (f"search/{quote(query, safe='')}" if query else "")
+            return subprocess.run(["open", url], check=False).returncode
+    except OSError as error:
+        print(f"unlaw music: {error}", file=sys.stderr)
+        return 1
+    if not query:
+        return 0
     uri = f"spotify:search:{quote(query)}"
     script = f'''set searchQuery to "{_apple_string(query)}"
 tell application "{_apple_string(application)}"

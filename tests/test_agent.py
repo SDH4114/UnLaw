@@ -249,6 +249,7 @@ class AgentCase(CoreTestCase):
         (self.vault / "TODO.md").write_text(KANBAN, encoding="utf-8")
         self.ok("config", "set", "agent.roots", json.dumps([str(self.files)]))
         self.ok("config", "set", "todo.vault_path", str(self.vault))
+        self.ok("config", "set", "todo.file", "TODO.md")
         # `security` stand-in, so tests never touch the real Keychain.
         self.keychain = self.root / "keychain.txt"
         self.tool(

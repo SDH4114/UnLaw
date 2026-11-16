@@ -981,7 +981,41 @@ def _bare_name(raw: str, suffix: str = ".md") -> bool:
     )
 
 
+# The default board path of releases up to 3.19.4: the maintainer's own vault, written into every new config.toml.
+LEGACY_VAULT = "~/aiwork/data-obsidian"
+
+
+def own_board(config: dict) -> Path | None:
+    """The default board Unlaw keeps itself: desk.boards_dir/todo.file when todo.vault_path is empty.
+
+    A config that still carries the old default vault, on a Mac without that folder, gets board.md too.
+    """
+    todo = config.get("todo", {}) if isinstance(config.get("todo"), dict) else {}
+    vault = str(todo.get("vault_path", ""))
+    if vault.strip():
+        if vault != LEGACY_VAULT or Path(vault).expanduser().is_dir():
+            return None
+        name = "board.md"
+    else:
+        name = str(todo.get("file") or "board.md")
+    folder = boards_folder(desk_settings(config)["boards_dir"], config_dir())
+    path = (folder / name).absolute()
+    if path.parent != folder.absolute() or path.suffix.casefold() != ".md":
+        raise ValueError("todo.file must be a .md file name when todo.vault_path is empty")
+    return path
+
+
 def default_board(config: dict) -> Path:
+    own = own_board(config)
+    if own is not None:
+        if not own.is_file() and not own.is_symlink():
+            own.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with own.open("x", encoding="utf-8") as handle:
+                    handle.write(NEW_BOARD)
+            except FileExistsError:
+                pass
+        return own.resolve()
     path = configured_board(config["todo"])
     if not path.is_file():
         raise FileNotFoundError(

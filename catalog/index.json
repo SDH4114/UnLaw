@@ -34,7 +34,7 @@
   {
    "name": "desk",
    "summary": "Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser.",
-   "sha256": "a5704d0f96280a28a2aec80177b6cc66493fce63bf36bcb7a03ffc79e606183a"
+   "sha256": "383ef9ebc0644c610c7d7f42365712570d44abb38e79b1aaec6f022854e06d1b"
   },
   {
    "name": "git",
@@ -64,7 +64,7 @@
   {
    "name": "music",
    "summary": "Open Spotify, or search for a track and attempt to play it.",
-   "sha256": "89547b5e5a0231b58e8ae8d5479a0a29504f83f33b5654d8695e86a640b6a838"
+   "sha256": "7ddb2ec061fb9d90ea239256a403d34b9c6bee7e9a9c33639d4ee75858889aa3"
   },
   {
    "name": "netflix",
@@ -114,7 +114,7 @@
   {
    "name": "work",
    "summary": "Open the configured lofi website and the current directory in your editor.",
-   "sha256": "68814b798020bf0f2ec5ce63f8491669cfcb674aa608ec939bd954ff8ebcae1b"
+   "sha256": "9a85d1325d447c035b4b598cc179191d6f7aa3e03a66d02788a6bdcdd608c86d"
   },
   {
    "name": "yt",
@@ -123,8 +123,8 @@
   },
   {
    "name": "zed",
-   "summary": "Open the current directory in the configured editor (default: Zed).",
-   "sha256": "341db58fe09d6d4f9320aa2b107c7234c20cd8ffb47efcfd87303ad5b3588923"
+   "summary": "Open the current directory in the configured editor.",
+   "sha256": "8006a5d52ef87148de39c98db378bc9b6a13e70e322b7621d6096435716827f0"
   }
  ]
 }

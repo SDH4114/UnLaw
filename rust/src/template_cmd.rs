@@ -135,7 +135,7 @@ fn plan(template: &Template, config: Option<&Config>) -> Result<Vec<Step>, Strin
     for (index, window) in template.windows.iter().enumerate() {
         let mut app = window.app.clone();
         if template.legacy && app == "Zed" {
-            app = config.map(|config| config.string("apps.editor")).filter(|editor| !editor.is_empty()).unwrap_or(app);
+            app = config.map(|config| config.string("apps.editor")).filter(|editor| !editor.is_empty() && editor != "auto").unwrap_or(app);
         }
         let target = match &window.open {
             None => None,

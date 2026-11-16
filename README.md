@@ -327,8 +327,8 @@ executable = "macos-harness"
 timeout = 30
 
 [todo]
-vault_path = "~/aiwork/data-obsidian"
-file = "TODO.md"
+vault_path = ""         # empty = the boards folder (desk.boards_dir); or an Obsidian vault
+file = "board.md"        # the default board; created on first use when vault_path is empty
 completed_column = "Completed"
 
 [desk]
@@ -365,9 +365,9 @@ podcast_dir = "~/Library/Mobile Documents/com~apple~CloudDocs/Podcasts"   # ul y
 
 [apps]
 spotify = "Spotify"
-editor = "Zed"
+editor = "auto"          # auto = Zed, VS Code, Cursor or Sublime Text (first installed), else Finder
 spotify_autoplay_delay = 2.0
-browser_url = "https://duckduckgo.com/"
+browser_url = "https://www.google.com/"
 lofi_url = "https://lofi-engine.vercel.app/"
 youtube_url = "https://www.youtube.com/"
 
@@ -595,7 +595,7 @@ the open board to the macOS Trash (`ul desk rm <board>` does the same from the
 terminal); the default board (`todo.file`) is never deleted.
 
 ```bash
-ul desk                                  # the default board (todo.vault_path + todo.file)
+ul desk                                  # the default board: boards/board.md, created on first use
 ul desk Work                             # <desk.boards_dir>/Work.md
 ul desk ~/notes/Project.md --no-open     # any Kanban .md file
 ul desk --reminders                      # Apple Reminders: lists are columns
@@ -815,7 +815,7 @@ Computer stats without root: `ul sys` shows model, chip, macOS, uptime, CPU, GPU
 
 ```bash
 ul lofi                           # open Lofi Engine
-ul zed                            # open the current folder in Zed
+ul zed                            # open the current folder in the editor (apps.editor)
 ul netflix                        # open Netflix
 ul tg                             # open Telegram
 ul obsidian                       # open Obsidian
@@ -825,7 +825,7 @@ ul steam                          # open Steam
 ul minecraft                      # open Prism Launcher
 ul music
 ul music "Killer Queen"           # search and play the first result in Spotify
-ul work                            # Lofi Engine + current folder in Zed
+ul work                            # Lofi Engine + current folder in the editor
 ul yt                              # open the YouTube home page
 ul yt "omarchy linux"             # YouTube search in the browser
 ul yt download "https://youtu.be/VIDEO_ID"                 # download MOV
@@ -838,7 +838,8 @@ ul yt --help                      # all options and examples
 ```
 
 Auto-playing a Spotify result requires the Accessibility permission for the
-terminal.
+terminal. Without the Spotify app, `ul music` opens the web player
+(open.spotify.com) and searches there.
 
 The `ul browser` start page is set in the config:
 

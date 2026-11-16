@@ -1,8 +1,8 @@
 # Unlaw command source. Edit freely: this file has no runtime dependency on Unlaw.
-"""Open the current directory in the configured editor (default: Zed)."""
+"""Open the current directory in the configured editor."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Open the current directory in the configured editor (default: Zed).\nUsage: ul zed\nSetting: apps.editor\nExample: ul zed\n'
+COMMAND_HELP = 'Open the current directory in the configured editor.\nUsage: ul zed\nSetting: apps.editor ("auto" = the first installed of Zed, Visual Studio Code, Cursor,\n  Sublime Text; Finder when none is; or an app name such as "Zed")\nExample: ul zed\n'
 
 import copy
 import os
@@ -10,7 +10,7 @@ import tomllib
 from pathlib import Path
 
 
-DEFAULT_CONFIG = {'apps': {'editor': 'Zed'}}
+DEFAULT_CONFIG = {'apps': {'editor': 'auto'}}
 
 
 class ConfigError(ValueError):
@@ -49,6 +49,20 @@ from pathlib import Path
 
 
 
+# apps.editor = "auto": the first of these that `open -a` finds, else Finder.
+AUTO_EDITORS = ("Zed", "Visual Studio Code", "Cursor", "Sublime Text")
+
+
+def _open_in_editor(editor: str, folder: str) -> int:
+    if editor.strip() and editor != "auto":
+        return subprocess.run(["open", "-a", editor, folder], check=False).returncode
+    for name in AUTO_EDITORS:
+        # `open -a` fails at once (exit 1, a message on stderr) when the app is not installed.
+        if subprocess.run(["open", "-a", name, folder], check=False, stderr=subprocess.DEVNULL).returncode == 0:
+            return 0
+    return subprocess.run(["open", folder], check=False).returncode
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] in {"-h", "--help", "help"}:
@@ -59,7 +73,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     try:
         editor = str(load_config()["apps"]["editor"])
-        return subprocess.run(["open", "-a", editor, str(Path.cwd())], check=False).returncode
+        return _open_in_editor(editor, str(Path.cwd()))
     except (ConfigError, OSError) as error:
         print(f"unlaw zed: {error}", file=sys.stderr)
         return 1

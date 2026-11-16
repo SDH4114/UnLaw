@@ -2,7 +2,7 @@
 """Open the configured lofi website and the current directory in your editor."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Open the configured lofi website and the current directory in your editor.\nUsage: ul work\nSettings: apps.lofi_url, apps.editor.\nExample: ul work\n'
+COMMAND_HELP = 'Open the configured lofi website and the current directory in your editor.\nUsage: ul work\nSettings: apps.lofi_url, apps.editor ("auto" = the first installed of Zed, Visual Studio\n  Code, Cursor, Sublime Text; Finder when none is; or an app name such as "Zed").\nExample: ul work\n'
 
 import copy
 import os
@@ -10,7 +10,7 @@ import tomllib
 from pathlib import Path
 
 
-DEFAULT_CONFIG = {'apps': {'editor': 'Zed', 'lofi_url': 'https://lofi-engine.vercel.app/'}}
+DEFAULT_CONFIG = {'apps': {'editor': 'auto', 'lofi_url': 'https://lofi-engine.vercel.app/'}}
 
 
 class ConfigError(ValueError):
@@ -49,6 +49,20 @@ from pathlib import Path
 
 
 
+# apps.editor = "auto": the first of these that `open -a` finds, else Finder.
+AUTO_EDITORS = ("Zed", "Visual Studio Code", "Cursor", "Sublime Text")
+
+
+def _open_in_editor(editor: str, folder: str) -> int:
+    if editor.strip() and editor != "auto":
+        return subprocess.run(["open", "-a", editor, folder], check=False).returncode
+    for name in AUTO_EDITORS:
+        # `open -a` fails at once (exit 1, a message on stderr) when the app is not installed.
+        if subprocess.run(["open", "-a", name, folder], check=False, stderr=subprocess.DEVNULL).returncode == 0:
+            return 0
+    return subprocess.run(["open", folder], check=False).returncode
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] in {"-h", "--help", "help"}:
@@ -62,7 +76,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         browser = subprocess.run(["open", str(settings["lofi_url"])], check=False)
         if browser.returncode != 0:
             return browser.returncode
-        return subprocess.run(["open", "-a", str(settings["editor"]), str(Path.cwd())], check=False).returncode
+        return _open_in_editor(str(settings["editor"]), str(Path.cwd()))
     except (ConfigError, OSError) as error:
         print(f"unlaw work: {error}", file=sys.stderr)
         return 1

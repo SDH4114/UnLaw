@@ -334,6 +334,7 @@ Example: ul minecraft
 Usage: ul music [track]
 Settings: apps.spotify, apps.spotify_autoplay_delay.
 Autoplay requires Accessibility permission for your terminal.
+Without the Spotify app, opens the Spotify web player (open.spotify.com) instead.
 Example: ul music "Nujabes Feather"
 ''',
     "netflix": '''Open Netflix in your default browser.
@@ -380,7 +381,8 @@ Usage: ul desk [board] [--reminders] [--port N] [--no-open]
        ul desk list | show [board] | add <text> | move <n> <column> | done <n>
        ul desk new <name> | rm <board> | path [board] | stats [board] | pomodoro [...]
 Page:
-  ul desk           Open the default board (todo.vault_path + todo.file) on 127.0.0.1
+  ul desk           Open the default board on 127.0.0.1: <desk.boards_dir>/board.md,
+                    created on first use (todo.vault_path + todo.file pick another)
   [board]           A name = <desk.boards_dir>/<name>.md, or a path to any .md board
   --reminders       Open Apple Reminders as a board (lists = columns)
 Terminal (for you and AI agents):
@@ -395,14 +397,15 @@ Terminal (for you and AI agents):
 The .md file is the source of truth: Obsidian, the page and these commands all
 see every change. Tabs on the page: Board, Today, Stats, Games, Studio, Canvas.
 Settings: desk.port, desk.boards_dir, desk.canvas_dir, desk.reminders, desk.pomodoro.*,
-  todo.vault_path, todo.file, todo.completed_column.
+  todo.vault_path (empty = desk.boards_dir), todo.file, todo.completed_column.
 Examples: ul desk
           ul desk show Work --json
           ul desk add "Call the bank @tomorrow" -b Work
 ''',
     "work": '''Open the configured lofi website and the current directory in your editor.
 Usage: ul work
-Settings: apps.lofi_url, apps.editor.
+Settings: apps.lofi_url, apps.editor ("auto" = the first installed of Zed, Visual Studio
+  Code, Cursor, Sublime Text; Finder when none is; or an app name such as "Zed").
 Example: ul work
 ''',
     "yt": '''Open YouTube, search, or download one YouTube video.
@@ -455,9 +458,10 @@ Examples:
   ul yt download "https://youtu.be/VIDEO_ID" --full --sub-lang en --format mp4
   ul yt download "https://youtu.be/VIDEO_ID" --quality 1080 --output ~/Downloads
 ''',
-    "zed": '''Open the current directory in the configured editor (default: Zed).
+    "zed": '''Open the current directory in the configured editor.
 Usage: ul zed
-Setting: apps.editor
+Setting: apps.editor ("auto" = the first installed of Zed, Visual Studio Code, Cursor,
+  Sublime Text; Finder when none is; or an app name such as "Zed")
 Example: ul zed
 ''',
 }

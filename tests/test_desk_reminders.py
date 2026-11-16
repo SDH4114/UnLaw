@@ -301,6 +301,7 @@ class SeedReminderTests(unittest.TestCase):
         with patch.dict(os.environ, self.env):
             self.desk = ensure_layout() / "commands" / "desk" / "main.py"
             set_config_value("todo.vault_path", str(self.root / "no-vault"))
+            set_config_value("todo.file", "TODO.md")
 
     def run_seed(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -343,6 +344,7 @@ class SeedReminderTests(unittest.TestCase):
 
         with patch.dict(os.environ, self.env):
             set_config_value("todo.vault_path", str(vault))
+            set_config_value("todo.file", "TODO.md")
         refused = self.run_seed("rm", str(vault / "TODO.md"))
         self.assertEqual(refused.returncode, 2)
         self.assertIn("default board", refused.stderr)

@@ -2,7 +2,7 @@
 """Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser.\nUsage: ul desk [board] [--reminders] [--port N] [--no-open]\n       ul desk list | show [board] | add <text> | move <n> <column> | done <n>\n       ul desk new <name> | rm <board> | path [board] | stats [board] | pomodoro [...]\nPage:\n  ul desk           Open the default board (todo.vault_path + todo.file) on 127.0.0.1\n  [board]           A name = <desk.boards_dir>/<name>.md, or a path to any .md board\n  --reminders       Open Apple Reminders as a board (lists = columns)\nTerminal (for you and AI agents):\n  list [--json]     Default, recent and named boards, and whether Reminders is on\n  show [board]      Columns and numbered cards; --json for scripts, --reminders\n  add <text>        New card in the first column (--column C; @today/@tomorrow dates)\n  move <n> <col>    Move card n; done <n> checks it and moves it to the Done column\n                    add/move/done take -b <board>; without it the default board\n  new <name>        Create a board with To do / Doing / Done\n  rm <board>        Move a board to the Trash (not the default board)\n  stats, pomodoro   Focus statistics and the timer the page shows too\nThe .md file is the source of truth: Obsidian, the page and these commands all\nsee every change. Tabs on the page: Board, Today, Stats, Games, Studio, Canvas.\nSettings: desk.port, desk.boards_dir, desk.canvas_dir, desk.reminders, desk.pomodoro.*,\n  todo.vault_path, todo.file, todo.completed_column.\nExamples: ul desk\n          ul desk show Work --json\n          ul desk add "Call the bank @tomorrow" -b Work\n'
+COMMAND_HELP = 'Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser.\nUsage: ul desk [board] [--reminders] [--port N] [--no-open]\n       ul desk list | show [board] | add <text> | move <n> <column> | done <n>\n       ul desk new <name> | rm <board> | path [board] | stats [board] | pomodoro [...]\nPage:\n  ul desk           Open the default board on 127.0.0.1: <desk.boards_dir>/board.md,\n                    created on first use (todo.vault_path + todo.file pick another)\n  [board]           A name = <desk.boards_dir>/<name>.md, or a path to any .md board\n  --reminders       Open Apple Reminders as a board (lists = columns)\nTerminal (for you and AI agents):\n  list [--json]     Default, recent and named boards, and whether Reminders is on\n  show [board]      Columns and numbered cards; --json for scripts, --reminders\n  add <text>        New card in the first column (--column C; @today/@tomorrow dates)\n  move <n> <col>    Move card n; done <n> checks it and moves it to the Done column\n                    add/move/done take -b <board>; without it the default board\n  new <name>        Create a board with To do / Doing / Done\n  rm <board>        Move a board to the Trash (not the default board)\n  stats, pomodoro   Focus statistics and the timer the page shows too\nThe .md file is the source of truth: Obsidian, the page and these commands all\nsee every change. Tabs on the page: Board, Today, Stats, Games, Studio, Canvas.\nSettings: desk.port, desk.boards_dir, desk.canvas_dir, desk.reminders, desk.pomodoro.*,\n  todo.vault_path (empty = desk.boards_dir), todo.file, todo.completed_column.\nExamples: ul desk\n          ul desk show Work --json\n          ul desk add "Call the bank @tomorrow" -b Work\n'
 
 import copy
 import os
@@ -11,9 +11,7 @@ from pathlib import Path
 
 
 DEFAULT_CONFIG = {'storage': {'root': 'data'},
- 'todo': {'vault_path': '~/aiwork/data-obsidian',
-          'file': 'TODO.md',
-          'completed_column': 'Completed'},
+ 'todo': {'vault_path': '', 'file': 'board.md', 'completed_column': 'Completed'},
  'desk': {'port': 8765,
           'open_browser': True,
           'sound': True,
@@ -6086,7 +6084,41 @@ def _bare_name(raw: str, suffix: str = ".md") -> bool:
     )
 
 
+# The default board path of releases up to 3.19.4: the maintainer's own vault, written into every new config.toml.
+LEGACY_VAULT = "~/aiwork/data-obsidian"
+
+
+def own_board(config: dict) -> Path | None:
+    """The default board Unlaw keeps itself: desk.boards_dir/todo.file when todo.vault_path is empty.
+
+    A config that still carries the old default vault, on a Mac without that folder, gets board.md too.
+    """
+    todo = config.get("todo", {}) if isinstance(config.get("todo"), dict) else {}
+    vault = str(todo.get("vault_path", ""))
+    if vault.strip():
+        if vault != LEGACY_VAULT or Path(vault).expanduser().is_dir():
+            return None
+        name = "board.md"
+    else:
+        name = str(todo.get("file") or "board.md")
+    folder = boards_folder(desk_settings(config)["boards_dir"], config_dir())
+    path = (folder / name).absolute()
+    if path.parent != folder.absolute() or path.suffix.casefold() != ".md":
+        raise ValueError("todo.file must be a .md file name when todo.vault_path is empty")
+    return path
+
+
 def default_board(config: dict) -> Path:
+    own = own_board(config)
+    if own is not None:
+        if not own.is_file() and not own.is_symlink():
+            own.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with own.open("x", encoding="utf-8") as handle:
+                    handle.write(NEW_BOARD)
+            except FileExistsError:
+                pass
+        return own.resolve()
     path = configured_board(config["todo"])
     if not path.is_file():
         raise FileNotFoundError(

@@ -9,6 +9,9 @@ from unlawful.command_help import COMMAND_HELP
 from unlawful.config import ConfigError, load_config
 
 
+WEB_PLAYER = "https://open.spotify.com/"
+
+
 def _apple_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -24,12 +27,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"unlaw music: {error}", file=sys.stderr)
         return 2
     application = str(settings["spotify"])
-    if not args:
-        return subprocess.run(["open", "-a", application], check=False).returncode
     query = " ".join(args).strip()
-    if not query:
+    if args and not query:
         print("Usage: ul music [track]", file=sys.stderr)
         return 2
+    try:
+        # `open -a` fails at once when the app is not installed; then the web player opens instead.
+        opened = subprocess.run(["open", "-a", application], check=False, stderr=subprocess.DEVNULL).returncode == 0
+        if not opened:
+            url = WEB_PLAYER + (f"search/{quote(query, safe='')}" if query else "")
+            return subprocess.run(["open", url], check=False).returncode
+    except OSError as error:
+        print(f"unlaw music: {error}", file=sys.stderr)
+        return 1
+    if not query:
+        return 0
     uri = f"spotify:search:{quote(query)}"
     script = f'''set searchQuery to "{_apple_string(query)}"
 tell application "{_apple_string(application)}"

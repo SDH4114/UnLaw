@@ -139,8 +139,8 @@ class ConfigTests(unittest.TestCase):
             },
             "todo": {
                 "todo": {
-                    "vault_path": "~/aiwork/data-obsidian",
-                    "file": "TODO.md",
+                    "vault_path": "",
+                    "file": "board.md",
                     "completed_column": "Completed",
                 }
             },
@@ -153,7 +153,7 @@ class ConfigTests(unittest.TestCase):
             },
             "work": {
                 "apps": {
-                    "editor": "Zed",
+                    "editor": "auto",
                     "lofi_url": "https://lofi-engine.vercel.app/",
                 }
             },
@@ -162,7 +162,7 @@ class ConfigTests(unittest.TestCase):
                 "apps": {"youtube_url": "https://www.youtube.com/"},
                 "yt": {"podcast_dir": "~/Library/Mobile Documents/com~apple~CloudDocs/Podcasts"},
             },
-            "zed": {"apps": {"editor": "Zed"}},
+            "zed": {"apps": {"editor": "auto"}},
             "agent": {
                 "storage": {"root": "data"},
                 "telegram": {

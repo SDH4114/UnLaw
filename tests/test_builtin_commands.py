@@ -372,7 +372,7 @@ class LauncherBuiltinTests(CoreTestCase):
         self.ok("browser")
         self.ok("config", "set", "apps.browser_url", "https://example.com/start")
         self.ok("browser")
-        self.assertEqual(self.calls(log), [["https://duckduckgo.com/"], ["https://example.com/start"]])
+        self.assertEqual(self.calls(log), [["https://www.google.com/"], ["https://example.com/start"]])
         self.assertEqual(self.ul("browser", "extra").returncode, 2)
         self.assertIn("apps.browser_url", self.ok("browser", "-h").stdout)
 

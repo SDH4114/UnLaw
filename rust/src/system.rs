@@ -944,6 +944,22 @@ fn editor_check(config: Option<&Config>) -> Check {
     Check { name: "Editor", available: ule.is_some() || source == "core.editor", required: false, detail }
 }
 
+/// The board `ul desk` opens by default (desk.py `default_board`): `<desk.boards_dir>/<todo.file>` when
+/// todo.vault_path is empty, also `board.md` there when it still names the pre-3.19.5 default that does not
+/// exist on this Mac, otherwise todo.vault_path + todo.file.
+fn default_board(config: &Config) -> PathBuf {
+    let vault = config.string("todo.vault_path");
+    let file = config.string("todo.file");
+    let legacy = vault == "~/aiwork/data-obsidian" && !crate::util::expand_user(&vault).is_dir();
+    if !vault.trim().is_empty() && !legacy {
+        return crate::util::expand_user(&vault).join(file);
+    }
+    let boards = crate::util::expand_user(&config.string("desk.boards_dir"));
+    let boards = if boards.as_os_str().is_empty() { PathBuf::from("boards") } else { boards };
+    let boards = if boards.is_absolute() { boards } else { config_dir().join(boards) };
+    boards.join(if legacy || file.is_empty() { "board.md".into() } else { file })
+}
+
 fn doctor_checks() -> Vec<Check> {
     let root = ensure_layout().unwrap_or_else(|_| config_dir());
     let (config, config_ok, config_detail) = match config::load() {
@@ -954,7 +970,7 @@ fn doctor_checks() -> Vec<Check> {
     let effective = config.as_ref().unwrap_or(&fallback);
     let storage = if config_ok { effective.storage_root() } else { config_dir().join("data") };
     let harness = which(&effective.string("mac.executable"));
-    let todo_file = crate::util::expand_user(&effective.string("todo.vault_path")).join(effective.string("todo.file"));
+    let todo_file = default_board(effective);
     let lm_port = u16::try_from(effective.int("lm.port")).unwrap_or(1234);
     let unlaw_bin = executable_dir();
 
@@ -996,7 +1012,7 @@ fn doctor_checks() -> Vec<Check> {
         tool("Node.js", "node", "optional; runs commands written as main.js"),
         tool("screencapture", "screencapture", "built into macOS"),
         tool("ffmpeg", "ffmpeg", "needed for camera and audio recording"),
-        tool("Zed", "zed", "needed by `ul work`"),
+        tool("Zed", "zed", "optional; `ul work` and `ul zed` use another editor without it"),
         tool("7-Zip", "7z", "needed by `ul zip` for 7z, rar reading and AES zip"),
         tool("zstd", "zstd", "needed by `ul zip` for .tar.zst and .zst"),
         tool("RAR", "rar", "optional; needed to create .rar with `ul zip -f rar`"),

@@ -362,6 +362,57 @@ class DeleteBoardTests(unittest.TestCase):
         self.assertTrue((self.home / ".Trash" / "Linked.md").is_symlink())
 
 
+class DefaultBoardTests(unittest.TestCase):
+    """The default board lives in desk.boards_dir and is created on first use, never in someone's vault."""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.home = self.root / "home"
+        self.home.mkdir()
+        patcher = patch.dict(os.environ, {"HOME": str(self.home), "XDG_CONFIG_HOME": str(self.root / "config")})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.boards = self.root / "config" / "unlaw" / "boards"
+
+    def test_the_default_config_creates_board_md_in_the_boards_folder(self) -> None:
+        from unlawful.config import DEFAULT_CONFIG
+        from unlawful.desk import default_board
+        from unlawful.kanban import NEW_BOARD
+
+        path = default_board(DEFAULT_CONFIG)
+        self.assertEqual(path, (self.boards / "board.md").resolve())
+        self.assertEqual(path.read_text(encoding="utf-8"), NEW_BOARD)
+        path.write_text(BOARD, encoding="utf-8")
+        self.assertEqual(default_board(DEFAULT_CONFIG).read_text(encoding="utf-8"), BOARD, "an existing board is kept")
+
+    def test_the_old_default_vault_counts_only_when_it_exists(self) -> None:
+        from unlawful.desk import default_board
+
+        config = {"todo": {"vault_path": "~/aiwork/data-obsidian", "file": "TODO.md"}, "desk": {}}
+        self.assertEqual(default_board(config), (self.boards / "board.md").resolve())
+        vault = self.home / "aiwork" / "data-obsidian"
+        vault.mkdir(parents=True)
+        (vault / "TODO.md").write_text(BOARD, encoding="utf-8")
+        self.assertEqual(default_board(config), (vault / "TODO.md").resolve())
+
+    def test_a_configured_vault_is_never_created(self) -> None:
+        from unlawful.desk import default_board
+
+        config = {"todo": {"vault_path": str(self.root / "vault"), "file": "TODO.md"}, "desk": {}}
+        with self.assertRaises(FileNotFoundError):
+            default_board(config)
+        self.assertFalse((self.root / "vault").exists())
+
+    def test_todo_file_cannot_leave_the_boards_folder(self) -> None:
+        from unlawful.desk import default_board
+
+        for name in ("../escape.md", "sub/board.md", "board.txt"):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                default_board({"todo": {"vault_path": "", "file": name}, "desk": {}})
+
+
 class PomodoroTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
@@ -459,6 +510,7 @@ class DeskServerTests(unittest.TestCase):
         with patch.dict(os.environ, self.env):
             commands = ensure_layout() / "commands"
             set_config_value("todo.vault_path", str(self.vault))
+            set_config_value("todo.file", "TODO.md")
         self.desk = commands / "desk" / "main.py"
 
     def run_seed(self, script: Path, *args: str) -> subprocess.CompletedProcess[str]:
