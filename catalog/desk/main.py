@@ -371,8 +371,8 @@ MAX_NOTE_LINES = 20
 # One request per run: argv[0] is a JSON object with "op"; the answer is JSON on stdout.
 EVENTKIT_SCRIPT = r"""
 ObjC.import("EventKit");
-function wait(isDone) {
-  const until = Date.now() + 60000;
+function wait(isDone, seconds) {
+  const until = Date.now() + seconds * 1000;
   while (!isDone() && Date.now() < until) $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.02));
   return isDone();
 }
@@ -389,13 +389,18 @@ function check(ok, error, what) {
 function run(argv) {
   try {
     const request = JSON.parse(argv[0]);
-    const store = $.EKEventStore.alloc.init;
-    let status = Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder));
+    const access = () => Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder));
+    let store = $.EKEventStore.alloc.init;
+    let status = access();
     if (status === 0) {
+      // First run: macOS asks the user. The completion block may never reach this run loop,
+      // so the status itself is polled too; a store made before the answer sees no data.
       let answered = false;
       store.requestFullAccessToRemindersWithCompletion((granted) => { answered = true; });
-      wait(() => answered);
-      status = Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder));
+      wait(() => answered || access() !== 0, 90);
+      status = access();
+      if (status === 0) return JSON.stringify({ error: "macOS is still asking for access to Reminders: answer the dialog, then try again" });
+      store = $.EKEventStore.alloc.init;
     }
     if (status !== 3) return JSON.stringify({ error: "no access to Reminders: allow your terminal in System Settings > Privacy & Security > Reminders" });
     const item = (id) => {
@@ -428,7 +433,7 @@ function run(argv) {
       }
       let fetched = null;
       store.fetchRemindersMatchingPredicateCompletion(store.predicateForIncompleteRemindersWithDueDateStartingEndingCalendars($(), $(), $()), (items) => { fetched = items; });
-      if (!wait(() => fetched !== null)) throw new Error("Reminders did not answer");
+      if (!wait(() => fetched !== null, 20)) throw new Error("Reminders did not answer");
       const items = [];
       for (let i = 0; i < fetched.count; i++) {
         const r = fetched.objectAtIndex(i);
@@ -490,7 +495,9 @@ class Reminders:
 
     MAX_AGE = 1.5
 
-    def __init__(self, timeout: float = 60, clock=time.monotonic) -> None:
+    # Above the script's own waits (90 s for the access dialog + 20 s for the fetch),
+    # so a slow first run ends with the script's message, not a kill.
+    def __init__(self, timeout: float = 120, clock=time.monotonic) -> None:
         self.timeout = timeout
         self.clock = clock
         self.lock = threading.Lock()
@@ -6141,6 +6148,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         return
+
+    def handle(self) -> None:
+        # The page went away (reload, closed tab) before a slow answer was written: nothing to report.
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _send(
         self, status: int, body: bytes, kind: str, headers: dict[str, str] | None = None

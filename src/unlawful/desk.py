@@ -1044,6 +1044,13 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         return
 
+    def handle(self) -> None:
+        # The page went away (reload, closed tab) before a slow answer was written: nothing to report.
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def _send(
         self, status: int, body: bytes, kind: str, headers: dict[str, str] | None = None
     ) -> None:
