@@ -335,7 +335,7 @@ Usage: ul music [track]
 Settings: apps.spotify, apps.spotify_autoplay_delay.
 Autoplay requires Accessibility permission for your terminal.
 Without the Spotify app, opens the Spotify web player (open.spotify.com) instead.
-Example: ul music "Nujabes Feather"
+Example: ul music "Take Me Out"
 ''',
     "netflix": '''Open Netflix in your default browser.
 Usage: ul netflix

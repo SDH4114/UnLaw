@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.parse
 from pathlib import Path
 from unittest.mock import patch
 
@@ -734,6 +735,194 @@ class CanvasFileActionTests(ServerTests):
     def test_choose_without_osascript_lets_the_page_ask(self) -> None:
         with patch.dict(os.environ, {"PATH": str(self.root / "empty")}):
             self.assertEqual(self.request("POST", "/api/canvas/choose", {}), (200, {"unavailable": True}))
+
+
+class CanvasFileTests(unittest.TestCase):
+    """Files dropped on a canvas: copied into attachments/ next to it, served back as pictures, opened in their app."""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        board = self.root / "TODO.md"
+        board.write_text("## To do\n", encoding="utf-8")
+        patcher = patch.dict(
+            os.environ,
+            {"XDG_CONFIG_HOME": str(self.root / "config"), "HOME": str(self.root / "home")},
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.canvas_dir = self.root / "canvases"
+        self.desk = Desk(board, {"desk": {"canvas_dir": str(self.canvas_dir)}}, self.root / "state")
+        server = desk_module.make_server(
+            self.desk, 0, TOKEN, True,
+            arcade=desk_module.Arcade(None, self.root / "scores", "normal"),
+            studio=desk_module.Studio(None, {}),
+        )
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+
+        def stop() -> None:
+            server.shutdown()
+            server.server_close()
+            worker.join(2)
+
+        self.addCleanup(stop)
+        self.address = server.server_address
+        self.canvas = self.desk.canvas_open("Case", create=True)["path"]
+
+    def call(self, method: str, path: str, payload: bytes | None = None, token: str | None = TOKEN, headers: dict | None = None):
+        connection = http.client.HTTPConnection(*self.address, timeout=10)
+        try:
+            sent = {"X-Desk-Token": token} if token else {}
+            connection.request(method, path, payload, {**sent, **(headers or {})})
+            response = connection.getresponse()
+            return response.status, response.getheader("Content-Type") or "", response.read()
+        finally:
+            connection.close()
+
+    def upload(self, name: str, data: bytes, canvas: str | None = None, token: str | None = TOKEN):
+        query = urllib.parse.urlencode({"path": canvas or self.canvas, "name": name})
+        status, _, body = self.call("POST", "/api/canvas/upload?" + query, data, token)
+        return status, json.loads(body)
+
+    def media(self, file: str, thumb: bool = False, token: str = TOKEN):
+        query = {"t": token, "path": self.canvas, "file": file}
+        if thumb:
+            query["thumb"] = "1"
+        return self.call("GET", "/media/canvas?" + urllib.parse.urlencode(query), token=None)
+
+    def fake_tool(self, name: str, script: str) -> Path:
+        tools = self.root / "bin"
+        tools.mkdir(exist_ok=True)
+        fake = tools / name
+        fake.write_text("#!/bin/sh\n" + script)
+        fake.chmod(0o755)
+        return tools
+
+    def test_upload_copies_the_file_next_to_the_canvas(self) -> None:
+        status, data = self.upload("Photo.png", b"\x89PNG data")
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data, {"file": "attachments/Photo.png", "name": "Photo.png", "size": 9})
+        self.assertEqual((self.canvas_dir / "attachments" / "Photo.png").read_bytes(), b"\x89PNG data")
+
+    def test_upload_never_overwrites(self) -> None:
+        self.upload("Report.pdf", b"one")
+        status, data = self.upload("Report.pdf", b"two")
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["file"], "attachments/Report 2.pdf")
+        folder = self.canvas_dir / "attachments"
+        self.assertEqual((folder / "Report.pdf").read_bytes(), b"one")
+        self.assertEqual((folder / "Report 2.pdf").read_bytes(), b"two")
+
+    def test_upload_names_are_cleaned(self) -> None:
+        for raw, clean in (
+            ("../../evil.txt", "evil.txt"),
+            ("..\\x\\y.doc", "y.doc"),
+            (".hidden", "hidden"),
+            ("a\x00b\nc.md", "abc.md"),
+            ("", "file"),
+            ("/", "file"),
+            ("я" * 300 + ".pdf", "я" * 98 + ".pdf"),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(desk_module.attachment_name(raw), clean)
+        status, data = self.upload("../../escape.txt", b"x")
+        self.assertEqual(status, 200, data)
+        self.assertTrue((self.canvas_dir / "attachments" / "escape.txt").is_file())
+        self.assertFalse((self.root / "escape.txt").exists())
+
+    def test_upload_needs_the_token_and_an_existing_canvas(self) -> None:
+        self.assertEqual(self.upload("a.png", b"x", token=None)[0], 403)
+        self.assertEqual(self.upload("a.png", b"x", token="wrong")[0], 403)
+        status, data = self.upload("a.png", b"x", canvas=str(self.root / "missing.canvas"))
+        self.assertEqual(status, 404, data)
+        status, data = self.upload("a.png", b"x", canvas=str(self.root / "TODO.md"))
+        self.assertEqual(status, 400, data)
+        self.assertFalse((self.root / "attachments").exists())
+
+    def test_upload_size_limit(self) -> None:
+        with patch.object(desk_module, "MAX_UPLOAD", 4):
+            status, data = self.upload("big.bin", b"12345")
+        self.assertEqual(status, 400, data)
+        self.assertFalse((self.canvas_dir / "attachments" / "big.bin").exists())
+
+    def test_cut_off_upload_leaves_nothing(self) -> None:
+        class Short:
+            def read(self, size: int) -> bytes:
+                return b""
+
+        with self.assertRaises(ValueError):
+            self.desk.canvas_attach(self.canvas, "cut.pdf", Short(), 10)
+        self.assertEqual(list((self.canvas_dir / "attachments").iterdir()), [])
+
+    def test_pictures_are_served_with_their_type(self) -> None:
+        self.upload("Photo.png", b"\x89PNG data")
+        status, kind, body = self.media("attachments/Photo.png")
+        self.assertEqual((status, kind, body), (200, "image/png", b"\x89PNG data"))
+        self.assertEqual(self.media("attachments/Photo.png", token="wrong")[0], 403)
+
+    def test_media_stays_inside_the_canvas_folder(self) -> None:
+        (self.root / "secret.png").write_bytes(b"SECRET-BYTES")
+        outside = self.root / "outside.png"
+        outside.write_bytes(b"OUTSIDE-BYTES")
+        (self.canvas_dir / "link.png").symlink_to(outside)
+        for file in ("../secret.png", str(self.root / "secret.png"), "~/secret.png", "link.png", "attachments/none.png"):
+            with self.subTest(file=file):
+                status, _, body = self.media(file)
+                self.assertIn(status, (400, 404, 500))
+                self.assertNotIn(b"SECRET-BYTES", body)
+                self.assertNotIn(b"OUTSIDE-BYTES", body)
+
+    def test_other_files_get_a_quick_look_thumbnail_once(self) -> None:
+        self.upload("Brief.pdf", b"%PDF-1.4")
+        log = self.root / "ql.log"
+        tools = self.fake_tool(
+            "qlmanage",
+            f'echo "$@" >> {log}\nfor last; do :; done\nout=""\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done\n'
+            'printf "PNGTHUMB" > "$out/${last##*/}.png"\n',
+        )
+        with patch.dict(os.environ, {"PATH": str(tools)}):
+            first = self.media("attachments/Brief.pdf")
+            second = self.media("attachments/Brief.pdf")
+        self.assertEqual(first, (200, "image/png", b"PNGTHUMB"))
+        self.assertEqual(second, first)
+        self.assertEqual(len(log.read_text().splitlines()), 1, "the thumbnail is cached")
+        self.assertIn("-t -s 640", log.read_text())
+
+    def test_no_thumbnail_is_404(self) -> None:
+        self.upload("Brief.pdf", b"%PDF-1.4")
+        tools = self.fake_tool("qlmanage", "exit 1\n")
+        with patch.dict(os.environ, {"PATH": str(tools)}):
+            self.assertEqual(self.media("attachments/Brief.pdf")[0], 404)
+        with patch.dict(os.environ, {"PATH": str(self.root / "empty")}):
+            self.assertEqual(self.media("attachments/Brief.pdf")[0], 404)
+
+    def test_open_file_runs_open_with_the_absolute_path(self) -> None:
+        self.upload("Brief.pdf", b"%PDF-1.4")
+        log = self.root / "open.log"
+        tools = self.fake_tool("open", f'echo "$@" > {log}\n')
+        body = json.dumps({"path": self.canvas, "file": "attachments/Brief.pdf"}).encode()
+        with patch.dict(os.environ, {"PATH": str(tools)}):
+            status, _, data = self.call("POST", "/api/canvas/open-file", body)
+            self.assertEqual((status, json.loads(data)), (200, {"ok": True, "revealed": False}))
+            self.assertEqual(log.read_text().strip(), str((self.canvas_dir / "attachments" / "Brief.pdf").resolve()))
+            refused = json.dumps({"path": self.canvas, "file": "../TODO.md"}).encode()
+            status, _, _ = self.call("POST", "/api/canvas/open-file", refused)
+        self.assertEqual(status, 404)
+
+    def test_runnable_files_are_only_shown_in_finder(self) -> None:
+        log = self.root / "open.log"
+        tools = self.fake_tool("open", f'echo "$@" > {log}\n')
+        self.upload("run.command", b"#!/bin/sh\necho hi\n")
+        program = self.canvas_dir / "attachments" / "program"
+        program.write_bytes(b"#!/bin/sh\n")
+        program.chmod(0o755)
+        for file, shown in (("attachments/run.command", "attachments/run.command"), ("attachments/program", "attachments/program")):
+            with self.subTest(file=file), patch.dict(os.environ, {"PATH": str(tools)}):
+                status, _, data = self.call("POST", "/api/canvas/open-file", json.dumps({"path": self.canvas, "file": file}).encode())
+                self.assertEqual((status, json.loads(data)), (200, {"ok": True, "revealed": True}))
+                self.assertEqual(log.read_text().strip(), "-R " + str((self.canvas_dir / shown).resolve()))
 
 
 class BoardChooseTests(ServerTests):

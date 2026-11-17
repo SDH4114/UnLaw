@@ -660,7 +660,29 @@ class CaptureTests(ToolTestCase):
         self.assertNotEqual(paths[0].read_bytes(), paths[1].read_bytes())
 
 class MusicAndWorkTests(ToolTestCase):
+    def test_music_without_a_track_only_opens_spotify(self) -> None:
+        opened, script = self.tool("open"), self.tool("osascript")
+        self.assertEqual(self.run_main(music.main, [])[0], 0)
+        self.assertEqual(self.lines(opened), ["-a|Spotify"])
+        self.assertEqual(self.lines(script), [], "no search and no keystrokes")
+
+    def test_music_with_a_track_opens_spotify_then_searches(self) -> None:
+        opened, script = self.tool("open"), self.tool("osascript")
+        self.assertEqual(self.run_main(music.main, ["Take", "Me", "Out"])[0], 0)
+        self.assertEqual(self.lines(opened), ["-a|Spotify"])
+        self.assertIn('open location "spotify:search:Take%20Me%20Out"', script.read_text())
+
+    def test_music_without_the_app_uses_the_web_player(self) -> None:
+        opened = self.tool("open", body="if sys.argv[1] == '-a': raise SystemExit(1)\n")
+        script = self.tool("osascript")
+        self.assertEqual(self.run_main(music.main, ["Take Me Out"])[0], 0)
+        self.assertEqual(self.lines(opened), ["-a|Spotify", "https://open.spotify.com/search/Take%20Me%20Out"])
+        self.assertEqual(self.lines(script), [])
+        self.assertEqual(self.run_main(music.main, [])[0], 0)
+        self.assertEqual(self.lines(opened)[-1], "https://open.spotify.com/")
+
     def test_music_query_is_escaped_for_applescript(self) -> None:
+        self.tool("open")
         log = self.tool("osascript")
         set_config_value("apps.spotify_autoplay_delay", 0.5)
         self.assertEqual(self.run_main(music.main, ['say "hi" \\ now'])[0], 0)
@@ -670,6 +692,7 @@ class MusicAndWorkTests(ToolTestCase):
         self.assertIn("delay 0.5", script)
 
     def test_music_failures(self) -> None:
+        self.tool("open")
         self.tool("osascript", exit_code=1)
         code, _, error = self.run_main(music.main, ["song"])
         self.assertEqual(code, 1)

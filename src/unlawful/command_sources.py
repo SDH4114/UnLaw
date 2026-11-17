@@ -343,6 +343,12 @@ LEGACY_SOURCE_HASHES["desk"].add("48f1487d908b6df268d658a9137bb9f2faa3dedd590157
 LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("5ad640becd9dc1d413d0a4a03a39c62cabc9d1ca3135553354865c73f5f6b1a2")
 # Desk seed of the 3.14.0 Reminders build (7af1328, installed on the maintainer machine), before the Canvas tab.
 LEGACY_SOURCE_HASHES["desk"].add("9ccc7b80ec554df971227a24b05411ec420ea7398d713cec26948c3915d645e3")
+# Official music seed of release 3.19.5 (1863dbc), before the help example changed to "Take Me Out".
+LEGACY_SOURCE_HASHES["music"].add("7ddb2ec061fb9d90ea239256a403d34b9c6bee7e9a9c33639d4ee75858889aa3")
+LEGACY_NORMALIZED_HASHES.setdefault("music", set()).add("bba4ef2fdded4ebba575299a3bfd8eb91ed93bd61152ebdb03deeafe015889d1")
+# Official desk seed of release 3.19.5 (1863dbc), before files on the canvas and the detective board look.
+LEGACY_SOURCE_HASHES["desk"].add("383ef9ebc0644c610c7d7f42365712570d44abb38e79b1aaec6f022854e06d1b")
+LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("97ddefd13f81d8a0aa99526c5e8c79f1d35183101a9fcb9a7d59c27addc31a53")
 LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("8209386369c0883b8c60bf4ad3848d24a16ca4e42909b839becfdd08a4d9f891")
 # Desk seed of 3.15.0 (00fc883: Canvas tab), before Ping Pong in the Games tab.
 LEGACY_SOURCE_HASHES["desk"].add("cc861b52e51cac22416ea8474c9eb9189c5799b310e62286352b4be021fd6b4a")

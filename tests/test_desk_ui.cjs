@@ -79,7 +79,8 @@ function harness() {
       renderCanvas, cvDown, cvMove, cvUp, cvWheel, cvSetTool, cvEndEdit, cvSelect, cvGroup, cvExport, paintScene, cvPalette,
       fillable, fillTarget, applyFill, setBackground, cvBackground, canvasKey, cvStyle, cvNew, cvRename, cvChoose, CV_BY_KEY,
       floodRegion, growMask, traceMask, paintFromMask, paintContains, cutElement, eraseAt, cvBucket, cvToolClick,
-      widthToSlider, sliderToWidth, cvStepWidth, cvBuildBar, cvTypedWidth, loadBoards, applyTheme, newBoard, openOtherBoard, renderBoard, deleteBoard};
+      widthToSlider, sliderToWidth, cvStepWidth, cvBuildBar, cvTypedWidth,
+      cvCork, setLook, pinPoint, threadCurve, edgeCurveFor, nodeTilt, fileCardSize, fileExtension, mixColor, cvAddFiles, cvToggleCork, cvImageFor, bezierPoint, loadBoards, applyTheme, newBoard, openOtherBoard, renderBoard, deleteBoard};
   `, context);
   return {context, a: context.audit, listeners, timers, intervals, frames, ids,
     run: code => vm.runInContext(code, context)};
@@ -1063,6 +1064,99 @@ const tests = {
   h.a.renderBoard(again);
   assert.equal(again.children[0].children.some(node => node.children[0] && node.children[0].on && node.children[0].on.dragstart), false,
     'Reminders lists keep their order');
+ },
+ async canvas_detective_board() {
+  const h = harness(), a = h.a;
+  const doc = plain(sampleShape().canvas);
+  assert.equal(a.cvCork(doc), false);
+  assert.equal(a.setLook(doc, true), true);
+  assert.equal(doc.unlaw.look, 'cork');
+  assert.equal(doc.unlaw.future, 'yes', 'other unlaw keys stay');
+  assert.equal(a.setLook(doc, true), false, 'no change when it is already a detective board');
+  // Tilt and pin come from the id: the same every time, small, and the pin sits on the paper near the top.
+  const n1 = doc.nodes[0], n2 = doc.nodes[1];
+  assert.equal(a.nodeTilt(n1), a.nodeTilt({...n1}));
+  assert.ok(Math.abs(a.nodeTilt(n1)) <= 0.045);
+  assert.equal(a.nodeTilt(doc.nodes[2]), 0, 'groups are never tilted');
+  const pin = a.pinPoint(n1);
+  assert.ok(pin.x > n1.x + 80 && pin.x < n1.x + 120, 'pin near the top middle');
+  assert.ok(pin.y > n1.y && pin.y < n1.y + 30);
+  // Thread runs pin to pin and hangs below the straight line.
+  const curve = a.threadCurve(n1, n2);
+  assert.deepEqual(plain(curve.p0), plain(a.pinPoint(n1)));
+  assert.deepEqual(plain(curve.p3), plain(a.pinPoint(n2)));
+  const mid = a.bezierPoint(curve, 0.5);
+  assert.ok(mid.y > (curve.p0.y + curve.p3.y) / 2 + 20, 'the thread sags');
+  const map = new Map(doc.nodes.map(n => [n.id, n]));
+  assert.deepEqual(plain(a.edgeCurveFor(map, doc.edges[0], true)), plain(curve));
+  assert.notDeepEqual(plain(a.edgeCurveFor(map, doc.edges[0], false)), plain(curve), 'the plain look keeps side-to-side curves');
+  // Clicking the sagging thread selects the edge (the middle lies outside both cards).
+  assert.equal(a.hitTest(doc, mid.x, mid.y, 1), 'e:e1');
+  a.setLook(doc, false);
+  assert.equal(a.cvCork(doc), false);
+  assert.equal('look' in doc.unlaw, false);
+  // Helpers.
+  assert.deepEqual(plain(a.fileCardSize(null)), {width: 220, height: 280});
+  assert.deepEqual(plain(a.fileCardSize({w: 1000, h: 500})), {width: 280, height: 180});
+  assert.equal(a.fileCardSize({w: 10, h: 1000}).height, 510, 'tall pictures are capped');
+  assert.equal(a.fileExtension('attachments/Brief.pdf'), 'PDF');
+  assert.equal(a.fileExtension('noext'), 'FILE');
+  assert.equal(a.mixColor('#000000', '#ffffff', 0.5), '#808080');
+  // Painting a detective board on a recording context: pins and thread are drawn, the fill snapshot has no texture.
+  const calls = [];
+  const ctx = new Proxy({measureText: text => ({width: String(text).length * 7})}, {
+   get: (target, prop) => (prop in target ? target[prop] : (...args) => { calls.push(prop); return prop === 'createPattern' ? 'pattern' : undefined; }),
+   set: (target, prop, value) => { target[prop] = value; return true; },
+  });
+  h.context.document.createElement = () => ({getContext: () => ctx});
+  const pal = {dark: false, bg: '#fff', panel: '#fff', text: '#000', muted: '#888', line: '#ddd', accent: '#36f', soft: '#eef'};
+  a.setLook(doc, true);
+  const scene = flat => { calls.length = 0; a.paintScene({ctx, doc, view: {x: 0, y: 0, z: 1}, w: 800, h: 600, pal, scale: 1, ui: null, flat}); return [...calls]; };
+  const textured = scene(false);
+  assert.ok(textured.includes('createPattern'), 'cork texture');
+  assert.ok(textured.includes('arc'), 'push pins');
+  assert.ok(textured.includes('bezierCurveTo'), 'thread');
+  assert.equal(scene(true).includes('createPattern'), false, 'the fill tool sees flat cork');
+ },
+ async canvas_files_are_added_and_pinned() {
+  const h = harness(), a = h.a;
+  a.cvLoad(sampleShape());
+  a.cv.w = 800; a.cv.h = 600; a.cv.view = {x: 0, y: 0, z: 1};
+  const sent = [];
+  h.context.fetch = async (url, options) => {
+   sent.push({url, options});
+   if (url.includes('name=bad.pdf')) return {ok: false, status: 400, json: async () => ({error: 'nope'})};
+   const name = decodeURIComponent(/name=([^&]*)/.exec(url)[1]);
+   return {ok: true, status: 200, json: async () => ({file: 'attachments/' + name, name, size: 3})};
+  };
+  const nodes = a.cv.doc.nodes.length, undo = a.cv.hist.undo.length;
+  await a.cvAddFiles([{name: 'Brief.pdf', size: 3, type: 'application/pdf'}, {name: 'bad.pdf', size: 3}, {name: 'Doc.docx', size: 3}], {x: 100, y: 100});
+  assert.equal(sent.length, 3);
+  assert.ok(sent[0].url.startsWith('/api/canvas/upload?path=' + encodeURIComponent('/c/a.canvas') + '&name=Brief.pdf'));
+  assert.equal(sent[0].options.headers['X-Desk-Token'], 'test');
+  assert.equal(sent[0].options.method, 'POST');
+  const added = a.cv.doc.nodes.slice(nodes);
+  assert.deepEqual(plain(added.map(n => [n.type, n.file])), [['file', 'attachments/Brief.pdf'], ['file', 'attachments/Doc.docx']]);
+  assert.equal(added[0].x, 100 - 110); assert.equal(added[0].y, 100 - 140);
+  assert.ok(added[1].x > added[0].x, 'several files are fanned out');
+  assert.equal(h.ids.get('toast').textContent, 'nope');
+  assert.deepEqual(plain(a.cv.sel), added.map(n => 'n:' + n.id));
+  assert.equal(a.cv.hist.undo.length, undo + 1, 'one undo step');
+  sent.length = 0;
+  await a.cvAddFiles([{name: 'huge.mov', size: 300 * 1024 * 1024}]);
+  assert.equal(sent.length, 0, 'too big files are not sent');
+  a.cv.doc = null;
+  await a.cvAddFiles([{name: 'x.png', size: 1}]);
+  assert.equal(sent.length, 0);
+  assert.equal(h.ids.get('toast').textContent, 'Open or create a canvas first');
+  // The detective board toggle is one undoable step.
+  a.cvLoad(sampleShape());
+  a.cvToggleCork();
+  assert.equal(a.cvCork(a.cv.doc), true);
+  a.cvUndo();
+  assert.equal(a.cvCork(a.cv.doc), false);
+  assert.equal(a.cvImageFor(a.cv.doc.nodes[1]), null, 'notes are never fetched as pictures');
+  assert.equal(a.cvImageFor({file: 'attachments/a.txt'}), null, 'plain text stays a paper sheet');
  },
  async favicon_follows_the_page_theme() {
   const h = harness();

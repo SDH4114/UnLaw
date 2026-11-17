@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import fcntl
 import hmac
 import json
@@ -60,6 +61,15 @@ PHASES = {
 DOING_COLUMNS = {"doing", "in progress", "in work", "в работе", "делаю", "в процессе"}
 MAX_BODY = 64 * 1024
 MAX_CANVAS_BODY = 16 * 1024 * 1024
+# Files dropped on a canvas are copied next to it, into this folder (a JSON Canvas file node's path is relative).
+CANVAS_FILES = "attachments"
+MAX_UPLOAD = 256 * 1024 * 1024
+# Pictures the page shows as they are; anything else gets a Quick Look thumbnail (qlmanage).
+CANVAS_IMAGES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
+THUMB_SIZE = 640
+# `open` runs these (a script in Terminal, an installer, Java), so a card naming one only shows it in Finder.
+RUNNABLE_SUFFIXES = {".command", ".tool", ".terminal", ".sh", ".zsh", ".bash", ".csh", ".jar", ".pkg", ".mpkg", ".app", ".workflow", ".action", ".scpt", ".applescript", ".scptd", ".osax", ".prefpane", ".inetloc", ".fileloc", ".webloc", ".definition"}
+THUMB_TIMEOUT = 30
 MAX_TEXT = 500
 RECENT = 8
 # The macOS open dialog for "Open…" in the Canvas tab; argv[1] is the folder it starts in.
@@ -799,6 +809,85 @@ class Desk:
         start = self.canvas_dir if self.canvas_dir.is_dir() else Path.home()
         return self._choose(CHOOSE_CANVAS_SCRIPT, [str(start)])
 
+    def canvas_folder(self, raw: object) -> Path:
+        """The folder of an existing canvas; file nodes are relative to it."""
+        with self.canvas_lock:
+            return canvas_file(raw, create=False, canvas_dir=self.canvas_dir).parent
+
+    def canvas_attach(self, raw: object, name: object, source, length: int) -> dict:
+        """Copy `length` bytes from `source` into the canvas's attachments folder under a free name
+        (`x.pdf`, `x 2.pdf`, ...), never over a file; a cut-off upload leaves nothing behind."""
+        if not 0 <= length <= MAX_UPLOAD:
+            raise ValueError(f"A file on a canvas can be at most {MAX_UPLOAD // (1024 * 1024)} MB")
+        clean = attachment_name(name)
+        folder = self.canvas_folder(raw) / CANVAS_FILES
+        folder.mkdir(parents=True, exist_ok=True)
+        stem, suffix = os.path.splitext(clean)
+        for number in range(1, 1000):
+            target = folder / (clean if number == 1 else f"{stem} {number}{suffix}")
+            try:
+                handle = target.open("xb")
+            except FileExistsError:
+                continue
+            break
+        else:
+            raise ValueError(f"No free name for {clean} in {folder}")
+        try:
+            with handle:
+                left = length
+                while left > 0:
+                    chunk = source.read(min(1 << 16, left))
+                    if not chunk:
+                        raise ValueError("the upload ended early")
+                    handle.write(chunk)
+                    left -= len(chunk)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+        return {"file": f"{CANVAS_FILES}/{target.name}", "name": target.name, "size": length}
+
+    def canvas_asset(self, raw: object, file: object) -> Path:
+        """A file a node of this canvas names, only when it lies inside the canvas's folder."""
+        if not isinstance(file, str) or not file or "\x00" in file or file.startswith(("/", "~")):
+            raise ValueError("file must be a path relative to the canvas")
+        folder = self.canvas_folder(raw).resolve()
+        target = (folder / file).resolve()
+        if not target.is_relative_to(folder) or not target.is_file():
+            raise FileNotFoundError(f"No such file next to the canvas: {file}")
+        return target
+
+    def canvas_thumb(self, path: Path) -> Path:
+        """A Quick Look PNG of any file (PDF, documents, HEIC, ...), cached by path, size and time."""
+        info = path.stat()
+        key = hashlib.sha256(f"{path}\0{info.st_size}\0{info.st_mtime_ns}".encode()).hexdigest()[:32]
+        cache = self.directory / "thumbs"
+        thumb = cache / f"{key}.png"
+        if thumb.is_file():
+            return thumb
+        cache.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=cache, prefix=".ql.") as work:
+            try:
+                subprocess.run(
+                    ["qlmanage", "-t", "-s", str(THUMB_SIZE), "-o", work, str(path)],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=THUMB_TIMEOUT, check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise FileNotFoundError(f"No preview for {path.name}") from error
+            made = Path(work) / f"{path.name}.png"
+            if not made.is_file():
+                raise FileNotFoundError(f"No preview for {path.name}")
+            os.replace(made, thumb)
+        return thumb
+
+    def canvas_open_file(self, raw: object, file: object) -> dict:
+        """Open a canvas file in its macOS app (Preview, Pages, ...). A file that `open` would run
+        (scripts, executables, installers) is only shown in Finder, so a card never starts a program."""
+        target = self.canvas_asset(raw, file)
+        runnable = target.suffix.casefold() in RUNNABLE_SUFFIXES or (not target.suffix and os.access(target, os.X_OK))
+        command = ["open", "-R", str(target)] if runnable else ["open", str(target)]
+        return {"ok": subprocess.run(command, check=False).returncode == 0, "revealed": runnable}
+
     def board_choose(self, create: bool) -> dict:
         """The macOS save dialog for a new board (create) or the open dialog for an existing one.
         Same answers as canvas_choose; a new board's path gets .md when the name has none."""
@@ -937,6 +1026,23 @@ def board_file(raw: str, create: bool = False, boards_dir: Path | None = None) -
         raise ValueError(f"Not a file: {path}")
     KanbanBoard.parse(path.read_text(encoding="utf-8"))
     return path
+
+
+def attachment_name(raw: object) -> str:
+    """A safe file name from the browser's: the last path part, no control characters,
+    no leading dot, at most 200 bytes (the extension kept)."""
+    if not isinstance(raw, str):
+        raise TypeError("name must be text")
+    name = raw.replace("\\", "/").rsplit("/", 1)[-1]
+    name = "".join(char for char in name if char.isprintable()).strip().lstrip(".").strip()
+    if not name:
+        name = "file"
+    stem, suffix = os.path.splitext(name)
+    if len(suffix.encode()) > 20:
+        stem, suffix = name, ""
+    while len((stem + suffix).encode()) > 200:
+        stem = stem[:-1]
+    return (stem.rstrip() or "file") + suffix
 
 
 def canvas_file(raw: object, create: bool, canvas_dir: Path) -> Path:
@@ -1245,6 +1351,13 @@ class Handler(BaseHTTPRequestHandler):
             name = self.studio.member(query.get("name", [""])[0]).name
             data = self.studio.run("thumb", name, timeout=60)
             path = Path(str(data.get("thumbnail") if isinstance(data, dict) else ""))
+        elif url.path == "/media/canvas":
+            target = self.desk.canvas_asset(query.get("path", [""])[0], query.get("file", [""])[0])
+            kind = CANVAS_IMAGES.get(target.suffix.casefold())
+            if kind is None or query.get("thumb", [""])[0] == "1":
+                target, kind = self.desk.canvas_thumb(target), "image/png"
+            self._send_file(target, kind)
+            return
         elif url.path == "/media/preview":
             display = query.get("display", ["1"])[0]
             if not display.isdigit() or not 1 <= int(display) <= 16:
@@ -1256,9 +1369,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send_file(path)
 
-    def _send_file(self, path: Path) -> None:
+    def _send_file(self, path: Path, kind: str | None = None) -> None:
         """Serve a file with byte ranges, which video seeking needs."""
-        kind = MEDIA_TYPES.get(path.suffix.casefold())
+        kind = kind or MEDIA_TYPES.get(path.suffix.casefold())
         if kind is None or not path.is_file():
             self._json(404, {"error": "not found"})
             return
@@ -1307,8 +1420,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if not self._guard():
             return
-        path = urllib.parse.urlsplit(self.path).path
+        url = urllib.parse.urlsplit(self.path)
+        path = url.path
         try:
+            if path == "/api/canvas/upload":
+                # The body is the file itself (not JSON), streamed to disk.
+                query = urllib.parse.parse_qs(url.query)
+                length = int(self.headers.get("Content-Length") or -1)
+                self._json(200, self.desk.canvas_attach(query.get("path", [""])[0], query.get("name", [""])[0], self.rfile, length))
+                return
             body = self._body(MAX_CANVAS_BODY if path == "/api/canvas" else MAX_BODY)
             if path == "/api/board":
                 self._json(200, self.desk.change(body))
@@ -1352,6 +1472,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.desk.canvas_rename(body.get("path"), body.get("name")))
             elif path == "/api/canvas/choose":
                 self._json(200, self.desk.canvas_choose())
+            elif path == "/api/canvas/open-file":
+                self._json(200, self.desk.canvas_open_file(body.get("path"), body.get("file")))
             elif path == "/api/boards/delete":
                 self._json(200, self.desk.delete_board(body.get("path")))
             elif path == "/api/boards/choose":

@@ -2,7 +2,7 @@
 """Open Spotify, or search for a track and attempt to play it."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Open Spotify, or search for a track and attempt to play it.\nUsage: ul music [track]\nSettings: apps.spotify, apps.spotify_autoplay_delay.\nAutoplay requires Accessibility permission for your terminal.\nWithout the Spotify app, opens the Spotify web player (open.spotify.com) instead.\nExample: ul music "Nujabes Feather"\n'
+COMMAND_HELP = 'Open Spotify, or search for a track and attempt to play it.\nUsage: ul music [track]\nSettings: apps.spotify, apps.spotify_autoplay_delay.\nAutoplay requires Accessibility permission for your terminal.\nWithout the Spotify app, opens the Spotify web player (open.spotify.com) instead.\nExample: ul music "Take Me Out"\n'
 
 import copy
 import os

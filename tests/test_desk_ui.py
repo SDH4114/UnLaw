@@ -134,6 +134,12 @@ class DeskUITests(unittest.TestCase):
     def test_canvas_and_board_shortcuts_do_not_clash(self) -> None:
         self.run_case("canvas_keys_stay_in_their_view")
 
+    def test_canvas_detective_board_pins_and_thread(self) -> None:
+        self.run_case("canvas_detective_board")
+
+    def test_canvas_files_are_uploaded_and_pinned(self) -> None:
+        self.run_case("canvas_files_are_added_and_pinned")
+
     def test_canvas_pointer_flows_create_move_connect_and_erase(self) -> None:
         self.run_case("canvas_interaction_flow")
 

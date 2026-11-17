@@ -34,7 +34,7 @@
   {
    "name": "desk",
    "summary": "Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser.",
-   "sha256": "383ef9ebc0644c610c7d7f42365712570d44abb38e79b1aaec6f022854e06d1b"
+   "sha256": "400c2e8d650b8ebba28a73d52c13578ecbb8e9180b709d99cb2e55231183356e"
   },
   {
    "name": "git",
@@ -64,7 +64,7 @@
   {
    "name": "music",
    "summary": "Open Spotify, or search for a track and attempt to play it.",
-   "sha256": "7ddb2ec061fb9d90ea239256a403d34b9c6bee7e9a9c33639d4ee75858889aa3"
+   "sha256": "d7348136d3657f20b2e5e93d0e23b72a2e8fd0f89189cf3a2b217497e9f6d5fc"
   },
   {
    "name": "netflix",

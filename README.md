@@ -646,6 +646,16 @@ keyboard layout: `v` select, `h` hand, `n` card, `t` text, `u` shapes, `b`
 brush, `g` fill, `e` eraser, `[`/`]` width, `d` default color, Cmd+G group,
 Cmd+0 fit.
 
+Drop files on the canvas (or use **Add** at the right of the toolbar) to pin
+pictures, PDFs, documents or anything else: they are copied into `attachments/`
+next to the `.canvas` file (never over an existing file) and shown as pictures,
+documents through their Quick Look preview. Clicking a selected file card opens
+it in its app (a Markdown note in Obsidian; scripts and programs are only
+shown in Finder, never run). The pin button turns a canvas into a
+detective board: cork, sticky notes, pinned photos and red thread from pin to
+pin. The look is saved in the canvas (`unlaw.look`), the file stays a normal
+JSON Canvas.
+
 **Games** plays the `ul game` arcade (Tetris, Snake, Minesweeper, Space Invaders,
 Chomp, Dash, Ping Pong, Chess) in the page with keyboard and mouse. The desk runs `ul game --stream`, so
 these are the same Rust games, and best scores are shared with the terminal in

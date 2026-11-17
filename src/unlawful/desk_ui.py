@@ -325,6 +325,9 @@ canvas.wave.strip { position: absolute; left: 0; right: 0; bottom: 0; height: 64
 .cvcanvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
 .cvedit { position: absolute; display: none; resize: none; border: 2px solid var(--accent); border-radius: 8px; background: var(--panel); color: var(--text); padding: 4px 6px; outline: none; z-index: 3; line-height: 1.3; overflow: auto; }
 .cvempty { position: absolute; inset: 0; display: none; place-content: center; justify-items: center; gap: 10px; color: var(--muted); }
+.cvbar .cvadd { margin-left: auto; }
+.cvbar .cvadd button { gap: 5px; color: var(--text); font-weight: 600; padding: 4px 9px; }
+.cvstage.dropping::after { content: "Drop files to pin them here"; position: absolute; inset: 10px; display: grid; place-items: center; border: 3px dashed var(--accent); border-radius: 14px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent-ink); font-weight: 700; font-size: 18px; pointer-events: none; z-index: 4; }
 </style>
 </head>
 <body>
@@ -1947,6 +1950,8 @@ const CV_ICONS = {
   fit: "M4 9V4h5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5",
   export: "M12 4v11 M7 10l5 5 5-5 M5 20h14",
   plus: "M12 5v14 M5 12h14",
+  pin: "M9 3.5h6 M10 3.5l-.6 6L6.5 13h11l-2.9-3.5-.6-6 M12 13v8",
+  attach: "M20.5 11.5l-8.4 8.4a5 5 0 0 1-7.1-7.1l8.4-8.4a3.3 3.3 0 0 1 4.7 4.7l-8.4 8.4a1.7 1.7 0 0 1-2.4-2.4l7.7-7.7",
   folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
   erasePart: "M7 11a5 5 0 1 0 10 0a5 5 0 1 0-10 0 M3 20.5h18",
   rough3: "M5 5h14v14H5z",
@@ -1970,6 +1975,15 @@ const CV_SIDE_NAMES = Object.keys(CV_SIDES);
 const CV_SHAPES = new Set(["rectangle", "ellipse", "diamond", "line", "arrow", "freedraw", "text", "paint"]);
 const CV_HEX = /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/;
 
+// Detective board look (unlaw.look = "cork"): cork, paper notes, photos and red thread between push pins.
+const CV_CORK = { light: "#b8875a", dark: "#5e4128" };
+const CV_PAPER = "#fff1a6";
+const CV_THREAD = "#c1121f";
+const CV_PINS = ["#d62828", "#1d6fd8", "#2b9348", "#f4a300", "#7b2cbf", "#e5e5e5"];
+const CV_IMAGE_FILE = /\.(png|jpe?g|gif|webp)$/i;
+// Quick Look draws plain text as dark text on a dark page when macOS is in dark mode: these stay a paper sheet.
+const CV_PLAIN_FILE = /\.(txt|text|log|csv|tsv|json|jsonl|ya?ml|toml|ini|cfg|conf|xml|html?|css|js|mjs|cjs|ts|tsx|jsx|py|rs|c|h|cc|cpp|hpp|m|swift|go|java|kt|rb|php|sh|zsh|bash|fish|sql|lua|r|jl|tex|srt|vtt)$/i;
+const CV_MAX_UPLOAD = 256 * 1024 * 1024;
 const cvNum = (value, fallback) => (typeof value === "number" && Number.isFinite(value) ? value : fallback);
 const cvClone = (value) => JSON.parse(JSON.stringify(value));
 const cvId = () => Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
@@ -2013,6 +2027,45 @@ function mulberry32(seed) {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+// ---- detective board geometry: a tilt per card from its id, one pin per card, thread from pin to pin ----
+const cvCork = (doc) => Boolean(doc && doc.unlaw && typeof doc.unlaw === "object" && doc.unlaw.look === "cork");
+function setLook(doc, cork) {
+  if (cvCork(doc) === cork) return false;
+  if (cork) { ensureElements(doc); doc.unlaw.look = "cork"; } else delete doc.unlaw.look;
+  return true;
+}
+// FNV-1a of the id as 0..1, so a card keeps its tilt and pin color on every redraw and machine.
+function idHash(id, salt) {
+  let h = 0x811c9dc5;
+  for (const ch of String(salt || "") + String(id)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
+  return h / 4294967296;
+}
+const nodeTilt = (node) => (node.type === "group" ? 0 : (idHash(node.id) * 2 - 1) * 0.045);
+const pinColor = (node) => CV_PINS[Math.floor(idHash(node.id, "pin") * CV_PINS.length)];
+function pinPoint(node) {
+  const tilt = nodeTilt(node), dy = -node.height / 2 + Math.min(14, node.height / 4);
+  return { x: node.x + node.width / 2 - Math.sin(tilt) * dy, y: node.y + node.height / 2 + Math.cos(tilt) * dy };
+}
+// The thread hangs: a quadratic sag written as a cubic, so hit-testing and labels use the edge code as is.
+function threadCurve(a, b) {
+  const p0 = pinPoint(a), p3 = pinPoint(b), length = Math.hypot(p3.x - p0.x, p3.y - p0.y);
+  const q = { x: (p0.x + p3.x) / 2, y: (p0.y + p3.y) / 2 + Math.min(90, 10 + length * 0.12) };
+  return { p0, c1: { x: p0.x + (2 / 3) * (q.x - p0.x), y: p0.y + (2 / 3) * (q.y - p0.y) }, c2: { x: p3.x + (2 / 3) * (q.x - p3.x), y: p3.y + (2 / 3) * (q.y - p3.y) }, p3 };
+}
+function mixColor(color, other, amount) {
+  const parse = (c) => { let hex = c.slice(1); if (hex.length === 3) hex = hex.split("").map((x) => x + x).join(""); return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)); };
+  if (!CV_HEX.test(color) || !CV_HEX.test(other)) return color;
+  const a = parse(color), b = parse(other);
+  return "#" + a.map((v, i) => Math.round(v + (b[i] - v) * amount).toString(16).padStart(2, "0")).join("");
+}
+const fileExtension = (file) => { const m = /\.([A-Za-z0-9]{1,8})$/.exec(String(file || "")); return m ? m[1].toUpperCase() : "FILE"; };
+// A new file card: photos keep their proportions (a frame of 10 px and a 40 px caption around them).
+function fileCardSize(image) {
+  if (!image || !(image.w > 0) || !(image.h > 0)) return { width: 220, height: 280 };
+  const width = 280, photo = Math.max(100, Math.min(460, ((width - 20) * image.h) / image.w));
+  return { width, height: Math.round(photo + 50) };
 }
 
 // ---- view transforms: screen = world * z + (x, y) ----
@@ -2204,9 +2257,10 @@ function hitEdge(curve, x, y, tol) {
   for (let i = 0; i <= 32; i++) { const p = bezierPoint(curve, i / 32); pts.push([p.x, p.y]); }
   return polyDist(pts, x, y, false) <= tol + 1;
 }
-function edgeCurveFor(map, edge) {
+function edgeCurveFor(map, edge, cork) {
   const a = map.get(edge.fromNode), b = map.get(edge.toNode);
   if (!a || !b) return null;
+  if (cork) return threadCurve(a, b);
   const ca = { x: a.x + a.width / 2, y: a.y + a.height / 2 }, cb = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
   const from = CV_SIDE_NAMES.includes(edge.fromSide) ? edge.fromSide : nearestSide(a, cb.x, cb.y);
   const to = CV_SIDE_NAMES.includes(edge.toSide) ? edge.toSide : nearestSide(b, ca.x, ca.y);
@@ -2222,7 +2276,7 @@ function hitTest(doc, x, y, zoom) {
   for (let i = nodes.length - 1; i >= 0; i--) if (nodes[i].type !== "group" && boxContains(nodes[i], x, y)) return cvKey("n", nodes[i]);
   const map = nodeMap(doc);
   for (const edge of docEdges(doc).reverse()) {
-    const curve = edgeCurveFor(map, edge);
+    const curve = edgeCurveFor(map, edge, cvCork(doc));
     if (curve && hitEdge(curve, x, y, tol)) return cvKey("e", edge);
   }
   for (let i = nodes.length - 1; i >= 0; i--) if (nodes[i].type === "group" && hitGroup(nodes[i], x, y, tol)) return cvKey("n", nodes[i]);
@@ -2244,7 +2298,7 @@ function fillTarget(doc, x, y, zoom) {
   for (let i = nodes.length - 1; i >= 0; i--) if (nodes[i].type !== "group" && boxContains(nodes[i], x, y)) return cvKey("n", nodes[i]);
   const map = nodeMap(doc);
   for (const edge of docEdges(doc).reverse()) {
-    const curve = edgeCurveFor(map, edge);
+    const curve = edgeCurveFor(map, edge, cvCork(doc));
     if (curve && hitEdge(curve, x, y, tol)) return cvKey("e", edge);
   }
   for (let i = nodes.length - 1; i >= 0; i--) if (nodes[i].type === "group" && (boxContains(nodes[i], x, y) || hitGroup(nodes[i], x, y, tol))) return cvKey("n", nodes[i]);
@@ -3093,7 +3147,7 @@ function paintLines(ctx, node, lines, font, color, lineHeight, cursor) {
   }
 }
 
-function paintNode(ctx, node, pal, hideText) {
+function paintNode(ctx, node, pal, hideText, image) {
   const color = nodeColor(node.color);
   ctx.save();
   roundPath(ctx, node.x, node.y, node.width, node.height, 8);
@@ -3103,7 +3157,20 @@ function paintNode(ctx, node, pal, hideText) {
   ctx.lineWidth = color ? 2 : 1.5;
   ctx.strokeStyle = color || pal.line;
   ctx.stroke();
-  if (!hideText) {
+  if (image && node.height > 60) {
+    // A picture fills the card above a one-line caption.
+    ctx.save();
+    roundPath(ctx, node.x + 5, node.y + 5, node.width - 10, node.height - 38, 5);
+    ctx.clip();
+    drawCover(ctx, image, { x: node.x + 5, y: node.y + 5, width: node.width - 10, height: node.height - 38 }, !CV_IMAGE_FILE.test(String(node.file ?? "")));
+    ctx.restore();
+    if (!hideText) {
+      ctx.font = "600 13px " + CV_FONT;
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = pal.text;
+      ctx.fillText(String(node.file ?? "").split("/").pop(), node.x + 10, node.y + node.height - 17, Math.max(10, node.width - 20));
+    }
+  } else if (!hideText) {
     ctx.beginPath();
     ctx.rect(node.x + 4, node.y + 4, node.width - 8, node.height - 8);
     ctx.clip();
@@ -3125,6 +3192,286 @@ function paintNode(ctx, node, pal, hideText) {
     }
   }
   ctx.restore();
+}
+
+// ---- detective board painting ----
+// Photos fill their frame (cropped); a document's preview is shown whole, so its page is never cut.
+function drawCover(ctx, image, box, whole) {
+  const iw = image.naturalWidth || image.width || 1, ih = image.naturalHeight || image.height || 1;
+  if (whole) {
+    const scale = Math.min(box.width / iw, box.height / ih), w = iw * scale, h = ih * scale;
+    ctx.drawImage(image, box.x + (box.width - w) / 2, box.y + (box.height - h) / 2, w, h);
+    return;
+  }
+  const scale = Math.max(box.width / iw, box.height / ih), sw = box.width / scale, sh = box.height / scale;
+  ctx.drawImage(image, (iw - sw) / 2, (ih - sh) / 2, sw, sh, box.x, box.y, box.width, box.height);
+}
+
+// One speckled tile (seeded, so it never flickers), wrapped at the edges so it repeats without seams.
+const corkTiles = {};
+const corkPatterns = new WeakMap();
+function corkPattern(ctx, dark) {
+  const key = dark ? "dark" : "light";
+  if (typeof ctx.createPattern !== "function") return null;
+  let cached = corkPatterns.get(ctx);
+  if (cached && cached.key === key) return cached.pattern;
+  if (!corkTiles[key]) {
+    const tile = document.createElement("canvas"), size = 160;
+    const t = tile && typeof tile.getContext === "function" ? tile.getContext("2d") : null;
+    if (!t) return null;
+    tile.width = tile.height = size;
+    const base = CV_CORK[key], random = mulberry32(7);
+    t.fillStyle = base;
+    t.fillRect(0, 0, size, size);
+    for (let i = 0; i < 1500; i++) {
+      const x = random() * size, y = random() * size, r = 0.4 + random() * 1.7, squash = 0.45 + random() * 0.6, turn = random() * Math.PI;
+      t.globalAlpha = 0.15 + random() * 0.3;
+      t.fillStyle = mixColor(base, random() < 0.45 ? "#f6dcaa" : "#24120a", 0.3 + random() * 0.45);
+      for (const dx of [-size, 0, size]) for (const dy of [-size, 0, size]) {
+        if (x + dx < -3 || x + dx > size + 3 || y + dy < -3 || y + dy > size + 3) continue;
+        t.beginPath();
+        t.ellipse(x + dx, y + dy, r, r * squash, turn, 0, Math.PI * 2);
+        t.fill();
+      }
+    }
+    t.globalAlpha = 1;
+    corkTiles[key] = tile;
+  }
+  cached = { key, pattern: ctx.createPattern(corkTiles[key], "repeat") };
+  corkPatterns.set(ctx, cached);
+  return cached.pattern;
+}
+
+function tilted(ctx, node, draw) {
+  const tilt = nodeTilt(node), cx = node.x + node.width / 2, cy = node.y + node.height / 2;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(tilt);
+  ctx.translate(-cx, -cy);
+  draw();
+  ctx.restore();
+}
+
+function paperShadow(ctx, on) {
+  ctx.shadowColor = on ? "rgba(30, 14, 0, 0.45)" : "rgba(0, 0, 0, 0)";
+  ctx.shadowBlur = on ? 12 : 0;
+  ctx.shadowOffsetX = on ? 3 : 0;
+  ctx.shadowOffsetY = on ? 6 : 0;
+}
+
+// Paper with the bottom right corner lifted a little.
+function paperPath(ctx, x, y, w, h, curl) {
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x + w, y);
+  ctx.lineTo(x + w, y + h - curl);
+  ctx.quadraticCurveTo(x + w - curl * 0.15, y + h - curl * 0.15, x + w - curl, y + h);
+  ctx.lineTo(x, y + h);
+  ctx.closePath();
+}
+
+function paperFill(ctx, x, y, h, paper) {
+  const shade = typeof ctx.createLinearGradient === "function" ? ctx.createLinearGradient(x, y, x, y + h) : null;
+  if (shade && typeof shade.addColorStop === "function") {
+    shade.addColorStop(0, paper);
+    shade.addColorStop(1, mixColor(paper, "#000000", 0.08));
+    ctx.fillStyle = shade;
+  } else {
+    ctx.fillStyle = paper;
+  }
+  ctx.fill();
+}
+
+function paperCurl(ctx, x, y, w, h, curl, paper) {
+  ctx.beginPath();
+  ctx.moveTo(x + w, y + h - curl);
+  ctx.quadraticCurveTo(x + w - curl * 0.15, y + h - curl * 0.15, x + w - curl, y + h);
+  ctx.lineTo(x + w - curl * 0.85, y + h - curl * 0.85);
+  ctx.closePath();
+  ctx.fillStyle = mixColor(paper, "#000000", 0.2);
+  ctx.fill();
+}
+
+function handLines(ctx, node, text, top, size, color, centered) {
+  const font = size + "px " + CV_HAND, room = Math.max(10, node.width - 28);
+  ctx.font = font;
+  ctx.fillStyle = color;
+  ctx.textBaseline = "top";
+  ctx.textAlign = centered ? "center" : "left";
+  const lines = wrapText((s) => ctx.measureText(s).width, String(text).slice(0, 4000), room);
+  let y = top;
+  for (const line of lines) {
+    if (y + size > node.y + node.height - 8) break;
+    ctx.fillText(line, centered ? node.x + node.width / 2 : node.x + 14, y);
+    y += size * 1.25;
+  }
+  ctx.textAlign = "left";
+}
+
+// A sticky note, a pinned photo (or document) or an index card for a link.
+function paintCorkNode(ctx, node, pal, hideText, image) {
+  const { x, y, width: w, height: h } = node, ink = "#2b2622";
+  tilted(ctx, node, () => {
+    if (node.type === "file") {
+      const paper = "#fbf8f0", photo = { x: x + 10, y: y + 10, width: w - 20, height: Math.max(10, h - 50) };
+      paperShadow(ctx, true);
+      ctx.beginPath();
+      ctx.rect(x, y, w, h);
+      ctx.fillStyle = paper;
+      ctx.fill();
+      paperShadow(ctx, false);
+      if (image) {
+        const whole = !CV_IMAGE_FILE.test(String(node.file ?? ""));
+        if (whole) { ctx.fillStyle = "#ece6d8"; ctx.fillRect(photo.x, photo.y, photo.width, photo.height); }
+        drawCover(ctx, image, photo, whole);
+      } else {
+        ctx.fillStyle = "#ece6d8";
+        ctx.fillRect(photo.x, photo.y, photo.width, photo.height);
+        ctx.fillStyle = "#c9bfa9";
+        for (let line = photo.y + 46; line < photo.y + photo.height - 10; line += 14) ctx.fillRect(photo.x + 14, line, Math.max(0, photo.width - 28) * (line % 3 ? 1 : 0.6), 3);
+        const label = fileExtension(node.file);
+        ctx.font = "700 15px " + CV_FONT;
+        const badge = Math.min(photo.width - 20, ctx.measureText(label).width + 18);
+        ctx.fillStyle = label === "PDF" ? "#c1121f" : /^DOCX?$|^PAGES$/.test(label) ? "#1d6fd8" : /^XLSX?$|^CSV$|^NUMBERS$/.test(label) ? "#2b9348" : "#6b5b45";
+        ctx.fillRect(photo.x + 10, photo.y + 12, badge, 24);
+        ctx.fillStyle = "#ffffff";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, photo.x + 19, photo.y + 24, badge - 18);
+      }
+      if (!hideText) {
+        ctx.font = "16px " + CV_HAND;
+        ctx.fillStyle = ink;
+        ctx.textBaseline = "middle";
+        ctx.textAlign = "center";
+        ctx.fillText(String(node.file ?? "").split("/").pop(), x + w / 2, y + h - 20, Math.max(10, w - 20));
+        ctx.textAlign = "left";
+      }
+      return;
+    }
+    if (node.type === "link") {
+      paperShadow(ctx, true);
+      ctx.beginPath();
+      ctx.rect(x, y, w, h);
+      ctx.fillStyle = "#fdfdf8";
+      ctx.fill();
+      paperShadow(ctx, false);
+      ctx.fillStyle = "#e05a5a";
+      ctx.fillRect(x, y + 30, w, 1.5);
+      ctx.fillStyle = "#9cc3e6";
+      for (let line = y + 52; line < y + h - 4; line += 22) ctx.fillRect(x, line, w, 1);
+      if (!hideText) handLines(ctx, node, node.url ?? "", y + 36, 16, "#1d4f91", false);
+      return;
+    }
+    const color = nodeColor(node.color), paper = color ? mixColor(color, "#ffffff", 0.55) : CV_PAPER, curl = Math.min(22, w / 6, h / 6);
+    paperShadow(ctx, true);
+    paperPath(ctx, x, y, w, h, curl);
+    paperFill(ctx, x, y, h, paper);
+    paperShadow(ctx, false);
+    paperCurl(ctx, x, y, w, h, curl, paper);
+    // Text starts below the pin, where thread tied to it still passes.
+    if (!hideText) handLines(ctx, node, node.type === "text" ? node.text ?? "" : String(node.type), y + 38, 19, ink, false);
+  });
+}
+
+// The red thread: its shadow on the cork, a darker body, a lighter twist.
+function paintThread(ctx, curve, edge, pal, selected, hideLabel) {
+  const color = nodeColor(edge.color) || CV_THREAD;
+  const path = (dx, dy) => {
+    ctx.beginPath();
+    ctx.moveTo(curve.p0.x + dx, curve.p0.y + dy);
+    ctx.bezierCurveTo(curve.c1.x + dx, curve.c1.y + dy, curve.c2.x + dx, curve.c2.y + dy, curve.p3.x + dx, curve.p3.y + dy);
+  };
+  ctx.save();
+  ctx.lineCap = "round";
+  path(3, 6);
+  ctx.strokeStyle = "rgba(30, 12, 0, 0.3)";
+  ctx.lineWidth = 2.6;
+  ctx.stroke();
+  if (selected) {
+    path(0, 0);
+    ctx.strokeStyle = pal.accent;
+    ctx.globalAlpha = 0.5;
+    ctx.lineWidth = 8;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  path(0, 0);
+  ctx.strokeStyle = mixColor(color, "#000000", 0.3);
+  ctx.lineWidth = 2.8;
+  ctx.stroke();
+  path(0, 0);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.9;
+  ctx.stroke();
+  ctx.setLineDash([2, 4]);
+  path(0, 0);
+  ctx.strokeStyle = mixColor(color, "#ffffff", 0.4);
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+  ctx.setLineDash([]);
+  if (edge.label && !hideLabel) {
+    // A paper tag hanging on the thread.
+    const mid = bezierPoint(curve, 0.5), text = String(edge.label).slice(0, 120);
+    ctx.font = "16px " + CV_HAND;
+    const width = ctx.measureText(text).width + 18;
+    ctx.translate(mid.x, mid.y);
+    ctx.rotate((idHash(edge.id) * 2 - 1) * 0.06);
+    paperShadow(ctx, true);
+    ctx.fillStyle = "#f7f1e1";
+    ctx.fillRect(-width / 2, -13, width, 26);
+    paperShadow(ctx, false);
+    ctx.fillStyle = "#2b2622";
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "center";
+    ctx.fillText(text, 0, 1);
+  }
+  ctx.restore();
+}
+
+// A push pin seen from above: its shadow and needle on the cork, a round head with a cap.
+function paintPin(ctx, p, color) {
+  ctx.save();
+  ctx.fillStyle = "rgba(25, 10, 0, 0.35)";
+  ctx.beginPath();
+  ctx.ellipse(p.x + 4, p.y + 6, 6.5, 5, 0.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(25, 10, 0, 0.4)";
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  ctx.moveTo(p.x, p.y);
+  ctx.lineTo(p.x + 7, p.y + 9);
+  ctx.stroke();
+  const head = typeof ctx.createRadialGradient === "function" ? ctx.createRadialGradient(p.x - 2.5, p.y - 2.5, 0.5, p.x, p.y, 7.5) : null;
+  if (head && typeof head.addColorStop === "function") {
+    head.addColorStop(0, mixColor(color, "#ffffff", 0.65));
+    head.addColorStop(0.45, color);
+    head.addColorStop(1, mixColor(color, "#000000", 0.45));
+    ctx.fillStyle = head;
+  } else {
+    ctx.fillStyle = color;
+  }
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = mixColor(color, "#ffffff", 0.25);
+  ctx.beginPath();
+  ctx.arc(p.x - 0.8, p.y - 0.8, 3.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+  ctx.beginPath();
+  ctx.arc(p.x - 2.2, p.y - 2.4, 1.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function paintVignette(ctx, w, h) {
+  if (typeof ctx.createRadialGradient !== "function") return;
+  const shade = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.35, w / 2, h / 2, Math.hypot(w, h) * 0.6);
+  if (!shade || typeof shade.addColorStop !== "function") return;
+  shade.addColorStop(0, "rgba(0, 0, 0, 0)");
+  shade.addColorStop(1, "rgba(20, 8, 0, 0.32)");
+  ctx.fillStyle = shade;
+  ctx.fillRect(0, 0, w, h);
 }
 
 function paintGroup(ctx, node, pal, hideLabel) {
@@ -3263,26 +3610,54 @@ function paintOverlay(o) {
   }
 }
 
-// o: {ctx, doc, view, w, h, pal, scale, ui}; ui is null for export (no grid, handles or selection).
+// o: {ctx, doc, view, w, h, pal, scale, ui, images, flat}; ui is null for export (no grid, handles or selection),
+// images(node) gives a loaded picture of a file card or null, flat paints cork without its texture (the fill tool
+// floods colors, and the speckles would stop it everywhere).
 function paintScene(o) {
   const { ctx, doc, view, pal, ui } = o;
-  const k = o.scale;
+  const k = o.scale, cork = cvCork(doc), background = cvBackground(doc);
   ctx.setTransform(k, 0, 0, k, 0, 0);
-  ctx.fillStyle = cvBackground(doc) || pal.bg;
+  ctx.fillStyle = background || (cork ? CV_CORK[pal.dark ? "dark" : "light"] : pal.bg);
   ctx.fillRect(0, 0, o.w, o.h);
-  if (ui) paintGrid(ctx, view, o.w, o.h, pal);
+  if (ui && !cork) paintGrid(ctx, view, o.w, o.h, pal);
   ctx.setTransform(k * view.z, 0, 0, k * view.z, k * view.x, k * view.y);
   const vis = { x: -view.x / view.z - 40, y: -view.y / view.z - 40, width: o.w / view.z + 80, height: o.h / view.z + 80 };
+  if (cork && !background && !o.flat) {
+    const pattern = corkPattern(ctx, pal.dark);
+    if (pattern) { ctx.fillStyle = pattern; ctx.fillRect(vis.x, vis.y, vis.width, vis.height); }
+  }
   const editing = ui && ui.editing;
+  const picture = (node) => (node.type === "file" && o.images ? o.images(node) : null);
   const nodes = docNodes(doc), map = new Map(nodes.map((n) => [n.id, n]));
   for (const node of nodes) if (node.type === "group" && rectsIntersect(node, vis)) paintGroup(ctx, node, pal, editing === cvKey("n", node));
-  for (const edge of docEdges(doc)) {
-    const curve = edgeCurveFor(map, edge);
-    if (curve) paintEdge(ctx, curve, edge, pal, Boolean(ui && ui.sel.has(cvKey("e", edge))), editing === cvKey("e", edge));
+  const edges = docEdges(doc), selected = (edge) => Boolean(ui && ui.sel.has(cvKey("e", edge)));
+  if (!cork) {
+    for (const edge of edges) {
+      const curve = edgeCurveFor(map, edge, false);
+      if (curve) paintEdge(ctx, curve, edge, pal, selected(edge), editing === cvKey("e", edge));
+    }
   }
-  for (const node of nodes) if (node.type !== "group" && rectsIntersect(node, vis)) paintNode(ctx, node, pal, editing === cvKey("n", node));
+  for (const node of nodes) {
+    if (node.type === "group" || !rectsIntersect(node, vis)) continue;
+    if (cork) paintCorkNode(ctx, node, pal, editing === cvKey("n", node), picture(node));
+    else paintNode(ctx, node, pal, editing === cvKey("n", node), picture(node));
+  }
+  if (cork) {
+    // Thread goes over the paper from pin to pin; every card has its pin, a group only when thread is tied to it.
+    const pinned = new Set();
+    for (const edge of edges) {
+      const curve = edgeCurveFor(map, edge, true);
+      if (!curve) continue;
+      paintThread(ctx, curve, edge, pal, selected(edge), editing === cvKey("e", edge));
+      pinned.add(edge.fromNode).add(edge.toNode);
+    }
+    for (const node of nodes) {
+      if ((node.type !== "group" || pinned.has(node.id)) && rectsIntersect(node, vis)) paintPin(ctx, pinPoint(node), pinColor(node));
+    }
+  }
   for (const el of docElements(doc)) if (rectsIntersect(el, vis)) paintElement(ctx, el, pal, editing === cvKey("x", el));
   if (ui && ui.draft) paintElement(ctx, ui.draft, pal, false);
+  if (ui && cork) { ctx.setTransform(k, 0, 0, k, 0, 0); paintVignette(ctx, o.w, o.h); }
   if (ui) paintOverlay({ ...o, ui });
 }
 
@@ -3301,7 +3676,7 @@ function cvDraw() {
     }
     const eraser = cv.tool === "eraser" && cv.eraser === "part" && cv.cursor ? { ...cv.cursor, r: cvEraserRadius() * cv.view.z } : null;
     const ui = { sel: new Set(cv.sel), hover: cv.hover, drag: cv.drag, editing: cv.editing && cv.editing.key, tool: cv.tool, draft: cvDraft(), eraser };
-    paintScene({ ctx: cv.ctx, doc: cv.doc, view: cv.view, w: cv.w, h: cv.h, pal, scale: cv.dpr, ui });
+    paintScene({ ctx: cv.ctx, doc: cv.doc, view: cv.view, w: cv.w, h: cv.h, pal, scale: cv.dpr, ui, images: cvImageFor });
   });
 }
 
@@ -3340,7 +3715,7 @@ function cvExport() {
   const canvas = document.createElement("canvas");
   canvas.width = Math.round(width * scale);
   canvas.height = Math.round(height * scale);
-  paintScene({ ctx: canvas.getContext("2d"), doc: cv.doc, view: { x: pad - bounds.x, y: pad - bounds.y, z: 1 }, w: width, h: height, pal: cvPalette(), scale, ui: null });
+  paintScene({ ctx: canvas.getContext("2d"), doc: cv.doc, view: { x: pad - bounds.x, y: pad - bounds.y, z: 1 }, w: width, h: height, pal: cvPalette(), scale, ui: null, images: cvImageFor });
   canvas.toBlob((blob) => {
     if (!blob) { toast("Could not export the image"); return; }
     const url = URL.createObjectURL(blob);
@@ -3403,6 +3778,7 @@ function cvSync() {
   ui.customWrap.style.background = custom ? cv.style.stroke : "";
   if (custom && /^#[0-9a-fA-F]{6}$/.test(cv.style.stroke) && ui.custom.value !== cv.style.stroke.toLowerCase()) ui.custom.value = cv.style.stroke.toLowerCase();
   ui.fill.classList.toggle("on", cv.style.fill);
+  if (ui.cork) ui.cork.classList.toggle("on", cvCork(cv.doc));
   if (document.activeElement !== ui.width) ui.width.value = String(widthToSlider(cv.style.width));
   if (document.activeElement !== ui.widthValue) ui.widthValue.value = String(cv.style.width);
   ui.undo.disabled = !cv.hist || !cv.hist.undo.length;
@@ -3663,7 +4039,7 @@ function cvSnapshot() {
   canvas.height = h;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return null;
-  paintScene({ ctx, doc: cv.doc, view: cv.view, w: cv.w, h: cv.h, pal: cvPalette(), scale: k, ui: null });
+  paintScene({ ctx, doc: cv.doc, view: cv.view, w: cv.w, h: cv.h, pal: cvPalette(), scale: k, ui: null, images: cvImageFor, flat: true });
   const image = ctx.getImageData(0, 0, w, h);
   return image && image.data ? { data: image.data, w, h, k } : null;
 }
@@ -3735,13 +4111,86 @@ function cvErase(w) {
   }
 }
 
-// Clicking a file card that is already the only selection opens its note.
-function cvOpenFile(key) {
+// Clicking a file card that is already the only selection opens it: a note in Obsidian, anything else in its app.
+async function cvOpenFile(key) {
   const node = cvLookup(cv.doc, key);
   if (!node || node.type !== "file") return;
   const name = noteName(node.file);
-  if (name) openNote(name);
-  else toast("Only Markdown notes can be opened");
+  if (name) { openNote(name); return; }
+  const { data } = await api("POST", "/api/canvas/open-file", { path: cv.path, file: String(node.file ?? "") });
+  if (!data.ok) toast(data.error || "Could not open " + String(node.file ?? "").split("/").pop());
+  else if (data.revealed) toast("Shown in Finder: files that would run a program are never opened from the canvas");
+}
+
+// Pictures of file cards: the file itself for images, a Quick Look thumbnail for anything else (PDF, documents).
+// Loaded once per canvas and file; a failed one is not asked again, so the card stays a plain document.
+const cvImages = new Map();
+function cvImageFor(node) {
+  const file = String(node.file ?? "");
+  if (!file || !cv.path || noteName(file) || CV_PLAIN_FILE.test(file) || typeof Image !== "function") return null;
+  const key = cv.path + "\n" + file;
+  let entry = cvImages.get(key);
+  if (!entry) {
+    const image = new Image();
+    entry = { image, ok: false };
+    image.onload = () => { entry.ok = true; cvDraw(); };
+    image.src = "/media/canvas?t=" + encodeURIComponent(TOKEN) + "&path=" + encodeURIComponent(cv.path) + "&file=" + encodeURIComponent(file) + (CV_IMAGE_FILE.test(file) ? "" : "&thumb=1");
+    cvImages.set(key, entry);
+  }
+  return entry.ok ? entry.image : null;
+}
+
+function cvLocalImageSize(file) {
+  return new Promise((resolve) => {
+    if (typeof Image !== "function" || !/^image\//.test(file.type || "") || typeof URL.createObjectURL !== "function") { resolve(null); return; }
+    const url = URL.createObjectURL(file), image = new Image();
+    const done = (size) => { URL.revokeObjectURL(url); resolve(size); };
+    image.onload = () => done({ w: image.naturalWidth, h: image.naturalHeight });
+    image.onerror = () => done(null);
+    image.src = url;
+  });
+}
+
+// Copy files next to the canvas (attachments/) and pin a card for each at `at` (world point; default: view center).
+async function cvAddFiles(files, at) {
+  const list = Array.from(files || []).slice(0, 30);
+  if (!list.length) return;
+  if (!cv.doc || !cv.path) { toast("Open or create a canvas first"); return; }
+  const path = cv.path;
+  const center = at || toWorld(cv.view, cv.w / 2, cv.h / 2);
+  const added = [];
+  for (const [i, file] of list.entries()) {
+    if (file.size > CV_MAX_UPLOAD) { toast(file.name + " is larger than 256 MB"); continue; }
+    cvStatus("Adding " + file.name + "…");
+    let response, data = {};
+    try {
+      response = await fetch("/api/canvas/upload?path=" + encodeURIComponent(path) + "&name=" + encodeURIComponent(file.name || "file"), {
+        method: "POST", headers: { "X-Desk-Token": TOKEN, "Content-Type": "application/octet-stream" }, body: file, cache: "no-store",
+      });
+      data = await response.json().catch(() => ({}));
+    } catch (error) {
+      toast("Could not reach the desk: " + error.message);
+      continue;
+    }
+    if (!response.ok || typeof data.file !== "string") { toast(data.error || "Could not add " + file.name); continue; }
+    if (cv.path !== path || !cv.doc) { toast(file.name + " was saved next to the other canvas"); continue; }
+    const size = fileCardSize(await cvLocalImageSize(file));
+    const node = { id: cvId(), type: "file", file: data.file, x: Math.round(center.x - size.width / 2 + i * 36), y: Math.round(center.y - size.height / 2 + i * 36), ...size };
+    ensureList(cv.doc, "nodes").push(node);
+    added.push(cvKey("n", node));
+  }
+  cvStatus("");
+  if (added.length) {
+    cvSelect(added);
+    cvCommit("add files");
+  }
+}
+
+const cvHasFiles = (event) => Boolean(event.dataTransfer && Array.from(event.dataTransfer.types || []).includes("Files"));
+
+function cvToggleCork() {
+  if (!cv.doc) return;
+  if (setLook(cv.doc, !cvCork(cv.doc))) { cvCommit("look"); cvSync(); }
 }
 
 function cvDouble(event) {
@@ -3774,7 +4223,7 @@ function cvStartEdit(key) {
   cvEndEdit();
   let box, text, font = "15px " + CV_FONT;
   if (key[0] === "e") {
-    const curve = edgeCurveFor(nodeMap(cv.doc), item);
+    const curve = edgeCurveFor(nodeMap(cv.doc), item, cvCork(cv.doc));
     if (!curve) return;
     const mid = bezierPoint(curve, 0.5);
     box = { x: mid.x - 80, y: mid.y - 14, width: 160, height: 28 };
@@ -4098,6 +4547,11 @@ function cvBuildBar() {
   ui.pick = h("select", { class: "cvpick", title: "Switch canvas" });
   ui.pick.addEventListener("change", cvPickChanged);
   ui.zoom = h("span", { class: "cvzoom", title: "Zoom" });
+  ui.cork = iconButton("pin", "Detective board: cork, paper notes, photos and red thread between pins", cvToggleCork);
+  ui.files = h("input", { type: "file", multiple: true, style: "display:none", "aria-hidden": "true" });
+  ui.files.addEventListener("change", () => { const picked = Array.from(ui.files.files || []); ui.files.value = ""; cvAddFiles(picked); });
+  ui.add = h("button", { title: "Add files: pictures, PDF, documents, anything (or drop them on the canvas)", "aria-label": "Add files" }, cvIcon("attach"), "Add");
+  ui.add.addEventListener("click", press(ui.add, () => ui.files.click()));
   ui.status = h("span", { class: "cvstatus" });
   ui.root = h("div", { class: "cvbar" },
     ui.name,
@@ -4107,8 +4561,9 @@ function cvBuildBar() {
     h("div", { class: "group" }, ui.fill, ui.width, ui.widthValue),
     h("div", { class: "group" }, iconButton("group", "Group the selection (Cmd/Ctrl+G)", cvGroup), ui.undo, ui.redo),
     h("div", { class: "group" }, iconButton("fit", "Fit everything in view (Cmd/Ctrl+0)", cvFit), ui.zoom),
-    h("div", { class: "group" }, iconButton("export", "Export the canvas as a PNG image", cvExport)),
-    ui.status);
+    h("div", { class: "group" }, ui.cork, iconButton("export", "Export the canvas as a PNG image", cvExport)),
+    ui.status,
+    h("div", { class: "group cvadd" }, ui.add, ui.files));
   return ui;
 }
 
@@ -4119,7 +4574,22 @@ function renderCanvas(main) {
   const canvas = h("canvas", { class: "cvcanvas", tabindex: "0" });
   ui.editor = h("textarea", { class: "cvedit", spellcheck: "false" });
   ui.empty = h("div", { class: "cvempty" }, h("div", { text: "No canvas yet" }), h("button", { class: "primary", text: "New canvas", onclick: cvNew }));
-  main.append(h("div", { class: "cv" }, ui.root, h("div", { class: "cvstage" }, canvas, ui.editor, ui.empty), ui.menu));
+  const stage = h("div", { class: "cvstage" }, canvas, ui.editor, ui.empty);
+  main.append(h("div", { class: "cv" }, ui.root, stage, ui.menu));
+  // Files dragged in from Finder (or the desktop) are pinned where they are dropped.
+  stage.addEventListener("dragover", (event) => {
+    if (!cvHasFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    stage.classList.add("dropping");
+  });
+  stage.addEventListener("dragleave", (event) => { if (!stage.contains(event.relatedTarget)) stage.classList.remove("dropping"); });
+  stage.addEventListener("drop", (event) => {
+    stage.classList.remove("dropping");
+    if (!cvHasFiles(event)) return;
+    event.preventDefault();
+    cvAddFiles(event.dataTransfer.files, cvPoint(event).w);
+  });
   cv.el = canvas;
   cv.ctx = canvas.getContext("2d");
   cv.ui = ui;
@@ -4155,6 +4625,8 @@ document.addEventListener("pointerdown", (event) => {
   cvCloseMenu();
 }, true);
 document.addEventListener("visibilitychange", () => { if (document.hidden && state.view === "canvas") saveCanvas(); });
+// A file dropped beside the canvas must not make the browser leave the page to show it.
+for (const type of ["dragover", "drop"]) document.addEventListener(type, (event) => { if (state.view === "canvas" && cvHasFiles(event)) event.preventDefault(); });
 $("theme").addEventListener("click", () => { if (state.view === "canvas") cvDraw(); });
 
 // ---- theme, search, keys ----
