@@ -1,0 +1,178 @@
+<style>
+  .ul { --bg:#0b0b0a; --panel:#171715; --col:#121211; --sunk:#1f1e1b; --text:#f5f2ea; --muted:#9b958a; --line:#282622; --acc:#ffc933; --red:#ff5a4e; --ok:#4fc581;
+        background:var(--bg); color:var(--text); border-radius:12px; padding:12px; font:12px/1.4 -apple-system,BlinkMacSystemFont,sans-serif; }
+  .ul * { box-sizing:border-box; }
+  .ul .top { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+  .ul .tabs { display:flex; gap:2px; background:var(--col); border:1px solid var(--line); border-radius:8px; padding:2px; }
+  .ul .tabs span { padding:3px 10px; border-radius:6px; color:var(--muted); }
+  .ul .tabs span.on { background:var(--sunk); color:var(--text); font-weight:600; }
+  .ul .seg { display:flex; gap:2px; }
+  .ul .seg span { border:1px solid var(--line); padding:2px 8px; border-radius:6px; color:var(--muted); }
+  .ul .seg span.on { border-color:var(--acc); color:var(--acc); }
+  .ul .pane { background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:8px; margin-bottom:8px; }
+  .ul h5 { margin:0 0 6px; font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:600; display:flex; align-items:center; }
+  .ul h5 .add { margin-left:auto; color:var(--acc); text-transform:none; letter-spacing:0; font-size:11px; }
+  .ul .sc { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .ul .sc div { aspect-ratio:16/9; border-radius:5px; background:#1d2433; position:relative; border:1px solid var(--line); overflow:hidden; }
+  .ul .sc div.on { border:2px solid var(--acc); }
+  .ul .sc div span { position:absolute; left:4px; bottom:2px; font-size:9px; color:#d8d3c8; text-shadow:0 1px 2px #000; }
+  .ul .sc div kbd { position:absolute; right:3px; top:2px; }
+  .ul .sc div b { position:absolute; left:0; bottom:0; width:32%; height:30%; background:#7a5a3c; }
+  .ul kbd { font:10px ui-monospace,monospace; color:var(--muted); border:1px solid var(--line); border-radius:4px; padding:0 4px; background:var(--col); }
+  .ul .src { display:flex; align-items:center; gap:6px; padding:5px 6px; border-radius:6px; }
+  .ul .src.on { background:var(--sunk); box-shadow: inset 2px 0 0 var(--acc); }
+  .ul .src .eye { margin-left:auto; color:var(--muted); }
+  .ul .stage { position:relative; aspect-ratio:16/9; background:linear-gradient(135deg,#1d2433,#141821); border-radius:6px; overflow:hidden; }
+  .ul .win { position:absolute; background:#232a3a; border:1px solid #2f3850; border-radius:4px; }
+  .ul .win:before { content:""; position:absolute; left:5px; top:4px; width:18px; height:4px; border-radius:2px; background:#3b4560; }
+  .ul .cam { position:absolute; left:0; bottom:0; width:24%; aspect-ratio:16/9; background:radial-gradient(circle at 50% 42%, #c9a27a 0 16%, #4a3a2c 17% 30%, #2a2622 31%); outline:2px solid var(--acc); outline-offset:-2px; }
+  .ul .cam .h { position:absolute; width:7px; height:7px; background:var(--acc); border-radius:2px; right:-3px; top:-3px; }
+  .ul .badge { position:absolute; right:6px; top:6px; background:rgba(0,0,0,.55); color:var(--red); font-weight:700; font-size:10px; padding:1px 6px; border-radius:4px; }
+  .ul .float { position:absolute; left:25.5%; bottom:6px; background:rgba(23,23,21,.96); border:1px solid var(--line); border-radius:8px; padding:4px 6px; display:flex; gap:6px; align-items:center; box-shadow:0 6px 18px rgba(0,0,0,.5); }
+  .ul .row { display:flex; align-items:center; gap:6px; margin:5px 0; }
+  .ul .lbl { color:var(--muted); width:62px; flex:none; }
+  .ul .shapes { display:flex; gap:4px; }
+  .ul .shapes span { width:22px; height:22px; border:1px solid var(--line); border-radius:5px; display:grid; place-items:center; }
+  .ul .shapes span.on { border-color:var(--acc); }
+  .ul .shapes em { display:block; background:var(--muted); }
+  .ul .shapes span.on em { background:var(--acc); }
+  .ul .slider { flex:1; height:3px; background:var(--sunk); border-radius:2px; position:relative; }
+  .ul .slider:after { content:""; position:absolute; left:var(--at,40%); top:-4px; width:10px; height:10px; border-radius:50%; background:var(--acc); }
+  .ul .meter { flex:1; height:6px; border-radius:3px; background:linear-gradient(90deg,var(--ok) 0 45%, var(--acc) 45% 62%, var(--sunk) 62%); }
+  .ul .meter.s { background:linear-gradient(90deg,var(--ok) 0 28%, var(--sunk) 28%); }
+  .ul .dd { border:1px solid var(--line); border-radius:6px; padding:3px 8px; background:var(--col); flex:1; display:flex; justify-content:space-between; white-space:nowrap; overflow:hidden; }
+  .ul .dd:after { content:"▾"; color:var(--muted); margin-left:6px; }
+  .ul .rec { width:38px; height:38px; border-radius:50%; border:3px solid var(--text); display:grid; place-items:center; flex:none; }
+  .ul .rec:after { content:""; width:20px; height:20px; border-radius:50%; background:var(--red); }
+  .ul .clock { font:600 20px ui-monospace,monospace; }
+  .ul .muted { color:var(--muted); }
+  .ul .pill { border:1px solid var(--line); border-radius:999px; padding:4px 10px; display:inline-flex; gap:6px; align-items:center; background:var(--panel); white-space:nowrap; }
+  .ul .menu { position:absolute; z-index:2; left:0; right:0; top:26px; background:#1c1b18; border:1px solid var(--line); border-radius:7px; padding:4px; box-shadow:0 8px 22px rgba(0,0,0,.55); }
+  .ul .menu div { padding:3px 6px; border-radius:4px; display:flex; justify-content:space-between; }
+  .ul .menu div.on { background:var(--sunk); color:var(--acc); }
+  .ul .tag { font-size:9px; color:var(--muted); border:1px solid var(--line); border-radius:3px; padding:0 3px; }
+  .note { color: var(--text-secondary); font-size:.85rem; margin-top:.75rem; }
+  .note li { margin:.15rem 0 .15rem 1.1rem; }
+</style>
+
+<h2>Объединённый вариант A + B</h2>
+<p class="subtitle">Три колонки из A (всё видно и меняется в один клик), из B: миниатюры сцен, плавающая панель у камеры, выбор устройства прямо у каждого источника. Превью уже, чем в A, боковые панели шире. Открыт список микрофонов, чтобы было видно выбор устройства.</p>
+
+<div class="ul">
+  <div class="top">
+    <div class="tabs"><span class="on">Запись</span><span>Монтаж</span><span>Библиотека</span></div>
+    <span style="flex:1"></span>
+    <span class="muted">Формат</span><div class="seg"><span class="on">16:9</span><span>9:16</span><span>1:1</span><span>4:5</span></div>
+  </div>
+
+  <div style="display:grid; grid-template-columns:215px minmax(0,1fr) 255px; gap:10px; align-items:start;">
+    <!-- left: scenes + sources -->
+    <div>
+      <div class="pane">
+        <h5>Сцены <span class="add">+ сцена</span></h5>
+        <div class="sc">
+          <div class="on"><b></b><kbd>1</kbd><span>Экран + камера</span></div>
+          <div><kbd>2</kbd><span>Только экран</span></div>
+          <div style="background:#4a3a2c"><kbd>3</kbd><span>Камера</span></div>
+          <div style="background:linear-gradient(90deg,#1d2433 50%,#4a3a2c 50%)"><kbd>4</kbd><span>Рядом</span></div>
+        </div>
+      </div>
+      <div class="pane">
+        <h5>Источники <span class="add">+ источник</span></h5>
+        <div class="src">▣ Экран <span class="eye">👁</span></div>
+        <div class="src on">◉ Камера <span class="eye">👁</span></div>
+        <div class="src">▤ Логотип.png <span class="eye">👁</span></div>
+        <div class="src muted">T Текст «Подпишись» <span class="eye">◌</span></div>
+      </div>
+    </div>
+
+    <!-- center: smaller preview + recording bar + mixer -->
+    <div>
+      <div class="stage">
+        <div class="win" style="left:8%;top:8%;width:55%;height:62%"></div>
+        <div class="win" style="left:50%;top:22%;width:42%;height:55%"></div>
+        <div class="cam"><span class="h"></span></div>
+        <div class="float">
+          <div class="shapes">
+            <span><em style="width:12px;height:12px;border-radius:50%"></em></span>
+            <span><em style="width:12px;height:12px;border-radius:4px"></em></span>
+            <span><em style="width:12px;height:12px"></em></span>
+            <span class="on"><em style="width:15px;height:9px"></em></span>
+            <span><em style="width:9px;height:14px"></em></span>
+          </div>
+          <span class="muted">↙ ↘ ↖ ↗</span>
+        </div>
+        <span class="badge">● REC 12:31</span>
+      </div>
+      <div class="row" style="margin:10px 0; gap:12px">
+        <div class="rec"></div><span class="clock">00:12:31</span>
+        <span class="pill">❚❚ Пауза <kbd>P</kbd></span><span class="pill">⚑ Метка <kbd>M</kbd></span>
+        <span style="flex:1"></span>
+        <span class="muted" style="text-align:right">3600×2338 · 60 fps<br>1.4 ГБ записано · свободно 182 ГБ</span>
+      </div>
+      <div class="pane">
+        <h5>Звук</h5>
+        <div class="row" style="position:relative">
+          <span class="lbl">🎙 Микрофон</span>
+          <div style="position:relative; flex:1.3; display:flex">
+            <span class="dd">MacBook Pro Microphone</span>
+            <div class="menu">
+              <div>Системный по умолчанию</div>
+              <div class="on">MacBook Pro Microphone <span>✓</span></div>
+              <div>Haos's Phone Microphone</div>
+              <div>BlackHole 2ch <span class="tag">виртуальный</span></div>
+              <div>Microsoft Teams Audio <span class="tag">виртуальный</span></div>
+              <div class="muted">Без микрофона</div>
+            </div>
+          </div>
+          <div class="meter"></div><span class="muted">🔈</span>
+        </div>
+        <div style="height:118px"></div>
+        <div class="row"><span class="lbl">🔊 Звук Mac</span><span class="dd" style="flex:1.3">Весь звук системы</span><div class="meter s"></div><span class="muted">🔈</span></div>
+        <div class="row"><span class="lbl muted">громкость</span><div class="slider" style="--at:70%"></div><span class="muted" style="width:62px">мик 100%</span><div class="slider" style="--at:55%"></div><span class="muted">мак 80%</span></div>
+      </div>
+    </div>
+
+    <!-- right: properties of the selected source + output -->
+    <div>
+      <div class="pane">
+        <h5>Камера</h5>
+        <div class="row"><span class="lbl">Устройство</span><span class="dd">FaceTime HD Camera</span></div>
+        <div class="row"><span class="lbl">Качество</span><span class="dd">1920×1080 · 30 fps</span></div>
+        <div class="row"><span class="lbl">Форма</span>
+          <div class="shapes">
+            <span><em style="width:12px;height:12px;border-radius:50%"></em></span>
+            <span><em style="width:12px;height:12px;border-radius:4px"></em></span>
+            <span><em style="width:12px;height:12px"></em></span>
+            <span class="on"><em style="width:15px;height:9px"></em></span>
+            <span><em style="width:9px;height:14px"></em></span>
+          </div></div>
+        <div class="row"><span class="lbl">Размер</span><div class="slider" style="--at:24%"></div><span class="muted">24%</span></div>
+        <div class="row"><span class="lbl">Место</span><span class="pill" style="border-color:var(--acc)">↙ прижата к углу</span></div>
+        <div class="row"><span class="lbl">Рамка</span><span style="width:14px;height:14px;border-radius:3px;background:var(--acc)"></span><div class="slider" style="--at:10%"></div><span class="muted">2 px</span></div>
+        <div class="row"><span class="lbl">Скругление</span><div class="slider" style="--at:0%"></div><span class="muted">0</span></div>
+        <div class="row"><span class="lbl">Тень</span>☑<span class="lbl" style="width:auto;margin-left:10px">Зеркало</span>☑</div>
+      </div>
+      <div class="pane">
+        <h5>Экран</h5>
+        <div class="row"><span class="lbl">Дисплей</span><span class="dd">1 · Встроенный 3600×2338</span></div>
+        <div class="row"><span class="lbl">Область</span><span class="dd">Весь экран</span></div>
+        <div class="row"><span class="lbl">Показ</span>☑ клики <span style="margin-left:8px">☑ курсор</span></div>
+      </div>
+      <div class="pane">
+        <h5>Вывод</h5>
+        <div class="row"><span class="lbl">Кадры</span><div class="seg"><span class="on">60</span><span>30</span></div></div>
+        <div class="row"><span class="lbl">Качество</span><span class="dd">Высокое (H.264)</span></div>
+        <div class="row"><span class="lbl">Отсчёт</span><span class="dd">3 секунды</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  <ul>
+    <li>Клик по камере в превью — плавающая панель (форма, угол); полные настройки всегда справа.</li>
+    <li>Выбор устройства: у микрофона, звука Mac, камеры и дисплея свой список; виртуальные (BlackHole, Teams) помечены.</li>
+    <li>Справа показывается источник, выбранный слева: кликнешь «Экран» или «Логотип» — справа его свойства.</li>
+  </ul>
+</div>
