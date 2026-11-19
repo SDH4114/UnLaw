@@ -998,7 +998,28 @@ def start_recording(
         except BaseException:
             shutil.rmtree(folder, ignore_errors=True)
             raise
+        if setup["menubar"]:
+            _start_menubar(state)
     return status()
+
+
+def _start_menubar(state: dict) -> None:
+    """Show the recording in the menu bar; a helper that cannot start changes nothing."""
+    program = os.environ.get("UNLAW_BIN")
+    if not program or shutil.which("osascript") is None:
+        return
+    try:
+        helper = subprocess.Popen(
+            _backend().menubar_argv(program, recording_state_file()),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        return
+    state["helpers"].append({"pid": helper.pid, "program": "osascript", "track": "menubar"})
+    _write_json(recording_state_file(), state)
 
 
 def pause_recording() -> dict:

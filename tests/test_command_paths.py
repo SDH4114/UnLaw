@@ -908,6 +908,35 @@ class CaptureTests(ToolTestCase):
         for word in ("record [screen", "scene", "mark", "projects", "export", "setup", "doctor", "--canvas", "--cam-quality", "--mic-format", "stop --force"):
             self.assertIn(word, help_text)
 
+    def test_menubar_helper_follows_the_recording(self) -> None:
+        logs = self.media_tools()
+        self.tool("osascript", body="import signal, time\nif '-l' in sys.argv:\n    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n    while True:\n        time.sleep(0.05)\n")
+        with patch.dict(os.environ, {"UNLAW_BIN": "/fake/ul"}):
+            self.ok("record")
+            helpers = capture._load_state()["helpers"]
+            self.assertEqual([item["program"] for item in helpers], ["osascript"])
+            deadline = time.monotonic() + 5
+            while not logs["osascript"].exists() and time.monotonic() < deadline:
+                time.sleep(0.05)  # the helper is detached; it logs when it starts
+            content = logs["osascript"].read_text()
+            self.assertIn("-l|JavaScript|-e|", content)
+            self.assertIn("NSStatusBar", content)
+            self.assertTrue(content.rstrip().endswith(f"|/fake/ul|{capture.recording_state_file()}"))
+            self.ok("stop")
+            deadline = time.monotonic() + 5
+            while capture._alive(helpers[0]["pid"], "osascript") and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(capture._alive(helpers[0]["pid"], "osascript"), "the helper quits with the recording")
+            setup = json.loads(self.ok("setup", "--json"))
+            setup["menubar"] = False
+            with patch.object(capture.sys, "stdin", io.StringIO(json.dumps(setup))):
+                self.ok("setup", "--set-json", "-")
+            before = logs["osascript"].read_text()
+            self.ok("record")
+            self.assertEqual(capture._load_state()["helpers"], [])
+            self.ok("stop")
+            self.assertEqual(logs["osascript"].read_text(), before)
+
     def test_delete_refuses_an_absolute_symlink_to_a_capture(self) -> None:
         target = storage_path("captures", "screenshots", "original.png")
         target.write_bytes(b"keep")

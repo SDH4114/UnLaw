@@ -38,6 +38,86 @@ FFMPEG_QUIET = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y"
 LEVELS_FILE = "mic-levels.txt"
 
 
+# The menu-bar helper (osascript -l JavaScript): a status item that shows the recording clock and runs
+# `ul capture <action>` through NSTask with an argument array (no shell). It reads the state file once a
+# second and quits when the recording ends. argv: [ul binary, state file].
+MENUBAR_JS = r"""
+ObjC.import('Cocoa');
+function readJSON(path) {
+  const text = $.NSString.stringWithContentsOfFileEncodingError(path, $.NSUTF8StringEncoding, null);
+  if (text.isNil()) return null;
+  try { return JSON.parse(ObjC.unwrap(text)); } catch (error) { return null; }
+}
+function clock(seconds) {
+  seconds = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(seconds / 3600), m = Math.floor(seconds / 60) % 60, s = seconds % 60;
+  const two = (n) => (n < 10 ? '0' : '') + n;
+  return (h ? h + ':' + two(m) : two(m)) + ':' + two(s);
+}
+function run(argv) {
+  const ul = argv[0], statePath = argv[1];
+  const first = readJSON(statePath);
+  if (!first || !first.project) return;
+  const project = readJSON(first.project + '/project.json') || {};
+  const scenes = Array.isArray(project.scenes) ? project.scenes : [];
+  const app = $.NSApplication.sharedApplication;
+  app.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
+  ObjC.registerSubclass({
+    name: 'UnlawRecordingMenu',
+    methods: {
+      'act:': {
+        types: ['void', ['id']],
+        implementation: function (sender) {
+          const task = $.NSTask.alloc.init;
+          task.launchPath = ul;
+          task.arguments = ObjC.wrap(JSON.parse(ObjC.unwrap(sender.representedObject)));
+          task.launch;
+        },
+      },
+    },
+  });
+  const target = $.UnlawRecordingMenu.alloc.init;
+  const item = $.NSStatusBar.systemStatusBar.statusItemWithLength($.NSVariableStatusItemLength);
+  let shown = '';
+  function entry(menu, title, args, checked) {
+    const row = $.NSMenuItem.alloc.initWithTitleActionKeyEquivalent(title, 'act:', '');
+    row.target = target;
+    row.representedObject = $(JSON.stringify(args));
+    if (checked) row.state = $.NSControlStateValueOn;
+    menu.addItem(row);
+  }
+  function build(state) {
+    const menu = $.NSMenu.alloc.init;
+    entry(menu, 'Stop and save', ['capture', 'stop'], false);
+    entry(menu, state.paused ? 'Resume' : 'Pause', ['capture', state.paused ? 'resume' : 'pause'], false);
+    menu.addItem($.NSMenuItem.separatorItem);
+    scenes.forEach((scene, index) => entry(menu, (index + 1) + '  ' + scene.name, ['capture', 'scene', scene.id], scene.id === state.scene));
+    menu.addItem($.NSMenuItem.separatorItem);
+    entry(menu, 'Add mark', ['capture', 'mark'], false);
+    entry(menu, 'Open Studio', ['desk'], false);
+    item.menu = menu;
+  }
+  const mask = $.NSEventMaskAny || $.NSAnyEventMask;
+  while (true) {
+    const state = readJSON(statePath);
+    if (!state || state.project !== first.project) break;
+    const running = state.segment_started && !state.paused;
+    const elapsed = state.elapsed + (running ? Date.now() / 1000 - state.segment_started : 0);
+    item.button.title = (state.paused ? '❚❚ ' : '● ') + clock(elapsed);
+    const key = [state.phase, state.paused, state.scene].join('|');
+    if (key !== shown) { build(state); shown = key; }
+    const until = $.NSDate.dateWithTimeIntervalSinceNow(1.0);
+    while (true) {
+      const event = app.nextEventMatchingMaskUntilDateInModeDequeue(mask, until, $.NSDefaultRunLoopMode, true);
+      if (event.isNil()) break;
+      app.sendEvent(event);
+    }
+  }
+  $.NSStatusBar.systemStatusBar.removeStatusItem(item);
+}
+"""
+
+
 class BackendError(Exception):
     """Recording is not possible here (wrong system, missing tool)."""
 
@@ -373,6 +453,9 @@ class MacBackend:
                 return apps[0][: -len(".app")]
             current = int(parent)
         return None
+
+    def menubar_argv(self, unlaw_bin: str, state_file: Path) -> list[str]:
+        return ["osascript", "-l", "JavaScript", "-e", MENUBAR_JS, unlaw_bin, str(state_file)]
 
     def settings_url(self, kind: str) -> str:
         if kind not in SETTINGS_PANES:
