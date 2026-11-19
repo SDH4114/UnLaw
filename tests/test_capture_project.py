@@ -186,5 +186,106 @@ class SetupTests(ProjectTestCase):
         )
 
 
+class ProjectTests(ProjectTestCase):
+    def make(self) -> Path:
+        return capture_project.create_project("screen", capture_project.default_setup({}), {})
+
+    def test_intervals_split_at_segments_and_scenes(self) -> None:
+        project = {
+            "segments": [{"duration": 10.0}, {"duration": 5.0}],
+            "events": [
+                {"t": 0.0, "scene": "screen-camera"},
+                {"t": 4.0, "scene": "camera"},
+                {"t": 4.0, "mark": "x"},
+                {"t": 12.0, "scene": "screen"},
+            ],
+        }
+        self.assertEqual(
+            capture_project.timeline_intervals(project, 60),
+            [
+                {"segment": 0, "start": 0.0, "length": 4.0, "scene": "screen-camera"},
+                {"segment": 0, "start": 4.0, "length": 6.0, "scene": "camera"},
+                {"segment": 1, "start": 0.0, "length": 2.0, "scene": "camera"},
+                {"segment": 1, "start": 2.0, "length": 3.0, "scene": "screen"},
+            ],
+        )
+
+    def test_intervals_round_to_frames_and_drop_empty_ones(self) -> None:
+        project = {
+            "segments": [{"duration": 1.0}, {"duration": 0.004}],
+            "events": [
+                {"t": 0.0, "scene": "screen"},
+                {"t": 0.5071, "scene": "camera"},
+                {"t": 0.5072, "scene": "screen"},
+            ],
+        }
+        got = capture_project.timeline_intervals(project, 60)
+        self.assertEqual([round(item["start"] * 60, 6) % 1 for item in got], [0.0] * len(got))
+        self.assertTrue(all(item["length"] >= 1 / 60 for item in got))
+        # The camera flick is shorter than a frame; the two screen pieces join into one.
+        self.assertEqual(got, [{"segment": 0, "start": 0.0, "length": 1.0, "scene": "screen"}])
+
+    def test_end_alignment(self) -> None:
+        self.assertEqual(
+            capture_project.segment_starts({"screen": 10.0, "camera": 9.69, "mic": 9.06}, "screen"),
+            {"screen": 0.0, "camera": 0.31, "mic": 0.94},
+        )
+        self.assertEqual(capture_project.segment_starts({"screen": 10.0, "mic": 10.2}, "screen")["mic"], -0.2)
+
+    def test_project_round_trip_keeps_unknown_keys_and_refuses_escapes(self) -> None:
+        folder = self.make()
+        self.assertEqual(folder.parent, capture_project.projects_dir())
+        for sub in ("media", "assets", "logs", "cache"):
+            self.assertTrue((folder / sub).is_dir())
+        data = capture_project.read_project(folder)
+        self.assertEqual((data["format"], data["version"], data["state"]), ("unlaw-studio-project", 1, "recording"))
+        self.assertEqual(data["events"], [{"t": 0.0, "scene": "screen-camera"}])
+        data["future"] = {"x": 1}
+        capture_project.write_project(folder, data)
+        self.assertEqual(capture_project.read_project(folder)["future"], {"x": 1})
+        (folder / "media" / "link.mp4").symlink_to("/etc/hosts")
+        for bad in ("media/../../etc/passwd", "/etc/passwd", "media/link.mp4", "../x.mp4"):
+            data["segments"] = [{"duration": 1.0, "files": {"screen": bad}, "starts": {"screen": 0.0}}]
+            with self.subTest(bad=bad), self.assertRaises(capture_project.ProjectError):
+                capture_project.validate_project(data, folder)
+        data["segments"] = [{"duration": 1.0, "files": {"screen": "media/screen-001.mp4"}, "starts": {"screen": 0.0}}]
+        capture_project.validate_project(data, folder)
+
+    def test_names_never_clash(self) -> None:
+        first, second = self.make(), self.make()
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.is_dir() and second.is_dir())
+
+    def test_assets_used_by_the_setup_are_copied(self) -> None:
+        assets = capture_project.assets_dir()
+        assets.mkdir(parents=True, exist_ok=True)
+        (assets / "logo.png").write_bytes(b"png")
+        setup = capture_project.default_setup({})
+        setup["sources"].append({"id": "img-1", "kind": "image", "enabled": True, "asset": "logo.png"})
+        folder = capture_project.create_project("screen", setup, {})
+        self.assertEqual((folder / "assets" / "logo.png").read_bytes(), b"png")
+
+    def test_events_are_added(self) -> None:
+        folder = self.make()
+        capture_project.add_event(folder, {"t": 2.5, "scene": "camera"})
+        capture_project.add_event(folder, {"t": 3.0, "mark": "intro"})
+        events = capture_project.read_project(folder)["events"]
+        self.assertEqual(events[1:], [{"t": 2.5, "scene": "camera"}, {"t": 3.0, "mark": "intro"}])
+        with self.assertRaises(capture_project.ProjectError):
+            capture_project.add_event(folder, {"t": 1.0, "scene": "nope"})
+
+    def test_missing_camera_falls_back_to_the_screen_layout(self) -> None:
+        folder = self.make()
+        project = capture_project.read_project(folder)
+        project["segments"] = [{"duration": 2.0, "files": {"screen": "media/screen-001.mp4"}, "starts": {"screen": 0.0}}]
+        background, placements = capture_project.effective_placements(project, "screen-camera", "9:16")
+        self.assertEqual([source for source, _ in placements], ["screen"])
+        self.assertEqual(background, {"kind": "blur"})
+        project["segments"][0]["files"]["camera"] = "media/camera-001.mp4"
+        project["sources"][1]["enabled"] = True
+        _, placements = capture_project.effective_placements(project, "screen-camera", "16:9")
+        self.assertEqual([source for source, _ in placements], ["screen", "camera"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -555,3 +555,232 @@ def save_setup(data: dict) -> dict:
     with _file_lock("setup"):
         write_json_atomic(setup_path(), setup)
     return setup
+
+
+# ---------------------------------------------------------------- projects
+
+PROJECT_FORMAT = "unlaw-studio-project"
+PROJECT_STATES = ("recording", "saving", "ready", "incomplete")
+TRACKS = ("screen", "camera", "mic")
+
+
+def projects_dir() -> Path:
+    return storage_path("captures", "projects")
+
+
+def assets_dir() -> Path:
+    return storage_path("studio", "assets")
+
+
+def inside(folder: Path, relative: object, where: str) -> Path:
+    """A path written in a project, refused unless it stays inside the folder (no `..`, no symlink)."""
+    if not isinstance(relative, str) or not relative or relative.startswith(("/", "\\")):
+        _fail(where, "must be a path relative to the project folder")
+    parts = Path(relative).parts  # type: ignore[arg-type]
+    if ".." in parts or any(part.startswith("~") for part in parts[:1]):
+        _fail(where, "must stay inside the project folder")
+    path = folder / relative  # type: ignore[operator]
+    if path.is_symlink():
+        _fail(where, "must not be a symbolic link")
+    root = folder.resolve()
+    if not path.resolve().is_relative_to(root):
+        _fail(where, "must stay inside the project folder")
+    return path
+
+
+def _validate_events(value: object, scene_ids: set[str], where: str = "events") -> list:
+    if not isinstance(value, list):
+        _fail(where, "must be a list")
+    for index, item in enumerate(value):  # type: ignore[arg-type]
+        event = _dict(item, f"{where}[{index}]")
+        _numeric(event.get("t"), f"{where}[{index}].t", 0, 1e7)
+        if "scene" in event:
+            if event["scene"] not in scene_ids:
+                _fail(f"{where}[{index}].scene", "must be one of the scenes")
+        else:
+            _text(event.get("mark"), f"{where}[{index}].mark", 200, empty=True)
+    return value  # type: ignore[return-value]
+
+
+def validate_project(data: object, folder: Path) -> dict:
+    project = _dict(data, "project")
+    if project.get("format") != PROJECT_FORMAT or project.get("version") != 1:
+        _fail("project", f"is not an {PROJECT_FORMAT} version 1 file")
+    _text(project.get("name"), "project.name", 200)
+    _choice(project.get("mode"), "project.mode", ("screen", "camera", "audio"))
+    _choice(project.get("state"), "project.state", PROJECT_STATES)
+    problems = project.get("problems")
+    if not isinstance(problems, list) or not all(isinstance(item, str) for item in problems):
+        _fail("project.problems", "must be a list of messages")
+    _numeric(project.get("duration"), "project.duration", 0, 1e7)
+    validate_sources(project.get("sources"), "project.sources")
+    validate_audio(project.get("audio"), "project.audio")
+    scene_ids = validate_scenes(project.get("scenes"), "project.scenes")
+    validate_layouts(project.get("layouts"), scene_ids, "project.layouts")
+    _validate_events(project.get("events"), scene_ids, "project.events")
+    segments = project.get("segments")
+    if not isinstance(segments, list):
+        _fail("project.segments", "must be a list")
+    for index, item in enumerate(segments):  # type: ignore[arg-type]
+        here = f"project.segments[{index}]"
+        segment = _dict(item, here)
+        _numeric(segment.get("duration"), f"{here}.duration", 0, 1e7)
+        for track, relative in _dict(segment.get("files"), f"{here}.files").items():
+            _choice(track, f"{here}.files", TRACKS)
+            inside(folder, relative, f"{here}.files.{track}")
+        for track, start in _dict(segment.get("starts"), f"{here}.starts").items():
+            _choice(track, f"{here}.starts", TRACKS)
+            _numeric(start, f"{here}.starts.{track}", -1e5, 1e5)
+    validate_export(project.get("export"), "project.export")
+    exports = project.get("exports")
+    if not isinstance(exports, list) or not all(isinstance(item, dict) for item in exports):
+        _fail("project.exports", "must be a list")
+    return project
+
+
+def read_project(folder: Path) -> dict:
+    path = folder / "project.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise ProjectError(f"{folder} is not a Studio project (no project.json)") from error
+    except (OSError, ValueError) as error:
+        raise ProjectError(f"{path}: {error}") from error
+    return validate_project(data, folder)
+
+
+def write_project(folder: Path, data: dict) -> None:
+    validate_project(data, folder)
+    write_json_atomic(folder / "project.json", data)
+
+
+def create_project(kind: str, setup: dict, recorded: dict) -> Path:
+    """A new project folder (never reused) holding a copy of the setup; `recorded` adds device facts."""
+    root = projects_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    base = f"{kind}-{_stamp()}"
+    folder, number = root / base, 2
+    while True:
+        try:
+            folder.mkdir()
+            break
+        except FileExistsError:
+            folder, number = root / f"{base} {number}", number + 1
+    for sub in ("media", "assets", "logs", "cache"):
+        (folder / sub).mkdir()
+    sources = copy.deepcopy(setup["sources"])
+    for source in sources:
+        source.update(recorded.get(source["id"], {}))
+        if source["kind"] in ("image", "text") and source["enabled"]:
+            asset = assets_dir() / source["asset"]
+            if asset.is_file() and not asset.is_symlink():
+                (folder / "assets" / source["asset"]).write_bytes(asset.read_bytes())
+    audio = copy.deepcopy(setup["audio"])
+    audio["mic"].update(recorded.get("mic", {}))
+    mode = "audio" if kind == "audio" else "camera" if kind == "camera" else "screen"
+    export = dict(setup["export"], canvas=setup["canvas"])
+    project = {
+        "format": PROJECT_FORMAT,
+        "version": 1,
+        "name": folder.name,
+        "created": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "mode": mode,
+        "state": "recording",
+        "problems": [],
+        "duration": 0.0,
+        "sources": sources,
+        "audio": audio,
+        "segments": [],
+        "scenes": copy.deepcopy(setup["scenes"]),
+        "layouts": copy.deepcopy(setup["layouts"]),
+        "events": [{"t": 0.0, "scene": setup["scene"]}],
+        "export": export,
+        "exports": [],
+    }
+    write_project(folder, project)
+    return folder
+
+
+def add_event(folder: Path, event: dict) -> dict:
+    with _file_lock("project"):
+        project = read_project(folder)
+        project["events"].append(event)
+        write_project(folder, project)
+    return project
+
+
+def segment_starts(durations: dict[str, float], reference: str) -> dict[str, float]:
+    """Where each track starts on the reference track's clock: all recorders stop together, so their ends line up."""
+    end = durations[reference]
+    return {track: round(end - length, 3) + 0.0 for track, length in durations.items()}
+
+
+def timeline_intervals(project: dict, fps: int) -> list[dict]:
+    """The recording cut at pauses and scene switches, on frame boundaries; pieces shorter than a frame go."""
+    frame = 1 / fps
+
+    def snap(value: float) -> float:
+        return round(value * fps) / fps
+
+    changes = [(snap(event["t"]), event["scene"]) for event in project["events"] if "scene" in event]
+
+    def scene_at(moment: float) -> str:
+        active = changes[0][1] if changes else "screen"
+        for at, scene in changes:
+            if at <= moment + 1e-9:
+                active = scene
+        return active
+
+    intervals: list[dict] = []
+    elapsed = 0.0
+    for index, segment in enumerate(project["segments"]):
+        begin, finish = snap(elapsed), snap(elapsed + segment["duration"])
+        elapsed += segment["duration"]
+        cuts = sorted({begin, finish, *(at for at, _ in changes if begin < at < finish)})
+        for start, end in zip(cuts, cuts[1:]):
+            if end - start < frame - 1e-9:
+                continue
+            scene = scene_at(start)
+            last = intervals[-1] if intervals else None
+            if last and last["segment"] == index and last["scene"] == scene and abs(last["start"] + last["length"] - (start - begin)) < 1e-6:
+                last["length"] = round(last["length"] + end - start, 6)
+                continue
+            intervals.append({"segment": index, "start": round(start - begin, 6) + 0.0, "length": round(end - start, 6), "scene": scene})
+    return intervals
+
+
+def recorded_tracks(project: dict) -> set[str]:
+    return {track for segment in project["segments"] for track in segment["files"]}
+
+
+def effective_placements(project: dict, scene: str, canvas: str) -> tuple[dict, list[tuple[str, dict]]]:
+    """Background and visible placements in z order; a source that was not recorded is skipped, and a scene
+    left with only the screen uses the `screen` scene's layout."""
+    tracks = recorded_tracks(project)
+    available = {
+        source["id"]
+        for source in project["sources"]
+        if source["enabled"] and (source["kind"] in ("image", "text") or source["kind"] in tracks)
+    }
+    layouts = project["layouts"].get(canvas, {})
+
+    def pick(name: str) -> tuple[dict, list[tuple[str, dict]], bool]:
+        layout = layouts.get(name)
+        if layout is None:
+            return dict(BLACK), [], False
+        chosen, dropped = [], False
+        for source in project["sources"]:
+            item = layout["placements"].get(source["id"])
+            if item is None or not item["visible"]:
+                continue
+            if source["id"] in available:
+                chosen.append((source["id"], item))
+            else:
+                dropped = True
+        return layout["background"], chosen, dropped
+
+    background, chosen, dropped = pick(scene)
+    only_screen = [source for source, _ in chosen] == ["screen"]
+    if scene != "screen" and (not chosen or (only_screen and dropped)) and "screen" in layouts:
+        background, chosen, _ = pick("screen")
+    return background, chosen
