@@ -117,15 +117,26 @@ if os.environ.get("FAKE_FAIL"):
     raise SystemExit(1)
 if "-v" in args:
     stop = []
-    signal.signal(signal.SIGINT, lambda *_: stop.append(1))
-    open(out, "wb").write(b"screen")
+    if os.environ.get("FAKE_STUCK"):
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    else:
+        signal.signal(signal.SIGINT, lambda *_: stop.append(1))
     while not stop:
         time.sleep(0.02)
+    open(out, "wb").write(b"screen")  # like the real tool: the movie is written when it stops
     raise SystemExit(0)
 if "-c" in args or ("-i" in args and os.environ.get("FAKE_CANCEL")):
     raise SystemExit(0)
 open(out, "wb").write(b"png")
 """
+
+FAKE_MODES = (
+    "[in#0 @ 0x1] Selected framerate (1000.000000) is not supported by the device.\\n"
+    "[in#0 @ 0x1] Supported modes:\\n"
+    "[in#0 @ 0x1]   1920x1080@[15.000000 30.000000]fps\\n"
+    "[in#0 @ 0x1]   1280x720@[15.000000 30.000000]fps\\n"
+)
 
 FAKE_FFMPEG = """import os, signal, time
 args = sys.argv[1:]
@@ -139,21 +150,36 @@ if "-list_devices" in args:
         "[AVFoundation indev @ 0x1] [1] MacBook Pro Microphone\\n"
     )
     raise SystemExit(1)
+if "-framerate" in args and args[args.index("-framerate") + 1] == "1000":
+    sys.stderr.write(""" + repr(FAKE_MODES) + """)
+    raise SystemExit(1)
 out = args[-1]
 if out == "-":
     import array
     sys.stdout.buffer.write(array.array("h", [0, 16384, -32768, 100] * 500).tobytes())
     raise SystemExit(0)
 if "avfoundation" in args:
+    if os.environ.get("FAKE_NO_NV12") and "-pixel_format" in args:
+        sys.stderr.write("Selected pixel format (nv12) is not supported by the input device.\\n")
+        raise SystemExit(1)
     stop = []
     signal.signal(signal.SIGINT, lambda *_: stop.append(1))
     open(out, "wb").write(b"rec")
+    levels = "-filter_complex" in args and "mic-levels.txt" in args[args.index("-filter_complex") + 1]
+    level = "-80.0" if os.environ.get("FAKE_SILENT") else "-21.5"
     dies = float(os.environ.get("FAKE_RECORDER_DIES", "0"))
     started = time.monotonic()
+    frame = 0
     while not stop:
         if dies and time.monotonic() - started > dies:
             raise SystemExit(1)  # a device vanished mid-recording
-        time.sleep(0.02)
+        if levels:
+            with open("mic-levels.txt", "a") as stream:
+                stream.write(f"frame:{frame} pts:{frame * 4800} pts_time:{frame / 10}\\nlavfi.astats.Overall.Peak_level={level}\\n")
+            frame += 1
+            time.sleep(0.1)
+        else:
+            time.sleep(0.02)
     raise SystemExit(255)
 failing = os.environ.get("FAKE_FFMPEG_FAIL")
 if failing and any(failing in arg for arg in args):
@@ -161,7 +187,9 @@ if failing and any(failing in arg for arg in args):
     raise SystemExit(1)
 data = b"processed"
 if "concat" in args:
-    data = b"".join(open(line.strip()[6:-1], "rb").read() for line in open(args[args.index("-i") + 1]))
+    data = b"".join(open(line.strip()[6:-1].replace("'\\\\''", "'"), "rb").read() for line in open(args[args.index("-i") + 1]))
+elif "+faststart" in args and "copy" in args and "-i" in args:
+    data = open(args[args.index("-i") + 1], "rb").read()  # a remux keeps the media
 open(out, "wb").write(data)
 """
 
@@ -279,24 +307,31 @@ class CaptureTests(ToolTestCase):
         command = self.lines(logs["screencapture"])[-1].split("|")
         self.assertEqual(command[:4], ["-v", "-x", "-D1", "-k"])
         self.assertIn("-A", command, "system audio by default")
-        self.assertIn("-g", command, "the default microphone goes into screencapture")
-        self.assertEqual(self.lines(logs.get("ffmpeg", Path("none"))), [], "no ffmpeg needed for a plain screen recording")
+        self.assertNotIn("-g", command, "the microphone is its own track")
+        mic = [line for line in self.lines(logs["ffmpeg"]) if "avfoundation" in line][-1].split("|")
+        self.assertIn(":default", mic)
+        self.assertEqual(mic[mic.index("-c:a") + 1], "flac")
         code, _, error = self.run_main(capture.main, ["record", "audio"])
         self.assertEqual(code, 1)
         self.assertIn("already running", error)
         status = json.loads(self.ok("status", "--json"))
         self.assertEqual((status["phase"], status["mode"], status["camera"]), ("recording", "screen", False))
+        self.assertEqual(status["tracks"], ["screen", "mic"])
         self.assertIn("Paused", self.ok("pause"))
         self.assertTrue(json.loads(self.ok("status", "--json"))["paused"])
         self.assertIn("Recording", self.ok("resume"))
-        saved = json.loads(self.ok("stop", "--json"))["saved"]
-        path = Path(saved)
-        self.assertEqual(path.parent, storage_path("captures", "recordings"))
-        self.assertEqual(path.read_bytes(), b"screenscreen", "two parts joined")
-        self.assertTrue(any("concat" in line for line in self.lines(logs["ffmpeg"])))
+        result = json.loads(self.ok("stop", "--json"))
+        folder, project = self.project(result)
+        self.assertEqual(result["saved"], result["project"], "no export: saved is the project folder")
+        self.assertEqual(folder.parent, storage_path("captures", "projects"))
+        self.assertEqual((project["state"], len(project["segments"])), ("ready", 2))
+        self.assertEqual(project["segments"][1]["files"], {"screen": "media/screen-002.mp4", "mic": "media/mic-002.flac"})
+        self.assertEqual((folder / "media" / "screen-001.mp4").read_bytes(), b"screen", "remuxed, not re-encoded")
+        self.assertEqual(sorted(path.name for path in (folder / "media").iterdir()),
+                         ["mic-001.flac", "mic-002.flac", "screen-001.mp4", "screen-002.mp4"], "no dot files left")
         self.assertFalse(capture.recording_state_file().exists())
-        self.assertEqual(list(storage_path("captures", ".parts").iterdir()), [], "parts are cleaned up")
         self.assertEqual(self.ok("status").strip(), "Not recording.")
+        self.assertIn("ul capture export last", self.ok("record") and self.ok("stop"))
         code, _, error = self.run_main(capture.main, ["stop"])
         self.assertEqual(code, 1)
         self.assertIn("no active recording", error)
@@ -305,17 +340,20 @@ class CaptureTests(ToolTestCase):
         logs = self.media_tools()
         self.ok("record", "--camera", "--format", "mp4", "--no-clicks")
         screen = self.lines(logs["screencapture"])[-1].split("|")
-        self.assertNotIn("-g", screen, "the microphone is recorded with the camera, in sync with the face")
+        self.assertNotIn("-g", screen)
         self.assertNotIn("-k", screen)
-        camera = [line for line in self.lines(logs["ffmpeg"]) if "avfoundation" in line][-1].split("|")
-        self.assertIn("default:default", camera, "the camera macOS picks, with the default microphone")
-        saved = Path(json.loads(self.ok("stop", "--json"))["saved"])
-        self.assertTrue(saved.name.startswith("screen-camera-") and saved.suffix == ".mp4")
-        overlay = [line for line in self.lines(logs["ffmpeg"]) if "overlay=" in line][-1]
-        self.assertIn("overlay=W-w-38:H-h-38", overlay)
-        self.assertIn("amix=inputs=2", overlay)
-        self.assertIn("-itsoffset", overlay)
-        self.assertTrue(any("+faststart" in line for line in self.lines(logs["ffmpeg"])))
+        camera = [line for line in self.lines(logs["ffmpeg"]) if "avfoundation" in line and ":none" in line][-1].split("|")
+        self.assertIn("default:none", camera, "video only: the microphone is its own track")
+        self.assertEqual(camera[camera.index("-video_size") + 1], "1920x1080", "high quality = 1080p from the probed modes")
+        self.assertEqual(camera[camera.index("-framerate") + 1], "30.000000", "the device's own framerate string")
+        self.assertEqual(camera[camera.index("-b:v") + 1], "6000000")
+        folder, project = self.project(json.loads(self.ok("stop", "--json")))
+        self.assertTrue(folder.name.startswith("screen-camera-"))
+        self.assertEqual((folder / "media" / "camera-001.mp4").read_bytes(), b"rec")
+        self.assertEqual(project["export"]["container"], "mp4")
+        self.assertEqual(project["sources"][1]["mode"], "1920x1080@30.000000")
+        self.assertTrue(project["sources"][1]["enabled"])
+        self.assertEqual(project["segments"][0]["starts"], {"screen": 0.0, "camera": 0.0, "mic": 0.0})
 
     def test_a_named_or_virtual_microphone_is_recorded_separately(self) -> None:
         logs = self.media_tools()
@@ -323,15 +361,15 @@ class CaptureTests(ToolTestCase):
         code, _, error = self.run_main(capture.main, ["record"])
         self.assertEqual(code, 0, error)
         self.assertIn("BlackHole 2ch is a virtual device", error)
-        self.assertNotIn("-g", self.lines(logs["screencapture"])[-1].split("|"))
         mic = [line for line in self.lines(logs["ffmpeg"]) if "avfoundation" in line][-1].split("|")
         self.assertIn(":BlackHole 2ch", mic)
         self.ok("stop")
-        self.assertTrue(any("amix" in line and "-c:v|copy" in line for line in self.lines(logs["ffmpeg"])))
         set_config_value("capture.audio_device", "macbook")
-        self.ok("record", "--no-system-audio")
+        self.ok("record", "--no-system-audio", "--mic-format", "wav")
         self.assertNotIn("-A", self.lines(logs["screencapture"])[-1].split("|"))
-        self.assertIn(":MacBook Pro Microphone", [line for line in self.lines(logs["ffmpeg"]) if "avfoundation" in line][-1].split("|"))
+        mic = [line for line in self.lines(logs["ffmpeg"]) if "avfoundation" in line][-1].split("|")
+        self.assertIn(":MacBook Pro Microphone", mic)
+        self.assertTrue(mic[-1].endswith("mic-001.wav"))
         self.ok("stop")
         code, _, error = self.run_main(capture.main, ["record", "--mic", "Studio"])
         self.assertEqual(code, 2)
@@ -339,15 +377,19 @@ class CaptureTests(ToolTestCase):
 
     def test_audio_and_camera_recordings(self) -> None:
         logs = self.media_tools()
-        self.ok("record", "audio", "--format", "mp3")
+        self.ok("record", "audio", "--mic-format", "m4a")
         command = [line for line in self.lines(logs["ffmpeg"]) if "avfoundation" in line][-1].split("|")
         self.assertIn(":default", command)
-        self.assertIn("libmp3lame", command)
-        saved = Path(json.loads(self.ok("stop", "--json"))["saved"])
-        self.assertEqual((saved.suffix, saved.read_bytes()), (".mp3", b"rec"))
+        self.assertIn("aac", command)
+        self.assertEqual(self.lines(logs["screencapture"]), [], "no screen and no permission probe for audio")
+        folder, project = self.project(json.loads(self.ok("stop", "--json")))
+        self.assertEqual((project["mode"], project["segments"][0]["files"]), ("audio", {"mic": "media/mic-001.m4a"}))
+        self.assertEqual((folder / "media" / "mic-001.m4a").read_bytes(), b"rec")
         self.ok("camera", "--no-mic", "--cam", "facetime")
-        self.assertIn("FaceTime HD Camera:none", [line for line in self.lines(logs["ffmpeg"]) if "avfoundation" in line][-1].split("|"))
-        self.assertTrue(Path(json.loads(self.ok("stop", "--json"))["saved"]).name.startswith("camera-"))
+        self.assertIn("FaceTime HD Camera:none", [line for line in self.lines(logs["ffmpeg"]) if "avfoundation" in line and "-video_size" in line][-1].split("|"))
+        folder, project = self.project(json.loads(self.ok("stop", "--json")))
+        self.assertTrue(folder.name.startswith("camera-"))
+        self.assertEqual(project["events"][0]["scene"], "camera")
         code, _, error = self.run_main(capture.main, ["record", "audio", "--no-mic"])
         self.assertEqual(code, 2)
         self.assertIn("needs a microphone", error)
@@ -355,31 +397,33 @@ class CaptureTests(ToolTestCase):
         self.assertIn("system audio is recorded with the screen only", error)
 
     def test_a_failed_save_keeps_the_parts_for_another_try(self) -> None:
-        logs = self.media_tools()
+        self.media_tools()
         self.ok("record", "--camera")
         status = json.loads(self.ok("status", "--json"))
         self.assertLess(status["elapsed"], 3.0)
         self.assertGreaterEqual(status["elapsed"], 0.6, "the clock starts with the recorders, before the start check")
-        with patch.dict(os.environ, {"FAKE_FFMPEG_FAIL": "overlay"}):
+        with patch.dict(os.environ, {"FAKE_FFMPEG_FAIL": "+faststart"}):
             code, _, error = self.run_main(capture.main, ["stop"])
         self.assertEqual(code, 1)
-        self.assertIn("adding the camera failed", error)
+        self.assertIn("saving the screen recording failed", error)
         status = json.loads(self.ok("status", "--json"))
         self.assertEqual(status["phase"], "unsaved")
         self.assertIn("Not saved yet", self.ok("status"))
-        saved = Path(json.loads(self.ok("stop", "--json"))["saved"])
-        self.assertTrue(saved.is_file())
+        folder, project = self.project(json.loads(self.ok("stop", "--json")))
+        self.assertEqual(project["state"], "ready")
+        self.assertTrue((folder / "media" / "screen-001.mp4").is_file())
         self.assertFalse(capture.recording_state_file().exists())
-        self.assertGreaterEqual(sum("overlay=" in line for line in self.lines(logs["ffmpeg"])), 2)
 
     def test_a_recording_that_cannot_start_explains_permissions(self) -> None:
         self.media_tools()
         with patch.dict(os.environ, {"FAKE_FAIL": "1"}):
             code, _, error = self.run_main(capture.main, ["record"])
         self.assertEqual(code, 1)
-        self.assertIn("could not create image from display", error)
+        self.assertIn("Screen Recording permission", error)
         self.assertIn("Privacy & Security", error)
         self.assertFalse(capture.recording_state_file().exists())
+        projects = storage_path("captures", "projects")
+        self.assertEqual(list(projects.iterdir()) if projects.is_dir() else [], [], "no empty project is left behind")
         state = capture.recording_state_file()
         state.write_text("{not json")
         code, _, error = self.run_main(capture.main, ["stop"])
@@ -391,7 +435,7 @@ class CaptureTests(ToolTestCase):
         self.media_tools()
         started = time.monotonic()
         out = self.ok("record", "audio", "--duration", "1")
-        self.assertIn("Saved:", out)
+        self.assertIn("Saved project:", out)
         self.assertGreaterEqual(time.monotonic() - started, 1.0)
         self.assertFalse(capture.recording_state_file().exists())
 
@@ -403,15 +447,16 @@ class CaptureTests(ToolTestCase):
         self.assertEqual(code, 0, error)
         self.assertLess(time.monotonic() - started, 10, "it must not keep timing a dead recorder")
         self.assertIn("stopped unexpectedly", error)
-        self.assertTrue(Path(out.split("Saved: ", 1)[1].strip()).is_file())
+        folder = Path(out.split("Saved project: ", 1)[1].splitlines()[0].strip())
+        self.assertEqual(json.loads((folder / "project.json").read_text())["state"], "incomplete")
 
     def test_ctrl_c_while_saving_keeps_the_recording_for_another_stop(self) -> None:
         self.media_tools()
         self.ok("record", "audio")
-        with patch.object(capture, "_save", side_effect=KeyboardInterrupt):
+        with patch.object(capture, "_finish", side_effect=KeyboardInterrupt):
             self.assertEqual(self.run_main(capture.main, ["stop"])[0], 130)
         self.assertEqual(json.loads(self.ok("status", "--json"))["phase"], "unsaved")
-        self.assertTrue(Path(json.loads(self.ok("stop", "--json"))["saved"]).is_file())
+        self.assertTrue(Path(json.loads(self.ok("stop", "--json"))["project"]).is_dir())
 
     def test_a_failed_thumbnail_or_preview_is_never_cached(self) -> None:
         self.media_tools()
@@ -522,10 +567,8 @@ class CaptureTests(ToolTestCase):
         os.chdir(original)
         self.ok("record", "--output", "session.mov")
         os.chdir(other)
-        saved = Path(json.loads(self.ok("stop", "--json"))["saved"])
-        self.assertEqual(saved, original / "session.mov")
-        self.assertEqual(saved.read_bytes(), b"screen")
-        self.assertFalse((other / "session.mov").exists())
+        self.assertEqual(json.loads(self.ok("status", "--json"))["output"], str(original / "session.mov"))
+        self.ok("stop")
 
     def test_failed_start_stops_spawned_recorders(self) -> None:
         self.media_tools()
@@ -603,16 +646,17 @@ class CaptureTests(ToolTestCase):
         self.ok("record", "--camera")
         self.ok("pause")
         state = capture._load_state()
-        screen = Path(state["segments"][0]["screen"])
-        camera = Path(state["segments"][0]["camera"])
+        folder = Path(state["project"])
+        screen = folder / state["segments"][0]["screen"]
+        camera = folder / state["segments"][0]["camera"]
         screen.unlink()
-        code, _, _ = self.run_main(capture.main, ["stop"])
-        self.assertNotEqual(code, 0)
-        self.assertTrue(camera.exists(), "the surviving camera recording was deleted")
-        self.assertEqual(camera.read_bytes(), b"rec")
-        self.assertEqual(json.loads(self.ok("status", "--json"))["phase"], "unsaved")
-        screen.write_bytes(b"recovered")
-        self.assertTrue(Path(json.loads(self.ok("stop", "--json"))["saved"]).exists())
+        result = json.loads(self.ok("stop", "--json"))
+        self.assertFalse(camera.exists(), "remuxed into camera-001.mp4")
+        _, project = self.project(result)
+        self.assertEqual(project["state"], "incomplete")
+        self.assertEqual(project["segments"][0]["files"], {"camera": "media/camera-001.mp4", "mic": "media/mic-001.flac"})
+        self.assertIn("part 1: the screen recording is missing", project["problems"])
+        self.assertEqual((folder / "media" / "camera-001.mp4").read_bytes(), b"rec")
 
     def test_partial_recording_state_is_rejected_without_a_traceback(self) -> None:
         self.media_tools()
@@ -620,13 +664,14 @@ class CaptureTests(ToolTestCase):
         self.ok("pause")
         valid = capture._load_state()
         self.ok("stop")
-        broken_pid = {**valid, "processes": [{"pid": "bad", "program": "ffmpeg"}]}
+        broken_pid = {**valid, "processes": [{"pid": "bad", "program": "ffmpeg", "track": "mic"}]}
         for state in (
             {"segments": []},
             {**valid, "segments": None},
             broken_pid,
             {**valid, "elapsed": 10**500},
-            {**valid, "plan": {**valid["plan"], "overlay": []}},
+            {**valid, "plan": {**valid["plan"], "display": []}},
+            {**valid, "segments": [{"screen": "media/x.mov", "logs": "y"}]},
         ):
             with self.subTest(state=state):
                 capture.recording_state_file().write_text(json.dumps(state))
@@ -639,6 +684,112 @@ class CaptureTests(ToolTestCase):
                 self.assertNotEqual(code, 0)
                 self.assertIn("recording state", json.loads(out)["error"])
                 self.assertEqual(error, "")
+
+    def project(self, result: dict) -> tuple[Path, dict]:
+        folder = Path(result["project"])
+        return folder, json.loads((folder / "project.json").read_text())
+
+    def test_scenes_and_marks_are_timestamped(self) -> None:
+        self.media_tools()
+        self.ok("record", "--camera")
+        time.sleep(0.3)
+        self.ok("scene", "3")
+        time.sleep(0.2)
+        self.ok("mark", "intro", "done")
+        code, _, error = self.run_main(capture.main, ["scene", "9"])
+        self.assertEqual(code, 2)
+        self.assertIn("there is no scene 9; scenes: 1 Screen + camera", error)
+        _, project = self.project(json.loads(self.ok("stop", "--json")))
+        events = project["events"]
+        self.assertEqual([event.get("scene") or event.get("mark") for event in events], ["screen-camera", "camera", "intro done"])
+        self.assertTrue(0.2 <= events[1]["t"] < events[2]["t"])
+
+    def test_a_stuck_screen_recorder_is_not_killed(self) -> None:
+        self.media_tools()
+        with patch.object(capture, "STOP_GRACE", 0.3), patch.object(capture, "TERM_GRACE", 0.2), patch.dict(os.environ, {"FAKE_STUCK": "1"}):
+            self.ok("record")
+            code, out, _ = self.run_main(capture.main, ["stop", "--json"])
+            self.assertEqual(code, 1)
+            answer = json.loads(out)
+            self.assertEqual(answer["stuck"], ["screencapture"])
+            status = json.loads(self.ok("status", "--json"))
+            self.assertEqual((status["phase"], status["stuck"]), ("stuck", ["screencapture"]))
+            folder, project = self.project(answer)
+            self.assertEqual(project["state"], "incomplete")
+            self.assertTrue((folder / "media" / "mic-001.flac").exists(), "the microphone track is kept")
+            done = json.loads(self.ok("stop", "--force", "--json"))
+        self.assertEqual(done["state"], "incomplete")
+        self.assertFalse(capture.recording_state_file().exists())
+
+    def test_a_camera_that_refuses_nv12_is_retried_without_it(self) -> None:
+        logs = self.media_tools()
+        with patch.dict(os.environ, {"FAKE_NO_NV12": "1"}):
+            self.ok("record", "--camera")
+        cameras = [line for line in self.lines(logs["ffmpeg"]) if ":none" in line and "-video_size" in line]
+        self.assertEqual(["-pixel_format" in line for line in cameras[-2:]], [True, False])
+        self.assertEqual(json.loads(self.ok("status", "--json"))["phase"], "recording")
+
+    def test_status_warns_about_a_silent_microphone(self) -> None:
+        self.media_tools()
+        with patch.object(capture, "SILENCE_SECONDS", 0.5), patch.dict(os.environ, {"FAKE_SILENT": "1"}):
+            self.ok("record")
+            time.sleep(1.0)
+            status = json.loads(self.ok("status", "--json"))
+        self.assertLess(status["level_db"], -60)
+        self.assertTrue(any("microphone is silent" in warning for warning in status["warnings"]))
+        self.ok("stop")
+        self.ok("record")
+        time.sleep(0.5)
+        status = json.loads(self.ok("status", "--json"))
+        self.assertEqual(status["level_db"], -21.5)
+        self.assertFalse(any("silent" in warning for warning in status["warnings"]))
+
+    def test_a_dying_camera_leaves_a_project_with_the_rest(self) -> None:
+        self.media_tools()
+        with patch.dict(os.environ, {"FAKE_RECORDER_DIES": "0.9"}):
+            self.ok("record", "--camera")
+            time.sleep(1.4)
+            self.assertEqual(json.loads(self.ok("status", "--json"))["phase"], "interrupted")
+        _, project = self.project(json.loads(self.ok("stop", "--json")))
+        self.assertEqual(project["state"], "incomplete")
+        self.assertIn("screen", project["segments"][0]["files"])
+        self.assertTrue(any("stopped during the recording" in problem for problem in project["problems"]))
+
+    def test_stop_right_after_start_saves(self) -> None:
+        self.media_tools()
+        self.ok("record")
+        result = json.loads(self.ok("stop", "--json"))
+        self.assertIn(result["state"], ("ready", "incomplete"))
+
+    def test_start_while_saving_answers_at_once(self) -> None:
+        self.media_tools()
+        state = capture.recording_state_file()
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(json.dumps({"phase": "saving"}))
+        with capture._locked():
+            started = time.monotonic()
+            code, _, error = self.run_main(capture.main, ["record"])
+        self.assertLess(time.monotonic() - started, 6)
+        self.assertEqual(code, 1)
+        self.assertIn("still saving", error)
+        state.unlink()
+
+    def test_a_version_1_state_is_wrapped_into_a_project(self) -> None:
+        self.media_tools()
+        parts = storage_path("captures", ".parts", "screen-1")
+        parts.mkdir(parents=True)
+        (parts / "000-screen.mov").write_bytes(b"old screen")
+        output = storage_path("captures", "recordings", "screen-old.mov")
+        capture.recording_state_file().write_text(json.dumps({
+            "mode": "screen", "output": str(output), "parts": str(parts), "started": "2026-11-18T10:00:00+00:00",
+            "elapsed": 4.0, "segments": [{"screen": str(parts / "000-screen.mov")}], "processes": [], "paused": True,
+            "phase": "paused", "warnings": [], "plan": {"mode": "screen", "display": 1},
+        }))
+        result = json.loads(self.ok("stop", "--json"))
+        folder, project = self.project(result)
+        self.assertEqual(project["segments"][0]["files"], {"screen": "media/screen-001.mp4"})
+        self.assertEqual((folder / "media" / "screen-001.mp4").read_bytes(), b"old screen")
+        self.assertFalse(parts.exists())
 
     def test_delete_refuses_an_absolute_symlink_to_a_capture(self) -> None:
         target = storage_path("captures", "screenshots", "original.png")

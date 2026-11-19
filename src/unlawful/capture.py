@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import copy
 import fcntl
 import hashlib
 import json
 import math
 import os
 import select
+import shlex
 import shutil
 import signal
 import subprocess
@@ -20,6 +22,20 @@ from pathlib import Path
 
 from unlawful.command_help import COMMAND_HELP
 
+from .capture_mac import LEVELS_FILE, BackendError, backend, pick_mode, virtual_device
+from .capture_project import (
+    CAMERA_QUALITY,
+    CANVASES,
+    MIC_FORMATS,
+    ProjectError,
+    add_event,
+    create_project,
+    load_setup,
+    projects_dir,
+    read_project,
+    segment_starts,
+    write_project,
+)
 from .config import ConfigError, load_config, storage_path
 
 USAGE = """Usage: ul capture                      (menu: pick what to capture)
@@ -37,22 +53,6 @@ IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".heic", ".tiff"}
 VIDEO_FORMATS = ("mov", "mp4")
 AUDIO_FORMATS = ("m4a", "mp3", "wav")
 MODES = ("screen", "camera", "audio")
-CORNERS = {
-    "bottom-right": "W-w-{m}:H-h-{m}",
-    "bottom-left": "{m}:H-h-{m}",
-    "top-right": "W-w-{m}:{m}",
-    "top-left": "{m}:{m}",
-}
-# Virtual devices that carry app audio, not a voice; picking one as the microphone is a common mistake.
-LOOPBACK_WORDS = (
-    "blackhole",
-    "loopback",
-    "soundflower",
-    "teams audio",
-    "zoomaudio",
-    "aggregate",
-)
-CAMERA_SIZE = "1280x720"
 # Old one-word actions keep working.
 SHORTCUTS = {
     "screenshot": ("shot", "screen"),
@@ -65,11 +65,12 @@ SHORTCUTS = {
 
 
 class CaptureError(Exception):
-    """A problem the user can fix; `code` is the exit status."""
+    """A problem the user can fix; `code` is the exit status, `data` extra JSON keys."""
 
     def __init__(self, message: str, code: int = 2) -> None:
         super().__init__(message)
         self.code = code
+        self.data: dict = {}
 
 
 # ---------------------------------------------------------------- helpers
@@ -125,16 +126,35 @@ def _write_json(path: Path, data: object) -> None:
 
 
 @contextmanager
-def _locked(name: str = "recording") -> Iterator[None]:
-    """Serialize recording changes or screenshot allocation across CLI processes."""
+def _locked(name: str = "recording", *, refuse_saving: bool = False) -> Iterator[None]:
+    """Serialize recording changes or screenshot allocation across CLI processes. A new recording
+    (`refuse_saving`) does not wait behind a stop that is still saving: it answers at once."""
     lock = storage_path("runtime", f"{name}.lock")
     lock.parent.mkdir(parents=True, exist_ok=True)
     with lock.open("a") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+        if refuse_saving:
+            while True:
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if _phase_on_disk() == "saving":
+                        raise CaptureError("the previous recording is still saving; try again in a moment", 1) from None
+                    time.sleep(0.1)
+        else:
+            fcntl.flock(handle, fcntl.LOCK_EX)
         try:
             yield
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _phase_on_disk() -> str | None:
+    try:
+        state = json.loads(recording_state_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return state.get("phase") if isinstance(state, dict) else None
 
 
 def _seconds(text: str) -> float:
@@ -177,85 +197,8 @@ def _run(command: list[str], what: str) -> None:
 # ---------------------------------------------------------------- devices
 
 
-def _ffmpeg_devices() -> tuple[list[str], list[str]]:
-    if shutil.which("ffmpeg") is None:
-        return [], []
-    result = subprocess.run(
-        [
-            "ffmpeg",
-            "-hide_banner",
-            "-f",
-            "avfoundation",
-            "-list_devices",
-            "true",
-            "-i",
-            "",
-        ],
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    cameras: list[str] = []
-    microphones: list[str] = []
-    current: list[str] | None = None
-    for line in result.stderr.splitlines():
-        if "video devices:" in line:
-            current = cameras
-        elif "audio devices:" in line:
-            current = microphones
-        elif current is not None and "] [" in line:
-            name = line.split("] [", 1)[1].split("] ", 1)
-            if len(name) == 2 and not name[1].startswith("Capture screen"):
-                current.append(name[1].strip())
-    return cameras, microphones
-
-
-def _displays() -> list[dict]:
-    """Displays numbered like `screencapture -D` (1 is the main display)."""
-    try:
-        result = subprocess.run(
-            ["system_profiler", "-json", "SPDisplaysDataType"],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-        data = json.loads(result.stdout or "{}")
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
-        data = {}
-    screens = [
-        screen
-        for gpu in data.get("SPDisplaysDataType", [])
-        for screen in gpu.get("spdisplays_ndrvs", [])
-        if isinstance(screen, dict)
-    ]
-    screens.sort(key=lambda screen: screen.get("spdisplays_main") != "spdisplays_yes")
-    return [
-        {
-            "number": index,
-            "name": str(screen.get("_name", f"Display {index}")),
-            "pixels": str(screen.get("_spdisplays_pixels", "")),
-        }
-        for index, screen in enumerate(screens, 1)
-    ] or [{"number": 1, "name": "Main display", "pixels": ""}]
-
-
-def is_loopback(name: str) -> bool:
-    return any(word in name.casefold() for word in LOOPBACK_WORDS)
-
-
 def devices() -> dict:
-    cameras, microphones = _ffmpeg_devices()
-    return {
-        "displays": _displays(),
-        "cameras": cameras,
-        "microphones": [
-            {"name": name, "virtual": is_loopback(name)} for name in microphones
-        ],
-        "ffmpeg": shutil.which("ffmpeg") is not None,
-    }
+    return _backend().devices()
 
 
 def _resolve(value: str, names: list[str], kind: str) -> str | None:
@@ -342,79 +285,129 @@ def shot(
 # ---------------------------------------------------------------- recording
 
 
-def _alive(pid: int, program: str) -> bool:
-    try:
-        done, _ = os.waitpid(pid, os.WNOHANG)
-        if done:
-            return False
-    except ChildProcessError:
-        pass
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return False
-    command = subprocess.run(
-        ["ps", "-p", str(pid), "-o", "command="],
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout
-    # A reused pid (after a reboot) must never be signalled: it has to be our tool.
-    return program in command
+# ---------------------------------------------------------------- recording
+#
+# A recording is a project folder (capture_project.py): every track goes to its own
+# file in media/, one set of files per segment (a pause ends a segment). The state
+# file runtime/recording.json (version 2) points at the project while it records.
+
+STATE_VERSION = 2
+START_CHECK = 0.7
+STOP_GRACE = 30.0
+TERM_GRACE = 10.0
+KILL_GRACE = 2.0
+SILENCE_SECONDS = 10.0
+SILENCE_DB = -60.0
+LOW_SPACE = 5 * 10**9
+PROGRAMS = ("screencapture", "ffmpeg", "osascript")
+PHASES = ("recording", "paused", "saving", "interrupted", "unsaved", "stuck")
+TRACK_ORDER = ("screen", "camera", "mic")
+FALLBACK_MODE = {"width": 1280, "height": 720, "fps": "30"}
 
 
-def _valid_state(state: object) -> bool:
-    if not isinstance(state, dict):
+def _backend():
+    try:
+        return backend()
+    except BackendError as error:
+        raise CaptureError(str(error), 1) from error
+
+
+def _finite(value: object) -> bool:
+    if type(value) not in (int, float):
         return False
-    plan = state.get("plan")
-    if not isinstance(plan, dict) or state.get("mode") not in MODES:
+    try:
+        return math.isfinite(value) and abs(value) < 1e12  # type: ignore[arg-type]
+    except OverflowError:  # an int too large for a float
         return False
-    if not all(
-        isinstance(state.get(key), str) and state[key]
-        for key in ("output", "parts", "started")
-    ):
-        return False
-    if state.get("phase") not in ("recording", "paused", "saving", "interrupted", "unsaved"):
-        return False
-    if type(state.get("paused")) is not bool:
-        return False
-    for key in ("elapsed", "segment_started"):
-        value = state.get(key)
-        if key == "segment_started" and value is None:
-            continue
-        if type(value) not in (int, float) or not -sys.float_info.max <= value <= sys.float_info.max:
-            return False
-    segments, processes = state.get("segments"), state.get("processes")
-    if not isinstance(segments, list) or not isinstance(processes, list):
-        return False
-    if any(
-        not isinstance(files, dict)
-        or not all(isinstance(path, str) and path for path in files.values())
-        for files in segments
-    ):
-        return False
-    for process in processes:
-        if not isinstance(process, dict) or type(process.get("pid")) is not int:
-            return False
-        if not 0 < process["pid"] <= 2**31 - 1 or process.get("program") not in (
-            "ffmpeg", "screencapture"
-        ):
-            return False
-    if (
-        plan.get("mode") != state["mode"]
-        or not isinstance(plan.get("overlay"), str)
-        or plan["overlay"] not in CORNERS
-    ):
-        return False
-    if not all(type(plan.get(key)) is bool for key in ("camera", "system_audio", "clicks")):
+
+
+def _valid_processes(value: object) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(item, dict)
+        and type(item.get("pid")) is int
+        and 0 < item["pid"] <= 2**31 - 1
+        and item.get("program") in PROGRAMS
+        and isinstance(item.get("track"), str)
+        for item in value
+    )
+
+
+def _valid_plan(plan: object) -> bool:
+    if not isinstance(plan, dict):
         return False
     if type(plan.get("display")) is not int or plan["display"] < 1:
         return False
-    return all(
-        key in plan and (plan[key] is None or isinstance(plan[key], str))
-        for key in ("camera_name", "mic", "rect")
+    if not all(
+        type(plan.get(key)) is bool
+        for key in ("clicks", "system", "mic_in_screen", "nv12")
+    ):
+        return False
+    if not all(
+        plan.get(key) is None or isinstance(plan.get(key), str)
+        for key in ("area", "camera", "mic")
+    ):
+        return False
+    if any(key not in plan for key in ("area", "camera", "mic", "mode")):
+        return False
+    mode = plan["mode"]
+    if mode is not None and not (
+        isinstance(mode, dict)
+        and type(mode.get("width")) is int
+        and type(mode.get("height")) is int
+        and isinstance(mode.get("fps"), str)
+    ):
+        return False
+    return (
+        type(plan.get("bitrate")) is int
+        and plan.get("mic_format") in MIC_FORMATS
+        and plan.get("audio_format") in AUDIO_FORMATS
+    )
+
+
+def _valid_state(state: object) -> bool:
+    if not isinstance(state, dict) or state.get("version") != STATE_VERSION:
+        return False
+    if state.get("mode") not in MODES or state.get("phase") not in PHASES:
+        return False
+    if not all(
+        isinstance(state.get(key), str) and state[key]
+        for key in ("project", "started", "scene")
+    ):
+        return False
+    if state.get("output") is not None and not isinstance(state.get("output"), str):
+        return False
+    if state.get("export") is not None and not isinstance(state.get("export"), dict):
+        return False
+    if type(state.get("paused")) is not bool or not _finite(state.get("elapsed")):
+        return False
+    if state.get("segment_started") is not None and not _finite(
+        state.get("segment_started")
+    ):
+        return False
+    segments, durations = state.get("segments"), state.get("durations")
+    if not isinstance(segments, list) or not all(
+        isinstance(files, dict)
+        and all(
+            track in TRACK_ORDER and isinstance(path, str) and path
+            for track, path in files.items()
+        )
+        for files in segments
+    ):
+        return False
+    if not isinstance(durations, list) or not all(
+        _finite(value) for value in durations
+    ):
+        return False
+    for key in ("warnings", "problems", "stuck"):
+        value = state.get(key)
+        if not isinstance(value, list) or not all(
+            isinstance(item, str) for item in value
+        ):
+            return False
+    return (
+        _valid_processes(state.get("processes"))
+        and _valid_processes(state.get("helpers"))
+        and _valid_plan(state.get("plan"))
     )
 
 
@@ -424,6 +417,8 @@ def _load_state() -> dict | None:
         return None
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(state, dict) and "version" not in state and "parts" in state:
+            return _wrap_legacy_state(state)
         if not _valid_state(state):
             raise ValueError("not a recording state")
         return state
@@ -434,169 +429,206 @@ def _load_state() -> dict | None:
         ) from error
 
 
-def _audio_codec(extension: str) -> list[str]:
-    return {
-        ".m4a": ["-c:a", "aac", "-b:a", "192k"],
-        ".mp3": ["-c:a", "libmp3lame", "-q:a", "2"],
-        ".wav": ["-c:a", "pcm_s16le"],
-    }[extension]
+def _wrap_legacy_state(old: dict) -> dict:
+    """A recording started by 3.20 or earlier (state version 1): its parts move into a project so that
+    `ul capture stop` can still finish it. The old `output` stays the file it is exported to."""
+    segments, processes = old.get("segments"), old.get("processes", [])
+    if not isinstance(segments, list) or not all(
+        isinstance(files, dict) for files in segments
+    ):
+        raise ValueError("an old recording state without segments")
+    if not isinstance(processes, list):
+        raise ValueError("an old recording state without processes")
+    mode = old.get("mode") if old.get("mode") in MODES else "screen"
+    setup, _ = load_setup()
+    folder = create_project(mode, setup, {})
+    moved: list[dict] = []
+    for index, files in enumerate(segments, 1):
+        entry = {}
+        for key, value in files.items():
+            track = "mic" if key in ("audio", "mic") else key
+            source = Path(value) if isinstance(value, str) else None
+            if track not in TRACK_ORDER or source is None or not source.is_file():
+                continue
+            dot = "" if track == "mic" else "."
+            relative = f"media/{dot}{track}-{index:03d}{source.suffix.casefold()}"
+            os.replace(source, folder / relative)
+            entry[track] = relative
+        moved.append(entry)
+    plan = old.get("plan") if isinstance(old.get("plan"), dict) else {}
+    output = old.get("output") if isinstance(old.get("output"), str) else None
+    audio_format = Path(output).suffix[1:] if output and mode == "audio" else "m4a"
+    state = {
+        "version": STATE_VERSION,
+        "mode": mode,
+        "project": str(folder),
+        "output": output,
+        "export": {} if output else None,
+        "phase": "paused" if old.get("paused") is True else "recording",
+        "paused": old.get("paused") is True,
+        "elapsed": float(old["elapsed"]) if _finite(old.get("elapsed")) else 0.0,
+        "segment_started": old.get("segment_started")
+        if _finite(old.get("segment_started"))
+        else None,
+        "started": str(
+            old.get("started")
+            or datetime.now().astimezone().isoformat(timespec="seconds")
+        ),
+        "scene": setup["scene"],
+        "segments": moved,
+        "durations": [],
+        "processes": [
+            {"pid": item["pid"], "program": item["program"], "track": item["program"]}
+            for item in processes
+            if isinstance(item, dict)
+            and type(item.get("pid")) is int
+            and item.get("program") in PROGRAMS
+        ],
+        "helpers": [],
+        "warnings": [],
+        "problems": [],
+        "stuck": [],
+        "plan": {
+            "display": plan.get("display")
+            if type(plan.get("display")) is int and plan["display"] >= 1
+            else 1,
+            "area": None,
+            "clicks": True,
+            "system": True,
+            "mic_in_screen": False,
+            "camera": None,
+            "mode": None,
+            "bitrate": 0,
+            "nv12": True,
+            "mic": None,
+            "mic_format": "flac",
+            "audio_format": audio_format if audio_format in AUDIO_FORMATS else "m4a",
+        },
+    }
+    parts = old.get("parts")
+    if (
+        isinstance(parts, str)
+        and Path(parts).is_dir()
+        and not any(Path(parts).iterdir())
+    ):
+        Path(parts).rmdir()
+    _write_json(recording_state_file(), state)
+    return state
 
 
-def _segment_commands(
-    state: dict, index: int
-) -> tuple[dict, list[tuple[str, list[str]]]]:
-    """The files and processes for one segment (a new one after every resume)."""
-    plan = state["plan"]
-    parts = Path(state["parts"])
-    ffmpeg = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-nostdin",
-        "-y",
-        "-f",
-        "avfoundation",
+def _track_files(state: dict, index: int) -> dict[str, str]:
+    """Files of one segment, relative to the project. Video tracks start with a dot until they are
+    remuxed at stop (a file that is still being written is never offered to a player)."""
+    plan, number = state["plan"], index + 1
+    files = {}
+    if state["mode"] == "screen":
+        files["screen"] = f"media/.screen-{number:03d}.mov"
+    if plan["camera"]:
+        files["camera"] = f"media/.camera-{number:03d}.mp4"
+    if plan["mic"]:
+        files["mic"] = f"media/mic-{number:03d}{MIC_FORMATS[plan['mic_format']]}"
+    return files
+
+
+def _recorder(state: dict, track: str, out: Path) -> tuple[str, list[str]]:
+    plan, mac = state["plan"], _backend()
+    if track == "screen":
+        return "screencapture", mac.screen_argv(plan, out)
+    if track == "camera":
+        return "ffmpeg", mac.camera_argv(plan, out, nv12=plan["nv12"])
+    return "ffmpeg", mac.mic_argv(plan, out)
+
+
+def _log_size(folder: Path, track: str) -> int:
+    log = folder / "logs" / f"{track}.log"
+    return log.stat().st_size if log.exists() else 0
+
+
+def _log_tail(folder: Path, track: str, start: int) -> str:
+    log = folder / "logs" / f"{track}.log"
+    try:
+        with log.open("rb") as stream:
+            stream.seek(start)
+            text = stream.read().decode(errors="replace")
+    except OSError:
+        return ""
+    lines = [
+        line for line in text.splitlines() if line.strip() and not line.startswith("$ ")
     ]
-    camera_input = [
-        "-pixel_format",
-        "nv12",
-        "-framerate",
-        "30",
-        "-video_size",
-        CAMERA_SIZE,
+    return " ".join(lines[-2:])
+
+
+def _spawn(command: list[str], folder: Path, track: str) -> subprocess.Popen:
+    logs = folder / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    with (logs / f"{track}.log").open("ab") as log:
+        log.write(f"$ {shlex.join(command)}\n".encode())
+        log.flush()
+        return subprocess.Popen(
+            command,
+            cwd=logs,  # the microphone writes mic-levels.txt here
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            start_new_session=True,
+            # Safe: only the single-threaded CLI spawns recorders (the desk runs `ul capture`).
+            preexec_fn=_default_signals,  # noqa: PLW1509
+        )
+
+
+def _permission_hint(what: str) -> str:
+    app = _backend().responsible_app()
+    who = app or "the app that runs ul (your terminal or editor)"
+    return (
+        f"Give {who} {what} permission: System Settings > Privacy & Security > {what}, "
+        f"then restart {app or 'it'}. `ul capture doctor --open screen` opens the page."
+    )
+
+
+def _start_failure(track: str, reason: str) -> str:
+    what = {"screen": "Screen Recording", "camera": "Camera", "mic": "Microphone"}[
+        track
     ]
-    files: dict = {}
-    commands: list[tuple[str, list[str]]] = []
-    mode, mic = plan["mode"], plan["mic"]
-    if mode == "screen":
-        files["screen"] = str(parts / f"{index:03d}-screen.mov")
-        command = ["screencapture", "-v", "-x", f"-D{plan['display']}"]
-        if plan["rect"]:
-            command.append(f"-R{plan['rect']}")
-        if plan["clicks"]:
-            command.append("-k")
-        if plan["system_audio"]:
-            command.append("-A")
-        if mic == "default" and not plan["camera"]:
-            command.append("-g")
-        commands.append(("screencapture", [*command, files["screen"]]))
-        if plan["camera"]:
-            files["camera"] = str(parts / f"{index:03d}-camera.mov")
-            audio = ["-c:a", "aac", "-b:a", "192k"] if mic else []
-            commands.append(
-                (
-                    "ffmpeg",
-                    [
-                        *ffmpeg,
-                        *camera_input,
-                        "-i",
-                        f"{plan['camera_name']}:{mic or 'none'}",
-                        "-c:v",
-                        "h264_videotoolbox",
-                        "-b:v",
-                        "6M",
-                        *audio,
-                        files["camera"],
-                    ],
-                )
-            )
-        elif mic and mic != "default":
-            files["mic"] = str(parts / f"{index:03d}-mic.m4a")
-            commands.append(
-                (
-                    "ffmpeg",
-                    [
-                        *ffmpeg,
-                        "-i",
-                        f":{mic}",
-                        "-c:a",
-                        "aac",
-                        "-b:a",
-                        "192k",
-                        files["mic"],
-                    ],
-                )
-            )
-    elif mode == "camera":
-        files["camera"] = str(parts / f"{index:03d}-camera.mov")
-        audio = ["-c:a", "aac", "-b:a", "192k"] if mic else []
-        commands.append(
-            (
-                "ffmpeg",
-                [
-                    *ffmpeg,
-                    *camera_input,
-                    "-i",
-                    f"{plan['camera_name']}:{mic or 'none'}",
-                    "-c:v",
-                    "h264_videotoolbox",
-                    "-b:v",
-                    "6M",
-                    *audio,
-                    files["camera"],
-                ],
-            )
-        )
-    else:
-        extension = Path(state["output"]).suffix
-        files["audio"] = str(parts / f"{index:03d}-audio{extension}")
-        commands.append(
-            (
-                "ffmpeg",
-                [*ffmpeg, "-i", f":{mic}", *_audio_codec(extension), files["audio"]],
-            )
-        )
-    return files, commands
+    return f"the {track} recorder could not start: {reason or 'it stopped right away'}. {_permission_hint(what)}"
 
 
 def _start_segment(state: dict) -> None:
-    index = len(state["segments"])
-    files, commands = _segment_commands(state, index)
-    log_path = storage_path("runtime", "recording.log")
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    start = log_path.stat().st_size if log_path.exists() else 0
-    processes: list[tuple[str, subprocess.Popen]] = []
+    folder = Path(state["project"])
+    files = _track_files(state, len(state["segments"]))
+    offsets = {track: _log_size(folder, track) for track in files}
+    started: list[tuple[str, str, subprocess.Popen]] = []
     # The clock starts when the recorders start, not after the start check below.
     spawned = time.time()
     try:
-        with log_path.open("ab") as log:
-            for program, command in commands:
-                log.write(f"$ {' '.join(command)}\n".encode())
-                log.flush()
-                processes.append(
-                    (
-                        program,
-                        subprocess.Popen(
-                            command,
-                            stdin=subprocess.DEVNULL,
-                            stdout=log,
-                            stderr=log,
-                            start_new_session=True,
-                            # Safe: only the single-threaded CLI spawns recorders (the desk runs `ul capture`).
-                            preexec_fn=_default_signals,  # noqa: PLW1509
-                        ),
-                    )
-                )
+        for track, relative in files.items():
+            program, command = _recorder(state, track, folder / relative)
+            started.append((track, program, _spawn(command, folder, track)))
         # A missing permission or a busy device makes the tools exit within a moment;
         # later failures show up as the `interrupted` phase in `status`.
-        deadline = time.monotonic() + 0.7
+        deadline = time.monotonic() + START_CHECK
         while time.monotonic() < deadline:
-            if any(process.poll() is not None for _, process in processes):
-                with log_path.open("rb") as log:
-                    log.seek(start)
-                    lines = [
-                        line
-                        for line in log.read().decode(errors="replace").splitlines()
-                        if line and not line.startswith("$ ")
-                    ]
-                reason = " ".join(lines[-2:]) or "it stopped right away"
-                hint = " Check System Settings > Privacy & Security (Screen Recording, Camera, Microphone)."
-                raise CaptureError(f"recording could not start: {reason}.{hint}", 1)
+            for position, (track, program, process) in enumerate(started):
+                if process.poll() is None:
+                    continue
+                reason = _log_tail(folder, track, offsets[track])
+                if (
+                    track == "camera"
+                    and state["plan"]["nv12"]
+                    and "pixel format" in reason
+                ):
+                    # Some cameras (iPhone, capture cards) refuse nv12: try once with their own format.
+                    state["plan"]["nv12"] = False
+                    offsets[track] = _log_size(folder, track)
+                    _, command = _recorder(state, track, folder / files[track])
+                    started[position] = (track, program, _spawn(command, folder, track))
+                    deadline = time.monotonic() + START_CHECK
+                    continue
+                raise CaptureError(_start_failure(track, reason), 1)
             time.sleep(0.1)
         state["segments"].append(files)
         state["processes"] = [
-            {"pid": process.pid, "program": program} for program, process in processes
+            {"pid": process.pid, "program": program, "track": track}
+            for track, program, process in started
         ]
         state["segment_started"] = spawned
         state["paused"] = False
@@ -605,16 +637,37 @@ def _start_segment(state: dict) -> None:
     except BaseException:
         # Until the state is committed, only these Popen handles can stop the
         # detached recorders. This also covers Ctrl-C and a full state-file disk.
-        for _, process in processes:
+        for _, _, process in started:
             if process.poll() is None:
                 process.send_signal(signal.SIGINT)
-        for _, process in processes:
+        for _, _, process in started:
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
         raise
+
+
+def _alive(pid: int, program: str) -> bool:
+    try:
+        done, _ = os.waitpid(pid, os.WNOHANG)
+        if done:
+            return False
+    except ChildProcessError:
+        pass
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    command = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "command="],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    # A reused pid (after a reboot) must never be signalled: it has to be our tool.
+    return program in command
 
 
 def _default_signals() -> None:
@@ -634,57 +687,114 @@ def _signal_all(processes: list[dict], number: int) -> None:
                 pass
 
 
-def _stop_segment(state: dict) -> None:
-    """SIGINT lets the tools finish their files; SIGTERM, then SIGKILL, only if they hang."""
-    processes = state.get("processes", [])
+def _elapsed_now(state: dict) -> float:
+    running = state.get("segment_started") and not state["paused"]
+    return state["elapsed"] + (
+        time.time() - state["segment_started"] if running else 0.0
+    )
+
+
+def _stop_segment(state: dict, *, force: bool = False) -> list[str]:
+    """Stop every recorder together: SIGINT lets them finish their files. One that is still alive after
+    SIGTERM is never killed unless `force` (a killed screencapture loses its whole file); it is returned."""
     stopped_at = time.time()
-    for number, wait in ((signal.SIGINT, 15), (signal.SIGTERM, 5), (signal.SIGKILL, 2)):
-        _signal_all(processes, number)
-        deadline = time.monotonic() + wait
-        while (
-            any(_alive(item["pid"], item["program"]) for item in processes)
-            and time.monotonic() < deadline
-        ):
-            time.sleep(0.05)
-        if not any(_alive(item["pid"], item["program"]) for item in processes):
+    running = bool(state.get("segment_started")) and not state["paused"]
+    elapsed = _elapsed_now(state)
+    processes = state["processes"]
+
+    def alive() -> list[dict]:
+        return [item for item in processes if _alive(item["pid"], item["program"])]
+
+    steps = [
+        (signal.SIGINT, max(STOP_GRACE, 0.05 * elapsed)),
+        (signal.SIGTERM, TERM_GRACE),
+    ]
+    if force:
+        steps.append((signal.SIGKILL, KILL_GRACE))
+    for number, wait in steps:
+        current = alive()
+        if not current:
             break
-    if state.get("segment_started") and not state.get("paused"):
-        state["elapsed"] = (
-            state.get("elapsed", 0.0) + stopped_at - state["segment_started"]
-        )
-    state["processes"] = []
+        _signal_all(current, number)
+        deadline = time.monotonic() + wait
+        while alive() and time.monotonic() < deadline:
+            time.sleep(0.05)
+    left = alive()
+    if running:
+        state["durations"].append(round(stopped_at - state["segment_started"], 3))
+        state["elapsed"] = elapsed
+    state["processes"] = left
     state["segment_started"] = None
+    state["stuck"] = sorted({item["program"] for item in left})
+    return state["stuck"]
+
+
+def _scene_id(scenes: list[dict], value: str) -> str:
+    text = str(value).strip()
+    listing = ", ".join(
+        f"{number} {scene['name']}" for number, scene in enumerate(scenes, 1)
+    )
+    if _digits(text):
+        number = int(text)
+        if 1 <= number <= len(scenes):
+            return scenes[number - 1]["id"]
+        raise CaptureError(f"there is no scene {number}; scenes: {listing}")
+    for scene in scenes:
+        if (
+            text in (scene["id"], scene["name"])
+            or scene["name"].casefold() == text.casefold()
+        ):
+            return scene["id"]
+    raise CaptureError(f"no scene {text!r}; scenes: {listing}")
+
+
+def _source(setup: dict, kind: str) -> dict | None:
+    return next((source for source in setup["sources"] if source["kind"] == kind), None)
+
+
+def _plain(value: str) -> bool:
+    return value.strip().casefold() in {"", "default", "auto", "none", "off", "no"}
 
 
 def start_recording(
     mode: str = "screen",
     *,
-    camera: bool = False,
-    cam: str | None = None,
-    mic: str | None = None,
-    system_audio: bool | None = None,
-    display: int = 1,
-    rect: str | None = None,
-    clicks: bool | None = None,
-    format: str | None = None,
-    output: str | None = None,
+    scene: str | None = None,
+    canvas: str | None = None,
+    overrides: dict | None = None,
 ) -> dict:
-    """Start a recording in the background; `stop_recording` saves it."""
+    """Start a recording in the background; `stop_recording` saves the project.
+
+    `overrides` (CLI flags, the desk's request) change this recording only: camera (bool), cam,
+    cam_mode, cam_quality, mic (`none` = off), mic_format, system_audio, display, rect, clicks,
+    format (container of the export), output and export (export right after stop)."""
     if mode not in MODES:
         raise CaptureError(f"unknown recording mode: {mode} (screen, camera or audio)")
+    options = dict(overrides or {})
     settings = _settings()
+    setup, setup_warnings = load_setup()
+    setup = copy.deepcopy(setup)
+    screen_source, camera_source = _source(setup, "screen"), _source(setup, "camera")
+    fmt = options.get("format")
+    video_format = (
+        settings["video_format"] if settings["video_format"] in VIDEO_FORMATS else "mov"
+    )
+    audio_format = (
+        settings["audio_format"] if settings["audio_format"] in AUDIO_FORMATS else "m4a"
+    )
     if mode == "audio":
-        extension = "." + (format or settings["audio_format"])
-        if extension[1:] not in AUDIO_FORMATS:
+        audio_format = fmt or audio_format
+        if audio_format not in AUDIO_FORMATS:
             raise CaptureError(
                 f"audio format must be one of {', '.join(AUDIO_FORMATS)}"
             )
     else:
-        extension = "." + (format or settings["video_format"])
-        if extension[1:] not in VIDEO_FORMATS:
+        video_format = fmt or video_format
+        if video_format not in VIDEO_FORMATS:
             raise CaptureError(
                 f"video format must be one of {', '.join(VIDEO_FORMATS)}"
             )
+    rect = options.get("rect")
     if rect is not None:
         numbers = rect.split(",")
         if (
@@ -696,65 +806,130 @@ def start_recording(
                 "--rect needs X,Y,WIDTH,HEIGHT in points and only works for the screen"
             )
         rect = ",".join(number.strip() for number in numbers)
+    display = options.get("display") or (
+        screen_source["display"] if screen_source else 1
+    )
     if display < 1:
         raise CaptureError("--display starts at 1 (the main display)")
-    want_camera = mode == "camera" or camera
+    if canvas is not None and canvas not in CANVASES:
+        raise CaptureError(f"--canvas must be one of {', '.join(CANVASES)}")
+    quality = options.get("cam_quality") or (
+        camera_source["quality"] if camera_source else "high"
+    )
+    if quality not in CAMERA_QUALITY:
+        raise CaptureError("--cam-quality must be max, high or light")
+    mic_format = options.get("mic_format") or setup["audio"]["mic"]["format"]
+    if mic_format not in MIC_FORMATS:
+        raise CaptureError("--mic-format must be flac, wav or m4a")
+    camera_wanted = options.get("camera")
+    if camera_wanted is None:
+        camera_wanted = (
+            bool(camera_source and camera_source["enabled"]) and mode == "screen"
+        )
+    want_camera = mode == "camera" or bool(camera_wanted and mode == "screen")
     if mode == "screen":
         _need("screencapture", "for screen recording")
-    if mic is not None:
-        mic_value = mic
-    elif mode != "screen" or settings["screen_audio"]:
-        mic_value = str(settings["audio_device"])
+    mic_setup = setup["audio"]["mic"]
+    if options.get("mic") is not None:
+        mic_value = str(options["mic"])
+    elif mode != "screen" or mic_setup["enabled"]:
+        mic_value = mic_setup["device"]
     else:
         mic_value = "none"
-    plain_mic = mic_value.strip().casefold() in {
-        "",
-        "default",
-        "auto",
-        "none",
-        "off",
-        "no",
-    }
-    # The default microphone goes straight into screencapture; anything else needs ffmpeg.
-    needs_ffmpeg = want_camera or mode == "audio" or not plain_mic
-    if needs_ffmpeg:
+    plain_mic = _plain(mic_value)
+    has_ffmpeg = shutil.which("ffmpeg") is not None
+    if want_camera or mode == "audio" or not plain_mic:
         _need("ffmpeg", "for camera, microphone and audio recording")
-    plain_camera = str(cam or settings["camera_device"]).strip().casefold() in {
-        "",
-        "default",
-        "auto",
-        "none",
-        "off",
-        "no",
-    }
+    cam_value = str(
+        options.get("cam") or (camera_source["device"] if camera_source else "default")
+    )
     # Listing devices costs ffmpeg half a second; `default` and `none` need no list.
-    must_list = not plain_mic or (want_camera and not plain_camera)
-    cameras, microphones = _ffmpeg_devices() if must_list else ([], [])
+    must_list = not plain_mic or (want_camera and not _plain(cam_value))
+    cameras, microphones = _backend().list_avfoundation() if must_list else ([], [])
     mic_name = _resolve(mic_value, microphones, "microphone")
     if mode == "audio" and mic_name is None:
         raise CaptureError("audio recording needs a microphone")
-    camera_name = (
-        _resolve(cam or settings["camera_device"], cameras, "camera")
-        if want_camera
-        else None
-    )
+    camera_name = _resolve(cam_value, cameras, "camera") if want_camera else None
     if want_camera and camera_name is None:
         raise CaptureError(
-            "capture.camera_device is off; set it to `default` or a camera name"
+            "the camera is off; pick one with --cam NAME or capture.camera_device"
         )
-    if mode != "audio" and extension == ".mp4":
-        _need("ffmpeg", "to save MP4")
-    system = settings["system_audio"] if system_audio is None else system_audio
+    system = (
+        setup["audio"]["system"]["enabled"]
+        if options.get("system_audio") is None
+        else options["system_audio"]
+    )
     if system and mode != "screen":
-        if system_audio:
+        if options.get("system_audio"):
             raise CaptureError("system audio is recorded with the screen only")
         system = False
-    warnings = []
-    if mic_name and is_loopback(mic_name):
+    warnings = list(setup_warnings)
+    mic_in_screen = mode == "screen" and mic_name == "default" and not has_ffmpeg
+    if mic_in_screen:
+        warnings.append(
+            "ffmpeg is not installed: the microphone goes into the screen track (brew install ffmpeg)"
+        )
+    if mic_name and virtual_device(mic_name):
         warnings.append(
             f"{mic_name} is a virtual device: it records app audio routed to it, not your voice"
         )
-    with _locked():
+    camera_mode = None
+    if camera_name:
+        wanted = options.get("cam_mode") or (
+            camera_source["mode"] if camera_source else "auto"
+        )
+        camera_mode = pick_mode(
+            _backend().camera_modes(camera_name), quality, wanted
+        ) or dict(FALLBACK_MODE)
+    if mode == "camera":
+        scene_id = (
+            "camera"
+            if any(item["id"] == "camera" for item in setup["scenes"])
+            else setup["scene"]
+        )
+    else:
+        scene_id = (
+            _scene_id(setup["scenes"], scene) if scene is not None else setup["scene"]
+        )
+    clicks = options.get("clicks")
+    if clicks is None:
+        clicks = screen_source["clicks"] if screen_source else True
+    output = None
+    if options.get("output"):
+        extension = "." + (audio_format if mode == "audio" else video_format)
+        path = Path(options["output"]).expanduser().absolute()
+        output = str(
+            path if path.suffix.casefold() == extension else path.with_suffix(extension)
+        )
+    if mode == "screen" and not _backend().permission_probe()["screen"]:
+        raise CaptureError(
+            f"screen recording is not allowed. {_permission_hint('Screen Recording')}",
+            1,
+        )
+    # This recording's choices go into the project's copy of the setup, never into the saved setup.
+    setup["scene"] = scene_id
+    if canvas:
+        setup["canvas"] = canvas
+    setup["export"]["container"] = video_format
+    if camera_source:
+        camera_source["enabled"] = want_camera
+        if camera_name:
+            camera_source["device"] = camera_name
+            camera_source["quality"] = quality
+    if screen_source:
+        screen_source.update(
+            display=display, area=rect, clicks=bool(clicks), enabled=mode == "screen"
+        )
+    mic_setup.update(enabled=mic_name is not None, format=mic_format)
+    if mic_name:
+        mic_setup["device"] = mic_name
+    setup["audio"]["system"]["enabled"] = bool(system)
+    recorded = {}
+    if camera_name and camera_mode:
+        recorded["camera"] = {
+            "mode": f"{camera_mode['width']}x{camera_mode['height']}@{camera_mode['fps']}"
+        }
+    with _locked(refuse_saving=True):
         try:
             running = _load_state()
         except CaptureError:
@@ -763,51 +938,49 @@ def start_recording(
             raise CaptureError(
                 "a recording is already running; stop it with `ul capture stop`", 1
             )
-        if output:
-            path = Path(output).expanduser().absolute()
-            if path.suffix.casefold() != extension:
-                path = path.with_suffix(extension)
-        else:
-            name = "screen-camera" if mode == "screen" and camera else mode
-            folder = "recordings"
-            path = storage_path("captures", folder, f"{name}-{_timestamp()}{extension}")
-        path = _free(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        parts = storage_path(
-            "captures",
-            ".parts",
-            path.stem + "-" + hashlib.sha1(str(path).encode()).hexdigest()[:8],
-        )
-        parts.mkdir(parents=True, exist_ok=True)
+        kind = "screen-camera" if mode == "screen" and want_camera else mode
+        try:
+            folder = create_project(kind, setup, recorded)
+        except ProjectError as error:
+            raise CaptureError(str(error), 1) from error
         state = {
+            "version": STATE_VERSION,
             "mode": mode,
-            "output": str(path),
-            "parts": str(parts),
-            "started": datetime.now().astimezone().isoformat(timespec="seconds"),
-            "elapsed": 0.0,
-            "segments": [],
-            "processes": [],
-            "paused": False,
+            "project": str(folder),
+            "output": output,
+            "export": {} if output or options.get("export") else None,
             "phase": "recording",
+            "paused": False,
+            "elapsed": 0.0,
+            "segment_started": None,
+            "started": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "scene": scene_id,
+            "segments": [],
+            "durations": [],
+            "processes": [],
+            "helpers": [],
             "warnings": warnings,
+            "problems": [],
+            "stuck": [],
             "plan": {
-                "mode": mode,
-                "camera": bool(camera and mode == "screen"),
-                "camera_name": camera_name,
-                "mic": mic_name,
-                "system_audio": bool(system),
                 "display": display,
-                "rect": rect,
-                "clicks": settings["show_clicks"] if clicks is None else clicks,
-                "overlay": settings["overlay"]
-                if settings["overlay"] in CORNERS
-                else "bottom-right",
+                "area": rect,
+                "clicks": bool(clicks),
+                "system": bool(system),
+                "mic_in_screen": mic_in_screen,
+                "camera": camera_name,
+                "mode": camera_mode,
+                "bitrate": CAMERA_QUALITY[quality][1],
+                "nv12": True,
+                "mic": None if mic_in_screen else mic_name,
+                "mic_format": mic_format,
+                "audio_format": audio_format,
             },
         }
         try:
             _start_segment(state)
-        except CaptureError:
-            shutil.rmtree(parts, ignore_errors=True)
+        except BaseException:
+            shutil.rmtree(folder, ignore_errors=True)
             raise
     return status()
 
@@ -819,11 +992,12 @@ def pause_recording() -> dict:
             raise CaptureError("nothing is recording", 1)
         if state["paused"]:
             return status()
-        _need("ffmpeg", "to join the parts of a paused recording")
-        _stop_segment(state)
+        stuck = _stop_segment(state)
         state["paused"] = True
-        state["phase"] = "paused"
+        state["phase"] = "stuck" if stuck else "paused"
         _write_json(recording_state_file(), state)
+    if stuck:
+        raise CaptureError(_stuck_message(stuck), 1)
     return status()
 
 
@@ -832,10 +1006,80 @@ def resume_recording() -> dict:
         state = _load_state()
         if state is None:
             raise CaptureError("nothing is recording", 1)
+        if state["phase"] == "stuck":
+            raise CaptureError(_stuck_message(state["stuck"]), 1)
         if not state["paused"]:
             return status()
         _start_segment(state)
     return status()
+
+
+def switch_scene(scene: str) -> dict:
+    """Switch the scene now; while paused it applies from the resume point."""
+    with _locked():
+        state = _load_state()
+        if state is None:
+            raise CaptureError("nothing is recording", 1)
+        folder = Path(state["project"])
+        try:
+            scene_id = _scene_id(read_project(folder)["scenes"], scene)
+            add_event(folder, {"t": round(_elapsed_now(state), 3), "scene": scene_id})
+        except ProjectError as error:
+            raise CaptureError(str(error), 1) from error
+        state["scene"] = scene_id
+        _write_json(recording_state_file(), state)
+    return status()
+
+
+def add_mark(label: str = "") -> dict:
+    if len(label) > 200 or any(ord(char) < 32 for char in label):
+        raise CaptureError("a mark is one line of at most 200 characters")
+    with _locked():
+        state = _load_state()
+        if state is None:
+            raise CaptureError("nothing is recording", 1)
+        at = round(_elapsed_now(state), 3)
+        try:
+            add_event(Path(state["project"]), {"t": at, "mark": label})
+        except ProjectError as error:
+            raise CaptureError(str(error), 1) from error
+    return {**status(), "mark": {"t": at, "label": label}}
+
+
+def _mic_level(state: dict) -> tuple[float | None, bool]:
+    """The newest microphone peak (dBFS) and whether it stayed below SILENCE_DB for SILENCE_SECONDS."""
+    if not state["plan"]["mic"] or state["paused"]:
+        return None, False
+    path = Path(state["project"]) / "logs" / LEVELS_FILE
+    try:
+        with path.open("rb") as stream:
+            stream.seek(max(0, path.stat().st_size - 65536))
+            text = stream.read().decode(errors="replace")
+    except OSError:
+        return None, False
+    samples: list[tuple[float, float]] = []
+    moment = 0.0
+    for line in text.splitlines():
+        if "pts_time:" in line:
+            try:
+                moment = float(line.rsplit("pts_time:", 1)[1].split()[0])
+            except (ValueError, IndexError):
+                continue
+        elif "Peak_level=" in line:
+            try:
+                level = float(line.rsplit("=", 1)[1])
+            except ValueError:
+                continue
+            if not math.isnan(level):
+                samples.append((moment, level))
+    if not samples:
+        return None, False
+    last_time, last_level = samples[-1]
+    window = [level for at, level in samples if at >= last_time - SILENCE_SECONDS]
+    silent = last_time >= SILENCE_SECONDS and all(
+        level < SILENCE_DB for level in window
+    )
+    return (round(last_level, 1) if math.isfinite(last_level) else -120.0), silent
 
 
 def status() -> dict:
@@ -845,32 +1089,49 @@ def status() -> dict:
         state = None
     if state is None:
         return {"active": False}
-    running = state.get("segment_started") and not state["paused"]
-    elapsed = state.get("elapsed", 0.0) + (
-        time.time() - state["segment_started"] if running else 0.0
-    )
+    elapsed = _elapsed_now(state)
     alive = [
-        item
-        for item in state.get("processes", [])
-        if _alive(item["pid"], item["program"])
+        item for item in state["processes"] if _alive(item["pid"], item["program"])
     ]
     phase = state["phase"]
     if (
         phase == "recording"
-        and state.get("processes")
+        and state["processes"]
         and len(alive) < len(state["processes"])
     ):
         phase = "interrupted"
+    warnings = list(state["warnings"])
+    level, silent = _mic_level(state) if phase == "recording" else (None, False)
+    if silent:
+        warnings.append(
+            f"the microphone is silent (below {SILENCE_DB:.0f} dB for {SILENCE_SECONDS:.0f} s)"
+        )
+    try:
+        free = shutil.disk_usage(state["project"]).free
+    except OSError:
+        free = None
+    if free is not None and free < LOW_SPACE:
+        warnings.append(f"only {free / 1e9:.1f} GB free on the recording disk")
+    tracks = sorted(
+        {track for files in state["segments"] for track in files}, key=TRACK_ORDER.index
+    )
     return {
         "active": True,
+        "version": STATE_VERSION,
         "mode": state["mode"],
-        "camera": state["plan"]["camera"],
+        "camera": bool(state["plan"]["camera"]),
         "phase": phase,
         "paused": state["paused"],
         "elapsed": round(elapsed, 1),
-        "output": state["output"],
+        "project": state["project"],
+        "output": state["output"] or state["project"],
         "started": state["started"],
-        "warnings": state.get("warnings", []),
+        "scene": state["scene"],
+        "tracks": tracks,
+        "level_db": level,
+        "stuck": state["stuck"],
+        "free_bytes": free,
+        "warnings": warnings,
     }
 
 
@@ -878,6 +1139,16 @@ def status() -> dict:
 
 
 def _probe(path: str) -> dict:
+    empty = {
+        "duration": 0.0,
+        "audio": False,
+        "video": False,
+        "width": 0,
+        "height": 0,
+        "codecs": [],
+    }
+    if shutil.which("ffprobe") is None:
+        return empty
     result = subprocess.run(
         [
             "ffprobe",
@@ -897,7 +1168,7 @@ def _probe(path: str) -> dict:
     try:
         data = json.loads(result.stdout or "{}")
     except json.JSONDecodeError:
-        data = {}
+        return empty
     streams = data.get("streams", [])
     video = next(
         (stream for stream in streams if stream.get("codec_type") == "video"), {}
@@ -907,233 +1178,215 @@ def _probe(path: str) -> dict:
     except ValueError:
         duration = 0.0
     return {
-        "duration": duration,
+        "duration": duration if math.isfinite(duration) else 0.0,
         "audio": any(stream.get("codec_type") == "audio" for stream in streams),
         "video": bool(video),
         "width": int(video.get("width") or 0),
+        "height": int(video.get("height") or 0),
         "codecs": [stream.get("codec_name") for stream in streams],
     }
 
 
-def _overlay(screen: str, camera: str, corner: str, output: str) -> None:
-    """Camera in a corner of the screen; both stopped together, so their ends line up."""
-    base, cam = _probe(screen), _probe(camera)
-    offset = max(0.0, base["duration"] - cam["duration"])
-    width = max(2, int(base["width"] * 0.22) // 2 * 2) if base["width"] else 640
-    margin = max(8, base["width"] // 50) if base["width"] else 32
-    position = CORNERS[corner].format(m=margin)
-    graph = f"[1:v]scale={width}:-2,format=yuv420p[cam];[0:v][cam]overlay={position}:eof_action=pass[v]"
-    audio = [
-        label
-        for label, present in (("[0:a]", base["audio"]), ("[1:a]", cam["audio"]))
-        if present
-    ]
-    maps = ["-map", "[v]"]
-    if len(audio) == 2:
-        graph += ";[0:a][1:a]amix=inputs=2:duration=first:normalize=0[a]"
-        maps += ["-map", "[a]"]
-    elif audio:
-        maps += ["-map", "0:a" if audio[0] == "[0:a]" else "1:a"]
-    bitrate = (
-        f"{max(8, min(30, base['width'] * 5 // 1000))}M" if base["width"] else "12M"
-    )
-    _run(
-        [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostdin",
-            "-y",
-            "-i",
-            screen,
-            "-itsoffset",
-            f"{offset:.3f}",
-            "-i",
-            camera,
-            "-filter_complex",
-            graph,
-            *maps,
-            "-c:v",
-            "h264_videotoolbox",
-            "-b:v",
-            bitrate,
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            output,
-        ],
-        "adding the camera",
-    )
+def _repair_wav(path: Path) -> None:
+    """ffmpeg writes the WAV sizes at the end; a recorder stopped hard leaves them 0. Set them from the file."""
+    try:
+        with path.open("r+b") as stream:
+            head = stream.read(12)
+            if len(head) < 12 or head[:4] != b"RIFF" or head[8:12] != b"WAVE":
+                return
+            size = path.stat().st_size
+            offset = 12
+            while offset + 8 <= size:
+                stream.seek(offset)
+                chunk = stream.read(8)
+                name, length = chunk[:4], int.from_bytes(chunk[4:], "little")
+                if name == b"data":
+                    actual = size - offset - 8
+                    if length != actual:
+                        stream.seek(offset + 4)
+                        stream.write(min(actual, 0xFFFFFFFF).to_bytes(4, "little"))
+                        stream.seek(4)
+                        stream.write(min(size - 8, 0xFFFFFFFF).to_bytes(4, "little"))
+                    return
+                offset += 8 + length + (length & 1)
+    except OSError:
+        return
 
 
-def _mix_mic(screen: str, mic: str, output: str) -> None:
-    base, voice = _probe(screen), _probe(mic)
-    offset = max(0.0, base["duration"] - voice["duration"])
-    if base["audio"]:
-        audio = [
-            "-filter_complex",
-            "[0:a][1:a]amix=inputs=2:duration=first:normalize=0[a]",
-            "-map",
-            "0:v",
-            "-map",
-            "[a]",
-        ]
-    else:
-        audio = ["-map", "0:v", "-map", "1:a"]
-    _run(
-        [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostdin",
-            "-y",
-            "-i",
-            screen,
-            "-itsoffset",
-            f"{offset:.3f}",
-            "-i",
-            mic,
-            *audio,
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-shortest",
-            output,
-        ],
-        "adding the microphone",
-    )
+def _finished_track(folder: Path, track: str, relative: str) -> str | None:
+    """The track's playable file (relative), remuxing a dot file the first time; None if nothing was recorded."""
+    path = folder / relative
+    name = Path(relative).name
+    if not name.startswith("."):
+        if path.suffix == ".wav" and path.is_file():
+            _repair_wav(path)
+        return relative if path.is_file() and path.stat().st_size > 0 else None
+    has_ffmpeg = shutil.which("ffmpeg") is not None
+    final_name = Path(name[1:]).with_suffix(".mp4" if has_ffmpeg else path.suffix).name
+    final_relative = f"media/{final_name}"
+    final = folder / final_relative
+    if path.is_file() and path.stat().st_size > 0:
+        if has_ffmpeg:
+            temporary = final.with_name(f".remux-{final.name}")
+            try:
+                _run(
+                    [
+                        "ffmpeg",
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-nostdin",
+                        "-y",
+                        "-i",
+                        str(path),
+                        "-map",
+                        "0",
+                        "-c",
+                        "copy",
+                        "-movflags",
+                        "+faststart",
+                        str(temporary),
+                    ],
+                    f"saving the {track} recording",
+                )
+                os.replace(temporary, final)
+            finally:
+                temporary.unlink(missing_ok=True)
+            path.unlink()
+        else:
+            os.replace(path, final)
+        return final_relative
+    if final.is_file() and final.stat().st_size > 0:
+        return final_relative  # remuxed by an earlier try
+    return None
 
 
-def _finish_segment(state: dict, index: int, files: dict) -> str | None:
-    parts = Path(state["parts"])
-    plan = state["plan"]
-    existing = {
-        key: value
-        for key, value in files.items()
-        if Path(value).is_file() and Path(value).stat().st_size > 0
-    }
-    if state["mode"] == "audio":
-        return existing.get("audio")
-    if state["mode"] == "camera":
-        return existing.get("camera")
-    screen = existing.get("screen")
-    if screen is None:
-        if existing:
-            raise CaptureError(f"the screen recording is missing; other recorded parts are kept in {parts}", 1)
-        return None
-    if "camera" in existing:
-        out = str(parts / f"{index:03d}-done.mov")
-        _overlay(screen, existing["camera"], plan["overlay"], out)
-        return out
-    if "mic" in existing:
-        out = str(parts / f"{index:03d}-done.mov")
-        _mix_mic(screen, existing["mic"], out)
-        return out
-    return screen
-
-
-def _concat(files: list[str], output: str) -> None:
-    listing = Path(output).with_suffix(".txt")
-    listing.write_text(
-        "".join("file '" + name.replace("'", "'\\''") + "'\n" for name in files),
-        encoding="utf-8",
-    )
-    _run(
-        [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostdin",
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            str(listing),
-            "-c",
-            "copy",
-            output,
-        ],
-        "joining the parts",
-    )
-    listing.unlink(missing_ok=True)
-
-
-def stop_recording() -> dict:
-    """Stop, join paused parts, add camera/microphone, and save the final file."""
-    with _locked():
-        state = _load_state()
-        if state is None:
-            raise CaptureError("no active recording", 1)
-        _stop_segment(state)
-        state["phase"] = "saving"
-        _write_json(recording_state_file(), state)
-        try:
-            return _save(state)
-        except BaseException:  # also Ctrl-C while ffmpeg saves: never stay "saving"
-            # The parts stay and `ul capture stop` tries again; an empty
-            # recording was already cleaned up and must not come back.
-            if recording_state_file().exists():
-                state["phase"] = "unsaved"
-                _write_json(recording_state_file(), state)
-            raise
-
-
-def _save(state: dict) -> dict:
-    output = Path(state["output"])
-    done = [
-        path
-        for index, files in enumerate(state["segments"])
-        if (path := _finish_segment(state, index, files))
-    ]
-    if not done:
-        shutil.rmtree(state["parts"], ignore_errors=True)
+def _finish(state: dict) -> dict:
+    """Write what was recorded into project.json: playable files, durations, start offsets, problems."""
+    folder = Path(state["project"])
+    try:
+        project = read_project(folder)
+    except ProjectError as error:
+        raise CaptureError(str(error), 1) from error
+    stuck_tracks = {item["track"] for item in state["processes"]}
+    problems = list(state["problems"])
+    segments = []
+    for index, files in enumerate(state["segments"]):
+        final: dict[str, str] = {}
+        lengths: dict[str, float] = {}
+        for track, relative in files.items():
+            done = (
+                None
+                if track in stuck_tracks and index == len(state["segments"]) - 1
+                else _finished_track(folder, track, relative)
+            )
+            if done is None:
+                why = "is still running" if track in stuck_tracks else "is missing"
+                problems.append(f"part {index + 1}: the {track} recording {why}")
+                continue
+            final[track] = done
+            lengths[track] = _probe(str(folder / done))["duration"]
+        if not final:
+            continue
+        measured = state["durations"][index] if index < len(state["durations"]) else 0.0
+        reference = next(
+            (track for track in TRACK_ORDER if lengths.get(track, 0) > 0), None
+        )
+        if reference is None:
+            starts, duration = {track: 0.0 for track in final}, measured
+        else:
+            known = {track: length for track, length in lengths.items() if length > 0}
+            starts = {track: 0.0 for track in final} | segment_starts(known, reference)
+            duration = lengths[reference]
+        segments.append(
+            {"duration": round(duration, 3), "files": final, "starts": starts}
+        )
+    if not segments and not stuck_tracks:
+        media = folder / "media"
+        if folder.parent == projects_dir() and not any(
+            item.is_file() and item.stat().st_size for item in media.iterdir()
+        ):
+            shutil.rmtree(folder, ignore_errors=True)
         recording_state_file().unlink(missing_ok=True)
         raise CaptureError(
             "nothing was recorded (check the Screen Recording, Camera and Microphone permissions)",
             1,
         )
-    joined = done[0]
-    if len(done) > 1:
-        joined = str(Path(state["parts"]) / f"joined{Path(done[0]).suffix}")
-        _concat(done, joined)
-    target = _free(output) if output.exists() else output
-    if Path(joined).suffix.casefold() != target.suffix.casefold():
-        _run(
-            [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-nostdin",
-                "-y",
-                "-i",
-                joined,
-                "-c",
-                "copy",
-                "-movflags",
-                "+faststart",
-                str(target),
-            ],
-            "saving MP4",
-        )
-    else:
-        shutil.move(joined, target)
-    shutil.rmtree(state["parts"], ignore_errors=True)
-    recording_state_file().unlink(missing_ok=True)
+    project["segments"] = segments
+    project["duration"] = round(sum(segment["duration"] for segment in segments), 3)
+    project["problems"] = problems
+    project["state"] = "incomplete" if problems else "ready"
+    if state["mode"] == "audio":
+        project["audio_format"] = state["plan"]["audio_format"]
+    try:
+        write_project(folder, project)
+    except ProjectError as error:
+        raise CaptureError(str(error), 1) from error
     return {
         "active": False,
-        "saved": str(target),
-        "elapsed": round(state.get("elapsed", 0.0), 1),
+        "project": str(folder),
+        "saved": str(folder),
+        "elapsed": round(state["elapsed"], 1),
+        "state": project["state"],
+        "problems": problems,
     }
+
+
+def _stuck_message(stuck: list[str]) -> str:
+    tools = ", ".join(stuck)
+    return (
+        f"{tools} did not stop. The project was saved without that track. "
+        "Run `ul capture stop` to try again, or `ul capture stop --force` to end it (its track is lost)."
+    )
+
+
+def stop_recording(*, force: bool = False) -> dict:
+    """Stop all recorders and save the project; a recorder that hangs is reported, not killed."""
+    with _locked():
+        state = _load_state()
+        if state is None:
+            raise CaptureError("no active recording", 1)
+        if state["phase"] == "recording" and not state["paused"]:
+            for item in state["processes"]:
+                if not _alive(item["pid"], item["program"]):
+                    state["problems"].append(
+                        f"the {item['track']} recorder stopped during the recording"
+                    )
+        stuck = _stop_segment(state, force=force)
+        _stop_helpers(state)
+        state["phase"] = "saving"
+        _write_json(recording_state_file(), state)
+        try:
+            result = _finish(state)
+            if stuck:
+                state["phase"] = "stuck"
+                _write_json(recording_state_file(), state)
+                error = CaptureError(_stuck_message(stuck), 1)
+                error.data = {"stuck": stuck, "project": result["project"]}
+                raise error
+            result = _export_after_stop(state, result)
+        except CaptureError:
+            if recording_state_file().exists() and state["phase"] != "stuck":
+                state["phase"] = "unsaved"
+                _write_json(recording_state_file(), state)
+            raise
+        except BaseException:  # also Ctrl-C while saving: never stay "saving"
+            if recording_state_file().exists():
+                state["phase"] = "unsaved"
+                _write_json(recording_state_file(), state)
+            raise
+        recording_state_file().unlink(missing_ok=True)
+    return result
+
+
+def _stop_helpers(state: dict) -> None:
+    """The menu-bar helper only shows the recording; it is told to quit and never waited for."""
+    _signal_all(state["helpers"], signal.SIGTERM)
+    state["helpers"] = []
+
+
+def _export_after_stop(state: dict, result: dict) -> dict:
+    return result
 
 
 # ---------------------------------------------------------------- library
@@ -1510,7 +1763,7 @@ def preview(display: int = 1) -> Path:
     _need("screencapture", "for the preview")
     target = storage_path("runtime", f"preview-{display}.jpg")
     with _atomic_jpeg(target) as temporary:
-        _run(["screencapture", "-x", "-tjpg", f"-D{display}", str(temporary)], "the preview")
+        _run(_backend().preview_argv(display, temporary), "the preview")
         _run(["sips", "-Z", "1280", str(temporary)], "resizing the preview")
     return target
 
@@ -1570,11 +1823,23 @@ def _describe(info: dict) -> str:
         "saving": "Saving",
         "interrupted": "Stopped unexpectedly",
         "unsaved": "Not saved yet",
+        "stuck": "A recorder does not stop",
     }.get(info["phase"], info["phase"])
     line = f"{state} {what} {_clock(info['elapsed'])} → {info['output']}"
     if info["phase"] in {"interrupted", "unsaved"}:
         line += "\nRun `ul capture stop` to save what was recorded."
+    if info["phase"] == "stuck":
+        line += f"\n{', '.join(info['stuck'])} still runs: `ul capture stop` tries again, `ul capture stop --force` ends it."
     return line
+
+
+def _saved_text(result: dict) -> str:
+    if result["saved"] != result.get("project"):
+        return f"Saved: {result['saved']}"
+    text = f"Saved project: {result['saved']}"
+    if result.get("problems"):
+        text += "\nIncomplete: " + "; ".join(result["problems"])
+    return text + "\nExport a video: ul capture export last"
 
 
 def _watch(duration: float | None) -> dict:
@@ -1628,7 +1893,7 @@ def _menu() -> int:
             .casefold()
         )
         if choice == "s":
-            print("Saved:", stop_recording()["saved"])
+            print(_saved_text(stop_recording()))
         elif choice == "p":
             info = pause_recording() if not current["paused"] else resume_recording()
             print(_describe(info))
@@ -1671,10 +1936,10 @@ def _menu() -> int:
 
 
 def _record_now(mode: str, camera: bool) -> None:
-    info = start_recording(mode, camera=camera)
+    info = start_recording(mode, overrides={"camera": camera})
     for warning in info.get("warnings", []):
         print(f"Note: {warning}")
-    print("Saved:", _watch(None)["saved"])
+    print(_saved_text(_watch(None)))
 
 
 def _devices_text(info: dict) -> str:
@@ -1708,7 +1973,7 @@ def _devices_text(info: dict) -> str:
     except CaptureError as error:
         lines.append(f"Warning: {error}")
     else:
-        if resolved and is_loopback(resolved):
+        if resolved and virtual_device(resolved):
             lines.append(
                 f"Warning: capture.audio_device picks {resolved}, a virtual device. Use your microphone: ul config set capture.audio_device default"
             )
@@ -1764,64 +2029,74 @@ def main(argv: Sequence[str] | None = None) -> int:
         if action == "record":
             mode = rest.pop(0) if rest and _is_word(rest[0]) else "screen"
             if mode not in MODES:
-                raise CaptureError(
-                    f"unknown recording mode: {mode} (screen, camera or audio)"
-                )
-            output = _take(rest, "--output")
-            mic = _take(rest, "--mic")
-            cam = _take(rest, "--cam")
+                raise CaptureError(f"unknown recording mode: {mode} (screen, camera or audio)")
+            options: dict = {
+                "output": _take(rest, "--output"),
+                "mic": _take(rest, "--mic"),
+                "cam": _take(rest, "--cam"),
+                "cam_mode": _take(rest, "--cam-mode"),
+                "cam_quality": _take(rest, "--cam-quality"),
+                "mic_format": _take(rest, "--mic-format"),
+                "rect": _take(rest, "--rect"),
+                "format": _take(rest, "--format"),
+            }
+            scene = _take(rest, "--scene")
+            canvas = _take(rest, "--canvas")
             if _flag(rest, "--no-mic"):
-                mic = "none"
-            system = (
-                True
-                if _flag(rest, "--system-audio")
-                else False
-                if _flag(rest, "--no-system-audio")
-                else None
-            )
-            camera = _flag(rest, "--camera")
-            display = _number(_take(rest, "--display"), "--display", 1, 1)
-            rect = _take(rest, "--rect")
-            fmt = _take(rest, "--format")
-            clicks = False if _flag(rest, "--no-clicks") else None
+                options["mic"] = "none"
+            if _flag(rest, "--system-audio"):
+                options["system_audio"] = True
+            elif _flag(rest, "--no-system-audio"):
+                options["system_audio"] = False
+            if _flag(rest, "--camera"):
+                options["camera"] = True
+            elif _flag(rest, "--no-camera"):
+                options["camera"] = False
+            display = _take(rest, "--display")
+            if display is not None:
+                options["display"] = _number(display, "--display", 1, 1)
+            if _flag(rest, "--no-clicks"):
+                options["clicks"] = False
+            options["export"] = _flag(rest, "--export")
             duration_text = _take(rest, "--duration")
-            duration = (
-                _number(duration_text, "--duration", 0, 1)
-                if duration_text is not None
-                else None
-            )
+            duration = _number(duration_text, "--duration", 0, 1) if duration_text is not None else None
             wait = _flag(rest, "--wait")
-            if rest and not rest[0].startswith("-") and output is None:
-                output = rest.pop(0)
+            if rest and not rest[0].startswith("-") and options["output"] is None:
+                options["output"] = rest.pop(0)
             if rest:
                 raise CaptureError(f"unexpected argument: {rest[0]}")
-            if camera and mode != "screen":
+            if options.get("camera") and mode != "screen":
                 raise CaptureError("--camera adds the camera to a screen recording")
             info = start_recording(
-                mode,
-                camera=camera,
-                cam=cam,
-                mic=mic,
-                system_audio=system,
-                display=display,
-                rect=rect,
-                clicks=clicks,
-                format=fmt,
-                output=output,
+                mode, scene=scene, canvas=canvas, overrides={key: value for key, value in options.items() if value is not None}
             )
             for warning in info.get("warnings", []):
                 print(f"Note: {warning}", file=sys.stderr)
             if duration is not None or wait:
                 result = _watch(float(duration) if duration is not None else None)
-                _print(result, as_json, f"Saved: {result['saved']}")
+                _print(result, as_json, _saved_text(result))
                 return 0
-            _print(
-                info,
-                as_json,
-                f"Recording {'screen + camera' if info['camera'] else mode}: {info['output']}\nPause: ul capture pause · Stop and save: ul capture stop",
-            )
+            what = "screen + camera" if info["camera"] else mode
+            _print(info, as_json, f"Recording {what}: {info['project']}\nPause: ul capture pause · Stop and save: ul capture stop")
             return 0
-        if rest and action in {"pause", "resume", "stop", "status", "devices"}:
+        if action == "scene":
+            if len(rest) != 1:
+                raise CaptureError("usage: ul capture scene N|ID")
+            info = switch_scene(rest[0])
+            _print(info, as_json, f"Scene: {info['scene']}")
+            return 0
+        if action == "mark":
+            info = add_mark(" ".join(rest))
+            _print(info, as_json, f"Mark at {_clock(info['mark']['t'])}")
+            return 0
+        if action == "stop":
+            force = _flag(rest, "--force")
+            if rest:
+                raise CaptureError("stop takes no arguments (only --force)")
+            result = stop_recording(force=force)
+            _print(result, as_json, _saved_text(result))
+            return 0
+        if rest and action in {"pause", "resume", "status", "devices"}:
             raise CaptureError(f"{action} takes no arguments")
         if action == "pause":
             info = pause_recording()
@@ -1830,10 +2105,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         if action == "resume":
             info = resume_recording()
             _print(info, as_json, _describe(info))
-            return 0
-        if action == "stop":
-            result = stop_recording()
-            _print(result, as_json, f"Saved: {result['saved']}")
             return 0
         if action == "status":
             info = status()
@@ -1933,7 +2204,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise CaptureError(f"Unknown capture action: {action}")
     except CaptureError as error:
         if as_json:
-            print(json.dumps({"error": str(error)}))
+            print(json.dumps({"error": str(error), **error.data}, ensure_ascii=False))
         else:
             print(f"unlaw capture: {error}", file=sys.stderr)
         return error.code

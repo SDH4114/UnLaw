@@ -1,0 +1,12 @@
+[in#0 @ 0x788cc20000] Selected framerate (1000.000000) is not supported by the device.
+[in#0 @ 0x788cc20000] Supported modes:
+[in#0 @ 0x788cc20000]   1920x1080@[15.000000 30.000000]fps
+[in#0 @ 0x788cc20000]   1280x720@[15.000000 30.000000]fps
+[in#0 @ 0x788cc20000]   1080x1920@[15.000000 30.000000]fps
+[in#0 @ 0x788cc20000]   1760x1328@[15.000000 30.000000]fps
+[in#0 @ 0x788cc20000]   640x480@[15.000000 30.000000]fps
+[in#0 @ 0x788cc20000]   1328x1760@[15.000000 30.000000]fps
+[in#0 @ 0x788cc20000]   1552x1552@[15.000000 30.000000]fps
+[in#0 @ 0x788d014000] Error opening input: Input/output error
+Error opening input file default:none.
+Error opening input files: Input/output error
