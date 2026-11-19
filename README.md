@@ -673,32 +673,65 @@ too, and a recording keeps going when the page is closed.
 ## Screen, video and audio capture
 
 ```bash
-ul capture                        # a menu: pick a screenshot or a recording
+ul capture                        # the studio in a terminal: scenes, sources, REC, export
 ul capture shot                   # the whole screen (PNG); also: area, window
 ul capture shot area --clipboard  # select an area, copy it instead of saving
-ul capture record                 # screen + system audio + microphone, in the background
-ul capture record --camera        # the same with the camera in a corner
+ul capture record                 # screen + Mac sound + microphone, in the background
+ul capture record --camera        # the same with the camera (a separate track)
 ul capture record camera          # camera + microphone
-ul capture record audio --format mp3
+ul capture record audio           # the microphone only
 ul capture record --duration 30   # record 30 s in the foreground, then save
+ul capture scene 3                # switch the scene while recording (1-9)
+ul capture mark "intro done"      # a marker on the timeline
 ul capture pause                  # resume / stop / status
-ul capture stop                   # save (joins paused parts, adds camera and microphone)
-ul capture list                   # newest captures with length and size
+ul capture stop                   # save the project
+ul capture export last --canvas 9:16   # render a vertical video from the last project
+ul capture projects               # recording projects with state, length and exports
+ul capture doctor                 # permissions, ffmpeg, which app needs Screen Recording
+ul capture devices --modes        # cameras with the modes they offer
 ul capture trim last --from 0:05 --to 1:30
 ul capture convert last --to gif
-ul capture devices                # displays, cameras and microphones
 ```
+
+Every recording is a project folder in `storage.root/captures/projects`: the
+screen, the camera and the microphone are separate files in `media/`
+(`screen-001.mp4`, `camera-001.mp4`, `mic-001.flac`, one set per part between
+pauses), and `project.json` says how to put them together: scenes, a layout per
+format, scene switches and marks with their times, and the export settings.
+Nothing is re-encoded while recording, so nothing is lost to a slow encoder.
+Choose the camera file (`--cam-quality max|high|light`: 1080p 12 or 6 Mbps,
+720p 3 Mbps) and the microphone file (`--mic-format flac|wav|m4a`).
+
+`ul capture export` renders a project for YouTube (16:9), TikTok, Reels and
+Shorts (9:16), square (1:1) or Instagram portrait (4:5) at 1080, 1440 or 2160
+pixels on the short side, 60 or 30 fps, H.264 or HEVC, MOV or MP4, with the
+loudness evened out to -14 LUFS (`--no-normalize` keeps it as recorded).
+`--canvas source` gives the screen as recorded in seconds. By default the camera
+sits flush in the bottom-left corner in 16:9 and takes the top 40 % in vertical
+formats; shapes (circle, square, rounded, wide, tall), borders, shadows and the
+crop are set in the desk Studio or in `project.json`. The export never changes
+the project, so one recording gives every format. `record --export` or
+`stop --export` export right away; `record --output talk.mp4` exports there.
+
+Stop sends every recorder the stop signal at once and waits; a recorder that
+does not stop is never killed (a killed `screencapture` loses the whole file):
+the rest is saved, `ul capture stop` tries again and `ul capture stop --force`
+ends it. `status` warns when the microphone is silent or the disk is almost full.
+While recording, the menu bar shows the clock with Stop, Pause, the scenes, Add
+mark and Open Studio.
 
 Screen recordings use macOS `screencapture`, which records the sound of the Mac
 without extra drivers. ffmpeg (`brew install ffmpeg`) is needed for the camera,
-audio, a microphone other than the system default, pause, MP4, trim and convert.
-The first run asks for Screen Recording, Camera and Microphone permissions for
-the terminal. Devices are picked by name or number; `default` follows the system
-choice, and `ul capture devices` warns when the microphone is a virtual device
-such as BlackHole. Old one-word actions (`ul capture screenshot`, `area`,
-`screen`, `audio`, …) still work. Files go to `storage.root/captures` and are
-never overwritten; Telegram saves downloads to `storage.root/telegram/downloads`,
-and runtime files go to `storage.root/runtime`.
+the microphone track, audio, export, trim and convert. macOS gives Screen
+Recording, Camera and Microphone to the app that starts `ul` (Ghostty, Zed, …),
+so a recording can work from one terminal and fail from another;
+`ul capture doctor` names that app and `--open screen|camera|microphone` opens
+the right page of System Settings. Devices are picked by name or number;
+`default` follows the system choice, and `ul capture devices` warns when the
+microphone is a virtual device such as BlackHole. Exports and screenshots go to
+`storage.root/captures/recordings` and `/screenshots` and are never overwritten;
+Telegram saves downloads to `storage.root/telegram/downloads`, and runtime files
+go to `storage.root/runtime`.
 
 ## Keep the Mac awake
 
