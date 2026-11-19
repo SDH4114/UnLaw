@@ -656,9 +656,12 @@ function startPreview() {
   const url = media("/media/preview") + "&display=" + screen.display + "&_=" + Date.now();
   const image = new Image();
   image.onload = () => {
+    const first = !studio.screenUrl;
     studio.screenUrl = url;
-    if (studio.screenFailed) { studio.screenFailed = false; drawStage(); }
-    for (const node of document.querySelectorAll("img.screen")) node.src = url;
+    // The first snapshot (or one after a failure) replaces the placeholder, so the stage is redrawn;
+    // later ones only swap the image source.
+    if (first || studio.screenFailed) { studio.screenFailed = false; drawStage(); }
+    else for (const node of document.querySelectorAll("img.screen")) node.src = url;
     again(studio.status.active ? 3000 : 1000);
   };
   image.onerror = () => {

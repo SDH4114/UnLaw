@@ -75,7 +75,7 @@ function harness() {
       leaveStudio, toggleCamera, toggleMeter, stopStream, start, sendGame, drawCell,
       applyShape, pinPlacement, placementPx, snapPlacement, moveFocus, resizePlacement, studioKey, studioPollDelay,
       countdownSteps, saveSetupSoon, permissionBanner, openSettings,
-      renderStudio, renderStudioBody, renderSources, updateRecordControls,
+      renderStudio, renderStudioBody, renderSources, updateRecordControls, startPreview,
       projectClock, sceneAt, exportDefaults, exportHeightFor, renderExportDialog, startExport, pollExport, renderProjects, openProject, changePlacement, projectAction,
       cv, mulberry32, toScreen, toWorld, zoomAt, fitView, roughStrokes, hitElement, hitTest, edgeCurve, hitEdge,
       nearestSide, resizeBox, handleAt, applyBox, wrapText, adaptInk, nodeColor, noteName, makeLinear, makeFreedraw,
@@ -388,6 +388,32 @@ const tests = {
   a.studio.tab = 'projects';
   a.renderStudioBody();
   assert.ok(h.find('studioProjects'), 'the Projects tab renders');
+ },
+ async studio_first_preview_shows_the_screen() {
+  // The stage starts with a placeholder; the first snapshot that loads must replace it (not only update
+  // <img class=screen> nodes, of which there are none yet).
+  const h = treeHarness(), a = h.a;
+  const images = [];
+  h.context.Image = class { set src(value) { this.url = value; images.push(this); } };
+  a.state.view = 'studio';
+  a.studio.tab = 'record';
+  a.studio.info = {available: true, settings: {}};
+  a.studio.setup = sampleSetup();
+  a.studio.devices = {displays: [{number: 1, name: 'Color LCD', pixels: '3024 x 1964'}], cameras: [], microphones: [], ffmpeg: true};
+  a.studio.status = {active: false};
+  h.context.fetch = async () => response({});
+  a.renderStudio(h.main);
+  const screens = () => {
+   const found = [];
+   const walk = (node) => { if (typeof node === 'string') return; const classes = node.className || (node.attrs && node.attrs.class) || ''; if (/\bscreen\b/.test(classes)) found.push(node); (node.children || []).forEach(walk); };
+   walk(h.find('stage'));
+   return found;
+  };
+  assert.equal(screens().length, 0, 'no snapshot yet: a placeholder');
+  a.startPreview();
+  assert.ok(images.length, 'a snapshot is requested');
+  images[images.length - 1].onload();
+  assert.equal(screens().length, 1, 'the first snapshot is drawn on the stage');
  },
  async project_clock_maps_segments() {
   const h = harness();

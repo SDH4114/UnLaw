@@ -81,6 +81,9 @@ class DeskUITests(unittest.TestCase):
     def test_export_progress_polls_until_done(self) -> None:
         self.run_case("export_progress_polls_until_done")
 
+    def test_studio_first_preview_replaces_the_placeholder(self) -> None:
+        self.run_case("studio_first_preview_shows_the_screen")
+
     def test_studio_projects_tab_and_project_page(self) -> None:
         self.run_case("studio_projects_tab_renders")
 
