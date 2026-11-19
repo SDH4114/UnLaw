@@ -756,7 +756,7 @@ _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "sys": ("sysinfo.py",),
     "timer": ("timer.py",),
     "weather": ("weather.py",),
-    "capture": ("capture.py",),
+    "capture": ("capture_project.py", "capture_mac.py", "capture_export.py", "capture_tui.py", "capture.py"),
     "cpp": ("project_templates.py", "built_in_commands/cpp/main.py"),
     "git": ("git_hosts.py", "built_in_commands/git/main.py"),
     "claude": ("built_in_commands/claude/main.py",),
@@ -771,7 +771,7 @@ _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "rust": ("project_templates.py", "built_in_commands/rust/main.py"),
     "steam": ("built_in_commands/steam/main.py",),
     "tg": ("telegram.py",),
-    "desk": ("kanban.py", "reminders.py", "canvas.py", "desk_ui.py", "desk.py"),
+    "desk": ("kanban.py", "reminders.py", "canvas.py", "studio_ui.py", "desk_ui.py", "desk.py"),
     "work": ("desktop/work.py",),
     "yt": ("desktop/youtube.py",),
     "zed": ("built_in_commands/zed/main.py",),
@@ -808,6 +808,11 @@ def _clean_fragment(source: str, *, command: str) -> str:
         "from .desk_ui import ",
         "from .reminders import ",
         "from .canvas import ",
+        "from .capture_project import ",
+        "from .capture_mac import ",
+        "from .capture_export import ",
+        "from .capture_tui import ",
+        "from .studio_ui import ",
     )
     lines: list[str] = []
     skipping = False
@@ -890,3 +895,10 @@ def is_replaceable_command_source(source: str, name: str) -> bool:
     if hashlib.sha256(normalized.encode()).hexdigest() in LEGACY_NORMALIZED_HASHES.get(name, set()):
         return True
     return name in _COMMAND_FILES and normalized == normalized_source(command_source(name))
+
+# capture and desk seeds of 3.20.0 (729c0b5) and the 3.20.0 dev build of desk on the maintainer machine,
+# before Studio recording projects.
+LEGACY_SOURCE_HASHES.setdefault("capture", set()).add("d8d409d637af098272a0fd4d4b2f9e172b831ca160e5836144f89c5307424c3f")
+LEGACY_NORMALIZED_HASHES.setdefault("capture", set()).add("c1ea9e4981abfa3f855623b645481fc5333dac6666c8aa4aebf7bd8b270ed724")
+LEGACY_SOURCE_HASHES.setdefault("desk", set()).update({"400c2e8d650b8ebba28a73d52c13578ecbb8e9180b709d99cb2e55231183356e", "940143d0f2ba8d0a0965a1084bf3ebc84d9e752d1c126cdc5f254b803df08fad"})
+LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).update({"e58689072e857554e461826458443b87b723c5406600acfba362a42fd135c255", "4fd95f0a86c9832cfadb887d8f8444d0cef1b7009c02e2dcf4f148785531b817"})

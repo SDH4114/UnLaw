@@ -69,6 +69,20 @@ class LayoutTests(CoreTestCase):
         self.ok("init")
         self.assertEqual(script.read_text(), current)
 
+    def test_split_seeds_are_self_contained(self) -> None:
+        from unlawful import command_sources
+
+        self.assertEqual(command_sources._COMMAND_FILES["capture"], ("capture_project.py", "capture_mac.py", "capture_export.py", "capture_tui.py", "capture.py"))
+        self.assertEqual(command_sources._COMMAND_FILES["desk"], ("kanban.py", "reminders.py", "canvas.py", "studio_ui.py", "desk_ui.py", "desk.py"))
+        for name in ("capture", "desk"):
+            source = command_source(name)
+            compile(source, f"{name}/main.py", "exec")
+            self.assertNotIn("from .", source)
+            self.assertNotIn("from unlawful", source)
+        # 3.20.0 seeds (release and the dev build on the maintainer machine) must upgrade.
+        self.assertIn("d8d409d637af098272a0fd4d4b2f9e172b831ca160e5836144f89c5307424c3f", LEGACY_SOURCE_HASHES["capture"])
+        self.assertIn("940143d0f2ba8d0a0965a1084bf3ebc84d9e752d1c126cdc5f254b803df08fad", LEGACY_SOURCE_HASHES["desk"])
+
     def test_bootstrap_does_not_overwrite_customized_seed_command(self) -> None:
         custom = self.command("music", "print('mine')\n")
         edited = self.command("yt", command_source("yt") + "\n# My custom change\n")

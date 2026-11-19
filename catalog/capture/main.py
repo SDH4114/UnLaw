@@ -55,6 +55,14 @@ def storage_path(*parts: str) -> Path:
     root = configured if configured.is_absolute() else config_dir() / configured
     return root.joinpath(*parts)
 
+"""capture_project for the capture/desk seeds."""
+
+"""capture_mac for the capture/desk seeds."""
+
+"""capture_export for the capture/desk seeds."""
+
+"""capture_tui for the capture/desk seeds."""
+
 import fcntl
 import hashlib
 import json

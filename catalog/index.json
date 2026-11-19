@@ -14,7 +14,7 @@
   {
    "name": "capture",
    "summary": "Screenshots and screen, camera and audio recordings on macOS.",
-   "sha256": "d8d409d637af098272a0fd4d4b2f9e172b831ca160e5836144f89c5307424c3f"
+   "sha256": "aaff8f7cd6c5d3716b9834ea96585f01c0a0b0cceab4a79bbd90c96830576334"
   },
   {
    "name": "claude",
@@ -34,7 +34,7 @@
   {
    "name": "desk",
    "summary": "Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser.",
-   "sha256": "400c2e8d650b8ebba28a73d52c13578ecbb8e9180b709d99cb2e55231183356e"
+   "sha256": "a7e8aba41448ad452e32d2bc8240d910de36a12955712e668cd07607d799dfcc"
   },
   {
    "name": "git",

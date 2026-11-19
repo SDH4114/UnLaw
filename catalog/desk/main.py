@@ -891,6 +891,8 @@ def write_canvas(path: Path, data: dict) -> str:
             temporary.unlink()
     return version_of(raw)
 
+"""studio_ui for the capture/desk seeds."""
+
 """The `ul desk` page: one HTML document with inline CSS and JS, served by desk.py.
 
 Board text is user data, so the script builds every node with textContent and never uses innerHTML.
