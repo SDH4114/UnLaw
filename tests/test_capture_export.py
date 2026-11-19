@@ -1,0 +1,525 @@
+"""Export of Studio projects (`capture_export.py`): geometry, ffmpeg commands, files, with fake tools."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import unittest
+import zlib
+from pathlib import Path
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "tests"))
+
+from test_command_paths import FAKE_FFMPEG  # noqa: E402
+from unlawful import capture_export, capture_project  # noqa: E402
+from unlawful.config import ensure_layout, storage_path  # noqa: E402
+
+FAKE_FFPROBE = """import json, os
+name = os.path.basename(sys.argv[-1])
+sizes = {"screen": (3600, 2338), "camera": (1920, 1080)}
+kind = next((key for key in sizes if name.startswith(key)), None)
+streams = [{"codec_type": "audio", "codec_name": "aac"}]
+if kind:
+    streams.insert(0, {"codec_type": "video", "codec_name": "h264", "width": sizes[kind][0], "height": sizes[kind][1]})
+print(json.dumps({"format": {"duration": "10.0"}, "streams": streams}))
+"""
+
+
+def decode_png(data: bytes) -> tuple[int, int, list[bytes]]:
+    """Width, height and rows (filter byte removed) of a PNG written with filter 0."""
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    offset, idat, width, height, channels = 8, b"", 0, 0, 1
+    while offset < len(data):
+        length = struct.unpack(">I", data[offset : offset + 4])[0]
+        kind = data[offset + 4 : offset + 8]
+        body = data[offset + 8 : offset + 8 + length]
+        if kind == b"IHDR":
+            width, height = struct.unpack(">II", body[:8])
+            channels = {0: 1, 6: 4}[body[9]]
+        elif kind == b"IDAT":
+            idat += body
+        offset += 12 + length
+    raw = zlib.decompress(idat)
+    stride = width * channels + 1
+    rows = [raw[y * stride + 1 : (y + 1) * stride] for y in range(height)]
+    assert all(raw[y * stride] == 0 for y in range(height))
+    return width, height, rows
+
+
+class ExportTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        (self.root / "home").mkdir()
+        environment = patch.dict(
+            os.environ,
+            {
+                "HOME": str(self.root / "home"),
+                "XDG_CONFIG_HOME": str(self.root / "config"),
+                "PATH": f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
+            },
+        )
+        environment.start()
+        self.addCleanup(environment.stop)
+        ensure_layout()
+        self.ffmpeg_log = self.tool("ffmpeg", FAKE_FFMPEG)
+        self.tool("ffprobe", FAKE_FFPROBE)
+
+    def tool(self, name: str, body: str) -> Path:
+        log = self.root / f"{name}.log"
+        script = self.bin / name
+        script.write_text(
+            f"#!{sys.executable}\nimport sys\nopen({str(log)!r}, 'a').write('|'.join(sys.argv[1:]) + '\\n')\n{body}",
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
+        return log
+
+    def calls(self) -> list[list[str]]:
+        return (
+            [line.split("|") for line in self.ffmpeg_log.read_text().splitlines()]
+            if self.ffmpeg_log.exists()
+            else []
+        )
+
+    def make_project(
+        self, *, camera: bool = True, segments: int = 1, mode: str = "screen"
+    ) -> Path:
+        setup = capture_project.default_setup({})
+        setup["sources"][1]["enabled"] = camera
+        folder = capture_project.create_project(
+            "screen-camera" if camera else mode, setup, {}
+        )
+        project = capture_project.read_project(folder)
+        project["mode"] = mode
+        project["segments"] = []
+        for number in range(1, segments + 1):
+            files, starts = {}, {}
+            if mode == "screen":
+                files["screen"] = f"media/screen-{number:03d}.mp4"
+                starts["screen"] = 0.0
+            if camera:
+                files["camera"] = f"media/camera-{number:03d}.mp4"
+                starts["camera"] = 0.31
+            files["mic"] = f"media/mic-{number:03d}.flac"
+            starts["mic"] = 0.94
+            for track, relative in files.items():
+                (folder / relative).write_bytes(f"{track}{number}".encode())
+            project["segments"].append(
+                {
+                    "duration": 10.0,
+                    "files": files,
+                    "starts": starts,
+                    "info": {
+                        "screen": {"width": 3600, "height": 2338, "audio": True},
+                        "camera": {"width": 1920, "height": 1080, "audio": False},
+                    },
+                }
+            )
+        project["duration"] = 10.0 * segments
+        project["state"] = "ready"
+        if mode == "audio":
+            project["audio_format"] = "mp3"
+        capture_project.write_project(folder, project)
+        return folder
+
+    def settings(self, folder: Path, **overrides: object) -> dict:
+        return capture_export.export_settings(
+            capture_project.read_project(folder), {}, overrides
+        )
+
+    def graph(self, argv: list[str]) -> str:
+        return argv[argv.index("-filter_complex") + 1]
+
+
+class GeometryTests(ExportTestCase):
+    def test_mask_alpha(self) -> None:
+        width, height, rows = decode_png(capture_export.mask_png(100, 60, 30))
+        self.assertEqual((width, height), (100, 60))
+        self.assertEqual(rows[30][50], 255)
+        self.assertEqual(rows[0][0], 0)
+        self.assertTrue(
+            0 < rows[2][9] < 255 or 0 < rows[9][2] < 255, "anti-aliased edge"
+        )
+        self.assertTrue(
+            all(
+                value == 255
+                for row in decode_png(capture_export.mask_png(10, 6, 0))[2]
+                for value in row
+            )
+        )
+
+    def test_frame_has_a_border_ring_and_a_transparent_middle(self) -> None:
+        data, pad = capture_export.frame_png(100, 60, 0, 4, "#ff0000", True)
+        width, height, rows = decode_png(data)
+        self.assertEqual((width, height), (100 + 2 * pad, 60 + 2 * pad))
+        middle = rows[pad + 30][4 * (pad + 50) : 4 * (pad + 50) + 4]
+        self.assertEqual(middle[3], 0, "the source shows through")
+        ring = rows[pad + 30][4 * (pad + 1) : 4 * (pad + 1) + 4]
+        self.assertEqual(tuple(ring), (255, 0, 0, 255))
+        below = rows[pad + 60 + 2][4 * (pad + 50) : 4 * (pad + 50) + 4]
+        self.assertTrue(0 < below[3] < 255, "a soft shadow under the box")
+
+    def test_16x9_camera_and_screen_geometry(self) -> None:
+        folder = self.make_project()
+        project = capture_project.read_project(folder)
+        settings = self.settings(folder, canvas="16:9", height=1440, fps=60)
+        interval = {"segment": 0, "start": 0.0, "length": 2.0, "scene": "screen-camera"}
+        argv = capture_export.interval_argv(
+            folder, project, interval, settings, Path("o.mp4"), folder / "cache"
+        )
+        graph = self.graph(argv)
+        self.assertIn("scale=2218:1440", graph)
+        self.assertIn("overlay=171:0", graph)
+        self.assertIn("hflip", graph)
+        self.assertIn("crop=614:346", graph)
+        self.assertIn("overlay=0:1094", graph)
+        self.assertIn("color=c=0x000000:s=2560x1440:r=60", argv)
+        self.assertEqual(argv[argv.index("-b:v") + 1], "24330240")
+        self.assertIn("h264_videotoolbox", argv)
+        self.assertEqual(
+            argv[argv.index("-itsoffset") + 1],
+            "0.310",
+            "the camera started 0.31 s after the screen",
+        )
+        self.assertEqual(argv[argv.index("-t") + 1], "2.000")
+        self.assertEqual(argv[-1], "o.mp4")
+
+    def test_seek_into_a_later_interval(self) -> None:
+        folder = self.make_project()
+        project = capture_project.read_project(folder)
+        settings = self.settings(folder)
+        interval = {"segment": 0, "start": 4.0, "length": 6.0, "scene": "screen-camera"}
+        argv = capture_export.interval_argv(
+            folder, project, interval, settings, Path("o.mp4"), folder / "cache"
+        )
+        seeks = [argv[index + 1] for index, value in enumerate(argv) if value == "-ss"]
+        self.assertEqual(
+            seeks, ["4.000", "3.690"], "screen from 4 s, camera from 4 - 0.31 s"
+        )
+        self.assertNotIn("-itsoffset", argv)
+
+    def test_9x16_stack_crops_around_focus_and_rounds_corners(self) -> None:
+        folder = self.make_project()
+        project = capture_project.read_project(folder)
+        project["layouts"]["9:16"]["screen-camera"]["placements"]["camera"][
+            "radius"
+        ] = 0.1
+        settings = self.settings(folder, canvas="9:16", height=1080)
+        interval = {"segment": 0, "start": 0.0, "length": 2.0, "scene": "screen-camera"}
+        argv = capture_export.interval_argv(
+            folder, project, interval, settings, Path("o.mp4"), folder / "cache"
+        )
+        graph = self.graph(argv)
+        self.assertIn("crop=1080:768:143:0", graph)
+        self.assertIn("crop=1080:1152:347:0", graph)
+        self.assertIn("overlay=0:768", graph)
+        self.assertIn("alphamerge", graph)
+        masks = list((folder / "cache").glob("mask-*.png"))
+        self.assertEqual(len(masks), 1)
+        self.assertEqual(decode_png(masks[0].read_bytes())[:2], (1080, 768))
+
+    def test_blur_background_for_the_screen_scene_in_vertical(self) -> None:
+        folder = self.make_project()
+        project = capture_project.read_project(folder)
+        settings = self.settings(folder, canvas="9:16", height=1080)
+        interval = {"segment": 0, "start": 0.0, "length": 2.0, "scene": "screen"}
+        graph = self.graph(
+            capture_export.interval_argv(
+                folder, project, interval, settings, Path("o.mp4"), folder / "cache"
+            )
+        )
+        self.assertIn("boxblur", graph)
+        self.assertNotIn("hflip", graph, "no camera in the screen scene")
+
+    def test_audio_mixes_system_sound_and_mic_with_offsets(self) -> None:
+        folder = self.make_project()
+        project = capture_project.read_project(folder)
+        argv = capture_export.audio_argv(
+            folder, project, 0, self.settings(folder), Path("a.wav")
+        )
+        graph = self.graph(argv)
+        self.assertIn("adelay=940:all=1", graph)
+        self.assertIn("amix=inputs=2:normalize=0", graph)
+        self.assertIn("atrim=0:10.000", graph)
+        project["audio"]["mic"]["muted"] = True
+        project["audio"]["system"]["muted"] = True
+        self.assertIsNone(
+            capture_export.audio_argv(
+                folder, project, 0, self.settings(folder), Path("a.wav")
+            )
+        )
+
+    def test_settings_validate_and_prefill(self) -> None:
+        folder = self.make_project()
+        self.assertEqual(self.settings(folder)["height"], 1440)
+        self.assertEqual(
+            self.settings(folder, canvas="9:16")["height"],
+            1080,
+            "vertical defaults to 1080",
+        )
+        with self.assertRaises(capture_project.ProjectError):
+            self.settings(folder, height=720)
+        project = capture_project.read_project(folder)
+        project["export"]["canvas"] = "4:5"
+        project["export"]["height"] = 2160
+        settings = capture_export.export_settings(project, {"canvas": "16:9"}, {})
+        self.assertEqual(
+            (settings["canvas"], settings["height"]),
+            ("4:5", 2160),
+            "the project's last export wins",
+        )
+
+
+class ExportRunTests(ExportTestCase):
+    def test_export_records_itself_and_never_overwrites(self) -> None:
+        folder = self.make_project(segments=2)
+        settings = self.settings(folder)
+        first = capture_export.export_project(folder, settings)
+        second = capture_export.export_project(folder, settings)
+        self.assertEqual(first.parent, storage_path("captures", "recordings"))
+        self.assertEqual(first.name, f"{folder.name} 16x9.mov")
+        self.assertEqual(second.name, f"{folder.name} 16x9 2.mov")
+        project = capture_project.read_project(folder)
+        self.assertEqual(
+            [item["path"] for item in project["exports"]], [str(first), str(second)]
+        )
+        self.assertEqual(project["export"]["canvas"], "16:9")
+        status = capture_export.read_export_status()
+        self.assertEqual(
+            (status["phase"], status["percent"], status["output"]),
+            ("done", 100, str(second)),
+        )
+        self.assertEqual(
+            list((folder / "cache" / "render").glob("*")), [], "chunks are removed"
+        )
+        concat = [call for call in self.calls() if "concat" in call]
+        self.assertTrue(concat)
+        self.assertEqual(
+            sum(
+                1
+                for call in self.calls()
+                if "color=c=0x000000:s=2560x1440:r=60" in call
+            ),
+            4,
+            "two scenes-free intervals x two exports",
+        )
+
+    def test_source_canvas_copies_the_screen(self) -> None:
+        folder = self.make_project(segments=2)
+        out = capture_export.export_project(
+            folder, self.settings(folder, canvas="source", container="mp4")
+        )
+        self.assertEqual(out.name, f"{folder.name} source.mp4")
+        self.assertFalse(
+            any(
+                "-filter_complex" in call and "overlay" in "|".join(call)
+                for call in self.calls()
+            )
+        )
+        listing = [call for call in self.calls() if "concat" in call and "-c" in call]
+        self.assertTrue(listing, "segments joined by stream copy")
+
+    def test_paths_with_spaces_cyrillic_and_quotes(self) -> None:
+        with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.root / "Студия 'x'")}):
+            ensure_layout()
+            folder = self.make_project(segments=2)
+            out = capture_export.export_project(folder, self.settings(folder))
+            self.assertTrue(out.is_file())
+            self.assertIn("Студия 'x'", str(out))
+
+    def test_a_failed_export_leaves_no_partial_file(self) -> None:
+        folder = self.make_project()
+        before = (folder / "project.json").read_bytes()
+        with (
+            patch.dict(os.environ, {"FAKE_FFMPEG_FAIL": "overlay"}),
+            self.assertRaises(capture_export.ExportError),
+        ):
+            capture_export.export_project(folder, self.settings(folder))
+        recordings = storage_path("captures", "recordings")
+        self.assertEqual([path.name for path in recordings.iterdir()], [])
+        self.assertEqual((folder / "project.json").read_bytes(), before)
+        self.assertEqual(capture_export.read_export_status()["phase"], "failed")
+
+    def test_delete_sources_moves_the_project_to_the_trash(self) -> None:
+        folder = self.make_project()
+        out = capture_export.export_project(
+            folder, self.settings(folder, delete_sources=True)
+        )
+        self.assertTrue(out.is_file())
+        self.assertFalse(folder.exists())
+        self.assertTrue(
+            (self.root / "home" / ".Trash" / folder.name / "project.json").is_file()
+        )
+
+    def test_zero_length_segments_export(self) -> None:
+        folder = self.make_project(segments=2)
+        project = capture_project.read_project(folder)
+        project["segments"][1]["duration"] = 0.004
+        capture_project.write_project(folder, project)
+        capture_export.export_project(folder, self.settings(folder))
+        self.assertEqual(
+            sum(
+                1
+                for call in self.calls()
+                if any(arg.startswith("color=c=") for arg in call)
+            ),
+            1,
+        )
+
+    def test_audio_projects_export_audio(self) -> None:
+        folder = self.make_project(camera=False, mode="audio")
+        out = capture_export.export_project(folder, self.settings(folder))
+        self.assertEqual(out.name, f"{folder.name}.mp3")
+        self.assertIn("libmp3lame", self.calls()[-1])
+
+
+@unittest.skipUnless(
+    os.environ.get("UNLAW_REAL_MEDIA") == "1",
+    "opt-in: real ffmpeg on synthetic sources",
+)
+class RealFfmpegTests(unittest.TestCase):
+    def test_real_ffmpeg_export(self) -> None:
+        ffmpeg = shutil.which("ffmpeg")
+        self.assertIsNotNone(ffmpeg)
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        with patch.dict(
+            os.environ, {"HOME": str(root), "XDG_CONFIG_HOME": str(root / "config")}
+        ):
+            ensure_layout()
+            setup = capture_project.default_setup({})
+            setup["sources"][1]["enabled"] = True
+            folder = capture_project.create_project("screen-camera", setup, {})
+            media = folder / "media"
+
+            def make(args: list[str]) -> None:
+                subprocess.run(
+                    [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *args],
+                    check=True,
+                )
+
+            make(
+                [
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=s=3600x2338:r=60:d=2",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=f=440:d=2",
+                    "-c:v",
+                    "h264_videotoolbox",
+                    "-b:v",
+                    "20M",
+                    "-c:a",
+                    "aac",
+                    "-shortest",
+                    str(media / "screen-001.mp4"),
+                ]
+            )
+            make(
+                [
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc=s=1920x1080:r=30:d=1.7",
+                    "-c:v",
+                    "h264_videotoolbox",
+                    "-b:v",
+                    "6M",
+                    str(media / "camera-001.mp4"),
+                ]
+            )
+            make(
+                [
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=f=220:d=1.8",
+                    "-c:a",
+                    "flac",
+                    str(media / "mic-001.flac"),
+                ]
+            )
+            project = capture_project.read_project(folder)
+            project["segments"] = [
+                {
+                    "duration": 2.0,
+                    "files": {
+                        "screen": "media/screen-001.mp4",
+                        "camera": "media/camera-001.mp4",
+                        "mic": "media/mic-001.flac",
+                    },
+                    "starts": {"screen": 0.0, "camera": 0.3, "mic": 0.2},
+                }
+            ]
+            project["events"].append({"t": 1.0, "scene": "camera"})
+            project["layouts"]["16:9"]["screen-camera"]["placements"]["camera"][
+                "radius"
+            ] = 0.5
+            project["layouts"]["16:9"]["screen-camera"]["placements"]["camera"][
+                "border"
+            ] = {"width": 6, "color": "#ffc933"}
+            project["layouts"]["16:9"]["screen-camera"]["placements"]["camera"][
+                "shadow"
+            ] = True
+            project["duration"] = 2.0
+            capture_project.write_project(folder, project)
+            for canvas, height, size in (
+                ("16:9", 1440, "2560x1440"),
+                ("9:16", 1080, "1080x1920"),
+            ):
+                settings = capture_export.export_settings(
+                    project, {}, {"canvas": canvas, "height": height, "fps": 60}
+                )
+                out = capture_export.export_project(folder, settings)
+                probe = json.loads(
+                    subprocess.run(
+                        [
+                            "ffprobe",
+                            "-v",
+                            "error",
+                            "-show_entries",
+                            "stream=codec_type,width,height,r_frame_rate:format=duration",
+                            "-of",
+                            "json",
+                            str(out),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    ).stdout
+                )
+                video = next(
+                    stream
+                    for stream in probe["streams"]
+                    if stream["codec_type"] == "video"
+                )
+                self.assertEqual(
+                    (f"{video['width']}x{video['height']}", video["r_frame_rate"]),
+                    (size, "60/1"),
+                )
+                self.assertTrue(
+                    any(stream["codec_type"] == "audio" for stream in probe["streams"])
+                )
+                self.assertAlmostEqual(
+                    float(probe["format"]["duration"]), 2.0, delta=0.1
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()
