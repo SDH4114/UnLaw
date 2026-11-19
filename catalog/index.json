@@ -14,7 +14,7 @@
   {
    "name": "capture",
    "summary": "Screenshots, screen/camera/audio recording projects and video export on macOS.",
-   "sha256": "2dbed624d18f0c07cc383302022cc7a3d5b20e509699a5bbbdf6d1ebc5a92460"
+   "sha256": "e590db7ecc431c656c7d73dc89be13b41069035c0dd199cda44901c05d605937"
   },
   {
    "name": "claude",

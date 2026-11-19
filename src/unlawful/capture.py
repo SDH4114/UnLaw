@@ -22,6 +22,7 @@ from pathlib import Path
 
 from unlawful.command_help import COMMAND_HELP
 
+from .capture_tui import run_tui
 from .capture_mac import LEVELS_FILE, BackendError, backend, pick_mode, virtual_device
 from .capture_export import ExportError, export_project, export_settings, read_export_status
 from .capture_project import (
@@ -2134,7 +2135,10 @@ def _watch(duration: float | None) -> dict:
             if duration is not None and info["elapsed"] >= duration:
                 break
             if interactive:
-                sys.stdout.write("\r" + _describe(info).splitlines()[0][:110] + "   ")
+                line = _describe(info).splitlines()[0]
+                if info.get("level_db") is not None:
+                    line += f"  mic {info['level_db']:.0f} dB"
+                sys.stdout.write("\r" + line[:120] + "   ")
                 sys.stdout.flush()
                 ready, _, _ = select.select([sys.stdin], [], [], 0.5)
                 if ready:
@@ -2155,63 +2159,31 @@ def _watch(duration: float | None) -> dict:
     return stop_recording()
 
 
-def _menu() -> int:
-    current = status()
-    if current.get("active"):
-        print(_describe(current))
-        choice = (
-            input("s stop and save · p pause/resume · Enter keep recording: ")
-            .strip()
-            .casefold()
-        )
-        if choice == "s":
-            print(_saved_text(stop_recording()))
-        elif choice == "p":
-            info = pause_recording() if not current["paused"] else resume_recording()
-            print(_describe(info))
-        return 0
-    options = [
-        ("Screenshot: whole screen", lambda: print("Saved:", shot("screen"))),
-        ("Screenshot: select an area", lambda: print("Saved:", shot("area"))),
-        ("Screenshot: a window", lambda: print("Saved:", shot("window"))),
-        (
-            "Record the screen (microphone + system audio)",
-            lambda: _record_now("screen", False),
-        ),
-        (
-            "Record the screen with the camera in the corner",
-            lambda: _record_now("screen", True),
-        ),
-        ("Record the camera", lambda: _record_now("camera", False)),
-        ("Record audio from the microphone", lambda: _record_now("audio", False)),
-        (
-            "Open the latest capture",
-            lambda: subprocess.run(["open", str(find_capture("last"))], check=False),
-        ),
-        (
-            "Show the capture folder",
-            lambda: subprocess.run(
-                ["open", str(storage_path("captures"))], check=False
-            ),
-        ),
-    ]
-    print("Capture")
-    for index, (label, _) in enumerate(options, 1):
-        print(f"  {index}  {label}")
-    choice = input("Choose 1-9 (Enter cancels): ").strip()
-    if not choice:
-        return 0
-    if not _digits(choice) or not 1 <= int(choice) <= len(options):
-        raise CaptureError(f"pick a number from 1 to {len(options)}")
-    options[int(choice) - 1][1]()
-    return 0
+def _studio() -> int:
+    """`ul capture` in a terminal: the curses studio (capture_tui.py) over this module's functions."""
 
+    def export_defaults(folder: str) -> dict:
+        settings = export_settings(read_project(Path(folder)), load_setup()[0]["export"], {})
+        return {key: value for key, value in settings.items() if key != "delete_sources"}
 
-def _record_now(mode: str, camera: bool) -> None:
-    info = start_recording(mode, overrides={"camera": camera})
-    for warning in info.get("warnings", []):
-        print(f"Note: {warning}")
-    print(_saved_text(_watch(None)))
+    return run_tui(
+        {
+            "load_setup": load_setup,
+            "save_setup": save_setup,
+            "status": status,
+            "devices": devices,
+            "start": lambda: start_recording("screen"),
+            "stop": stop_recording,
+            "pause": pause_recording,
+            "resume": resume_recording,
+            "scene": switch_scene,
+            "mark": lambda: add_mark(""),
+            "last_project": lambda: str(find_project("last")),
+            "export_defaults": export_defaults,
+            "export": lambda folder, choice: export_recording(folder, choice),
+            "export_status": read_export_status,
+        }
+    )
 
 
 def _devices_text(info: dict) -> str:
@@ -2265,7 +2237,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not sys.stdin.isatty():
                 print(USAGE, end="")
                 return 2
-            return _menu()
+            return _studio()
         action, rest = args[0], args[1:]
         if action in SHORTCUTS:
             action, kind = SHORTCUTS[action]
