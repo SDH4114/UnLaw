@@ -12,6 +12,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -917,6 +918,24 @@ class DeskStudioTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def post_raw(self, port: int, path: str, data: bytes, token: str):
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+        try:
+            connection.request("POST", path, data, {"X-Desk-Token": token, "Content-Type": "application/octet-stream"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read() or b"{}")
+        finally:
+            connection.close()
+
+    def record_project(self, port: int, token: str, body: dict | None = None) -> dict:
+        status, data = self.call(port, token, "/api/studio/record", body or {})
+        self.assertEqual(status, 200, data)
+        self.assertEqual(self.call(port, token, "/api/studio/stop", {})[1], {"saving": True})
+        return self.wait_saved(port, token)
+
+    def media_url(self, token: str, project: str, file: str) -> str:
+        return f"/media/project?t={token}&path={quote(project)}&file={quote(file)}"
+
     def test_record_pause_stop_and_play_from_the_library(self) -> None:
         self.media()
         port, token = self.start()
@@ -931,6 +950,9 @@ class DeskStudioTests(unittest.TestCase):
             {"mode": "audio", "mic": "--rm"},
             {"mode": "screen", "display": 0},
             {"mode": "screen", "format": "exe"},
+            {"scene": "--json"},
+            {"scene": "../x"},
+            {"canvas": "21:9"},
         ):
             self.assertEqual(self.call(port, token, "/api/studio/record", bad)[0], 400, bad)
         status, data = self.call(port, token, "/api/studio/record", {"mode": "audio", "mic": "Studio"})
@@ -942,24 +964,195 @@ class DeskStudioTests(unittest.TestCase):
         self.assertEqual(self.call(port, token, "/api/studio/record", {"mode": "audio"})[0], 400, "one recording at a time")
         self.assertTrue(self.call(port, token, "/api/studio/pause", {})[1]["paused"])
         self.assertFalse(self.call(port, token, "/api/studio/resume", {})[1]["paused"])
+        self.assertEqual(self.call(port, token, "/api/studio/stop", {"force": "yes"})[0], 400)
         self.assertEqual(self.call(port, token, "/api/studio/stop", {})[1], {"saving": True})
-        saved = Path(self.wait_saved(port, token)["saved"])
-        self.assertEqual(saved.suffix, ".mp4")
-        self.assertTrue(saved.is_file())
-        library = self.call(port, token, "/api/studio/library")[1]
-        self.assertEqual([item["name"] for item in library], [saved.name])
-        status, headers, body = self.raw(port, f"/media/file?t={token}&name={saved.name}", {"Range": "bytes=2-5"})
-        self.assertEqual((status, headers["Content-Range"], headers["Content-Type"]), (206, f"bytes 2-5/{saved.stat().st_size}", "video/mp4"))
-        self.assertEqual(body, saved.read_bytes()[2:6])
-        self.assertEqual(self.raw(port, f"/media/file?t={token}&name={saved.name}", {"Range": "bytes=999-"})[0], 416)
-        self.assertEqual(self.raw(port, f"/media/file?name={saved.name}")[0], 403, "media needs the token")
+        done = self.wait_saved(port, token)
+        project = Path(done["project"])
+        self.assertEqual(done["saved"], done["project"], "no export yet: the recording is a project folder")
+        self.assertTrue((project / "project.json").is_file())
+        self.assertEqual(project.parent, self.captures / "projects")
+        listed = self.call(port, token, "/api/studio/projects")[1]
+        self.assertEqual([item["path"] for item in listed], [str(project)])
+        self.assertEqual(listed[0]["tracks"], ["screen", "camera", "mic"])
+        screen = project / "media" / "screen-001.mp4"
+        url = self.media_url(token, str(project), "media/screen-001.mp4")
+        status, headers, body = self.raw(port, url, {"Range": "bytes=2-4"})
+        self.assertEqual((status, headers["Content-Range"], headers["Content-Type"]), (206, f"bytes 2-4/{screen.stat().st_size}", "video/mp4"))
+        self.assertEqual(body, screen.read_bytes()[2:5])
+        self.assertEqual(self.raw(port, url, {"Range": "bytes=999-"})[0], 416)
+        self.assertEqual(self.raw(port, url.replace(f"t={token}&", ""))[0], 403, "media needs the token")
+        self.assertTrue((project / "media" / "screen-002.mp4").is_file(), "the pause started a second segment")
+        self.assertEqual(self.raw(port, self.media_url(token, str(project), "media/screen-002.mp4"))[0], 200)
+        self.assertEqual(self.call(port, token, "/api/studio/library")[1], [], "the library lists files; a project is not one")
         self.assertEqual(self.raw(port, f"/media/file?t={token}&name=..%2F..%2Fconfig.toml")[0], 404)
-        self.assertEqual(self.raw(port, f"/media/file?t={token}&name=.parts")[0], 404)
-        wave = self.call(port, token, f"/api/studio/wave?name={saved.name}&bars=20")[1]
-        self.assertEqual(len(wave["peaks"]), 20)
-        self.assertTrue(all(0 <= value <= 1 for value in wave["peaks"]))
-        self.assertEqual(self.call(port, token, f"/api/studio/wave?name={saved.name}&bars=5")[0], 400)
-        self.assertEqual(self.call(port, token, "/api/studio/wave?name=..%2Fx.mov")[0], 404)
+
+    def test_setup_scene_mark_and_project_flow(self) -> None:
+        self.media()
+        port, token = self.start()
+        setup = self.call(port, token, "/api/studio/setup")[1]
+        self.assertEqual(setup["canvas"], "16:9")
+        setup["canvas"] = "9:16"
+        status, saved = self.call(port, token, "/api/studio/setup", setup)
+        self.assertEqual((status, saved["canvas"]), (200, "9:16"))
+        self.assertEqual(self.call(port, token, "/api/studio/setup")[1]["canvas"], "9:16")
+        setup["countdown"] = 99
+        self.assertEqual(self.call(port, token, "/api/studio/setup", setup)[0], 400, "capture validates the setup")
+        self.assertEqual(self.call(port, token, "/api/studio/scene", {"scene": "camera"})[0], 400, "no recording yet")
+        self.assertEqual(self.call(port, token, "/api/studio/record", {"scene": "screen", "canvas": "1:1"})[0], 200)
+        for bad in ({"scene": "-1"}, {"scene": ""}, {"scene": 3}, {"scene": "x" * 40}):
+            self.assertEqual(self.call(port, token, "/api/studio/scene", bad)[0], 400, bad)
+        status, data = self.call(port, token, "/api/studio/scene", {"scene": "3"})
+        self.assertEqual((status, data["scene"]), (200, "camera"))
+        self.assertEqual(self.call(port, token, "/api/studio/mark", {"label": "intro done"})[0], 200)
+        self.assertEqual(self.call(port, token, "/api/studio/mark", {})[0], 200)
+        for bad in ({"label": "--force"}, {"label": "x\ny"}, {"label": 5}, {"label": "x" * 300}):
+            self.assertEqual(self.call(port, token, "/api/studio/mark", bad)[0], 400, bad)
+        self.assertEqual(self.call(port, token, "/api/studio/stop", {})[1], {"saving": True})
+        done = self.wait_saved(port, token)
+        projects = self.call(port, token, "/api/studio/projects")[1]
+        self.assertEqual(projects[0]["path"], done["project"])
+        status, project = self.call(port, token, f"/api/studio/project?path={quote(done['project'])}")
+        self.assertEqual(status, 200, project)
+        self.assertEqual([event["mark"] for event in project["events"] if "mark" in event], ["intro done", ""])
+        self.assertEqual([event["scene"] for event in project["events"] if "scene" in event], ["screen", "camera"])
+        status, headers, body = self.raw(port, self.media_url(token, done["project"], "media/screen-001.mp4"), {"Range": "bytes=0-2"})
+        self.assertEqual((status, body), (206, b"scr"))
+        # Layout edits are saved; what was recorded is never rewritten by the page.
+        project["export"]["canvas"] = "4:5"
+        project["duration"] = 999
+        status, saved = self.call(port, token, "/api/studio/project", {"path": done["project"], "project": project})
+        self.assertEqual(status, 200, saved)
+        again = self.call(port, token, f"/api/studio/project?path={quote(done['project'])}")[1]
+        self.assertEqual(again["export"]["canvas"], "4:5")
+        self.assertNotEqual(again["duration"], 999)
+        self.assertEqual(self.call(port, token, "/api/studio/project", {"path": done["project"], "project": []})[0], 400)
+        status, headers, body = self.raw(port, f"/media/thumb?t={token}&path={quote(done['project'])}")
+        self.assertEqual((status, headers["Content-Type"]), (200, "image/jpeg"))
+        for bad in (
+            {"path": done["project"], "canvas": "21:9"},
+            {"path": done["project"], "height": 720},
+            {"path": done["project"], "fps": "60"},
+            {"path": done["project"], "format": "avi"},
+            {"path": done["project"], "normalize": "yes"},
+            {"path": str(self.root), "canvas": "source"},
+        ):
+            self.assertIn(self.call(port, token, "/api/studio/export", bad)[0], (400, 404), bad)
+        status, data = self.call(port, token, "/api/studio/export", {"path": done["project"], "canvas": "source", "format": "mp4", "normalize": False})
+        self.assertEqual((status, data), (200, {"queued": True}))
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            progress = self.call(port, token, "/api/studio/export/status")[1]
+            if progress["phase"] in {"done", "failed"}:
+                break
+            time.sleep(0.2)
+        self.assertEqual(progress["phase"], "done", progress)
+        self.assertTrue(progress["output"].endswith(" source.mp4"))
+        self.assertEqual(Path(progress["output"]).parent, self.captures / "recordings")
+        # Move to Trash takes the whole project folder.
+        status, data = self.call(port, token, "/api/studio/action", {"action": "delete", "path": done["project"]})
+        self.assertEqual(status, 200, data)
+        self.assertEqual(Path(data["trashed"]).parent, self.root / "home" / ".Trash")
+        self.assertFalse(Path(done["project"]).exists())
+
+    def test_project_media_refuses_escapes(self) -> None:  # Review Focus 5
+        self.media()
+        port, token = self.start()
+        project = self.record_project(port, token)["project"]
+        folder = Path(project)
+        (folder / "media" / "link.mp4").symlink_to(folder / "media" / "screen-001.mp4")
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "secret.mp4").write_bytes(b"secret")
+        (folder / "assets" / "out").symlink_to(outside)
+        stray = self.root / "stray"
+        (stray / "media").mkdir(parents=True)
+        (stray / "media" / "a.mp4").write_bytes(b"a")
+        (stray / "project.json").write_text((folder / "project.json").read_text())
+        for path, file in (
+            (project, "media/../project.json"),
+            (project, "project.json"),
+            (project, "logs/screen.log"),
+            (project, "/etc/hosts"),
+            (project, "media/link.mp4"),
+            (project, "assets/out/secret.mp4"),
+            (project, ""),
+            (project, "media/missing.mp4"),
+            ("/tmp", "media/a.mp4"),
+            (str(stray), "media/a.mp4"),
+            (project + "/media/..", "media/screen-001.mp4"),
+            ("media", "media/screen-001.mp4"),
+        ):
+            with self.subTest(path=path, file=file):
+                self.assertEqual(self.raw(port, self.media_url(token, path, file))[0], 404)
+        self.assertEqual(self.call(port, token, f"/api/studio/project?path={quote(str(stray))}")[0], 404)
+        self.assertEqual(self.call(port, token, "/api/studio/action", {"action": "delete", "path": str(stray)})[0], 404)
+        self.assertTrue(stray.exists())
+        # A project.json whose files point outside the folder is refused by capture itself.
+        data = json.loads((folder / "project.json").read_text())
+        data["segments"][0]["files"]["screen"] = "../../outside/secret.mp4"
+        (folder / "project.json").write_text(json.dumps(data))
+        self.assertEqual(self.call(port, token, f"/api/studio/project?path={quote(project)}")[0], 400)
+
+    def test_assets_only_take_images(self) -> None:
+        self.media()
+        port, token = self.start()
+        png = b"\x89PNG\r\n\x1a\n" + b"\0" * 32
+        status, data = self.post_raw(port, "/api/studio/asset?name=logo.png", png, token)
+        self.assertEqual((status, data), (200, {"asset": "logo.png"}))
+        status, data = self.post_raw(port, "/api/studio/asset?name=logo.png", png, token)
+        self.assertEqual((status, data), (200, {"asset": "logo 2.png"}))
+        status, data = self.post_raw(port, "/api/studio/asset?name=..%2F..%2Fphoto.jpg", b"\xff\xd8\xff\xe0" + b"\0" * 16, token)
+        self.assertEqual((status, data), (200, {"asset": "photo.jpg"}))
+        assets = self.root / "config" / "unlaw" / "data" / "studio" / "assets"
+        self.assertEqual(sorted(item.name for item in assets.iterdir()), ["logo 2.png", "logo.png", "photo.jpg"])
+        self.assertEqual((assets / "logo.png").read_bytes(), png)
+        for name, body in (("x.png", b"<script>alert(1)</script>"), ("x.png", b""), ("x.svg", png), ("x.jpg", png)):
+            with self.subTest(name=name, body=body[:8]):
+                self.assertEqual(self.post_raw(port, f"/api/studio/asset?name={quote(name)}", body, token)[0], 400)
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+        try:
+            connection.putrequest("POST", "/api/studio/asset?name=big.png")
+            connection.putheader("X-Desk-Token", token)
+            connection.putheader("Content-Length", str(51 * 1024 * 1024))
+            connection.endheaders()
+            response = connection.getresponse()
+            self.assertEqual(response.status, 400, "too big is refused before reading")
+        finally:
+            connection.close()
+        self.assertEqual(len(list(assets.iterdir())), 3, "nothing half-written is left")
+        self.assertEqual(self.post_raw(port, "/api/studio/asset?name=a.png", png, "wrong")[0], 403)
+
+    def test_doctor_camera_modes_settings_and_open_project(self) -> None:
+        self.media()
+        port, token = self.start()
+        doctor = self.call(port, token, "/api/studio/doctor")[1]
+        self.assertIs(doctor["screen"], True)
+        self.assertIn("app", doctor)
+        modes = self.call(port, token, "/api/studio/camera-modes?device=FaceTime%20HD%20Camera")[1]
+        self.assertEqual(modes["modes"]["FaceTime HD Camera"][0], {"width": 1920, "height": 1080, "min_fps": "15.000000", "max_fps": "30.000000"})
+        for bad in ("", "-x", "x" * 300):
+            self.assertEqual(self.call(port, token, f"/api/studio/camera-modes?device={quote(bad)}")[0], 400, bad)
+        self.assertEqual(self.call(port, token, "/api/studio/open-settings", {"kind": "screen"})[0], 200)
+        self.assertIn("Privacy_ScreenCapture", (self.root / "open.log").read_text())
+        self.assertEqual(self.call(port, token, "/api/studio/open-settings", {"kind": "files"})[0], 400)
+        # "Open project…": a folder picked in the macOS dialog, remembered so its media can be served.
+        project = Path(self.record_project(port, token)["project"])
+        moved = self.root / "elsewhere" / "talk"
+        moved.parent.mkdir()
+        project.rename(moved)
+        osascript = self.root / "bin" / "osascript"
+        osascript.write_text(f"#!/bin/sh\nprintf '%s\\n' '{moved}/'\n", encoding="utf-8")
+        status, data = self.call(port, token, "/api/studio/open-project", {})
+        self.assertEqual(status, 200, data)
+        self.assertEqual((data["path"], data["project"]["name"]), (str(moved), project.name))
+        self.assertEqual(self.raw(port, self.media_url(token, str(moved), "media/screen-001.mp4"))[0], 200)
+        self.assertIn(str(moved), [item["path"] for item in self.call(port, token, "/api/studio/projects")[1]])
+        self.assertEqual(self.call(port, token, "/api/studio/action", {"action": "delete", "path": str(moved)})[0], 400, "only projects in the projects folder are trashed")
+        osascript.write_text(f"#!/bin/sh\nprintf '%s\\n' '{self.root}/'\n", encoding="utf-8")
+        status, data = self.call(port, token, "/api/studio/open-project", {})
+        self.assertEqual(status, 400, "a folder without project.json is not a project")
+        osascript.write_text("#!/bin/sh\necho 'execution error: User canceled. (-128)' >&2\nexit 1\n", encoding="utf-8")
+        self.assertEqual(self.call(port, token, "/api/studio/open-project", {})[1], {"path": None})
 
     def test_trim_rejects_non_finite_seconds(self) -> None:
         self.media()
@@ -1134,6 +1327,12 @@ class DeskFailureTests(unittest.TestCase):
                     os.kill(int(pid_file.read_text()), signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+
+    def test_open_project_without_osascript_asks_for_a_path(self) -> None:
+        from unlawful import desk
+
+        # PATH is the empty test bin: the real folder dialog can never open.
+        self.assertEqual(desk.Studio("/fake-ul", {}).open_project(), {"unavailable": True})
 
     def test_missing_capture_binary_finishes_the_background_save_with_an_error(self) -> None:
         import threading

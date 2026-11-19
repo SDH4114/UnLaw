@@ -6909,6 +6909,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.studio.run("wave", name, "--bars", bars, timeout=300))
             elif url.path == "/api/studio/library":
                 self._json(200, self.studio.run("list", "--all", timeout=120))
+            elif url.path == "/api/studio/setup":
+                self._json(200, self.studio.run("setup", timeout=30))
+            elif url.path == "/api/studio/projects":
+                self._json(200, self.studio.run("projects", timeout=120))
+            elif url.path == "/api/studio/project":
+                self._json(200, self.studio.project(urllib.parse.parse_qs(url.query).get("path", [""])[0]))
+            elif url.path == "/api/studio/export/status":
+                self._json(200, self.studio.run("export", "--status", timeout=30))
+            elif url.path == "/api/studio/camera-modes":
+                self._json(200, self.studio.camera_modes(urllib.parse.parse_qs(url.query).get("device", [""])[0]))
+            elif url.path == "/api/studio/doctor":
+                self._json(200, self.studio.run("doctor", timeout=30))
             elif url.path.startswith("/media/"):
                 self._media(url)
             else:
@@ -6917,17 +6929,23 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": str(error)})
         except FileNotFoundError as error:
             self._json(404, {"error": str(error)})
-        except (OSError, ValueError) as error:
+        except ValueError as error:
+            self._json(400 if url.path.startswith("/api/studio/") else 500, {"error": str(error)})
+        except OSError as error:
             self._json(500, {"error": str(error)})
 
     def _media(self, url: urllib.parse.SplitResult) -> None:
         query = urllib.parse.parse_qs(url.query)
         if url.path == "/media/file":
             path = self.studio.member(query.get("name", [""])[0])
+        elif url.path == "/media/thumb" and "path" in query:
+            path = self.studio.project_thumb(query["path"][0])
         elif url.path == "/media/thumb":
             name = self.studio.member(query.get("name", [""])[0]).name
             data = self.studio.run("thumb", name, timeout=60)
             path = Path(str(data.get("thumbnail") if isinstance(data, dict) else ""))
+        elif url.path == "/media/project":
+            path = self.studio.project_file(query.get("path", [""])[0], query.get("file", [""])[0])
         elif url.path == "/media/canvas":
             target = self.desk.canvas_asset(query.get("path", [""])[0], query.get("file", [""])[0])
             kind = CANVAS_IMAGES.get(target.suffix.casefold())
@@ -7006,7 +7024,15 @@ class Handler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length") or -1)
                 self._json(200, self.desk.canvas_attach(query.get("path", [""])[0], query.get("name", [""])[0], self.rfile, length))
                 return
-            body = self._body(MAX_CANVAS_BODY if path == "/api/canvas" else MAX_BODY)
+            if path == "/api/studio/asset":
+                # The body is the image itself; a refused upload may leave bytes unread, so the connection ends.
+                self.close_connection = True
+                length = int(self.headers.get("Content-Length") or -1)
+                name = urllib.parse.parse_qs(url.query).get("name", [""])[0]
+                self._json(200, self.studio.add_asset(name, self.rfile, length))
+                return
+            limit = MAX_CANVAS_BODY if path == "/api/canvas" else MAX_STUDIO_BODY if path in {"/api/studio/setup", "/api/studio/project"} else MAX_BODY
+            body = self._body(limit)
             if path == "/api/board":
                 self._json(200, self.desk.change(body))
             elif path == "/api/pomodoro":
@@ -7073,7 +7099,21 @@ class Handler(BaseHTTPRequestHandler):
             elif path in {"/api/studio/pause", "/api/studio/resume"}:
                 self._json(200, self.studio.run(path.rsplit("/", 1)[1], timeout=60))
             elif path == "/api/studio/stop":
-                self._json(200, self.studio.stop())
+                self._json(200, self.studio.stop(body))
+            elif path == "/api/studio/setup":
+                self._json(200, self.studio.save_setup(body))
+            elif path == "/api/studio/scene":
+                self._json(200, self.studio.scene(body))
+            elif path == "/api/studio/mark":
+                self._json(200, self.studio.mark(body))
+            elif path == "/api/studio/project":
+                self._json(200, self.studio.save_project(body))
+            elif path == "/api/studio/export":
+                self._json(200, self.studio.export(body))
+            elif path == "/api/studio/open-settings":
+                self._json(200, self.studio.open_settings(body))
+            elif path == "/api/studio/open-project":
+                self._json(200, self.studio.open_project())
             elif path == "/api/studio/shot":
                 self._json(200, self.studio.shot(body))
             elif path == "/api/studio/action":
@@ -7170,9 +7210,34 @@ MEDIA_TYPES = {
     ".gif": "image/gif",
     ".heic": "image/heic",
     ".tiff": "image/tiff",
+    ".flac": "audio/flac",
 }
 STUDIO_MODES = ("screen", "screen-camera", "camera", "audio")
 STUDIO_FORMATS = ("mov", "mp4", "m4a", "mp3", "wav")
+# Export and recording choices the page may pass on to `ul capture` (capture checks them again).
+STUDIO_CANVASES = ("16:9", "9:16", "1:1", "4:5", "source")
+STUDIO_EXPORT_CHOICES = {
+    "canvas": ("--canvas", STUDIO_CANVASES),
+    "height": ("--height", (1080, 1440, 2160)),
+    "fps": ("--fps", (30, 60)),
+    "codec": ("--codec", ("h264", "hevc")),
+    "quality": ("--quality", ("high", "max")),
+    "format": ("--format", ("mov", "mp4")),
+}
+STUDIO_SETTINGS = ("screen", "camera", "microphone")
+STUDIO_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
+# Setups and projects carry layouts for every format and scene: larger than a board change.
+MAX_STUDIO_BODY = 2 * 1024 * 1024
+# Images for image and text sources (the page renders text to PNG).
+MAX_ASSET = 50 * 1024 * 1024
+ASSET_MAGIC = {".png": b"\x89PNG\r\n\x1a\n", ".jpg": b"\xff\xd8\xff", ".jpeg": b"\xff\xd8\xff"}
+CHOOSE_PROJECT_SCRIPT = (
+    "on run argv",
+    "activate",
+    'set chosen to choose folder with prompt "Open a Studio project" default location (POSIX file (item 1 of argv))',
+    "return POSIX path of chosen",
+    "end run",
+)
 
 
 class StudioError(Exception):
@@ -7194,6 +7259,7 @@ class Studio:
         self.last: dict | None = None
         self._available: bool | None = None
         self._availability_lock = threading.Lock()
+        self.choose_lock = threading.Lock()
 
     def available(self) -> bool:
         with self._availability_lock:
@@ -7216,20 +7282,20 @@ class Studio:
                     pass
         return self._available
 
-    def run(self, *args: str, timeout: float = 60) -> object:
+    def run(self, *args: str, timeout: float = 60, stdin: str | None = None) -> object:
         if not self.available():
             raise StudioError("the capture command is not installed (ul features)")
         try:
             with subprocess.Popen(
                 [self.binary or "ul", "capture", *args, "--json"],
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 start_new_session=True,
             ) as process:
                 try:
-                    stdout, stderr_text = process.communicate(timeout=timeout)
+                    stdout, stderr_text = process.communicate(stdin, timeout=timeout)
                 except subprocess.TimeoutExpired:
                     # Saving/thumbnail helpers share this group; killing only the
                     # capture CLI would leave ffmpeg running after the timeout.
@@ -7279,23 +7345,34 @@ class Studio:
         return data
 
     def record(self, body: dict) -> object:
+        """Record the saved setup; `scene`/`canvas` and the old keys (mode, mic, cam, ...) override it once."""
         mode = body.get("mode")
-        if mode not in STUDIO_MODES:
+        if mode is not None and mode not in STUDIO_MODES:
             raise ValueError("mode must be screen, screen-camera, camera or audio")
-        args = ["record", "screen" if mode == "screen-camera" else str(mode)]
+        args = ["record"]
+        if mode is not None:
+            args.append("screen" if mode == "screen-camera" else str(mode))
         if mode == "screen-camera":
             args.append("--camera")
+        if body.get("scene") is not None:
+            args += ["--scene", self.scene_id(body["scene"])]
+        canvas = body.get("canvas")
+        if canvas is not None:
+            if canvas not in STUDIO_CANVASES:
+                raise ValueError("canvas must be 16:9, 9:16, 1:1, 4:5 or source")
+            args += ["--canvas", canvas]
         for key, flag in (("mic", "--mic"), ("cam", "--cam")):
             value = body.get(key)
             if value is not None:
                 if not isinstance(value, str) or not value.strip() or len(value) > 200 or value.startswith("-"):
                     raise ValueError(f"{key} must be a device name")
                 args += [flag, value]
-        display = body.get("display", 1)
-        if isinstance(display, bool) or not isinstance(display, int) or not 1 <= display <= 16:
+        display = body.get("display")
+        if display is not None and (isinstance(display, bool) or not isinstance(display, int) or not 1 <= display <= 16):
             raise ValueError("display must be a number from 1")
-        if mode in {"screen", "screen-camera"}:
-            args += ["--display", str(display)]
+        if mode in {None, "screen", "screen-camera"}:
+            if display is not None:
+                args += ["--display", str(display)]
             system = body.get("system_audio")
             if system is not None:
                 args.append("--system-audio" if system is True else "--no-system-audio")
@@ -7309,8 +7386,14 @@ class Studio:
         self.last = None
         return self.run(*args, timeout=30)
 
-    def stop(self) -> dict:
-        """Saving can take minutes (camera overlay), so it runs in the background."""
+    def stop(self, body: dict | None = None) -> dict:
+        """Saving can take minutes (remux, a slow recorder), so it runs in the background.
+
+        `force` kills a stuck recorder (its track is lost); `ul capture stop` never does that on its own.
+        """
+        force = (body or {}).get("force", False)
+        if not isinstance(force, bool):
+            raise TypeError("force must be true or false")
         with self.lock:
             if self.saving and self.saving.is_alive():
                 return {"saving": True}
@@ -7318,7 +7401,7 @@ class Studio:
 
             def work() -> None:
                 try:
-                    self.last = self.run("stop", timeout=3600)  # type: ignore[assignment]
+                    self.last = self.run("stop", *(["--force"] if force else []), timeout=3600)  # type: ignore[assignment]
                 except StudioError as error:
                     self.last = {"error": str(error)}
 
@@ -7347,6 +7430,13 @@ class Studio:
 
     def action(self, body: dict) -> object:
         action = body.get("action")
+        if "path" in body:
+            folder = self.project_folder(body.get("path"))
+            if action == "delete":
+                return self.run("delete", str(folder))
+            if action == "reveal":
+                return {"ok": subprocess.run(["open", "-R", str(folder)], check=False).returncode == 0}
+            raise ValueError("a project can be revealed or deleted")
         name = self.member(body.get("name")).name
         if action in {"open", "reveal"}:
             ok = subprocess.run(["open", *(["-R"] if action == "reveal" else []), str(self.member(name))], check=False).returncode == 0
@@ -7370,6 +7460,193 @@ class Studio:
                 raise ValueError("convert to mp4, mov, gif, m4a, mp3 or wav")
             return self.run("convert", name, "--to", to, timeout=3600)
         raise ValueError("unknown action")
+
+    @staticmethod
+    def scene_id(value: object) -> str:
+        """A scene id or its key number (1-9); never anything that looks like an option."""
+        if not isinstance(value, str) or not STUDIO_ID.fullmatch(value):
+            raise ValueError("scene must be a scene id or number")
+        return value
+
+    def save_setup(self, body: dict) -> object:
+        return self.run("setup", "--set-json", "-", stdin=json.dumps(body), timeout=30)
+
+    def scene(self, body: dict) -> object:
+        return self.run("scene", self.scene_id(body.get("scene")), timeout=30)
+
+    def mark(self, body: dict) -> object:
+        label = body.get("label", "")
+        if not isinstance(label, str) or len(label) > 200 or label.startswith("-") or not label.isprintable():
+            raise ValueError("a mark is one line of at most 200 characters")
+        return self.run("mark", *([label] if label else []), timeout=30)
+
+    def project(self, raw: object) -> object:
+        return self.run("project", str(self.project_folder(raw)), timeout=60)
+
+    def save_project(self, body: dict) -> object:
+        folder = self.project_folder(body.get("path"))
+        project = body.get("project")
+        if not isinstance(project, dict):
+            raise TypeError("project must be a JSON object")
+        return self.run("project", str(folder), "--set-json", "-", stdin=json.dumps(project), timeout=60)
+
+    def export(self, body: dict) -> object:
+        """Start an export in the background; the page follows it through export_status()."""
+        args = ["export", str(self.project_folder(body.get("path")))]
+        for key, (flag, allowed) in STUDIO_EXPORT_CHOICES.items():
+            value = body.get(key)
+            if value is None:
+                continue
+            if isinstance(value, bool) or value not in allowed:
+                raise ValueError(f"{key} must be one of " + ", ".join(str(item) for item in allowed))
+            args += [flag, str(value)]
+        for key, yes, no in (("normalize", "--normalize", "--no-normalize"), ("delete_sources", "--delete-sources", None)):
+            value = body.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, bool):
+                raise TypeError(f"{key} must be true or false")
+            if value or no:
+                args.append(yes if value else str(no))
+        return self.run(*args, "--background", timeout=60)
+
+    def camera_modes(self, device: object) -> object:
+        if not isinstance(device, str) or not device.strip() or len(device) > 200 or device.startswith("-") or not device.isprintable():
+            raise ValueError("device must be a camera name")
+        # The probe opens the camera for a moment.
+        return self.run("devices", "--modes", "--camera", device, timeout=60)
+
+    def open_settings(self, body: dict) -> object:
+        kind = body.get("kind")
+        if kind not in STUDIO_SETTINGS:
+            raise ValueError("kind must be screen, camera or microphone")
+        return self.run("doctor", "--open", str(kind), timeout=30)
+
+    def add_asset(self, name: object, source, length: int) -> dict:
+        """Copy an uploaded PNG/JPEG into storage.root/studio/assets under a free name, never over a file."""
+        if not 0 < length <= MAX_ASSET:
+            raise ValueError(f"an image can be at most {MAX_ASSET // (1024 * 1024)} MB")
+        clean = attachment_name(name)
+        stem, suffix = os.path.splitext(clean)
+        magic = ASSET_MAGIC.get(suffix.casefold())
+        if magic is None:
+            raise ValueError("only PNG and JPEG images can be sources")
+        stem = stem[:100].rstrip() or "image"
+        head = source.read(min(length, len(magic)))
+        if not head.startswith(magic) or len(head) < len(magic):
+            raise ValueError(f"this is not a {suffix[1:].upper()} image")
+        folder = storage_path("studio", "assets")
+        folder.mkdir(parents=True, exist_ok=True)
+        for number in range(1, 1000):
+            target = folder / (f"{stem}{suffix}" if number == 1 else f"{stem} {number}{suffix}")
+            try:
+                handle = target.open("xb")
+            except FileExistsError:
+                continue
+            break
+        else:
+            raise ValueError(f"no free name for {clean} in {folder}")
+        try:
+            with handle:
+                handle.write(head)
+                left = length - len(head)
+                while left > 0:
+                    chunk = source.read(min(1 << 16, left))
+                    if not chunk:
+                        raise ValueError("the upload ended early")
+                    handle.write(chunk)
+                    left -= len(chunk)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+        return {"asset": target.name}
+
+    def open_project(self) -> dict:
+        """Pick a project folder anywhere in the macOS folder dialog; capture remembers it.
+
+        {"path": None} when cancelled, {"unavailable": True} without osascript.
+        """
+        osascript = shutil.which("osascript")
+        if osascript is None:
+            return {"unavailable": True}
+        start = storage_path("captures", "projects")
+        if not start.is_dir():
+            start = Path.home()
+        if not self.choose_lock.acquire(blocking=False):
+            raise ValueError("The folder dialog is already open")
+        try:
+            command = [osascript]
+            for line in CHOOSE_PROJECT_SCRIPT:
+                command += ["-e", line]
+            try:
+                result = subprocess.run([*command, str(start)], capture_output=True, text=True, timeout=CHOOSE_TIMEOUT, check=False)
+            except subprocess.TimeoutExpired:
+                return {"path": None}
+        finally:
+            self.choose_lock.release()
+        if result.returncode != 0:
+            if "-128" in result.stderr:  # the user pressed Cancel
+                return {"path": None}
+            raise StudioError("The folder dialog failed: " + result.stderr.strip()[:300])
+        chosen = result.stdout.strip()
+        if not chosen:
+            return {"path": None}
+        if not chosen.startswith("/") or "\x00" in chosen:
+            raise StudioError("the dialog did not answer with a folder")
+        data = self.run("project", chosen.rstrip("/") or "/", "--remember", timeout=60)
+        if not isinstance(data, dict) or not isinstance(data.get("path"), str):
+            raise StudioError("ul capture did not describe the project")
+        return {"path": data["path"], "project": data}
+
+    @staticmethod
+    def project_folder(raw: object) -> Path:
+        """A project folder in captures/projects or one the user opened (recent-projects.json).
+
+        The path must be absolute and normalised, the folder and its project.json real (no symlinks).
+        """
+        if not isinstance(raw, str) or not raw.startswith("/") or "\x00" in raw or os.path.normpath(raw) != raw:
+            raise FileNotFoundError("unknown project")
+        folder = Path(raw)
+        manifest = folder / "project.json"
+        if folder.is_symlink() or not folder.is_dir() or manifest.is_symlink() or not manifest.is_file():
+            raise FileNotFoundError("unknown project")
+        if folder.resolve().parent == storage_path("captures", "projects").resolve():
+            return folder
+        try:
+            recent = json.loads(storage_path("studio", "recent-projects.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            recent = []
+        if isinstance(recent, list) and raw in recent:
+            return folder
+        raise FileNotFoundError("unknown project")
+
+    @classmethod
+    def project_file(cls, raw: object, file: object) -> Path:
+        """A file inside a project's media/ or assets/ folder: relative, no `..`, no symlink on the way."""
+        folder = cls.project_folder(raw)
+        if not isinstance(file, str) or not file or "\x00" in file or file.startswith("/") or os.path.normpath(file) != file:
+            raise FileNotFoundError("unknown project file")
+        parts = Path(file).parts
+        if len(parts) < 2 or parts[0] not in {"media", "assets"} or ".." in parts:
+            raise FileNotFoundError("unknown project file")
+        target = folder
+        for part in parts:
+            target = target / part
+            if target.is_symlink():
+                raise FileNotFoundError("unknown project file")
+        if not target.is_file() or not target.resolve().is_relative_to(folder.resolve()):
+            raise FileNotFoundError("unknown project file")
+        return target
+
+    def project_thumb(self, raw: object) -> Path:
+        """The first frame of the project's screen (or camera) track, through `ul capture thumb`."""
+        folder = self.project_folder(raw)
+        for track in ("screen", "camera"):
+            for item in sorted((folder / "media").glob(f"{track}-*.mp4")):
+                if item.is_file() and not item.is_symlink():
+                    data = self.run("thumb", str(item), timeout=60)
+                    return Path(str(data.get("thumbnail") if isinstance(data, dict) else ""))
+        raise FileNotFoundError("this project has no picture")
 
     @staticmethod
     def member(name: object) -> Path:
