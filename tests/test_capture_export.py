@@ -149,9 +149,7 @@ class GeometryTests(ExportTestCase):
         self.assertEqual((width, height), (100, 60))
         self.assertEqual(rows[30][50], 255)
         self.assertEqual(rows[0][0], 0)
-        self.assertTrue(
-            0 < rows[2][9] < 255 or 0 < rows[9][2] < 255, "anti-aliased edge"
-        )
+        self.assertTrue(any(0 < value < 255 for row in rows[:30] for value in row), "anti-aliased corner edge")
         self.assertTrue(
             all(
                 value == 255

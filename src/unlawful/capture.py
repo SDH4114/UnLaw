@@ -1274,6 +1274,7 @@ def _finish(state: dict) -> dict:
     for index, files in enumerate(state["segments"]):
         final: dict[str, str] = {}
         lengths: dict[str, float] = {}
+        info: dict[str, dict] = {}
         for track, relative in files.items():
             done = (
                 None
@@ -1285,7 +1286,10 @@ def _finish(state: dict) -> dict:
                 problems.append(f"part {index + 1}: the {track} recording {why}")
                 continue
             final[track] = done
-            lengths[track] = _probe(str(folder / done))["duration"]
+            probed = _probe(str(folder / done))
+            lengths[track] = probed["duration"]
+            if probed["video"] or probed["audio"]:
+                info[track] = {"width": probed["width"], "height": probed["height"], "audio": probed["audio"]}
         if not final:
             continue
         measured = state["durations"][index] if index < len(state["durations"]) else 0.0
@@ -1299,7 +1303,7 @@ def _finish(state: dict) -> dict:
             starts = {track: 0.0 for track in final} | segment_starts(known, reference)
             duration = lengths[reference]
         segments.append(
-            {"duration": round(duration, 3), "files": final, "starts": starts}
+            {"duration": round(duration, 3), "files": final, "starts": starts, "info": info}
         )
     if not segments and not stuck_tracks:
         media = folder / "media"

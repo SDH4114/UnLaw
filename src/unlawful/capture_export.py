@@ -24,7 +24,6 @@ from datetime import datetime
 from pathlib import Path
 
 from .capture_project import (
-    CANVASES,
     ProjectError,
     canvas_size,
     effective_placements,
@@ -138,13 +137,19 @@ def _rgb(color: str) -> tuple[int, int, int]:
     return int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
 
 
+def _frame_pad(width: int, height: int, shadow: bool) -> int:
+    """Room around the box for the shadow (blur plus its downward drop)."""
+    blur = max(8, round(min(width, height) * 0.06)) if shadow else 0
+    return blur + blur // 3
+
+
 def frame_png(
     width: int, height: int, radius_px: float, border_px: int, color: str, shadow: bool
 ) -> tuple[bytes, int]:
     """Border ring (inside the box) and soft shadow (outside, lower), overlaid over the source at
     (x - pad, y - pad); the box itself stays transparent."""
+    pad = _frame_pad(width, height, shadow)
     blur = max(8, round(min(width, height) * 0.06)) if shadow else 0
-    pad = blur + (blur // 3 if shadow else 0)
     red, green, blue = _rgb(color)
     radius = max(0.0, min(radius_px, width / 2, height / 2))
     drop = blur / 3
@@ -434,20 +439,13 @@ def interval_argv(
             key = hashlib.sha1(
                 f"{shown_width}x{shown_height}-{radius:.2f}-{border}-{item['border']['color']}-{item['shadow']}".encode()
             ).hexdigest()[:16]
-            frame, pad = frame_png(1, 1, 0, 0, "#000000", False) if False else (None, 0)
-            path = cache / f"frame-{key}.png"
-            if not path.is_file():
-                frame, pad = frame_png(
-                    shown_width,
-                    shown_height,
-                    radius,
-                    border,
-                    item["border"]["color"],
-                    item["shadow"],
-                )
-                _cached_png(cache, path.name, lambda frame=frame: frame)
-                (cache / f"frame-{key}.pad").write_text(str(pad))
-            pad = int((cache / f"frame-{key}.pad").read_text())
+            color = item["border"]["color"]
+            path = _cached_png(
+                cache,
+                f"frame-{key}.png",
+                lambda: frame_png(shown_width, shown_height, radius, border, color, item["shadow"])[0],
+            )
+            pad = _frame_pad(shown_width, shown_height, item["shadow"])
             frame_index = still_input(path)
             graph.append(
                 f"{current}[{frame_index}:v]overlay={left - pad}:{top - pad}:eof_action=pass[f{number}]"
@@ -623,21 +621,25 @@ def _run_ffmpeg(
     with log.open("ab") as stream:
         stream.write(("$ " + " ".join(argv) + "\n").encode())
         stream.flush()
-        process = subprocess.Popen(
+        with subprocess.Popen(
             argv,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=stream,
             text=True,
-        )
-        assert process.stdout is not None
-        for line in process.stdout:
-            if on_time and line.startswith("out_time_us="):
-                try:
-                    on_time(int(line.split("=", 1)[1]) / 1e6)
-                except ValueError:
-                    pass
-        code = process.wait()
+        ) as process:
+            assert process.stdout is not None
+            try:
+                for line in process.stdout:
+                    if on_time and line.startswith("out_time_us="):
+                        try:
+                            on_time(int(line.split("=", 1)[1]) / 1e6)
+                        except ValueError:
+                            pass
+            except BaseException:
+                process.kill()  # Ctrl-C or a failing callback: never leave an encoder running
+                raise
+            code = process.wait()
     if code != 0:
         tail = [
             line
