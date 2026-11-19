@@ -1369,6 +1369,8 @@ class Handler(BaseHTTPRequestHandler):
             path = Path(str(data.get("thumbnail") if isinstance(data, dict) else ""))
         elif url.path == "/media/project":
             path = self.studio.project_file(query.get("path", [""])[0], query.get("file", [""])[0])
+        elif url.path == "/media/asset":
+            path = self.studio.asset_file(query.get("name", [""])[0])
         elif url.path == "/media/canvas":
             target = self.desk.canvas_asset(query.get("path", [""])[0], query.get("file", [""])[0])
             kind = CANVAS_IMAGES.get(target.suffix.casefold())
@@ -1765,6 +1767,15 @@ class Studio:
         data = self.run("status", timeout=20)
         assert isinstance(data, dict)
         data["saving_done"] = self.last
+        if not data.get("active"):
+            # capture reports the free space only while recording; the page shows it before, too.
+            folder = storage_path("captures")
+            while not folder.exists() and folder != folder.parent:
+                folder = folder.parent
+            try:
+                data["free_bytes"] = shutil.disk_usage(folder).free
+            except OSError:
+                data["free_bytes"] = None
         return data
 
     def record(self, body: dict) -> object:
@@ -2060,6 +2071,17 @@ class Studio:
         if not target.is_file() or not target.resolve().is_relative_to(folder.resolve()):
             raise FileNotFoundError("unknown project file")
         return target
+
+    @staticmethod
+    def asset_file(name: object) -> Path:
+        """An image or rendered text in storage.root/studio/assets (no folders, no symlinks)."""
+        folder = storage_path("studio", "assets")
+        if not isinstance(name, str) or not name or "/" in name or "\x00" in name or name.startswith("."):
+            raise FileNotFoundError("unknown asset")
+        path = folder / name
+        if path.suffix.casefold() not in ASSET_MAGIC or path.is_symlink() or not path.is_file() or path.resolve().parent != folder.resolve():
+            raise FileNotFoundError("unknown asset")
+        return path
 
     def project_thumb(self, raw: object) -> Path:
         """The first frame of the project's screen (or camera) track, through `ul capture thumb`."""

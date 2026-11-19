@@ -48,9 +48,6 @@ class DeskUITests(unittest.TestCase):
     def test_columns_move_by_dragging_the_heading(self) -> None:
         self.run_case("columns_move_by_dragging_the_heading")
 
-    def test_camera_permission_cannot_reacquire_during_recording(self) -> None:
-        self.run_case("camera_record")
-
     def test_microphone_permission_cannot_outlive_studio(self) -> None:
         self.run_case("microphone_leave")
 
@@ -71,6 +68,33 @@ class DeskUITests(unittest.TestCase):
 
     def test_visible_studio_observes_terminal_recordings(self) -> None:
         self.run_case("studio_polling")
+
+    def test_studio_record_tab_renders_every_panel(self) -> None:
+        self.run_case("studio_record_tab_renders")
+
+    def test_studio_shapes_snap_resize_and_focus(self) -> None:
+        self.run_case("studio_shape_math")
+
+    def test_studio_shapes_match_the_export(self) -> None:
+        self.run_case("studio_shape_parity")
+
+    def test_studio_keys_poll_delays_and_countdown_steps(self) -> None:
+        self.run_case("studio_keys_and_polling")
+
+    def test_studio_countdown_records_once_and_can_be_cancelled(self) -> None:
+        self.run_case("studio_countdown_then_record")
+
+    def test_studio_setup_save_is_debounced(self) -> None:
+        self.run_case("studio_setup_save_is_debounced")
+
+    def test_studio_permission_banner_names_the_app(self) -> None:
+        self.run_case("studio_permission_banner")
+
+    def test_rec_pill_shows_recordings_started_elsewhere(self) -> None:
+        self.run_case("rec_pill_shows_terminal_recordings")
+
+    def test_camera_preview_stays_while_recording(self) -> None:
+        self.run_case("camera_record")
 
     def test_arcade_box_corners_and_tees_connect_the_correct_edges(self) -> None:
         self.run_case("box_edges")

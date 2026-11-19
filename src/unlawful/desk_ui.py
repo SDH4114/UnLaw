@@ -307,11 +307,11 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width
     <dt><kbd>n</kbd></dt><dd>New card (Today: quick add)</dd>
     <dt><kbd>/</kbd></dt><dd>Search cards</dd>
     <dt><kbd>space</kbd></dt><dd>Start / pause the focus timer</dd>
-    <dt><kbd>1</kbd> … <kbd>6</kbd></dt><dd>Board, Today, Stats, Games, Studio, Canvas</dd>
+    <dt><kbd>1</kbd> … <kbd>6</kbd></dt><dd>Board, Today, Stats, Games, Studio, Canvas (on the Studio Record tab the digits pick scenes)</dd>
     <dt><kbd>Esc</kbd></dt><dd>Clear search and tag filter</dd>
     <dt>double-click</dt><dd>Edit a card; drag cards between columns</dd>
     <dt>Games</dt><dd>While a game runs every key goes to it: arrows/WASD, Space, P pause, Esc leaves. Mouse works as in the terminal.</dd>
-    <dt>Studio</dt><dd><kbd>r</kbd> start / stop recording, <kbd>p</kbd> pause / resume. Recording runs <code>ul capture</code>, so it keeps going when the page is closed.</dd>
+    <dt>Studio</dt><dd>Record tab: <kbd>r</kbd> start (after the countdown) / stop, <kbd>p</kbd> pause / resume, <kbd>m</kbd> mark, <kbd>1</kbd> … <kbd>9</kbd> scenes. Drag a source to move it (corners and edges snap; a corner pins it), drag its yellow corner to resize, <kbd>⌥</kbd>-drag to pan inside it. Recording runs <code>ul capture</code>, so it keeps going when the page is closed; every recording becomes a project you export from the Projects tab.</dd>
     <dt>Canvas</dt><dd>Photoshop-style keys; a tool stays until you pick another. <kbd>v</kbd> select, <kbd>h</kbd> hand (or hold <kbd>space</kbd>), <kbd>n</kbd> card, <kbd>t</kbd> text, <kbd>u</kbd> shapes (<kbd>Shift</kbd>+<kbd>u</kbd> cycles rectangle, ellipse, diamond, line, arrow; also <kbd>r</kbd> <kbd>o</kbd> <kbd>l</kbd> <kbd>a</kbd>), <kbd>b</kbd> brush, <kbd>g</kbd> fill (<kbd>Alt</kbd>+click clears; open space reaching the edge of the view fills the background), <kbd>e</kbd> eraser (<kbd>Shift</kbd>+<kbd>e</kbd> switches whole object / only where it passes). Click an active eraser or shape tool again for its options (shape evenness 3 perfect, 2, 1 rougher). The fill tool floods the area of the clicked color like a paint program. <kbd>[</kbd> <kbd>]</kbd> or <kbd>-</kbd> <kbd>=</kbd> stroke width (slider 1-100; click the number to type one), <kbd>d</kbd> default color, <kbd>Cmd/Ctrl</kbd>+<kbd>G</kbd> group, <kbd>Cmd/Ctrl</kbd>+<kbd>0</kbd> fit, <kbd>Cmd/Ctrl</kbd>+<kbd>+</kbd> <kbd>-</kbd> zoom, <kbd>Del</kbd> delete, arrows nudge, <kbd>Cmd/Ctrl</kbd>+<kbd>Z</kbd> <kbd>C</kbd> <kbd>V</kbd> <kbd>D</kbd> <kbd>A</kbd>. Wheel pans, <kbd>Ctrl</kbd>+wheel or pinch zooms, double-click edits text, drag a side dot of a card to connect. The name left of the tools renames the file.</dd>
     <dt><kbd>?</kbd></dt><dd>This list</dd>
   </dl>
@@ -4060,6 +4060,7 @@ document.addEventListener("keydown", (event) => {
   }
   if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.key === "?") { $("help").classList.toggle("on"); return; }
+  if (studioKeydown(event)) return;
   if (state.view === "canvas") {
     if (event.key >= "1" && event.key <= "6") setView(VIEWS[Number(event.key) - 1]);
     return;
@@ -4072,8 +4073,6 @@ document.addEventListener("keydown", (event) => {
   }
   else if (event.key === " ") { event.preventDefault(); togglePlay(); }
   else if (event.key >= "1" && event.key <= "6") setView(VIEWS[Number(event.key) - 1]);
-  else if (state.view === "studio" && event.key === "r") toggleRecord();
-  else if (state.view === "studio" && event.key === "p") pauseRecord();
 });
 
 // ---- start ----
@@ -4087,11 +4086,12 @@ async function start() {
   setInterval(() => { if (!document.hidden && state.view === "games" && arcade.session) loadGames(); }, 5000);
   setInterval(drawTimer, 500);
   setInterval(drawRecording, 250);
-  setInterval(() => { if (!document.hidden && studio.info?.available) return loadRecordStatus(); }, 8000);
+  scheduleStudioPoll();
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) { if (state.view === "games") pauseGame(); return; }
     loadBoard(false);
     loadTimer();
+    scheduleStudioPoll(true);
   });
 }
 start();

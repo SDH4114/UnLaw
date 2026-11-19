@@ -942,7 +942,9 @@ class DeskStudioTests(unittest.TestCase):
         overview = self.call(port, token, "/api/studio")[1]
         self.assertTrue(overview["available"])
         self.assertEqual(overview["settings"]["audio_device"], "default")
-        self.assertFalse(self.call(port, token, "/api/studio/status")[1]["active"])
+        idle = self.call(port, token, "/api/studio/status")[1]
+        self.assertFalse(idle["active"])
+        self.assertGreater(idle["free_bytes"], 0, "the REC bar shows the free space before recording too")
         devices = self.call(port, token, "/api/studio/devices")[1]
         self.assertEqual(devices["cameras"], ["FaceTime HD Camera"])
         for bad in (
@@ -1120,6 +1122,13 @@ class DeskStudioTests(unittest.TestCase):
         finally:
             connection.close()
         self.assertEqual(len(list(assets.iterdir())), 3, "nothing half-written is left")
+        status, headers, body = self.raw(port, f"/media/asset?t={token}&name=logo%202.png")
+        self.assertEqual((status, headers["Content-Type"], body), (200, "image/png", png))
+        (assets / "link.png").symlink_to(assets / "logo.png")
+        for name in ("..%2Fsetup.json", "link.png", "missing.png", ".hidden.png", ""):
+            self.assertEqual(self.raw(port, f"/media/asset?t={token}&name={name}")[0], 404, name)
+        self.assertEqual(self.raw(port, "/media/asset?name=logo.png")[0], 403)
+        (assets / "link.png").unlink()
         self.assertEqual(self.post_raw(port, "/api/studio/asset?name=a.png", png, "wrong")[0], 403)
 
     def test_doctor_camera_modes_settings_and_open_project(self) -> None:

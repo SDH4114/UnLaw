@@ -894,57 +894,116 @@ def write_canvas(path: Path, data: dict) -> str:
 """The Studio tab of the `ul desk` page: its CSS and JS, injected into desk_ui.PAGE.
 
 Device names, project names and texts are user data, so nodes are built with textContent, never innerHTML.
+Recording, projects and export all go through `ul capture ... --json` on the server (desk.py `Studio`);
+the page only edits the shared setup (storage.root/studio/setup.json) and shows what capture reports.
 """
 
 
-STUDIO_CSS = r""".studio { display: grid; grid-template-columns: 300px 1fr; gap: 14px; padding: 14px 16px 16px; min-height: 100%; align-items: start; }
-.controls { position: sticky; top: 14px; display: flex; flex-direction: column; gap: 9px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 12px 14px 14px; }
-.controls h4 { margin: 8px 0 0; font-size: 12px; font-weight: 650; color: var(--muted); }
-.controls label { display: grid; gap: 3px; font-size: 12px; color: var(--muted); }
-.controls label.check { display: flex; align-items: center; gap: 7px; color: var(--text); font-size: 13px; }
-.controls select { width: 100%; }
-.modes { grid-template-columns: repeat(2, 1fr); }
-.recbox { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 0 4px; }
-.recbtn { width: 64px; height: 64px; border-radius: 50%; border: 3px solid var(--line); background: var(--panel); display: grid; place-items: center; padding: 0; }
-.recbtn i { width: 26px; height: 26px; border-radius: 50%; background: #e5484d; transition: border-radius .15s, width .15s, height .15s; }
-.recbtn.on i { width: 22px; height: 22px; border-radius: 5px; }
-.recbtn:hover { border-color: #e5484d; }
-.recclock { font: 600 22px var(--mono); letter-spacing: .02em; }
-.recclock.live { color: #e5484d; }
-.recstate { font-size: 12px; color: var(--muted); text-align: center; min-height: 16px; }
-.row { display: flex; gap: 6px; flex-wrap: wrap; }
-.row button { flex: 1; }
-.monitor { position: relative; background: #0c0c0b; border-radius: var(--radius); aspect-ratio: 16 / 10; max-height: 58vh; width: 100%; overflow: hidden; display: grid; place-items: center; box-shadow: var(--shadow); }
-.monitor img.screen { width: 100%; height: 100%; object-fit: contain; }
-.monitor video.cam { position: absolute; width: 24%; border-radius: 10px; box-shadow: 0 4px 18px rgba(0,0,0,.5); background: #000; transform: scaleX(-1); }
-.monitor video.cam.full { position: static; width: 100%; height: 100%; object-fit: contain; border-radius: 0; box-shadow: none; }
-.monitor video.cam.bottom-right { right: 3%; bottom: 4%; } .monitor video.cam.bottom-left { left: 3%; bottom: 4%; }
-.monitor video.cam.top-right { right: 3%; top: 4%; } .monitor video.cam.top-left { left: 3%; top: 4%; }
-.monitor .note { color: #8b8f98; text-align: center; padding: 20px; font-size: 13px; }
-.monitor .meter { width: 70%; height: 14px; border-radius: 7px; background: #23262d; overflow: hidden; }
-.monitor .meter i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #3ed67a, #ffd84d 75%, #ff5f57); transition: width .06s linear; }
-.monitor .badge { position: absolute; left: 12px; top: 12px; background: rgba(229,72,77,.92); color: #fff; font: 600 12px var(--mono); padding: 3px 9px; border-radius: 999px; display: none; }
-.monitor .badge.on { display: block; }
-.monitor .badge.paused { background: rgba(120,120,128,.9); }
-.monbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 8px 0 4px; }
-.monbar .hint { color: var(--muted); font-size: 12px; flex: 1; }
-.libhead { display: flex; align-items: center; gap: 10px; margin: 16px 0 8px; }
-.libhead h3 { margin: 0; font-size: 13px; font-weight: 650; color: var(--muted); }
-.libhead .levels { grid-template-columns: repeat(4, auto); }
-.libhead .levels button { padding: 3px 10px; }
-.library { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+STUDIO_CSS = r""".studio { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px 18px; min-height: 100%; }
+.sthead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sthead .seg { display: flex; gap: 2px; background: var(--column); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
+.sthead .seg button { border: none; background: transparent; padding: 3px 11px; border-radius: 6px; color: var(--muted); font-weight: 550; }
+.sthead .seg button.on { background: var(--panel); color: var(--text); box-shadow: var(--shadow), 0 0 0 1px var(--line); }
+.sthead .seg button:disabled { opacity: .45; }
+.sthead .fmt button.on { color: var(--accent-ink); box-shadow: 0 0 0 1px var(--accent); }
+.sthead .lbl { color: var(--muted); font-size: 12px; }
+.recgrid { display: grid; grid-template-columns: 230px minmax(0, 1fr) 270px; gap: 12px; align-items: start; }
+.pane { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 9px 10px 10px; margin-bottom: 10px; box-shadow: var(--shadow); }
+.pane h5 { margin: 0 0 7px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 650; display: flex; align-items: center; gap: 6px; }
+.pane h5 .add { margin-left: auto; border: none; background: transparent; padding: 0 2px; color: var(--accent-ink); text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 600; }
+.pane .prow { display: flex; align-items: center; gap: 7px; margin: 6px 0; font-size: 12.5px; }
+.pane .prow > .lbl { color: var(--muted); width: 74px; flex: none; font-size: 12px; }
+.pane .prow select, .pane .prow input[type=text], .pane .prow input[type=number] { flex: 1; min-width: 0; padding: 3px 7px; font-size: 12.5px; }
+.pane .prow input[type=range] { flex: 1; min-width: 0; }
+.pane .prow input[type=color] { width: 26px; height: 22px; padding: 0; border-radius: 5px; }
+.pane .prow .val { color: var(--muted); font: 11.5px var(--mono); min-width: 38px; text-align: right; }
+.pane .note { color: var(--muted); font-size: 11.5px; margin: 4px 0 0; }
+.scenes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.scn { position: relative; border-radius: 6px; border: 1px solid var(--line); background: var(--sunken); overflow: hidden; padding: 0; aspect-ratio: 16 / 10; text-align: left; }
+.scn.on { box-shadow: 0 0 0 2px var(--accent); border-color: var(--accent); }
+.scn .mini { position: absolute; border-radius: 2px; background: var(--muted); opacity: .45; }
+.scn .mini.camera { background: var(--accent); opacity: .8; }
+.scn .mini.image, .scn .mini.text { background: var(--energy); opacity: .7; }
+.scn kbd { position: absolute; right: 3px; top: 3px; font-size: 10px; }
+.scn span { position: absolute; left: 5px; bottom: 3px; right: 4px; font-size: 10.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.srcs .src { display: flex; align-items: center; gap: 7px; width: 100%; border: none; background: transparent; padding: 5px 6px; border-radius: 6px; text-align: left; font-size: 12.5px; }
+.srcs .src:hover { background: var(--column); }
+.srcs .src.on { background: var(--sunken); box-shadow: inset 2px 0 0 var(--accent); }
+.srcs .src.off { color: var(--muted); }
+.srcs .src .ico { width: 16px; text-align: center; color: var(--muted); }
+.srcs .src .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srcs .src .eye { border: none; background: transparent; padding: 0 3px; color: var(--muted); font-size: 12px; }
+.srcs .src .eye.hidden { opacity: .4; }
+.stmenu { position: absolute; z-index: 20; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--lift); padding: 4px; display: flex; flex-direction: column; gap: 2px; min-width: 150px; }
+.stmenu button { border: none; background: transparent; text-align: left; padding: 5px 9px; border-radius: 5px; font-size: 12.5px; }
+.stmenu button:hover { background: var(--column); }
+.stmenu label { display: flex; align-items: center; gap: 6px; padding: 4px 9px; font-size: 12px; color: var(--muted); }
+.centre { min-width: 0; }
+.banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; background: color-mix(in srgb, var(--danger) 12%, var(--panel)); border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line)); color: var(--text); border-radius: var(--r); padding: 8px 10px; margin-bottom: 8px; font-size: 12.5px; }
+.banner b { color: var(--danger); }
+.stage { position: relative; margin: 0 auto; border-radius: 8px; overflow: hidden; background: var(--sunken); box-shadow: var(--shadow); user-select: none; touch-action: none; }
+.stage .bg { position: absolute; inset: -8%; width: 116%; height: 116%; object-fit: cover; filter: blur(18px) brightness(.8); }
+.stage .ph { position: absolute; overflow: hidden; cursor: grab; box-sizing: border-box; }
+.stage .ph > img, .stage .ph > video { width: 100%; height: 100%; display: block; pointer-events: none; }
+.stage .ph.sel { outline: 2px solid var(--accent); outline-offset: -1px; }
+.stage .ph .camph { width: 100%; height: 100%; display: grid; place-items: center; background: var(--column); color: var(--muted); font-size: 12px; text-align: center; }
+.stage .handle { position: absolute; width: 11px; height: 11px; background: var(--accent); border: 2px solid var(--on-accent); border-radius: 3px; z-index: 4; cursor: nwse-resize; }
+.stage .handle.top-right, .stage .handle.bottom-left { cursor: nesw-resize; }
+.stage .float { position: absolute; z-index: 5; display: flex; gap: 4px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 3px 5px; box-shadow: var(--lift); }
+.shapes { display: flex; gap: 3px; }
+.shapes button, .corners button { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border-radius: 5px; font-size: 12px; }
+.shapes button.on, .corners button.on { border-color: var(--accent); color: var(--accent-ink); }
+.shapes button i { display: block; background: var(--muted); }
+.shapes button.on i { background: var(--accent); }
+.corners { display: flex; gap: 3px; }
+.stage .badge { position: absolute; right: 8px; top: 8px; z-index: 6; background: var(--panel); color: var(--danger); font: 700 11px var(--mono); padding: 2px 7px; border-radius: 5px; display: none; box-shadow: var(--shadow); }
+.stage .badge.on { display: block; }
+.stage .badge.paused { color: var(--muted); }
+.stage .count { position: absolute; inset: 0; z-index: 7; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 55%, transparent); font: 700 96px var(--mono); color: var(--accent-ink); }
+.stage .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 12.5px; text-align: center; padding: 20px; }
+.sthint { color: var(--muted); font-size: 11.5px; text-align: center; margin: 5px 0 0; }
+.recbar { display: flex; align-items: center; gap: 10px; margin: 10px 0; flex-wrap: wrap; position: relative; }
+.recbtn { width: 46px; height: 46px; border-radius: 50%; border: 3px solid var(--text); background: var(--panel); display: grid; place-items: center; padding: 0; flex: none; }
+.recbtn i { width: 22px; height: 22px; border-radius: 50%; background: var(--danger); transition: border-radius .15s, width .15s, height .15s; }
+.recbtn.on i { width: 18px; height: 18px; border-radius: 4px; }
+.recbtn:hover { border-color: var(--danger); }
+.recclock { font: 600 21px var(--mono); letter-spacing: .02em; }
+.recclock.live { color: var(--danger); }
+.recbar .pill { display: inline-flex; gap: 6px; align-items: center; border-radius: 999px; padding: 4px 10px; font-size: 12.5px; }
+.recbar .info { margin-left: auto; text-align: right; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.recstate { color: var(--muted); font-size: 12px; }
+.warns { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.warns div { display: flex; align-items: center; gap: 8px; border-radius: var(--r-sm); padding: 5px 9px; font-size: 12.5px; background: color-mix(in srgb, var(--warn) 14%, var(--panel)); border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line)); }
+.warns div button { margin-left: auto; padding: 2px 9px; }
+.meter { flex: 1; height: 7px; border-radius: 4px; background: var(--sunken); overflow: hidden; min-width: 40px; }
+.meter i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--ok) 0 60%, var(--warn) 60% 85%, var(--danger) 85%); background-size: var(--full, 100px) 100%; transition: width .08s linear; }
+.tag { font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; }
+.projbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.projbar .levels { grid-template-columns: repeat(3, auto); }
+.projbar .levels button { padding: 3px 12px; }
+.library { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
 .item { background: var(--panel); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; cursor: pointer; border: 1px solid var(--line); text-align: left; padding: 0; display: flex; flex-direction: column; }
 .item:hover { border-color: var(--accent); box-shadow: var(--lift); }
-.item .pic { aspect-ratio: 16 / 10; background: #15171c center / cover no-repeat; display: grid; place-items: center; color: #8b8f98; position: relative; }
+.item .pic { aspect-ratio: 16 / 10; background: var(--sunken); display: grid; place-items: center; color: var(--muted); position: relative; }
 .item .pic img { width: 100%; height: 100%; object-fit: cover; }
-.item .pic .len { position: absolute; right: 6px; bottom: 6px; background: rgba(0,0,0,.7); color: #fff; font: 11px var(--mono); padding: 1px 6px; border-radius: 5px; }
-.item .pic svg { width: 34px; height: 34px; stroke: #8b8f98; fill: none; stroke-width: 1.6; }
+.item .pic .len { position: absolute; right: 6px; bottom: 6px; background: var(--panel); color: var(--text); font: 11px var(--mono); padding: 1px 6px; border-radius: 5px; }
+.item .pic .state { position: absolute; left: 6px; top: 6px; background: var(--panel); color: var(--text); font-size: 10.5px; font-weight: 650; padding: 1px 6px; border-radius: 5px; }
+.item .pic .state.incomplete { color: var(--danger); }
+.item .pic svg { width: 34px; height: 34px; stroke: var(--muted); fill: none; stroke-width: 1.6; }
 .item .cap { padding: 7px 9px 8px; font-size: 12px; }
 .item .cap b { display: block; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item .cap span { color: var(--muted); }
-.rec-pill { display: none; border: none; background: rgba(229,72,77,.12); color: #e5484d; font: 600 12px var(--mono); border-radius: 999px; padding: 4px 10px; }
+.projpage { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 12px; align-items: start; }
+.projpage .player { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.projpage .player input[type=range] { flex: 1; }
+.projpage .scenelist { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.projpage .scenelist div { display: flex; gap: 8px; }
+.projpage .scenelist .t { font-family: var(--mono); color: var(--muted); width: 48px; }
+.progress { height: 6px; border-radius: 3px; background: var(--sunken); overflow: hidden; margin: 6px 0; }
+.progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+.rec-pill { display: none; border: none; background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); font: 600 12px var(--mono); border-radius: 999px; padding: 4px 10px; }
 .rec-pill.on { display: inline-flex; gap: 6px; align-items: center; }
-.rec-pill.on::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #e5484d; animation: blink 1.2s infinite; }
+.rec-pill.on::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); animation: blink 1.2s infinite; }
 .rec-pill.paused::before { animation: none; background: var(--muted); }
 @keyframes blink { 50% { opacity: .25; } }
 #viewer { position: fixed; inset: 0; background: rgba(10,8,4,.6); display: none; place-items: center; z-index: 12; }
@@ -958,24 +1017,231 @@ STUDIO_CSS = r""".studio { display: grid; grid-template-columns: 300px 1fr; gap:
 #viewer .tools { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 #viewer .tools .sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
 #viewer .tools .mark { font: 12px var(--mono); color: var(--muted); }
-.voice { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 10px; padding: 18px; }
-.voice-clock { font: 600 34px var(--mono); color: #f2f2f7; text-align: center; letter-spacing: .02em; }
-.voice .note { position: static; }
-canvas.wave { width: 100%; height: 46%; display: block; }
-canvas.wave.strip { position: absolute; left: 0; right: 0; bottom: 0; height: 64px; background: linear-gradient(transparent, rgba(0,0,0,.55)); }
 #viewer canvas.filewave { width: 100%; height: 96px; display: block; cursor: pointer; background: #0c0c0b; border-radius: 12px; }
-@media (max-width: 860px) { .studio { grid-template-columns: 1fr; } .controls { position: static; } }
+#viewer .export { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 12px; }
+#viewer .export label { display: grid; gap: 3px; font-size: 12px; color: var(--muted); }
+#viewer .export label.check { display: flex; align-items: center; gap: 7px; color: var(--text); }
+@media (max-width: 1180px) { .recgrid { grid-template-columns: 210px minmax(0, 1fr); } .recgrid > .right { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; } }
+@media (max-width: 860px) { .recgrid, .projpage { grid-template-columns: 1fr; } .recgrid > .right { display: block; } }
 """
 
-STUDIO_JS = r"""// ---- studio: recording, screenshots and the library through `ul capture` ----
-const studio = { info: null, devices: null, status: { active: false }, statusAt: 0, library: [], filter: localStorage.getItem("studio-filter") || "all", mode: localStorage.getItem("studio-mode") || "screen", display: 1, mic: "", cam: "", system: null, clicks: null, format: "", delay: 0, clipboard: false, preview: localStorage.getItem("studio-preview") !== "off", previewBusy: false, previewTimer: 0, camStream: null, micStream: null, audio: null, saving: false, item: null, trim: { from: null, to: null }, starting: 0, shown: 0, levels: [], analyser: null, sampler: 0, wave: null };
+STUDIO_JS = r"""// ---- studio: Record (scenes, sources, live preview) and Projects, all through `ul capture` ----
+const studio = { info: null, setup: null, devices: null, modes: {}, doctor: null, status: { active: false }, statusAt: 0, shown: 0, starting: 0, saving: false,
+  tab: localStorage.getItem("studio-tab") === "projects" ? "projects" : "record", selected: "camera", library: [], projects: [], filter: localStorage.getItem("studio-filter") || "projects",
+  camStream: null, camVideo: null, micStream: null, audio: null, analyser: null, sampler: 0, levels: [], screenUrl: "", screenFailed: false, previewTimer: 0,
+  drag: null, saveTimer: 0, counting: 0, countTimer: 0, countdownDone: null, menu: null, delay: 0, clipboard: false,
+  item: null, trim: { from: null, to: null }, project: null, exportJob: null, exportTimer: 0, playTimer: 0 };
 const media = (path, name) => path + "?t=" + encodeURIComponent(TOKEN) + (name ? "&name=" + encodeURIComponent(name) : "");
+
+// ---- studio geometry: the same numbers as capture_project.py (apply_shape, pin) and capture_export.py (placement_px) ----
+const STUDIO_RATIOS = { "16:9": [16, 9], "9:16": [9, 16], "1:1": [1, 1], "4:5": [4, 5] };
+const STUDIO_FORMATS = [["16:9", "16:9"], ["9:16", "9:16"], ["1:1", "1:1"], ["4:5", "4:5"], ["source", "As recorded"]];
+const STUDIO_SHAPES = { circle: [1, 1, 0.5], square: [1, 1, 0], rounded: [1, 1, 0.18], wide: [16, 9, 0], tall: [9, 16, 0] };
+const STUDIO_ANCHORS = [["top-left", "↖"], ["top-right", "↗"], ["bottom-left", "↙"], ["bottom-right", "↘"]];
+const SNAP = 0.02, MIN_BOX = 0.04;
+const studioClone = (value) => JSON.parse(JSON.stringify(value));
+// Python's round(): halves go to the even neighbour, so page and export agree on pixels.
+function roundHalfEven(value) {
+  const rounded = Math.round(value);
+  return Math.abs(value % 1) === 0.5 && rounded % 2 !== 0 ? rounded - 1 : rounded;
+}
+const evenPx = (value) => Math.max(2, roundHalfEven(value / 2) * 2);
+
+function pinPlacement(item, anchor) {
+  const out = studioClone(item);
+  out.anchor = anchor || null;
+  if (!anchor) return out;
+  const [, , width, height] = out.box;
+  out.box = [anchor.endsWith("left") ? 0 : 1 - width, anchor.startsWith("top") ? 0 : 1 - height, width, height];
+  return out;
+}
+
+function applyShape(item, shape, canvas) {
+  const out = studioClone(item);
+  if (!STUDIO_SHAPES[shape] || !STUDIO_RATIOS[canvas]) return out;
+  const [shapeWidth, shapeHeight, radius] = STUDIO_SHAPES[shape];
+  const [canvasWidth, canvasHeight] = STUDIO_RATIOS[canvas];
+  const [x, y] = out.box;
+  let width = out.box[2];
+  let height = width * (canvasWidth / canvasHeight) * (shapeHeight / shapeWidth);
+  if (height > 1) { width = width / height; height = 1; }
+  out.box = [x, y, width, height];
+  out.radius = radius;
+  if (out.anchor) return pinPlacement(out, out.anchor);
+  out.box = [Math.min(Math.max(x, 0), 1 - width), Math.min(Math.max(y, 0), 1 - height), width, height];
+  return out;
+}
+
+// The shape preset a placement matches (box aspect in pixels and radius), or null.
+function shapeOf(item, canvas) {
+  if (!item || !STUDIO_RATIOS[canvas]) return null;
+  const [canvasWidth, canvasHeight] = STUDIO_RATIOS[canvas];
+  const aspect = (item.box[2] * canvasWidth) / (item.box[3] * canvasHeight);
+  for (const [name, [w, h, radius]] of Object.entries(STUDIO_SHAPES)) {
+    if (Math.abs(aspect - w / h) < 0.02 && Math.abs(item.radius - radius) < 0.005) return name;
+  }
+  return null;
+}
+
+function placementPx(item, width, height) {
+  const [x, y, w, h] = item.box;
+  return { x: roundHalfEven(x * width), y: roundHalfEven(y * height), w: evenPx(w * width), h: evenPx(h * height) };
+}
+
+// After a drag: near a corner the box is pinned there (anchor), near an edge it sits flush on it.
+function snapPlacement(item, canvas) {
+  const out = studioClone(item);
+  let [x, y, width, height] = out.box;
+  const near = (a, b) => Math.abs(a - b) <= SNAP;
+  const left = near(x, 0), right = near(x + width, 1), top = near(y, 0), bottom = near(y + height, 1);
+  if ((left || right) && (top || bottom)) return pinPlacement(out, (top ? "top" : "bottom") + "-" + (left ? "left" : "right"));
+  if (left) x = 0; else if (right) x = 1 - width;
+  if (top) y = 0; else if (bottom) y = 1 - height;
+  out.box = [x, y, width, height];
+  out.anchor = null;
+  return out;
+}
+
+// Dragging inside a `cover` box pans what it shows: the picture follows the pointer.
+function moveFocus(item, dx, dy) {
+  const out = studioClone(item);
+  const clamp = (value) => Math.min(1, Math.max(0, value));
+  out.focus = [clamp(out.focus[0] - dx), clamp(out.focus[1] - dy)];
+  return out;
+}
+
+// Resize from one corner; the opposite corner stays, and a pinned box stays pinned.
+function resizePlacement(item, corner, dx, dy, keepAspect) {
+  const out = studioClone(item);
+  const [x, y, width, height] = out.box;
+  const right = corner.endsWith("right"), bottom = corner.startsWith("bottom");
+  let newWidth = Math.max(MIN_BOX, width + (right ? dx : -dx));
+  let newHeight = keepAspect ? newWidth * (height / width) : Math.max(MIN_BOX, height + (bottom ? dy : -dy));
+  if (newWidth > 1) { if (keepAspect) newHeight /= newWidth; newWidth = 1; }
+  if (newHeight > 1) { if (keepAspect) newWidth /= newHeight; newHeight = 1; }
+  out.box = [right ? x : x + width - newWidth, bottom ? y : y + height - newHeight, newWidth, newHeight];
+  return out.anchor ? pinPlacement(out, out.anchor) : out;
+}
+
+// R record/stop, P pause, M mark, 1-9 scenes (by key position, so every keyboard layout works).
+function studioKey(code, current) {
+  if (current.typing) return null;
+  if (code === "KeyR") return current.active ? "stop" : "record";
+  if (code === "KeyP") return "pause";
+  if (code === "KeyM") return "mark";
+  const digit = /^Digit([1-9])$/.exec(code);
+  if (digit) {
+    const scene = (current.scenes || [])[Number(digit[1]) - 1];
+    return scene ? "scene:" + scene : null;
+  }
+  return null;
+}
+
+// Status polling: never while the page is hidden; every second while a recording runs on the Studio tab,
+// every 5 s otherwise (the REC pill also shows recordings started from the terminal).
+function studioPollDelay(visible, recording, onStudio) {
+  if (!visible) return null;
+  return recording && onStudio ? 1000 : 5000;
+}
+
+function countdownSteps(n) { return Array.from({ length: Math.max(0, n) }, (_, index) => n - index); }
+
+// ---- studio data ----
+function cameraSource() { return studio.setup ? studio.setup.sources.find((item) => item.kind === "camera") || null : null; }
+function screenSource() { return studio.setup ? studio.setup.sources.find((item) => item.kind === "screen") || null : null; }
+function sourceById(id) { return studio.setup ? studio.setup.sources.find((item) => item.id === id) || null : null; }
+function currentCanvas() { return studio.setup ? studio.setup.canvas : "16:9"; }
+function currentScene() { return (studio.status.active && studio.status.scene) || (studio.setup ? studio.setup.scene : "screen-camera"); }
+function currentLayout() {
+  const layouts = studio.setup && studio.setup.layouts[currentCanvas()];
+  return layouts ? layouts[currentScene()] || null : null;
+}
+function placementOf(id) { const layout = currentLayout(); return layout ? layout.placements[id] || null : null; }
+function recordingNow() { return Boolean(studio.starting || (studio.status.active && studio.status.phase === "recording")); }
+function sourceName(source) {
+  if (source.kind === "screen") return "Screen";
+  if (source.kind === "camera") return "Camera";
+  if (source.kind === "text") return "Text “" + source.text + "”";
+  return source.asset;
+}
+const SOURCE_ICONS = { screen: "▣", camera: "◉", image: "▤", text: "T" };
+const CAMERA_MB = { max: 90, high: 45, light: 22 };
+const MIC_MB = { flac: 3, wav: 6, m4a: 2 };
+// screencapture has no bitrate option; ~25-70 MB per minute was measured, so the middle is shown.
+function megabytesPerMinute(setup) {
+  if (!setup) return 0;
+  const camera = setup.sources.find((item) => item.kind === "camera");
+  return 45 + (camera && camera.enabled ? CAMERA_MB[camera.quality] || 0 : 0) + (setup.audio.mic.enabled ? MIC_MB[setup.audio.mic.format] || 0 : 0);
+}
+function gigabytes(bytes) { return bytes === null || bytes === undefined ? "" : (bytes / 1e9).toFixed(bytes > 1e11 ? 0 : 1) + " GB"; }
 
 async function loadStudioInfo() {
   const { status, data } = await api("GET", "/api/studio");
   if (status !== 200) return;
   studio.info = data;
-  if (data.available) loadRecordStatus();
+  if (data.available) { loadRecordStatus(); loadSetup(); scheduleStudioPoll(); }
+}
+
+async function loadSetup() {
+  const { status, data } = await api("GET", "/api/studio/setup");
+  if (status !== 200) { toast(data.error || "Could not read the studio setup"); return; }
+  for (const warning of data.warnings || []) toast(warning);
+  delete data.warnings;
+  studio.setup = data;
+  if (!sourceById(studio.selected)) studio.selected = data.sources[0].id;
+}
+
+async function loadDevices() {
+  const { status, data } = await api("GET", "/api/studio/devices");
+  if (status !== 200) { toast(data.error || "Could not list devices"); return; }
+  studio.devices = data;
+  if (state.view === "studio") { renderSound(); renderProps(); updateRecordControls(); }
+}
+
+async function loadDoctor() {
+  const { status, data } = await api("GET", "/api/studio/doctor");
+  if (status !== 200) return;
+  studio.doctor = data;
+  renderBanner();
+}
+
+// Edits go to the shared setup file half a second after the last change.
+function saveSetupSoon() {
+  clearTimeout(studio.saveTimer);
+  studio.saveTimer = setTimeout(flushSetup, 500);
+}
+
+async function flushSetup() {
+  clearTimeout(studio.saveTimer);
+  studio.saveTimer = 0;
+  if (!studio.setup) return;
+  const { status, data } = await api("POST", "/api/studio/setup", studio.setup);
+  if (status === 200) return;
+  toast(data.error || "Could not save the studio setup");
+  await loadSetup();
+  if (state.view === "studio") renderStudioBody();
+}
+
+function edited(...parts) {
+  saveSetupSoon();
+  for (const part of parts) part();
+}
+
+// ---- recording state ----
+let studioPollTimer = 0;
+function scheduleStudioPoll(soon) {
+  clearTimeout(studioPollTimer);
+  studioPollTimer = 0;
+  if (!studio.info || !studio.info.available) return;
+  const busy = Boolean(studio.status.active || studio.saving || studio.starting);
+  const delay = studioPollDelay(!document.hidden, busy, state.view === "studio");
+  if (delay === null) return;
+  studioPollTimer = setTimeout(async () => {
+    studioPollTimer = 0;
+    if (document.hidden) return;
+    await loadRecordStatus();
+    scheduleStudioPoll();
+  }, soon ? 300 : delay);
 }
 
 async function loadRecordStatus() {
@@ -987,17 +1253,22 @@ async function loadRecordStatus() {
   if (studio.saving && data.saving_done) {
     studio.saving = false;
     if (data.saving_done.error) toast(data.saving_done.error);
-    else { toast("Saved " + data.saving_done.saved.split("/").pop()); loadLibrary(true); }
+    else recordingSaved(data.saving_done);
   }
-  if (was.active && !data.active && !studio.saving) loadLibrary();
   if (!data.active) for (const item of studio.levels) item.live = false;
   drawRecording();
   if (state.view === "studio") {
-    updateStudioControls();
-    // Started or finished (maybe from the terminal): bring the preview back or pause it.
-    if (Boolean(was.active) !== Boolean(data.active) && !studio.starting) renderMonitor();
+    updateRecordControls();
+    if (Boolean(was.active) !== Boolean(data.active) || was.scene !== data.scene) { renderScenes(); drawStage(); renderProps(); }
   }
-  if ((data.active || studio.saving) && !busyTimer) pollWhileBusy();
+}
+
+function recordingSaved(done) {
+  if (done.export_error) toast("Saved, but the export failed: " + done.export_error);
+  else toast("Saved " + String(done.saved || done.project || "").split("/").pop());
+  studio.projects = [];
+  if (state.view === "studio" && done.project && done.saved === done.project) openProject(done.project, true);
+  else if (state.view === "studio" && studio.tab === "projects") loadProjects();
 }
 
 function recordElapsed() {
@@ -1013,54 +1284,1023 @@ function recordElapsed() {
 
 function drawRecording() {
   const s = studio.status, pill = $("recPill");
-  const live = Boolean(studio.starting) || (s.active && s.phase === "recording");
   const active = s.active || studio.saving || Boolean(studio.starting);
   pill.className = "rec-pill" + (active ? " on" : "") + (s.paused ? " paused" : "");
   pill.textContent = studio.saving || s.phase === "saving" ? "Saving…" : active ? (s.paused ? "Paused " : "REC ") + clockText(recordElapsed()) : "";
   const clock = $("recClock");
   if (clock) {
     clock.textContent = clockText(recordElapsed());
-    clock.classList.toggle("live", live);
+    clock.classList.toggle("live", recordingNow());
   }
-  const badge = $("monBadge");
+  const badge = $("stageBadge");
   if (badge) {
     badge.className = "badge" + (active && !studio.saving ? " on" : "") + (s.paused ? " paused" : "");
     badge.textContent = s.paused ? "❚❚ PAUSED " + clockText(recordElapsed()) : "● REC " + clockText(recordElapsed());
   }
-  const waveClock = $("waveClock");
-  if (waveClock) waveClock.textContent = clockText(recordElapsed());
+  drawMeter();
 }
 
-async function loadDevices() {
-  const { status, data } = await api("GET", "/api/studio/devices");
-  if (status !== 200) { toast(data.error || "Could not list devices"); return; }
-  studio.devices = data;
-  if (state.view === "studio") renderStudioControls();
+// Countdown before a recording: the page waits, then calls record (R again cancels).
+function runCountdown(seconds) {
+  return new Promise((resolve) => {
+    studio.counting = seconds;
+    studio.countdownDone = resolve;
+    drawCountdown();
+    const tick = () => {
+      if (!studio.counting) return;
+      studio.counting -= 1;
+      drawCountdown();
+      if (studio.counting <= 0) { studio.countdownDone = null; resolve(true); }
+      else studio.countTimer = setTimeout(tick, 1000);
+    };
+    studio.countTimer = setTimeout(tick, 1000);
+  });
 }
 
-async function loadLibrary(openNewest) {
-  const { status, data } = await api("GET", "/api/studio/library");
-  if (status !== 200) return;
-  studio.library = data;
-  if (state.view === "studio") renderLibrary();
-  if (openNewest && data.length) openViewer(data[0]);
+function cancelCountdown() {
+  clearTimeout(studio.countTimer);
+  studio.counting = 0;
+  const done = studio.countdownDone;
+  studio.countdownDone = null;
+  drawCountdown();
+  if (done) done(false);
 }
 
+function drawCountdown() {
+  const stage = $("stage");
+  if (!stage) return;
+  let node = $("countdown");
+  if (!studio.counting) { if (node) node.remove(); return; }
+  if (!node) { node = h("div", { class: "count", id: "countdown" }); stage.append(node); }
+  node.textContent = String(studio.counting);
+}
+
+async function toggleRecord() {
+  if (studio.counting) { cancelCountdown(); return; }
+  if (studio.saving || studio.starting) return;
+  if (studio.status.active) {
+    studio.saving = true;
+    for (const item of studio.levels) item.live = false;
+    updateRecordControls();
+    const { status, data } = await api("POST", "/api/studio/stop", {});
+    if (status !== 200) { studio.saving = false; toast(data.error || "Could not stop"); }
+    updateRecordControls();
+    scheduleStudioPoll(true);
+    return;
+  }
+  const seconds = studio.setup ? studio.setup.countdown : 0;
+  if (seconds > 0 && !(await runCountdown(seconds))) return;
+  if (studio.status.active || studio.starting || studio.saving) return;
+  // The recording copies the saved setup, so a pending edit is saved first.
+  if (studio.saveTimer) await flushSetup();
+  const body = studio.setup ? { scene: studio.setup.scene, canvas: studio.setup.canvas } : {};
+  // Show the recording at once; the server's clock replaces this one when it answers.
+  studio.starting = Date.now();
+  studio.shown = 0;
+  studio.levels = [];
+  updateRecordControls();
+  const { status, data } = await api("POST", "/api/studio/record", body);
+  studio.starting = 0;
+  if (status !== 200) {
+    toast(data.error || "Could not start recording");
+    if (/permission/i.test(data.error || "")) loadDoctor();
+    await loadRecordStatus();
+    updateRecordControls();
+    return;
+  }
+  for (const warning of data.warnings || []) toast(warning);
+  studio.status = data;
+  studio.statusAt = Date.now();
+  updateRecordControls();
+  drawStage();
+  scheduleStudioPoll();
+}
+
+async function pauseRecord() {
+  if (!studio.status.active || studio.saving) return;
+  const { status, data } = await api("POST", studio.status.paused ? "/api/studio/resume" : "/api/studio/pause", {});
+  if (status !== 200) { toast(data.error || "Could not pause"); return; }
+  studio.status = data;
+  studio.statusAt = Date.now();
+  updateRecordControls();
+}
+
+async function addMark() {
+  if (!studio.status.active) return;
+  const { status, data } = await api("POST", "/api/studio/mark", {});
+  if (status !== 200) { toast(data.error || "Could not add a mark"); return; }
+  toast("Mark at " + clockText(data.mark ? data.mark.t : recordElapsed()));
+}
+
+async function forceStop() {
+  if (!confirm("Kill the stuck recorder? Its track is lost; the other tracks are kept.")) return;
+  studio.saving = true;
+  updateRecordControls();
+  const { status, data } = await api("POST", "/api/studio/stop", { force: true });
+  if (status !== 200) { studio.saving = false; toast(data.error || "Could not stop"); }
+  scheduleStudioPoll(true);
+}
+
+async function selectScene(id) {
+  if (!studio.setup || !studio.setup.scenes.some((item) => item.id === id)) return;
+  studio.setup.scene = id;
+  saveSetupSoon();
+  if (studio.status.active) {
+    const { status, data } = await api("POST", "/api/studio/scene", { scene: id });
+    if (status !== 200) toast(data.error || "Could not switch the scene");
+    else { studio.status = data; studio.statusAt = Date.now(); }
+  }
+  renderScenes();
+  drawStage();
+  renderProps();
+}
+
+function studioKeydown(event) {
+  if (state.view !== "studio" || studio.tab !== "record" || !studio.info || !studio.info.available || studio.project) return false;
+  const typing = /^(INPUT|SELECT|TEXTAREA)$/.test((document.activeElement && document.activeElement.tagName) || "");
+  const action = studioKey(event.code, { active: Boolean(studio.status.active), typing, scenes: studio.setup ? studio.setup.scenes.map((item) => item.id) : [] });
+  if (!action) return false;
+  event.preventDefault();
+  if (action === "record" || action === "stop") toggleRecord();
+  else if (action === "pause") pauseRecord();
+  else if (action === "mark") addMark();
+  else selectScene(action.slice(6));
+  return true;
+}
+
+// ---- browser camera and microphone (preview only; the recording itself is ul capture) ----
 function leaveStudio() {
   clearTimeout(studio.previewTimer);
+  studio.previewTimer = 0;
+  cancelCountdown();
   stopStream("camStream");
   stopStream("micStream");
+  closeStudioMenu();
   closeViewer();
+  stopProjectPlayer();
 }
 
 function stopStream(key) {
   const request = key === "camStream" ? "camRequest" : "micRequest";
   studio[request] = (studio[request] || 0) + 1;
   if (studio[key]) { studio[key].getTracks().forEach((track) => track.stop()); studio[key] = null; }
+  if (key === "camStream" && studio.camVideo) studio.camVideo.srcObject = null;
   if (key === "micStream") {
     clearInterval(studio.sampler);
     studio.analyser = null;
     if (studio.audio) { studio.audio.close(); studio.audio = null; }
+  }
+}
+
+async function toggleCamera() {
+  if (studio.camStream) { stopStream("camStream"); drawStage(); return; }
+  if (state.view !== "studio") return;
+  const request = studio.camRequest = (studio.camRequest || 0) + 1;
+  const current = () => request === studio.camRequest && state.view === "studio";
+  const wanted = (cameraSource() || {}).device || "default";
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    if (!current()) { stream.getTracks().forEach((track) => track.stop()); return; }
+    if (wanted !== "default") {
+      // Labels are only visible after the first permission; the device is matched by its name.
+      const found = (await navigator.mediaDevices.enumerateDevices()).find((item) => item.kind === "videoinput" && item.label === wanted);
+      if (!current()) { stream.getTracks().forEach((track) => track.stop()); return; }
+      if (found) { stream.getTracks().forEach((track) => track.stop()); stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: found.deviceId } } }); }
+    }
+    if (!current()) { stream.getTracks().forEach((track) => track.stop()); return; }
+    studio.camStream = stream;
+  } catch (error) { if (stream) stream.getTracks().forEach((track) => track.stop()); toast("The browser could not open the camera: " + error.message); }
+  drawStage();
+}
+
+function ensureCamera() {
+  const camera = cameraSource();
+  if (camera && camera.enabled && !studio.camStream && localStorage.getItem("studio-campreview") !== "off" && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) toggleCamera();
+}
+
+async function toggleMeter() {
+  if (studio.micStream) { stopStream("micStream"); renderSound(); return; }
+  if (state.view !== "studio") return;
+  const request = studio.micRequest = (studio.micRequest || 0) + 1;
+  const current = () => request === studio.micRequest && state.view === "studio";
+  const wanted = studio.setup ? studio.setup.audio.mic.device : "default";
+  try {
+    const constraints = { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } };
+    if (wanted && wanted !== "default") {
+      // Device labels are only visible after the first permission.
+      await navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => stream.getTracks().forEach((track) => track.stop()));
+      if (!current()) return;
+      const found = (await navigator.mediaDevices.enumerateDevices()).find((item) => item.kind === "audioinput" && item.label.includes(wanted));
+      if (!current()) return;
+      if (found) constraints.audio.deviceId = { exact: found.deviceId };
+    }
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    if (!current()) { stream.getTracks().forEach((track) => track.stop()); return; }
+    studio.micStream = stream;
+  } catch (error) { toast("The browser could not open the microphone: " + error.message); return; }
+  studio.audio = new AudioContext();
+  studio.analyser = studio.audio.createAnalyser();
+  studio.analyser.fftSize = 2048;
+  studio.audio.createMediaStreamSource(studio.micStream).connect(studio.analyser);
+  const samples = new Float32Array(studio.analyser.fftSize);
+  studio.sampler = setInterval(() => {
+    if (!studio.analyser) return;
+    studio.analyser.getFloatTimeDomainData(samples);
+    let peak = 0;
+    for (const value of samples) peak = Math.max(peak, Math.abs(value));
+    studio.levels.push({ v: dbLevel(20 * Math.log10(Math.max(peak, 1e-5))), live: recordingNow() });
+    if (studio.levels.length > 600) studio.levels.splice(0, 300);
+  }, 50);
+  renderSound();
+  const stream = studio.micStream;
+  const loop = () => { if (studio.micStream !== stream) return; drawMeter(); requestAnimationFrame(loop); };
+  loop();
+}
+
+const dbLevel = (db) => Math.min(1, Math.max(0, (db + 60) / 60));
+function drawMeter() {
+  const meter = $("micMeter");
+  if (!meter) return;
+  const s = studio.status;
+  let level = 0;
+  if (s.active && typeof s.level_db === "number") level = dbLevel(s.level_db);
+  else if (studio.micStream && studio.levels.length) level = studio.levels[studio.levels.length - 1].v;
+  meter.firstChild.style.width = Math.round(level * 100) + "%";
+}
+
+// ---- screen preview: a snapshot every second (every 3 s while recording, so the recording stays smooth) ----
+function startPreview() {
+  clearTimeout(studio.previewTimer);
+  const screen = screenSource();
+  if (!screen || state.view !== "studio" || studio.tab !== "record") return;
+  const again = (ms) => { studio.previewTimer = setTimeout(startPreview, ms); };
+  if (document.hidden) { again(1000); return; }
+  const url = media("/media/preview") + "&display=" + screen.display + "&_=" + Date.now();
+  const image = new Image();
+  image.onload = () => {
+    studio.screenUrl = url;
+    if (studio.screenFailed) { studio.screenFailed = false; drawStage(); }
+    for (const node of document.querySelectorAll("img.screen")) node.src = url;
+    again(studio.status.active ? 3000 : 1000);
+  };
+  image.onerror = () => {
+    if (!studio.screenFailed) { studio.screenFailed = true; loadDoctor(); drawStage(); }
+    again(5000);
+  };
+  image.src = url;
+}
+
+// ---- rendering ----
+function renderStudio(main) {
+  if (!studio.info) { main.textContent = ""; main.append(h("div", { class: "page" }, h("div", { class: "empty", text: "Loading…" }))); loadStudioInfo().then(() => state.view === "studio" && render()); return; }
+  if (!studio.info.available) {
+    main.textContent = "";
+    main.append(h("div", { class: "page" }, h("h3", { text: "Studio" }), h("div", { class: "empty", text: "The capture command is not installed in this ul. Turn on the `capture` feature with: ul features" })));
+    return;
+  }
+  if (main.querySelector(".studio")) return;
+  main.textContent = "";
+  main.append(h("div", { class: "studio", id: "studioRoot" }));
+  renderStudioBody();
+  if (!studio.setup) loadSetup().then(() => state.view === "studio" && renderStudioBody());
+  if (!studio.devices) loadDevices();
+  loadDoctor();
+  loadRecordStatus();
+  scheduleStudioPoll();
+}
+
+function setStudioTab(tab) {
+  if (tab === studio.tab && !studio.project) return;
+  studio.tab = tab;
+  localStorage.setItem("studio-tab", tab);
+  if (tab !== "record") { clearTimeout(studio.previewTimer); stopStream("camStream"); stopStream("micStream"); }
+  stopProjectPlayer();
+  studio.project = null;
+  renderStudioBody();
+}
+
+function renderStudioBody() {
+  const root = $("studioRoot");
+  if (!root) return;
+  root.textContent = "";
+  const tabs = h("div", { class: "seg" },
+    h("button", { class: studio.tab === "record" ? "on" : "", text: "Record", onclick: () => setStudioTab("record") }),
+    h("button", { class: studio.tab === "projects" ? "on" : "", text: "Projects", onclick: () => setStudioTab("projects") }),
+    h("button", { text: "Edit", disabled: true, title: "Editing (timeline, cuts, subtitles) is coming soon" }));
+  const head = h("div", { class: "sthead" }, tabs, h("span", { class: "spacer" }));
+  if (studio.tab === "record" && studio.setup) {
+    head.append(h("span", { class: "lbl", text: "Format" }), h("div", { class: "seg fmt" }, STUDIO_FORMATS.map(([value, label]) =>
+      h("button", { class: currentCanvas() === value ? "on" : "", text: label, title: value === "source" ? "The screen as recorded, no composition" : "Layout for " + value, onclick: () => { studio.setup.canvas = value; edited(renderStudioBody); } }))));
+  }
+  root.append(head);
+  if (studio.tab === "projects") { root.append(h("div", { id: "studioProjects" })); renderProjects(); return; }
+  if (!studio.setup) { root.append(h("div", { class: "empty", text: "Loading the studio setup…" })); return; }
+  root.append(h("div", { class: "recgrid" },
+    h("div", { class: "left" }, h("div", { class: "pane", id: "scenesPane" }), h("div", { class: "pane srcs", id: "sourcesPane" })),
+    h("div", { class: "centre" },
+      h("div", { id: "permBanner" }),
+      h("div", { class: "stage", id: "stage" }),
+      h("div", { class: "sthint", id: "stageHint" }),
+      h("div", { class: "recbar", id: "recBar" }),
+      h("div", { class: "warns", id: "warnStrip" }),
+      h("div", { class: "pane", id: "soundPane" })),
+    h("div", { class: "right" }, h("div", { class: "pane", id: "propsPane" }), h("div", { class: "pane", id: "outputPane" }))));
+  renderScenes();
+  renderSources();
+  renderBanner();
+  drawStage();
+  renderRecBar();
+  renderSound();
+  renderProps();
+  renderOutput();
+  updateRecordControls();
+  startPreview();
+  ensureCamera();
+}
+
+function permissionBanner(doctor) {
+  if (!doctor || doctor.screen !== false) return null;
+  const app = doctor.app || "the app that runs ul";
+  return h("div", { class: "banner" },
+    h("b", { text: "No screen recording permission." }),
+    h("span", { text: "Give " + app + " Screen Recording permission in System Settings › Privacy & Security, then quit and reopen " + app + ". Camera and microphone still record." }),
+    h("button", { text: "Open System Settings", onclick: () => openSettings("screen") }),
+    h("button", { class: "ghost", text: "Check again", onclick: loadDoctor }));
+}
+
+function renderBanner() {
+  const box = $("permBanner");
+  if (!box) return;
+  box.textContent = "";
+  const banner = permissionBanner(studio.doctor);
+  if (banner) box.append(banner);
+}
+
+async function openSettings(kind) {
+  const { status, data } = await api("POST", "/api/studio/open-settings", { kind });
+  if (status !== 200) { toast(data.error || "Could not open System Settings"); return; }
+  studio.doctor = data;
+  renderBanner();
+}
+
+function renderScenes() {
+  const box = $("scenesPane");
+  if (!box || !studio.setup) return;
+  box.textContent = "";
+  const canvas = currentCanvas() === "source" ? "16:9" : currentCanvas();
+  const [rw, rh] = STUDIO_RATIOS[canvas];
+  box.append(h("h5", {}, "Scenes", h("button", { class: "add", text: "+ scene", title: "Add a scene (at most 9)", onclick: addScene })));
+  const grid = h("div", { class: "scenes" });
+  studio.setup.scenes.forEach((scene, index) => {
+    const layout = (studio.setup.layouts[canvas] || {})[scene.id];
+    const thumb = h("button", { class: "scn" + (scene.id === currentScene() ? " on" : ""), title: scene.name + " (" + (index + 1) + ") · double-click to rename", onclick: () => selectScene(scene.id), ondblclick: () => renameScene(scene.id) });
+    thumb.style.aspectRatio = rw + " / " + rh;
+    for (const source of studio.setup.sources) {
+      const item = layout && layout.placements[source.id];
+      if (!item || !item.visible) continue;
+      const mini = h("i", { class: "mini " + source.kind });
+      Object.assign(mini.style, { left: item.box[0] * 100 + "%", top: item.box[1] * 100 + "%", width: item.box[2] * 100 + "%", height: item.box[3] * 100 + "%" });
+      if (item.radius) mini.style.borderRadius = item.radius >= 0.5 ? "50%" : "3px";
+      thumb.append(mini);
+    }
+    thumb.append(h("kbd", { text: String(index + 1) }), h("span", { text: scene.name }));
+    grid.append(thumb);
+  });
+  box.append(grid);
+}
+
+function addScene() {
+  const setup = studio.setup;
+  if (setup.scenes.length >= 9) { toast("A studio has at most 9 scenes (keys 1-9)"); return; }
+  let number = setup.scenes.length + 1;
+  while (setup.scenes.some((item) => item.id === "scene-" + number)) number += 1;
+  const id = "scene-" + number, from = currentScene();
+  setup.scenes.push({ id, name: "Scene " + number });
+  for (const canvas of Object.keys(setup.layouts)) {
+    const source = setup.layouts[canvas][from];
+    if (source) setup.layouts[canvas][id] = studioClone(source);
+  }
+  setup.scene = id;
+  edited(renderScenes, drawStage, renderProps);
+}
+
+function renameScene(id) {
+  const setup = studio.setup, scene = setup.scenes.find((item) => item.id === id);
+  if (!scene) return;
+  const name = prompt("Scene name (empty to delete the scene)", scene.name);
+  if (name === null) return;
+  if (!name.trim()) {
+    if (setup.scenes.length < 2 || studio.status.active) { toast(studio.status.active ? "Scenes cannot be deleted while recording" : "The last scene stays"); return; }
+    if (!confirm("Delete the scene “" + scene.name + "”?")) return;
+    setup.scenes = setup.scenes.filter((item) => item.id !== id);
+    for (const layouts of Object.values(setup.layouts)) delete layouts[id];
+    if (setup.scene === id) setup.scene = setup.scenes[0].id;
+  } else scene.name = name.trim().slice(0, 40);
+  edited(renderScenes, drawStage);
+}
+
+function renderSources() {
+  const box = $("sourcesPane");
+  if (!box || !studio.setup) return;
+  box.textContent = "";
+  box.append(h("h5", {}, "Sources", h("button", { class: "add", text: "+ source", onclick: (event) => openSourceMenu(event.currentTarget) })));
+  for (const source of studio.setup.sources) {
+    const item = placementOf(source.id);
+    const visible = Boolean(item && item.visible);
+    const eye = h("button", { class: "eye" + (visible ? "" : " hidden"), text: visible ? "👁" : "◌", title: visible ? "Hide in this scene" : "Show in this scene", onclick: (event) => { event.stopPropagation(); toggleVisible(source.id); } });
+    const off = (source.kind === "camera" && !source.enabled) || (source.kind !== "screen" && source.kind !== "camera" && !source.enabled);
+    box.append(h("div", { class: "src" + (source.id === studio.selected ? " on" : "") + (off ? " off" : ""), role: "button", tabindex: "0", onclick: () => selectSource(source.id) },
+      h("span", { class: "ico", text: SOURCE_ICONS[source.kind] }), h("span", { class: "name", text: sourceName(source) + (off ? " (off)" : "") }), eye));
+  }
+}
+
+function selectSource(id) {
+  studio.selected = id;
+  renderSources();
+  drawStage();
+  renderProps();
+}
+
+function toggleVisible(id) {
+  const layout = currentLayout();
+  if (!layout) return;
+  if (!layout.placements[id]) layout.placements[id] = defaultPlacement(sourceById(id), currentCanvas());
+  else layout.placements[id].visible = !layout.placements[id].visible;
+  edited(renderSources, renderScenes, drawStage, renderProps);
+}
+
+function defaultPlacement(source, canvas, aspect) {
+  const item = { visible: true, box: [0, 0, 1, 1], fit: "cover", focus: [0.5, 0.5], radius: 0, border: { width: 0, color: "#ffc933" }, shadow: false, mirror: false, anchor: null };
+  if (source.kind === "screen") { item.fit = "contain"; return item; }
+  if (source.kind === "camera") { item.mirror = true; return applyShape({ ...item, box: [0, 0, 0.24, 0.24], anchor: "bottom-left" }, "wide", canvas); }
+  const [cw, ch] = STUDIO_RATIOS[canvas] || [16, 9];
+  const width = 0.2, height = Math.min(1, (width * cw) / ch / (aspect || 1));
+  item.fit = "contain";
+  return pinPlacement({ ...item, box: [0, 0, width, height] }, "top-right");
+}
+
+function closeStudioMenu() {
+  if (studio.menu) { studio.menu.remove(); studio.menu = null; }
+}
+
+function openStudioMenu(anchor, items) {
+  closeStudioMenu();
+  const box = anchor.getBoundingClientRect();
+  const menu = h("div", { class: "stmenu" }, items);
+  Object.assign(menu.style, { position: "fixed", left: Math.round(box.left) + "px", top: Math.round(box.bottom + 4) + "px" });
+  document.body.append(menu);
+  studio.menu = menu;
+  setTimeout(() => document.addEventListener("pointerdown", function away(event) {
+    if (studio.menu === menu && !menu.contains(event.target)) closeStudioMenu();
+    document.removeEventListener("pointerdown", away);
+  }), 0);
+}
+
+function openSourceMenu(anchor) {
+  if (studio.setup.sources.length >= 12) { toast("A studio has at most 12 sources"); return; }
+  openStudioMenu(anchor, [
+    h("button", { text: "Image…", onclick: () => { closeStudioMenu(); pickImage(); } }),
+    h("button", { text: "Text", onclick: () => { closeStudioMenu(); addTextSource(); } }),
+  ]);
+}
+
+function freeSourceId(prefix) {
+  let number = 1;
+  while (sourceById(prefix + "-" + number)) number += 1;
+  return prefix + "-" + number;
+}
+
+async function uploadAsset(name, blob) {
+  let response;
+  try {
+    response = await fetch("/api/studio/asset?name=" + encodeURIComponent(name), { method: "POST", headers: { "X-Desk-Token": TOKEN }, body: blob });
+  } catch (error) { toast("Could not reach the desk: " + error.message); return null; }
+  let data = {};
+  try { data = await response.json(); } catch (error) { data = {}; }
+  if (response.status !== 200) { toast(data.error || "Upload failed"); return null; }
+  return data.asset;
+}
+
+function imageSize(url) {
+  return new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve([image.naturalWidth || 1, image.naturalHeight || 1]);
+    image.onerror = () => resolve([1, 1]);
+    image.src = url;
+  });
+}
+
+function addSourceWithPlacement(source, aspect) {
+  studio.setup.sources.push(source);
+  for (const [canvas, scenes] of Object.entries(studio.setup.layouts)) {
+    for (const [scene, layout] of Object.entries(scenes)) {
+      const item = defaultPlacement(source, canvas, aspect);
+      item.visible = canvas === currentCanvas() && scene === currentScene();
+      layout.placements[source.id] = item;
+    }
+  }
+  studio.selected = source.id;
+  edited(renderSources, renderScenes, drawStage, renderProps);
+}
+
+function pickImage() {
+  const input = h("input", { type: "file", accept: "image/png,image/jpeg" });
+  input.addEventListener("change", async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    if (file.size > 50 * 1024 * 1024) { toast("An image can be at most 50 MB"); return; }
+    const asset = await uploadAsset(file.name, file);
+    if (!asset) return;
+    const local = URL.createObjectURL(file);
+    const [width, height] = await imageSize(local);
+    URL.revokeObjectURL(local);
+    addSourceWithPlacement({ id: freeSourceId("img"), kind: "image", enabled: true, asset }, width / height);
+  });
+  input.click();
+}
+
+const TEXT_FONTS = [["-apple-system, Helvetica, sans-serif", "System"], ["Georgia, serif", "Georgia"], ["Menlo, monospace", "Menlo"], ["'Avenir Next', sans-serif", "Avenir Next"], ["'Helvetica Neue', sans-serif", "Helvetica Neue"]];
+
+// Text sources are pictures: the page draws the text into a PNG and uploads it (ffmpeg here has no drawtext).
+async function renderTextAsset(source) {
+  const scale = 2, padding = Math.round(source.size * 0.35);
+  const measure = document.createElement("canvas").getContext("2d");
+  const font = "600 " + source.size * scale + "px " + source.font;
+  measure.font = font;
+  const lines = source.text.split("\n");
+  const width = Math.ceil(Math.max(...lines.map((line) => measure.measureText(line).width)) + padding * 2 * scale);
+  const lineHeight = Math.round(source.size * 1.25 * scale);
+  const height = lineHeight * lines.length + padding * 2 * scale;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(2, width);
+  canvas.height = Math.max(2, height);
+  const context = canvas.getContext("2d");
+  if (source.background) {
+    context.fillStyle = source.background;
+    context.beginPath();
+    context.roundRect(0, 0, canvas.width, canvas.height, Math.round(padding * scale * 0.8));
+    context.fill();
+  }
+  context.font = font;
+  context.fillStyle = source.color;
+  context.textBaseline = "middle";
+  lines.forEach((line, index) => context.fillText(line, padding * scale, padding * scale + lineHeight * (index + 0.5)));
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) { toast("Could not draw the text"); return null; }
+  const asset = await uploadAsset("text " + source.id + ".png", blob);
+  return asset ? { asset, aspect: canvas.width / canvas.height } : null;
+}
+
+async function addTextSource() {
+  const source = { id: freeSourceId("text"), kind: "text", enabled: true, asset: "", text: "Subscribe", font: TEXT_FONTS[0][0], size: 64, color: "#ffffff", background: "#000000" };
+  const drawn = await renderTextAsset(source);
+  if (!drawn) return;
+  source.asset = drawn.asset;
+  addSourceWithPlacement(source, drawn.aspect);
+}
+
+function removeSource(id) {
+  const source = sourceById(id);
+  if (!source || source.kind === "screen" || source.kind === "camera") return;
+  studio.setup.sources = studio.setup.sources.filter((item) => item.id !== id);
+  for (const scenes of Object.values(studio.setup.layouts)) for (const layout of Object.values(scenes)) delete layout.placements[id];
+  studio.selected = studio.setup.sources[0].id;
+  edited(renderSources, renderScenes, drawStage, renderProps);
+}
+
+function stageRatio() {
+  const canvas = currentCanvas();
+  if (STUDIO_RATIOS[canvas]) return STUDIO_RATIOS[canvas][0] / STUDIO_RATIOS[canvas][1];
+  const display = displayInfo();
+  const pixels = display && /(\d+)\s*x\s*(\d+)/.exec(display.pixels || "");
+  return pixels ? Number(pixels[1]) / Number(pixels[2]) : 16 / 10;
+}
+
+function displayInfo() {
+  const screen = screenSource();
+  return studio.devices && screen ? studio.devices.displays.find((item) => item.number === screen.display) || null : null;
+}
+
+// The preview draws every visible source with the box, fit, focus, radius, border, shadow and mirror the export uses.
+function drawStage() {
+  const stage = $("stage");
+  if (!stage || !studio.setup) return;
+  const ratio = stageRatio();
+  stage.style.aspectRatio = String(ratio);
+  stage.style.width = "min(100%, calc(58vh * " + ratio.toFixed(4) + "))";
+  stage.textContent = "";
+  const canvas = currentCanvas();
+  const layout = currentLayout();
+  const width = stage.clientWidth || 640, height = width / ratio;
+  const scale = Math.min(width, height) / 1080;
+  const items = [];
+  if (canvas === "source") {
+    const screen = screenSource();
+    if (screen) items.push([screen, { visible: true, box: [0, 0, 1, 1], fit: "contain", focus: [0.5, 0.5], radius: 0, border: { width: 0, color: "#000000" }, shadow: false, mirror: false, anchor: null }]);
+    stage.style.background = "#000000";
+  } else if (layout) {
+    const background = layout.background;
+    stage.style.background = background.kind === "color" ? background.color : "#000000";
+    if (background.kind === "blur" && studio.screenUrl) stage.append(h("img", { class: "bg screen", src: studio.screenUrl, alt: "" }));
+    for (const source of studio.setup.sources) {
+      const item = layout.placements[source.id];
+      if (item && item.visible) items.push([source, item]);
+    }
+  }
+  if (!items.length) stage.append(h("div", { class: "empty", text: "Nothing is visible in this scene. Show a source with its eye on the left." }));
+  for (const [source, item] of items) stage.append(stageNode(source, item, width, height, scale, canvas !== "source"));
+  stage.append(h("span", { class: "badge", id: "stageBadge" }));
+  const selected = items.find(([source]) => source.id === studio.selected);
+  if (selected && selected[0].kind === "camera" && canvas !== "source") stage.append(cameraToolbar(selected[1]));
+  $("stageHint").textContent = canvas === "source" ? "As recorded: the screen exactly as captured, no layout." : "Drag to move (corners and edges snap) · drag the yellow corner to resize · ⌥-drag inside to pan · click the camera for shapes";
+  drawCountdown();
+  drawRecording();
+}
+
+function stageNode(source, item, width, height, scale, editable) {
+  const px = placementPx(item, width, height);
+  const node = h("div", { class: "ph" + (editable && source.id === studio.selected ? " sel" : "") });
+  Object.assign(node.style, { left: item.box[0] * 100 + "%", top: item.box[1] * 100 + "%", width: item.box[2] * 100 + "%", height: item.box[3] * 100 + "%" });
+  node.style.borderRadius = Math.round(item.radius * Math.min(px.w, px.h)) + "px";
+  if (item.border.width) node.style.border = Math.max(1, Math.round(item.border.width * scale)) + "px solid " + item.border.color;
+  if (item.shadow) node.style.boxShadow = "0 " + Math.round(8 * scale) + "px " + Math.round(28 * scale) + "px rgba(0,0,0,.55)";
+  const fitStyle = (child) => {
+    child.style.objectFit = item.fit;
+    child.style.objectPosition = item.focus[0] * 100 + "% " + item.focus[1] * 100 + "%";
+    if (item.mirror) child.style.transform = "scaleX(-1)";
+    return child;
+  };
+  if (source.kind === "screen") {
+    if (studio.screenUrl && !studio.screenFailed) node.append(fitStyle(h("img", { class: "screen", src: studio.screenUrl, alt: "" })));
+    else node.append(h("div", { class: "camph", text: studio.screenFailed ? "No screen preview (see above)" : "Screen " + source.display }));
+  } else if (source.kind === "camera") {
+    if (studio.camStream) {
+      if (!studio.camVideo) { studio.camVideo = h("video", { autoplay: true, playsinline: true }); studio.camVideo.muted = true; }
+      if (studio.camVideo.srcObject !== studio.camStream) studio.camVideo.srcObject = studio.camStream;
+      node.append(fitStyle(studio.camVideo));
+      const playing = studio.camVideo.play && studio.camVideo.play();
+      if (playing && playing.catch) playing.catch(() => {});
+    } else node.append(h("div", { class: "camph", text: source.enabled ? "Camera" : "Camera (off)" }));
+  } else {
+    node.append(fitStyle(h("img", { src: media("/media/asset", source.asset), alt: "" })));
+  }
+  if (!editable) return node;
+  node.addEventListener("pointerdown", (event) => startStageDrag(event, source.id, event.altKey ? "focus" : "move"));
+  if (source.id === studio.selected) {
+    const corner = item.anchor ? { "top-left": "bottom-right", "top-right": "bottom-left", "bottom-left": "top-right", "bottom-right": "top-left" }[item.anchor] : "bottom-right";
+    const handle = h("i", { class: "handle " + corner });
+    Object.assign(handle.style, { [corner.endsWith("right") ? "right" : "left"]: "-1px", [corner.startsWith("bottom") ? "bottom" : "top"]: "-1px" });
+    handle.addEventListener("pointerdown", (event) => { event.stopPropagation(); startStageDrag(event, source.id, "resize:" + corner); });
+    node.append(handle);
+  }
+  return node;
+}
+
+function startStageDrag(event, id, mode) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  if (studio.selected !== id) { studio.selected = id; renderSources(); renderProps(); }
+  const stage = $("stage"), layout = currentLayout();
+  if (!stage || !layout || !layout.placements[id]) return;
+  const start = studioClone(layout.placements[id]);
+  const rect = stage.getBoundingClientRect();
+  const node = event.currentTarget.classList.contains("handle") ? event.currentTarget.parentNode : event.currentTarget;
+  const source = sourceById(id);
+  const move = (e) => {
+    const dx = (e.clientX - event.clientX) / rect.width, dy = (e.clientY - event.clientY) / rect.height;
+    let next;
+    if (mode === "move") next = { ...studioClone(start), box: [start.box[0] + dx, start.box[1] + dy, start.box[2], start.box[3]], anchor: null };
+    else if (mode === "focus") next = moveFocus(start, dx / start.box[2], dy / start.box[3]);
+    else next = resizePlacement(start, mode.slice(7), dx, dy, source.kind !== "screen");
+    layout.placements[id] = next;
+    Object.assign(node.style, { left: next.box[0] * 100 + "%", top: next.box[1] * 100 + "%", width: next.box[2] * 100 + "%", height: next.box[3] * 100 + "%" });
+    const child = node.querySelector("img, video");
+    if (child && mode === "focus") child.style.objectPosition = next.focus[0] * 100 + "% " + next.focus[1] * 100 + "%";
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    if (mode === "move") layout.placements[id] = snapPlacement(layout.placements[id], currentCanvas());
+    const changed = JSON.stringify(start) !== JSON.stringify(layout.placements[id]);
+    if (changed) edited(drawStage, renderScenes, renderProps);
+    else drawStage();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+}
+
+function shapeButtons(item, onpick) {
+  const current = shapeOf(item, currentCanvas());
+  const sizes = { circle: [12, 12, "50%"], square: [12, 12, "0"], rounded: [12, 12, "4px"], wide: [16, 9, "0"], tall: [9, 16, "0"] };
+  return h("div", { class: "shapes" }, Object.keys(STUDIO_SHAPES).map((shape) => {
+    const mark = h("i");
+    Object.assign(mark.style, { width: sizes[shape][0] + "px", height: sizes[shape][1] + "px", borderRadius: sizes[shape][2] });
+    return h("button", { class: current === shape ? "on" : "", title: shape[0].toUpperCase() + shape.slice(1), onclick: () => onpick(shape) }, mark);
+  }));
+}
+
+function cornerButtons(item, onpick) {
+  return h("div", { class: "corners" }, STUDIO_ANCHORS.map(([anchor, arrow]) =>
+    h("button", { class: item.anchor === anchor ? "on" : "", text: arrow, title: "Pin to the " + anchor.replace("-", " ") + " corner", onclick: () => onpick(anchor) })));
+}
+
+function changePlacement(id, change) {
+  const layout = currentLayout();
+  if (!layout || !layout.placements[id]) return;
+  layout.placements[id] = change(layout.placements[id]);
+  edited(drawStage, renderScenes, renderProps);
+}
+
+function cameraToolbar(item) {
+  const id = cameraSource().id;
+  const bar = h("div", { class: "float" },
+    shapeButtons(item, (shape) => changePlacement(id, (p) => applyShape(p, shape, currentCanvas()))),
+    cornerButtons(item, (anchor) => changePlacement(id, (p) => pinPlacement(p, anchor))));
+  bar.addEventListener("pointerdown", (event) => event.stopPropagation());
+  const right = item.box[0] + item.box[2];
+  if (right < 0.62) Object.assign(bar.style, { left: "calc(" + right * 100 + "% + 6px)", bottom: "8px" });
+  else Object.assign(bar.style, { right: "calc(" + (1 - item.box[0]) * 100 + "% + 6px)", bottom: "8px" });
+  return bar;
+}
+
+function renderRecBar() {
+  const box = $("recBar");
+  if (!box) return;
+  box.textContent = "";
+  box.append(
+    h("button", { class: "recbtn", id: "recButton", title: "Start / stop recording (R)", onclick: toggleRecord }, h("i")),
+    h("span", { class: "recclock", id: "recClock", text: "00:00" }),
+    h("button", { class: "pill", id: "recPause", title: "Pause / resume (P)", onclick: pauseRecord }, "❚❚ Pause ", h("kbd", { text: "P" })),
+    h("button", { class: "pill", id: "recMark", title: "Add a mark at this moment (M)", onclick: addMark }, "⚑ Mark ", h("kbd", { text: "M" })),
+    h("button", { class: "pill", title: "Take a screenshot", onclick: (event) => openShotMenu(event.currentTarget) }, "Screenshot ▾"),
+    h("span", { class: "recstate", id: "recState" }),
+    h("span", { class: "info", id: "recInfo" }));
+}
+
+function openShotMenu(anchor) {
+  const delay = h("select", {}, [["0", "No delay"], ["3", "3 s delay"], ["5", "5 s delay"], ["10", "10 s delay"]].map(([value, label]) => h("option", { value, text: label, selected: String(studio.delay) === value })));
+  delay.addEventListener("change", () => { studio.delay = Number(delay.value); });
+  const clip = h("input", { type: "checkbox" });
+  clip.checked = studio.clipboard;
+  clip.addEventListener("change", () => { studio.clipboard = clip.checked; });
+  openStudioMenu(anchor, [
+    ...["screen", "area", "window"].map((kind) => h("button", { text: kind[0].toUpperCase() + kind.slice(1), onclick: () => { closeStudioMenu(); takeShot(kind); } })),
+    h("label", {}, delay), h("label", {}, clip, "Copy to the clipboard"),
+  ]);
+}
+
+function updateRecordControls() {
+  const s = studio.status;
+  const button = $("recButton");
+  if (!button) return;
+  const active = Boolean(s.active || studio.starting);
+  button.classList.toggle("on", active);
+  const pause = $("recPause");
+  pause.disabled = !s.active || studio.saving || s.phase === "saving" || Boolean(studio.starting);
+  pause.firstChild.textContent = s.paused ? "▶ Resume " : "❚❚ Pause ";
+  $("recMark").disabled = !s.active || Boolean(studio.starting);
+  $("recState").textContent = studio.counting ? "Starting in " + studio.counting + "…" : studio.starting ? "Starting…" : studio.saving || s.phase === "saving" ? "Saving…" : s.phase === "interrupted" ? "A recorder stopped; press stop to save the rest" : s.phase === "unsaved" ? "Not saved; press stop to try again" : s.phase === "stuck" ? "A recorder hangs" : s.active ? (s.paused ? "Paused" : "Recording") : "Ready";
+  const display = displayInfo();
+  const free = s.free_bytes;
+  $("recInfo").textContent = "";
+  $("recInfo").append(
+    h("div", { text: (display ? display.pixels.replace(/\s*x\s*/, "×") + " · " : "") + "60 fps" }),
+    h("div", { text: (free ? "free " + gigabytes(free) + " · " : "") + "≈ " + megabytesPerMinute(studio.setup) + " MB/min" }));
+  renderWarnings();
+  drawRecording();
+}
+
+function renderWarnings() {
+  const box = $("warnStrip");
+  if (!box) return;
+  box.textContent = "";
+  const s = studio.status;
+  for (const warning of s.warnings || []) box.append(h("div", { text: "⚠ " + warning }));
+  if ((s.stuck && s.stuck.length) || s.phase === "stuck") {
+    box.append(h("div", {}, "⚠ " + ((s.stuck || []).join(", ") || "A recorder") + " does not stop. Stop again to retry, or kill it (its track is lost).",
+      h("button", { text: "Force stop", onclick: forceStop })));
+  }
+}
+
+function prow(label, ...controls) { return h("div", { class: "prow" }, h("span", { class: "lbl", text: label }), ...controls); }
+function studioSelect(options, value, onchange) {
+  const node = h("select", {}, options.map(([v, label]) => h("option", { value: v, text: label, selected: v === value })));
+  node.addEventListener("change", () => onchange(node.value));
+  return node;
+}
+function studioCheck(value, onchange, label) {
+  const input = h("input", { type: "checkbox" });
+  input.checked = Boolean(value);
+  input.addEventListener("change", () => onchange(input.checked));
+  return label ? h("label", { class: "check" }, input, " " + label) : input;
+}
+function studioRange(min, max, step, value, oninput, shown) {
+  const input = h("input", { type: "range", min, max, step, value });
+  const val = h("span", { class: "val", text: shown(value) });
+  input.addEventListener("input", () => { val.textContent = shown(Number(input.value)); oninput(Number(input.value), false); });
+  input.addEventListener("change", () => oninput(Number(input.value), true));
+  return [input, val];
+}
+
+function renderSound() {
+  const box = $("soundPane");
+  if (!box || !studio.setup) return;
+  box.textContent = "";
+  const audio = studio.setup.audio, devices = studio.devices;
+  const mics = [["default", "Default microphone"], ...(devices ? devices.microphones.map((item) => [item.name, item.name + (item.virtual ? " (virtual)" : "")]) : []), ["", "No microphone"]];
+  if (audio.mic.enabled && !mics.some(([value]) => value === audio.mic.device)) mics.splice(1, 0, [audio.mic.device, audio.mic.device]);
+  box.append(h("h5", {}, "Sound"));
+  box.append(prow("Microphone", studioSelect(mics, audio.mic.enabled ? audio.mic.device : "", (value) => {
+    audio.mic.enabled = value !== "";
+    if (value) audio.mic.device = value;
+    const chosen = devices && devices.microphones.find((item) => item.name === value);
+    if (chosen && chosen.virtual) toast(value + " is virtual: it carries app audio, not your voice");
+    if (studio.micStream) { stopStream("micStream"); toggleMeter(); }
+    edited(renderSound, updateRecordControls);
+  }), h("div", { class: "meter", id: "micMeter" }, h("i")),
+    studio.status.active ? null : h("button", { class: "ghost", text: studio.micStream ? "Stop test" : "Test", title: "Show the level in the browser (the recording uses ul capture)", onclick: toggleMeter })));
+  box.append(prow("Mic volume", ...studioRange(0, 200, 5, Math.round(audio.mic.volume * 100), (value, done) => { audio.mic.volume = value / 100; if (done) saveSetupSoon(); }, (v) => v + "%"),
+    studioCheck(audio.mic.muted, (value) => { audio.mic.muted = value; saveSetupSoon(); }, "mute")));
+  box.append(prow("Mac sound", studioCheck(audio.system.enabled, (value) => { audio.system.enabled = value; saveSetupSoon(); }, "record the sound of the Mac")));
+  box.append(prow("Mac volume", ...studioRange(0, 200, 5, Math.round(audio.system.volume * 100), (value, done) => { audio.system.volume = value / 100; if (done) saveSetupSoon(); }, (v) => v + "%"),
+    studioCheck(audio.system.muted, (value) => { audio.system.muted = value; saveSetupSoon(); }, "mute")));
+  box.append(h("p", { class: "note", text: "Volumes and mute apply when a project is exported." }));
+  drawMeter();
+}
+
+function placementControls(source, item) {
+  const id = source.id, canvas = currentCanvas();
+  const nodes = [prow("Visible", studioCheck(item.visible, (value) => changePlacement(id, (p) => ({ ...p, visible: value })), "in this scene"))];
+  nodes.push(prow("Fit", studioSelect([["cover", "Fill (crop)"], ["contain", "Whole picture"]], item.fit, (value) => changePlacement(id, (p) => ({ ...p, fit: value })))));
+  if (source.kind !== "screen") nodes.push(prow("Shape", shapeButtons(item, (shape) => changePlacement(id, (p) => applyShape(p, shape, canvas)))));
+  nodes.push(prow("Size", ...studioRange(4, 100, 1, Math.round(item.box[2] * 100), (value, done) => {
+    if (!done) return;
+    changePlacement(id, (p) => {
+      let width = value / 100, height = p.box[3] * (width / p.box[2]);
+      if (height > 1) { width /= height; height = 1; }
+      const next = { ...studioClone(p), box: [Math.min(p.box[0], 1 - width), Math.min(p.box[1], 1 - height), width, height] };
+      return next.anchor ? pinPlacement(next, next.anchor) : next;
+    });
+  }, (v) => v + "%")));
+  nodes.push(prow("Corner", cornerButtons(item, (anchor) => changePlacement(id, (p) => pinPlacement(p, anchor))),
+    item.anchor ? h("button", { class: "ghost", text: "free", title: "Unpin", onclick: () => changePlacement(id, (p) => pinPlacement(p, null)) }) : null));
+  const color = h("input", { type: "color", value: item.border.color });
+  color.addEventListener("change", () => changePlacement(id, (p) => ({ ...p, border: { ...p.border, color: color.value } })));
+  nodes.push(prow("Border", color, ...studioRange(0, 40, 1, item.border.width, (value, done) => { if (done) changePlacement(id, (p) => ({ ...p, border: { ...p.border, width: value } })); }, (v) => v + " px")));
+  nodes.push(prow("Radius", ...studioRange(0, 50, 1, Math.round(item.radius * 100), (value, done) => { if (done) changePlacement(id, (p) => ({ ...p, radius: value / 100 })); }, (v) => v + "%")));
+  nodes.push(prow("Effects", studioCheck(item.shadow, (value) => changePlacement(id, (p) => ({ ...p, shadow: value })), "shadow"),
+    studioCheck(item.mirror, (value) => changePlacement(id, (p) => ({ ...p, mirror: value })), "mirror")));
+  return nodes;
+}
+
+function renderProps() {
+  const box = $("propsPane");
+  if (!box || !studio.setup) return;
+  box.textContent = "";
+  const source = sourceById(studio.selected) || studio.setup.sources[0];
+  const devices = studio.devices;
+  box.append(h("h5", { text: sourceName(source) }));
+  const recording = Boolean(studio.status.active);
+  if (source.kind === "camera") {
+    box.append(prow("Record", studioCheck(source.enabled, (value) => { source.enabled = value; if (value) ensureCamera(); else stopStream("camStream"); edited(renderSources, drawStage, renderProps, updateRecordControls); }, "the camera")));
+    const cams = [["default", "Default camera"], ...(devices ? devices.cameras.map((name) => [name, name]) : [])];
+    if (!cams.some(([value]) => value === source.device)) cams.push([source.device, source.device]);
+    const device = studioSelect(cams, source.device, (value) => { source.device = value; source.mode = "auto"; if (studio.camStream) { stopStream("camStream"); toggleCamera(); } edited(renderProps); });
+    device.disabled = recording;
+    box.append(prow("Device", device));
+    const name = source.device === "default" ? (devices && devices.cameras[0]) || "" : source.device;
+    const modes = [["auto", "Best (auto)"], ...(studio.modes[name] || []).map((mode) => [mode.width + "x" + mode.height + "@" + mode.max_fps, mode.width + "×" + mode.height + " · " + Math.round(Number(mode.max_fps)) + " fps"])];
+    if (!modes.some(([value]) => value === source.mode)) modes.push([source.mode, source.mode]);
+    const mode = studioSelect(modes, source.mode, (value) => { source.mode = value; edited(); });
+    mode.disabled = recording;
+    box.append(prow("Mode", mode, h("button", { class: "ghost", text: "↻", title: "Read the camera's modes (the camera light turns on for a moment)", disabled: recording || !name, onclick: () => loadCameraModes(name) })));
+    box.append(prow("Preview", studioCheck(localStorage.getItem("studio-campreview") !== "off", (value) => { localStorage.setItem("studio-campreview", value ? "on" : "off"); if (value) ensureCamera(); else { stopStream("camStream"); drawStage(); } }, "live camera in this page")));
+  } else if (source.kind === "screen") {
+    const displays = devices ? devices.displays.map((item) => [String(item.number), item.number + " · " + item.name + " " + item.pixels.replace(/\s*x\s*/, "×")]) : [[String(source.display), String(source.display)]];
+    const display = studioSelect(displays, String(source.display), (value) => { source.display = Number(value); studio.screenUrl = ""; edited(drawStage, updateRecordControls, startPreview); });
+    display.disabled = recording;
+    box.append(prow("Display", display));
+    const area = h("input", { type: "text", value: source.area || "", placeholder: "Whole display, or X,Y,W,H in points" });
+    area.disabled = recording;
+    area.addEventListener("change", () => {
+      const value = area.value.replace(/\s+/g, "");
+      if (value && !/^\d{1,5},\d{1,5},[1-9]\d{0,4},[1-9]\d{0,4}$/.test(value)) { toast("Area is X,Y,WIDTH,HEIGHT in points, e.g. 0,0,1280,720"); area.value = source.area || ""; return; }
+      source.area = value || null;
+      edited();
+    });
+    box.append(prow("Area", area));
+    box.append(prow("Show", studioCheck(source.clicks, (value) => { source.clicks = value; edited(); }, "clicks")));
+  } else if (source.kind === "text") {
+    const text = h("input", { type: "text", value: source.text, maxlength: "500" });
+    const font = studioSelect(TEXT_FONTS.some(([value]) => value === source.font) ? TEXT_FONTS : [...TEXT_FONTS, [source.font, source.font]], source.font, () => {});
+    const size = h("input", { type: "number", min: "8", max: "400", value: String(source.size) });
+    const color = h("input", { type: "color", value: source.color });
+    const back = h("input", { type: "color", value: source.background || "#000000" });
+    const backOn = studioCheck(Boolean(source.background), () => {});
+    box.append(prow("Text", text), prow("Font", font), prow("Size", size), prow("Colours", color, backOn, back));
+    box.append(prow("", h("button", { text: "Apply", onclick: async () => {
+      const value = text.value.trim(), points = Number(size.value);
+      if (!value) { toast("The text is empty"); return; }
+      if (!Number.isInteger(points) || points < 8 || points > 400) { toast("Size is 8-400"); return; }
+      const next = { ...source, text: value.slice(0, 500), font: font.value, size: points, color: color.value, background: backOn.checked ? back.value : null };
+      const drawn = await renderTextAsset(next);
+      if (!drawn) return;
+      Object.assign(source, next, { asset: drawn.asset });
+      edited(renderSources, drawStage, renderProps);
+    } })));
+  } else {
+    box.append(prow("File", h("span", { text: source.asset })));
+  }
+  if (source.kind === "image" || source.kind === "text") {
+    box.append(prow("Use", studioCheck(source.enabled, (value) => { source.enabled = value; edited(renderSources, drawStage); }, "in recordings"), h("button", { class: "ghost", text: "Remove", onclick: () => removeSource(source.id) })));
+  }
+  const item = placementOf(source.id);
+  if (currentCanvas() === "source") box.append(h("p", { class: "note", text: "“As recorded” has no layout; pick a format to place sources." }));
+  else if (item) box.append(...placementControls(source, item));
+  else box.append(h("p", { class: "note", text: "Not in this scene. Use the eye on the left to show it." }));
+}
+
+async function loadCameraModes(name) {
+  toast("Reading the modes of " + name + "…");
+  const { status, data } = await api("GET", "/api/studio/camera-modes?device=" + encodeURIComponent(name));
+  if (status !== 200) { toast(data.error || "Could not read the camera modes"); return; }
+  Object.assign(studio.modes, data.modes || {});
+  renderProps();
+}
+
+function renderOutput() {
+  const box = $("outputPane");
+  if (!box || !studio.setup) return;
+  box.textContent = "";
+  const camera = cameraSource(), mic = studio.setup.audio.mic;
+  box.append(h("h5", { text: "Recording files" }));
+  if (camera) box.append(prow("Camera", studioSelect([["max", "Max · 1080p · ~90 MB/min"], ["high", "High · 1080p · ~45 MB/min"], ["light", "Light · 720p · ~22 MB/min"]], camera.quality, (value) => { camera.quality = value; edited(renderOutput, updateRecordControls); })));
+  box.append(prow("Microphone", studioSelect([["flac", "FLAC lossless · ~3 MB/min"], ["wav", "WAV lossless · ~6 MB/min"], ["m4a", "M4A (AAC) · ~2 MB/min"]], mic.format, (value) => { mic.format = value; edited(renderOutput, updateRecordControls); })));
+  box.append(prow("Countdown", studioSelect([["0", "None"], ["3", "3 seconds"], ["5", "5 seconds"], ["10", "10 seconds"]], String(studio.setup.countdown), (value) => { studio.setup.countdown = Number(value); edited(); })));
+  box.append(h("p", { class: "note", text: "This setup ≈ " + megabytesPerMinute(studio.setup) + " MB per minute (the screen alone is ~25-70 MB/min, depending on what moves). Export chooses the format, size and fps." }));
+}
+
+const ICONS = { audio: "M9 18V5l12-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm12-2a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" };
+function sizeText(bytes) { return bytes > 1e9 ? (bytes / 1e9).toFixed(1) + " GB" : bytes > 1e6 ? (bytes / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(bytes / 1e3)) + " KB"; }
+
+async function takeShot(kind) {
+  const screen = screenSource();
+  const body = { kind, display: screen ? screen.display : 1, delay: studio.delay, clipboard: studio.clipboard };
+  if (kind !== "screen") toast("Select on the Mac: drag an area or click a window (Esc cancels)");
+  else if (studio.delay) toast("Screenshot in " + studio.delay + " s");
+  const { status, data } = await api("POST", "/api/studio/shot", body);
+  if (status !== 200) { toast(data.error || "Screenshot failed"); return; }
+  if (data.clipboard) { toast("Copied to the clipboard"); return; }
+  toast("Saved " + data.saved.split("/").pop());
+  studio.library = [];
+}
+
+// ---- projects tab ----
+async function loadLibrary() {
+  const { status, data } = await api("GET", "/api/studio/library");
+  if (status !== 200) return;
+  studio.library = data;
+  if (state.view === "studio" && studio.tab === "projects") renderProjects();
+}
+
+async function loadProjects() {
+  const { status, data } = await api("GET", "/api/studio/projects");
+  if (status !== 200) { toast(data.error || "Could not list the projects"); return; }
+  studio.projects = data;
+  if (state.view === "studio" && studio.tab === "projects" && !studio.project) renderProjects();
+}
+
+function stopProjectPlayer() {}
+function openProject(path) { setStudioTab("projects"); return path; }
+
+function renderProjects() {
+  const box = $("studioProjects");
+  if (!box) return;
+  box.textContent = "";
+  const filters = h("div", { class: "levels", id: "libFilters" }, [["projects", "Projects"], ["exports", "Exports"], ["screenshots", "Screenshots"]].map(([value, label]) =>
+    h("button", { class: studio.filter === value ? "on" : "", text: label, onclick: () => { studio.filter = value; localStorage.setItem("studio-filter", value); renderProjects(); } })));
+  box.append(h("div", { class: "projbar" }, filters, h("span", { class: "spacer" }), h("button", { class: "ghost", text: "Refresh", onclick: () => { loadProjects(); loadLibrary(); } })));
+  const grid = h("div", { class: "library", id: "library" });
+  box.append(grid);
+  renderLibrary(grid);
+}
+
+function renderLibrary(box) {
+  box = box || $("library");
+  if (!box) return;
+  box.textContent = "";
+  const kinds = { exports: ["video", "audio"], screenshots: ["image"] }[studio.filter] || ["video", "audio"];
+  const items = studio.library.filter((item) => kinds.includes(item.kind));
+  if (!items.length) { box.append(h("div", { class: "empty", text: "Nothing here yet." })); return; }
+  for (const item of items.slice(0, 120)) {
+    const pic = h("div", { class: "pic" });
+    if (item.kind === "audio") pic.append(svgIcon(ICONS.audio));
+    else pic.append(h("img", { src: media("/media/thumb", item.name), alt: "", loading: "lazy" }));
+    if (item.duration) pic.append(h("span", { class: "len", text: format(item.duration) }));
+    const when = new Date(item.modified).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    box.append(h("button", { class: "item", title: item.name, onclick: () => openViewer(item) }, pic,
+      h("div", { class: "cap" }, h("b", { text: item.name }), h("span", { text: when + " · " + sizeText(item.size) }))));
   }
 }
 
@@ -1083,325 +2323,6 @@ function bars(context, x, height, value, width, color) {
   context.beginPath();
   context.roundRect(x, (height - tall) / 2, width, tall, width / 2);
   context.fill();
-}
-
-// The live microphone: bars scroll left into a playhead, red for what is being recorded.
-function drawWave() {
-  const canvas = $("wave");
-  if (!canvas) return;
-  const [context, width, height] = fitCanvas(canvas);
-  const step = 5, head = Math.round(width * (canvas.classList.contains("strip") ? 0.97 : 0.72));
-  context.fillStyle = "rgba(255,255,255,.10)";
-  context.fillRect(0, height / 2 - 0.5, width, 1);
-  const shown = studio.levels.slice(-Math.floor(head / step));
-  shown.forEach((item, index) => bars(context, head - (shown.length - index) * step, height, item.v, 3, item.live ? "#ff453a" : "#8e8e93"));
-  const recording = Boolean(studio.starting || (studio.status.active && studio.status.phase === "recording"));
-  context.fillStyle = recording ? "#ff453a" : "#ffc933";
-  context.fillRect(head, 4, 2, height - 8);
-  context.beginPath();
-  context.arc(head + 1, 5, 4, 0, Math.PI * 2);
-  context.fill();
-}
-
-function renderStudio(main) {
-  if (!studio.info) { main.textContent = ""; main.append(h("div", { class: "page" }, h("div", { class: "empty", text: "Loading…" }))); loadStudioInfo().then(() => state.view === "studio" && render()); return; }
-  if (!studio.info.available) {
-    main.textContent = "";
-    main.append(h("div", { class: "page" }, h("h3", { text: "Studio" }), h("div", { class: "empty", text: "The capture command is not installed in this ul. Turn on the `capture` feature with: ul features" })));
-    return;
-  }
-  if (main.querySelector(".studio")) return;
-  main.textContent = "";
-  const monitor = h("div", { class: "monitor", id: "monitor" }, h("span", { class: "badge", id: "monBadge" }));
-  const bar = h("div", { class: "monbar" },
-    h("button", { id: "togglePreview", onclick: () => { studio.preview = !studio.preview; localStorage.setItem("studio-preview", studio.preview ? "on" : "off"); renderMonitor(); } }),
-    h("button", { id: "toggleCam", onclick: toggleCamera }),
-    h("button", { id: "toggleMic", onclick: toggleMeter }),
-    h("span", { class: "hint", id: "monHint" }),
-    h("button", { class: "ghost", text: "Devices ↻", title: "Look for cameras and microphones again", onclick: loadDevices }));
-  const filters = h("div", { class: "levels", id: "libFilters" }, [["all", "All"], ["video", "Video"], ["audio", "Audio"], ["image", "Screenshots"]].map(([value, label]) =>
-    h("button", { "data-filter": value, text: label, onclick: () => { studio.filter = value; localStorage.setItem("studio-filter", value); renderLibrary(); } })));
-  const stage = h("section", {}, monitor, bar,
-    h("div", { class: "libhead" }, h("h3", { text: "Library" }), filters, h("span", { class: "spacer" }), h("button", { class: "ghost", text: "Refresh", onclick: () => loadLibrary() })),
-    h("div", { class: "library", id: "library" }));
-  main.append(h("div", { class: "studio" }, h("aside", { class: "controls", id: "studioControls" }), stage));
-  const settings = studio.info.settings;
-  if (studio.system === null) studio.system = settings.system_audio;
-  if (studio.clicks === null) studio.clicks = settings.show_clicks;
-  renderStudioControls();
-  renderLibrary();
-  renderMonitor();
-  if (!studio.devices) loadDevices();
-  loadLibrary();
-  loadRecordStatus();
-}
-
-function field(label, control) { return h("label", {}, label, control); }
-function check(label, value, onchange) {
-  const input = h("input", { type: "checkbox" });
-  input.checked = value;
-  input.addEventListener("change", () => onchange(input.checked));
-  return h("label", { class: "check" }, input, label);
-}
-function select(options, value, onchange) {
-  const node = h("select", {}, options.map(([v, label]) => h("option", { value: v, text: label, selected: v === value })));
-  node.addEventListener("change", () => onchange(node.value));
-  return node;
-}
-
-function renderStudioControls() {
-  const box = $("studioControls");
-  if (!box) return;
-  box.textContent = "";
-  const settings = studio.info.settings, devices = studio.devices;
-  const screenMode = studio.mode === "screen" || studio.mode === "screen-camera";
-  const cameraMode = studio.mode === "camera" || studio.mode === "screen-camera";
-  box.append(h("h4", { text: "Record" }), h("div", { class: "levels modes" }, [["screen", "Screen"], ["screen-camera", "Screen + Cam"], ["camera", "Camera"], ["audio", "Audio"]].map(([value, label]) =>
-    h("button", { class: value === studio.mode ? "on" : "", text: label, disabled: studio.status.active, onclick: () => { studio.mode = value; studio.format = ""; localStorage.setItem("studio-mode", value); renderStudioControls(); renderMonitor(); } }))));
-  if (screenMode) {
-    const displays = devices ? devices.displays.map((item) => [String(item.number), item.number + " · " + item.name]) : [["1", "1 · Main display"]];
-    box.append(field("Display", select(displays, String(studio.display), (value) => { studio.display = Number(value); renderMonitor(); })));
-  }
-  if (cameraMode) {
-    const cams = [["", "Default (" + settings.camera_device + ")"], ...(devices ? devices.cameras.map((name) => [name, name]) : [])];
-    box.append(field("Camera", select(cams, studio.cam, (value) => { studio.cam = value; if (studio.camStream) { stopStream("camStream"); toggleCamera(); } })));
-  }
-  const mics = [["", "Default (" + settings.audio_device + ")"], ...(devices ? devices.microphones.map((item) => [item.name, item.name + (item.virtual ? " (virtual)" : "")]) : []), ...(studio.mode === "audio" ? [] : [["none", "No microphone"]])];
-  box.append(field("Microphone", select(mics, studio.mic, (value) => { studio.mic = value; const chosen = devices?.microphones.find((item) => item.name === value); if (chosen?.virtual) toast(value + " is virtual: it carries app audio, not your voice"); })));
-  if (screenMode) {
-    box.append(check("System audio (sound of the Mac)", studio.system, (value) => { studio.system = value; }));
-    box.append(check("Show clicks", studio.clicks, (value) => { studio.clicks = value; }));
-  }
-  const formats = studio.mode === "audio" ? [["", "Default (" + settings.audio_format + ")"], ["m4a", "M4A"], ["mp3", "MP3"], ["wav", "WAV"]] : [["", "Default (" + settings.video_format + ")"], ["mov", "MOV"], ["mp4", "MP4"]];
-  box.append(field("Format", select(formats, studio.format, (value) => { studio.format = value; })));
-  box.append(h("div", { class: "recbox" },
-    h("button", { class: "recbtn" + (studio.status.active ? " on" : ""), id: "recButton", title: "Start / stop recording (r)", onclick: toggleRecord }, h("i")),
-    h("span", { class: "recclock", id: "recClock", text: "00:00" }),
-    h("div", { class: "row" },
-      h("button", { id: "recPause", text: studio.status.paused ? "Resume" : "Pause", disabled: !studio.status.active || studio.saving, onclick: pauseRecord, title: "Pause / resume (p)" })),
-    h("div", { class: "recstate", id: "recState" })));
-  box.append(h("h4", { text: "Screenshot" }), h("div", { class: "row" },
-    ["screen", "area", "window"].map((kind) => h("button", { text: kind[0].toUpperCase() + kind.slice(1), title: kind === "screen" ? "The whole display" : "Select on the Mac with the mouse", onclick: () => takeShot(kind) }))));
-  box.append(field("Delay", select([["0", "No delay"], ["3", "3 s"], ["5", "5 s"], ["10", "10 s"]], String(studio.delay), (value) => { studio.delay = Number(value); })));
-  box.append(check("Copy to the clipboard instead of saving", studio.clipboard, (value) => { studio.clipboard = value; }));
-  updateStudioControls();
-}
-
-function updateStudioControls() {
-  const s = studio.status;
-  const button = $("recButton");
-  if (!button) return;
-  const active = Boolean(s.active || studio.starting);
-  button.classList.toggle("on", active);
-  $("recPause").disabled = !s.active || studio.saving || s.phase === "saving" || Boolean(studio.starting);
-  $("recPause").textContent = s.paused ? "Resume" : "Pause";
-  const what = s.active ? (s.camera ? "screen + camera" : s.mode) : "";
-  $("recState").textContent = studio.starting ? "Starting…" : studio.saving || s.phase === "saving" ? "Saving… (adding camera and microphone)" : s.phase === "interrupted" ? "Stopped unexpectedly — press stop to save" : s.phase === "unsaved" ? "Not saved — press stop to try again" : s.active ? (s.paused ? "Paused · " : "Recording ") + what : "Ready";
-  for (const node of document.querySelectorAll(".modes button")) node.disabled = active;
-  drawRecording();
-}
-
-async function toggleRecord() {
-  if (studio.saving || studio.starting) return;
-  if (studio.status.active) {
-    studio.saving = true;
-    for (const item of studio.levels) item.live = false;
-    updateStudioControls();
-    const { status, data } = await api("POST", "/api/studio/stop", {});
-    if (status !== 200) { studio.saving = false; toast(data.error || "Could not stop"); }
-    pollWhileBusy();
-    return;
-  }
-  const body = { mode: studio.mode, display: studio.display };
-  if (studio.mic) body.mic = studio.mic;
-  if (studio.cam && (studio.mode === "camera" || studio.mode === "screen-camera")) body.cam = studio.cam;
-  if (studio.mode === "screen" || studio.mode === "screen-camera") { body.system_audio = studio.system; body.clicks = studio.clicks; }
-  if (studio.format) body.format = studio.format;
-  // The page's own camera preview would hold the camera; let ffmpeg have it.
-  if (studio.mode !== "screen") stopStream("camStream");
-  // Show the recording at once: the recorders start in well under a second,
-  // and the server's clock replaces this one when it answers.
-  studio.starting = Date.now();
-  studio.shown = 0;
-  studio.levels = [];
-  updateStudioControls();
-  if (studio.mode === "audio" && !studio.micStream && studio.mic !== "none") toggleMeter();
-  renderMonitor();
-  const { status, data } = await api("POST", "/api/studio/record", body);
-  studio.starting = 0;
-  if (status !== 200) { toast(data.error || "Could not start recording"); await loadRecordStatus(); renderMonitor(); return; }
-  for (const warning of data.warnings || []) toast(warning);
-  studio.status = data;
-  studio.statusAt = Date.now();
-  updateStudioControls();
-  renderMonitor();
-  pollWhileBusy();
-}
-
-async function pauseRecord() {
-  if (!studio.status.active || studio.saving) return;
-  const { status, data } = await api("POST", studio.status.paused ? "/api/studio/resume" : "/api/studio/pause", {});
-  if (status !== 200) { toast(data.error || "Could not pause"); return; }
-  studio.status = data;
-  studio.statusAt = Date.now();
-  updateStudioControls();
-}
-
-let busyTimer = 0;
-function pollWhileBusy() {
-  clearTimeout(busyTimer);
-  busyTimer = setTimeout(async () => {
-    busyTimer = 0;
-    await loadRecordStatus();
-    if ((studio.status.active || studio.saving) && !busyTimer) pollWhileBusy();
-    else updateStudioControls();
-  }, studio.saving ? 700 : 1500);
-}
-
-async function takeShot(kind) {
-  const body = { kind, display: studio.display, delay: studio.delay, clipboard: studio.clipboard };
-  if (kind !== "screen") toast("Select on the Mac: drag an area or click a window (Esc cancels)");
-  else if (studio.delay) toast("Screenshot in " + studio.delay + " s");
-  const { status, data } = await api("POST", "/api/studio/shot", body);
-  if (status !== 200) { toast(data.error || "Screenshot failed"); return; }
-  if (data.clipboard) { toast("Copied to the clipboard"); return; }
-  toast("Saved " + data.saved.split("/").pop());
-  loadLibrary(false);
-}
-
-function renderMonitor() {
-  const monitor = $("monitor");
-  if (!monitor) return;
-  clearTimeout(studio.previewTimer);
-  for (const node of [...monitor.children]) if (node.id !== "monBadge") node.remove();
-  const screenMode = studio.mode === "screen" || studio.mode === "screen-camera";
-  const cameraMode = studio.mode === "camera" || studio.mode === "screen-camera";
-  const recording = Boolean(studio.status.active || studio.starting);
-  $("togglePreview").textContent = "Screen preview: " + (studio.preview ? "on" : "off");
-  $("togglePreview").style.display = screenMode ? "" : "none";
-  $("toggleCam").textContent = studio.camStream ? "Hide camera" : "Show camera";
-  $("toggleCam").style.display = cameraMode && !recording ? "" : "none";
-  $("toggleMic").textContent = studio.micStream ? "Hide sound" : "Show sound";
-  $("monHint").textContent = recording && screenMode ? "Preview paused while recording, so the recording stays smooth." : screenMode ? "The preview refreshes every 2 s; the recording itself is smooth." : studio.mode === "audio" ? "The wave shows how loud the microphone is." : "The camera preview uses the browser; it is released when recording starts.";
-  if (screenMode && studio.preview) {
-    // A full-screen snapshot every 2 s would compete with the recorder, so it stops while recording.
-    const image = h("img", { class: "screen", alt: "" });
-    image.addEventListener("error", () => { image.remove(); monitor.prepend(h("div", { class: "note", text: "No preview: give the terminal running ul desk Screen Recording permission (System Settings > Privacy & Security)." })); });
-    image.addEventListener("load", () => { if (!studio.status.active && !studio.starting) studio.previewTimer = setTimeout(refresh, 2000); });
-    const refresh = () => {
-      if (!image.isConnected) return;
-      if (state.view === "studio" && !document.hidden && !studio.status.active && !studio.starting) image.src = media("/media/preview") + "&display=" + studio.display + "&_=" + Date.now();
-      else studio.previewTimer = setTimeout(refresh, 2000);
-    };
-    if (recording) image.style.opacity = ".35";
-    monitor.append(image);
-    if (studio.lastPreview && recording) image.src = studio.lastPreview;
-    else refresh();
-    image.addEventListener("load", () => { if (!recording) studio.lastPreview = image.src; });
-  } else if (screenMode) {
-    monitor.append(h("div", { class: "note", text: "Display " + studio.display + " · preview off" }));
-  }
-  if (cameraMode && studio.camStream && !recording) {
-    const video = h("video", { class: "cam " + (studio.mode === "camera" ? "full" : studio.info.settings.overlay), autoplay: true, muted: true, playsinline: true });
-    video.muted = true;
-    video.srcObject = studio.camStream;
-    monitor.append(video);
-  } else if (studio.mode === "camera") {
-    monitor.append(h("div", { class: "note", text: recording ? "Recording the camera" : "Camera · press “Show camera” for a preview" }));
-  }
-  if (studio.mode === "audio") {
-    monitor.append(h("div", { class: "voice" },
-      h("div", { class: "voice-clock", id: "waveClock", text: clockText(recordElapsed()) }),
-      h("canvas", { id: "wave", class: "wave" }),
-      studio.micStream ? null : h("div", { class: "note", text: "Press “Show sound” (or start recording) to see the microphone" })));
-  } else if (studio.micStream) {
-    monitor.append(h("canvas", { id: "wave", class: "wave strip" }));
-  }
-  drawWave();
-}
-
-async function toggleCamera() {
-  if (studio.camStream) { stopStream("camStream"); renderMonitor(); return; }
-  if (state.view !== "studio" || studio.status.active || studio.starting) return;
-  const request = studio.camRequest = (studio.camRequest || 0) + 1;
-  const current = () => request === studio.camRequest && state.view === "studio" && !studio.status.active && !studio.starting;
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: true });
-    if (!current()) { stream.getTracks().forEach((track) => track.stop()); return; }
-    if (studio.cam) {
-      const found = (await navigator.mediaDevices.enumerateDevices()).find((item) => item.kind === "videoinput" && item.label === studio.cam);
-      if (!current()) { stream.getTracks().forEach((track) => track.stop()); return; }
-      if (found) { stream.getTracks().forEach((track) => track.stop()); stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: found.deviceId } } }); }
-    }
-    if (!current()) { stream.getTracks().forEach((track) => track.stop()); return; }
-    studio.camStream = stream;
-  } catch (error) { if (stream) stream.getTracks().forEach((track) => track.stop()); toast("The browser could not open the camera: " + error.message); }
-  renderMonitor();
-}
-
-async function toggleMeter() {
-  if (studio.micStream) { stopStream("micStream"); renderMonitor(); return; }
-  if (state.view !== "studio") return;
-  const request = studio.micRequest = (studio.micRequest || 0) + 1;
-  const current = () => request === studio.micRequest && state.view === "studio";
-  try {
-    const constraints = { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } };
-    if (studio.mic && studio.mic !== "none") {
-      // Device labels are only visible after the first permission.
-      await navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => stream.getTracks().forEach((track) => track.stop()));
-      if (!current()) return;
-      const found = (await navigator.mediaDevices.enumerateDevices()).find((item) => item.kind === "audioinput" && item.label.includes(studio.mic));
-      if (!current()) return;
-      if (found) constraints.audio.deviceId = { exact: found.deviceId };
-    }
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
-    if (!current()) { stream.getTracks().forEach((track) => track.stop()); return; }
-    studio.micStream = stream;
-  } catch (error) { toast("The browser could not open the microphone: " + error.message); return; }
-  studio.audio = new AudioContext();
-  studio.analyser = studio.audio.createAnalyser();
-  studio.analyser.fftSize = 2048;
-  studio.audio.createMediaStreamSource(studio.micStream).connect(studio.analyser);
-  const samples = new Float32Array(studio.analyser.fftSize);
-  // Like Voice Memos: one bar per 50 ms, louder = taller, red while recording.
-  studio.sampler = setInterval(() => {
-    if (!studio.analyser) return;
-    studio.analyser.getFloatTimeDomainData(samples);
-    let sum = 0, peak = 0;
-    for (const value of samples) { sum += value * value; peak = Math.max(peak, Math.abs(value)); }
-    const rms = Math.sqrt(sum / samples.length);
-    const db = 20 * Math.log10(Math.max(rms * 1.4, peak * 0.6, 1e-5));
-    const level = Math.min(1, Math.max(0, (db + 55) / 55)) ** 1.3;
-    const s = studio.status;
-    studio.levels.push({ v: level, live: Boolean(studio.starting || (s.active && s.phase === "recording")) });
-    if (studio.levels.length > 2400) studio.levels.splice(0, 600);
-  }, 50);
-  renderMonitor();
-  const stream = studio.micStream;
-  const loop = () => { if (studio.micStream !== stream) return; drawWave(); requestAnimationFrame(loop); };
-  loop();
-}
-
-const ICONS = { audio: "M9 18V5l12-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm12-2a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" };
-function sizeText(bytes) { return bytes > 1e9 ? (bytes / 1e9).toFixed(1) + " GB" : bytes > 1e6 ? (bytes / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(bytes / 1e3)) + " KB"; }
-
-function renderLibrary() {
-  const box = $("library");
-  if (!box) return;
-  for (const button of $("libFilters").children) button.classList.toggle("on", button.dataset.filter === studio.filter);
-  box.textContent = "";
-  const items = studio.library.filter((item) => studio.filter === "all" || item.kind === studio.filter);
-  if (!items.length) { box.append(h("div", { class: "empty", text: studio.library.length ? "Nothing of this kind yet." : "No captures yet. Take a screenshot or start a recording." })); return; }
-  for (const item of items.slice(0, 120)) {
-    const pic = h("div", { class: "pic" });
-    if (item.kind === "audio") pic.append(svgIcon(ICONS.audio));
-    else pic.append(h("img", { src: media("/media/thumb", item.name), alt: "", loading: "lazy" }));
-    if (item.duration) pic.append(h("span", { class: "len", text: format(item.duration) }));
-    const when = new Date(item.modified).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-    box.append(h("button", { class: "item", title: item.name, onclick: () => openViewer(item) }, pic,
-      h("div", { class: "cap" }, h("b", { text: item.name }), h("span", { text: when + " · " + sizeText(item.size) }))));
-  }
 }
 
 function openViewer(item) {
@@ -1431,7 +2352,7 @@ function openViewer(item) {
   if (item.kind !== "image") {
     const mark = h("span", { class: "mark", text: "trim: start – end" });
     const show = () => { mark.textContent = "trim: " + (studio.trim.from === null ? "start" : format(studio.trim.from)) + " – " + (studio.trim.to === null ? "end" : format(studio.trim.to)); };
-    const convert = select((item.kind === "video" ? [["mp4", "MP4"], ["mov", "MOV"], ["gif", "GIF"], ["m4a", "Audio M4A"], ["mp3", "Audio MP3"]] : [["mp3", "MP3"], ["m4a", "M4A"], ["wav", "WAV"]]).filter(([value]) => !item.name.toLowerCase().endsWith("." + value)), "", () => {});
+    const convert = studioSelect((item.kind === "video" ? [["mp4", "MP4"], ["mov", "MOV"], ["gif", "GIF"], ["m4a", "Audio M4A"], ["mp3", "Audio MP3"]] : [["mp3", "MP3"], ["m4a", "M4A"], ["wav", "WAV"]]).filter(([value]) => !item.name.toLowerCase().endsWith("." + value)), "", () => {});
     tools.append(h("span", { class: "sep" }),
       h("button", { text: "Set start", title: "Trim from the player position", onclick: () => { studio.trim.from = player.currentTime; show(); } }),
       h("button", { text: "Set end", onclick: () => { studio.trim.to = player.currentTime; show(); } }),
@@ -1461,8 +2382,8 @@ function openViewer(item) {
 }
 
 async function fileWave(item, player, canvas) {
-  const bars_ = Math.max(60, Math.min(1200, Math.floor((canvas.clientWidth || 900) / 4)));
-  const { status, data } = await api("GET", "/api/studio/wave?name=" + encodeURIComponent(item.name) + "&bars=" + bars_);
+  const count = Math.max(60, Math.min(1200, Math.floor((canvas.clientWidth || 900) / 4)));
+  const { status, data } = await api("GET", "/api/studio/wave?name=" + encodeURIComponent(item.name) + "&bars=" + count);
   if (status !== 200 || studio.item !== item) { if (status !== 200) canvas.remove(); return; }
   const peaks = data.peaks;
   const total = () => (Number.isFinite(player.duration) && player.duration > 0 ? player.duration : data.duration) || 1;
@@ -1502,7 +2423,8 @@ function closeViewer() {
   studio.item = null;
 }
 $("viewer").addEventListener("click", (event) => { if (event.target === $("viewer")) closeViewer(); });
-$("recPill").addEventListener("click", () => setView("studio"));
+$("recPill").addEventListener("click", () => { if (state.view !== "studio") setView("studio"); });
+window.addEventListener("resize", () => { if (state.view === "studio" && studio.tab === "record") drawStage(); });
 
 """
 
@@ -1814,11 +2736,11 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width
     <dt><kbd>n</kbd></dt><dd>New card (Today: quick add)</dd>
     <dt><kbd>/</kbd></dt><dd>Search cards</dd>
     <dt><kbd>space</kbd></dt><dd>Start / pause the focus timer</dd>
-    <dt><kbd>1</kbd> … <kbd>6</kbd></dt><dd>Board, Today, Stats, Games, Studio, Canvas</dd>
+    <dt><kbd>1</kbd> … <kbd>6</kbd></dt><dd>Board, Today, Stats, Games, Studio, Canvas (on the Studio Record tab the digits pick scenes)</dd>
     <dt><kbd>Esc</kbd></dt><dd>Clear search and tag filter</dd>
     <dt>double-click</dt><dd>Edit a card; drag cards between columns</dd>
     <dt>Games</dt><dd>While a game runs every key goes to it: arrows/WASD, Space, P pause, Esc leaves. Mouse works as in the terminal.</dd>
-    <dt>Studio</dt><dd><kbd>r</kbd> start / stop recording, <kbd>p</kbd> pause / resume. Recording runs <code>ul capture</code>, so it keeps going when the page is closed.</dd>
+    <dt>Studio</dt><dd>Record tab: <kbd>r</kbd> start (after the countdown) / stop, <kbd>p</kbd> pause / resume, <kbd>m</kbd> mark, <kbd>1</kbd> … <kbd>9</kbd> scenes. Drag a source to move it (corners and edges snap; a corner pins it), drag its yellow corner to resize, <kbd>⌥</kbd>-drag to pan inside it. Recording runs <code>ul capture</code>, so it keeps going when the page is closed; every recording becomes a project you export from the Projects tab.</dd>
     <dt>Canvas</dt><dd>Photoshop-style keys; a tool stays until you pick another. <kbd>v</kbd> select, <kbd>h</kbd> hand (or hold <kbd>space</kbd>), <kbd>n</kbd> card, <kbd>t</kbd> text, <kbd>u</kbd> shapes (<kbd>Shift</kbd>+<kbd>u</kbd> cycles rectangle, ellipse, diamond, line, arrow; also <kbd>r</kbd> <kbd>o</kbd> <kbd>l</kbd> <kbd>a</kbd>), <kbd>b</kbd> brush, <kbd>g</kbd> fill (<kbd>Alt</kbd>+click clears; open space reaching the edge of the view fills the background), <kbd>e</kbd> eraser (<kbd>Shift</kbd>+<kbd>e</kbd> switches whole object / only where it passes). Click an active eraser or shape tool again for its options (shape evenness 3 perfect, 2, 1 rougher). The fill tool floods the area of the clicked color like a paint program. <kbd>[</kbd> <kbd>]</kbd> or <kbd>-</kbd> <kbd>=</kbd> stroke width (slider 1-100; click the number to type one), <kbd>d</kbd> default color, <kbd>Cmd/Ctrl</kbd>+<kbd>G</kbd> group, <kbd>Cmd/Ctrl</kbd>+<kbd>0</kbd> fit, <kbd>Cmd/Ctrl</kbd>+<kbd>+</kbd> <kbd>-</kbd> zoom, <kbd>Del</kbd> delete, arrows nudge, <kbd>Cmd/Ctrl</kbd>+<kbd>Z</kbd> <kbd>C</kbd> <kbd>V</kbd> <kbd>D</kbd> <kbd>A</kbd>. Wheel pans, <kbd>Ctrl</kbd>+wheel or pinch zooms, double-click edits text, drag a side dot of a card to connect. The name left of the tools renames the file.</dd>
     <dt><kbd>?</kbd></dt><dd>This list</dd>
   </dl>
@@ -5567,6 +6489,7 @@ document.addEventListener("keydown", (event) => {
   }
   if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.key === "?") { $("help").classList.toggle("on"); return; }
+  if (studioKeydown(event)) return;
   if (state.view === "canvas") {
     if (event.key >= "1" && event.key <= "6") setView(VIEWS[Number(event.key) - 1]);
     return;
@@ -5579,8 +6502,6 @@ document.addEventListener("keydown", (event) => {
   }
   else if (event.key === " ") { event.preventDefault(); togglePlay(); }
   else if (event.key >= "1" && event.key <= "6") setView(VIEWS[Number(event.key) - 1]);
-  else if (state.view === "studio" && event.key === "r") toggleRecord();
-  else if (state.view === "studio" && event.key === "p") pauseRecord();
 });
 
 // ---- start ----
@@ -5594,11 +6515,12 @@ async function start() {
   setInterval(() => { if (!document.hidden && state.view === "games" && arcade.session) loadGames(); }, 5000);
   setInterval(drawTimer, 500);
   setInterval(drawRecording, 250);
-  setInterval(() => { if (!document.hidden && studio.info?.available) return loadRecordStatus(); }, 8000);
+  scheduleStudioPoll();
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) { if (state.view === "games") pauseGame(); return; }
     loadBoard(false);
     loadTimer();
+    scheduleStudioPoll(true);
   });
 }
 start();
@@ -6958,6 +7880,8 @@ class Handler(BaseHTTPRequestHandler):
             path = Path(str(data.get("thumbnail") if isinstance(data, dict) else ""))
         elif url.path == "/media/project":
             path = self.studio.project_file(query.get("path", [""])[0], query.get("file", [""])[0])
+        elif url.path == "/media/asset":
+            path = self.studio.asset_file(query.get("name", [""])[0])
         elif url.path == "/media/canvas":
             target = self.desk.canvas_asset(query.get("path", [""])[0], query.get("file", [""])[0])
             kind = CANVAS_IMAGES.get(target.suffix.casefold())
@@ -7354,6 +8278,15 @@ class Studio:
         data = self.run("status", timeout=20)
         assert isinstance(data, dict)
         data["saving_done"] = self.last
+        if not data.get("active"):
+            # capture reports the free space only while recording; the page shows it before, too.
+            folder = storage_path("captures")
+            while not folder.exists() and folder != folder.parent:
+                folder = folder.parent
+            try:
+                data["free_bytes"] = shutil.disk_usage(folder).free
+            except OSError:
+                data["free_bytes"] = None
         return data
 
     def record(self, body: dict) -> object:
@@ -7649,6 +8582,17 @@ class Studio:
         if not target.is_file() or not target.resolve().is_relative_to(folder.resolve()):
             raise FileNotFoundError("unknown project file")
         return target
+
+    @staticmethod
+    def asset_file(name: object) -> Path:
+        """An image or rendered text in storage.root/studio/assets (no folders, no symlinks)."""
+        folder = storage_path("studio", "assets")
+        if not isinstance(name, str) or not name or "/" in name or "\x00" in name or name.startswith("."):
+            raise FileNotFoundError("unknown asset")
+        path = folder / name
+        if path.suffix.casefold() not in ASSET_MAGIC or path.is_symlink() or not path.is_file() or path.resolve().parent != folder.resolve():
+            raise FileNotFoundError("unknown asset")
+        return path
 
     def project_thumb(self, raw: object) -> Path:
         """The first frame of the project's screen (or camera) track, through `ul capture thumb`."""
