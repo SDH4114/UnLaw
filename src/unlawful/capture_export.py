@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .capture_project import (
+    _even,
     ProjectError,
     canvas_size,
     effective_placements,
@@ -210,10 +211,6 @@ def export_settings(project: dict, setup_export: dict, overrides: dict) -> dict:
     settings.update(chosen)
     settings["delete_sources"] = bool(chosen.get("delete_sources", False))
     return validate_export(settings, "export")
-
-
-def _even(value: float) -> int:
-    return max(2, int(round(value / 2)) * 2)
 
 
 def _even_up(value: float) -> int:

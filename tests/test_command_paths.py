@@ -791,6 +791,123 @@ class CaptureTests(ToolTestCase):
         self.assertEqual((folder / "media" / "screen-001.mp4").read_bytes(), b"old screen")
         self.assertFalse(parts.exists())
 
+    def test_new_argument_errors(self) -> None:
+        cases = {
+            ("record", "--canvas", "21:9"): "--canvas must be one of 16:9, 9:16, 1:1, 4:5, source",
+            ("record", "--cam-quality", "ultra"): "--cam-quality must be max, high or light",
+            ("record", "--mic-format", "ogg"): "--mic-format must be flac, wav or m4a",
+            ("record", "--countdown", "x"): "--countdown needs a whole number from 0",
+            ("export",): "usage: ul capture export",
+            ("export", "last", "--height", "720"): "--height must be 1080, 1440 or 2160",
+            ("export", "last", "--fps", "24"): "--fps must be 30 or 60",
+            ("export", "last", "--canvas", "3:2"): "--canvas must be one of",
+            ("scene",): "usage: ul capture scene",
+            ("project",): "usage: ul capture project",
+            ("doctor", "--open", "keys"): "--open takes screen, camera or microphone",
+        }
+        for args, message in cases.items():
+            with self.subTest(args=args):
+                code, _, error = self.run_main(capture.main, list(args))
+                self.assertEqual(code, 2)
+                self.assertIn(message, error)
+
+    def test_projects_export_and_json_contracts(self) -> None:
+        self.media_tools()
+        code, _, error = self.run_main(capture.main, ["export", "last"])
+        self.assertEqual(code, 2)
+        self.assertIn("no Studio projects yet", error)
+        self.ok("record")
+        stop = json.loads(self.ok("stop", "--json"))
+        listed = json.loads(self.ok("projects", "--json"))
+        self.assertEqual(listed[0]["path"], stop["project"])
+        self.assertEqual((listed[0]["state"], listed[0]["mode"]), ("ready", "screen"))
+        self.assertIn(Path(stop["project"]).name, self.ok("projects"))
+        out = json.loads(self.ok("export", "last", "--canvas", "source", "--format", "mp4", "--json"))
+        self.assertTrue(out["saved"].endswith(" source.mp4"))
+        self.assertEqual(out["project"], stop["project"])
+        self.assertEqual(json.loads(self.ok("export", "--status", "--json"))["phase"], "done")
+        detail = json.loads(self.ok("project", "last", "--json"))
+        self.assertEqual(detail["path"], stop["project"])
+        self.assertEqual(detail["exports"][0]["path"], out["saved"])
+        self.assertEqual(json.loads(self.ok("project", Path(stop["project"]).name, "--json"))["path"], stop["project"])
+
+    def test_project_edits_keep_what_was_recorded(self) -> None:
+        self.media_tools()
+        self.ok("record")
+        folder = Path(json.loads(self.ok("stop", "--json"))["project"])
+        project = json.loads(self.ok("project", "last", "--json"))
+        project["layouts"]["16:9"]["screen"]["background"] = {"kind": "color", "color": "#112233"}
+        project["segments"] = []
+        project["state"] = "ready"
+        project["exports"] = [{"path": "/etc/passwd"}]
+        with patch.object(capture.sys, "stdin", io.StringIO(json.dumps(project))):
+            self.ok("project", str(folder), "--set-json", "-")
+        saved = json.loads((folder / "project.json").read_text())
+        self.assertEqual(saved["layouts"]["16:9"]["screen"]["background"]["color"], "#112233")
+        self.assertEqual(len(saved["segments"]), 1, "recorded segments are never replaced")
+        self.assertEqual(saved["exports"], [])
+        project["layouts"]["16:9"]["screen"]["background"] = {"kind": "color", "color": "red"}
+        with patch.object(capture.sys, "stdin", io.StringIO(json.dumps(project))):
+            code, _, error = self.run_main(capture.main, ["project", str(folder), "--set-json", "-"])
+        self.assertEqual(code, 2)
+        self.assertIn("colour", error)
+
+    def test_record_output_still_gives_a_file(self) -> None:
+        self.media_tools()
+        original = self.root / "start"
+        original.mkdir()
+        os.chdir(original)
+        self.ok("record", "--output", "talk.mp4")
+        os.chdir(self.root)
+        result = json.loads(self.ok("stop", "--json"))
+        self.assertEqual(result["saved"], str(original / "talk.mp4"), "the file name's extension picks the container")
+        self.assertTrue((original / "talk.mp4").is_file())
+        self.assertTrue(Path(result["project"]).is_dir(), "the project stays for other formats")
+        self.ok("record")
+        result = json.loads(self.ok("stop", "--export", "--canvas", "9:16", "--json"))
+        self.assertTrue(result["saved"].endswith(" 9x16.mov"))
+
+    def test_setup_round_trip_and_doctor(self) -> None:
+        logs = self.media_tools()
+        setup = json.loads(self.ok("setup", "--json"))
+        self.assertEqual(setup["canvas"], "16:9")
+        setup["canvas"] = "9:16"
+        with patch.object(capture.sys, "stdin", io.StringIO(json.dumps(setup))):
+            self.ok("setup", "--set-json", "-")
+        self.assertEqual(json.loads(self.ok("setup", "--json"))["canvas"], "9:16")
+        setup["countdown"] = 99
+        with patch.object(capture.sys, "stdin", io.StringIO(json.dumps(setup))):
+            code, _, error = self.run_main(capture.main, ["setup", "--set-json", "-"])
+        self.assertEqual(code, 2)
+        self.assertIn("setup.countdown", error)
+        self.ok("setup", "--reset")
+        self.assertEqual(json.loads(self.ok("setup", "--json"))["canvas"], "16:9")
+        doctor = json.loads(self.ok("doctor", "--json"))
+        self.assertEqual((doctor["screen"], doctor["ffmpeg"]), (True, True))
+        self.assertIn("app", doctor)
+        self.assertIn("Screen Recording: allowed", self.ok("doctor"))
+        self.ok("doctor", "--open", "camera")
+        self.assertEqual(self.lines(logs["open"])[-1], "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")
+
+    def test_devices_with_camera_modes(self) -> None:
+        self.media_tools()
+        data = json.loads(self.ok("devices", "--modes", "--json"))
+        self.assertEqual(data["modes"]["FaceTime HD Camera"][0]["width"], 1920)
+        self.assertIn("1920x1080 15-30 fps", self.ok("devices", "--modes", "--camera", "facetime"))
+
+    def test_delete_moves_a_project_to_the_trash(self) -> None:
+        self.media_tools()
+        self.ok("record")
+        folder = Path(json.loads(self.ok("stop", "--json"))["project"])
+        self.assertIn("Moved to the Trash", self.ok("delete", folder.name))
+        self.assertFalse(folder.exists())
+        self.assertTrue((self.root / "home" / ".Trash" / folder.name / "project.json").is_file())
+
+    def test_help_is_static_and_lists_new_actions(self) -> None:
+        help_text = self.ok("--help")
+        for word in ("record [screen", "scene", "mark", "projects", "export", "setup", "doctor", "--canvas", "--cam-quality", "--mic-format", "stop --force"):
+            self.assertIn(word, help_text)
+
     def test_delete_refuses_an_absolute_symlink_to_a_capture(self) -> None:
         target = storage_path("captures", "screenshots", "original.png")
         target.write_bytes(b"keep")

@@ -169,57 +169,91 @@ Examples: ul awake 2h --display
           ul awake --lid -- make build
           ul awake schedule add 23:00-06:00 --days weekdays
 ''',
-    "capture": '''Screenshots and screen, camera and audio recordings on macOS.
-Usage: ul capture                 a menu: pick what to capture (in a terminal)
+    "capture": '''Screenshots, screen/camera/audio recording projects and video export on macOS.
+Usage: ul capture                 the studio in a terminal (scenes, sources, REC, export)
        ul capture shot [screen|area|window] [options] [PATH]
        ul capture record [screen|camera|audio] [options] [PATH]
-       ul capture pause | resume | stop | status
-       ul capture list | last | open | reveal | copy | delete | trim | convert | devices
+       ul capture pause | resume | status | scene N | mark [TEXT] | stop [--force] [--export]
+       ul capture projects | project X | export X [options] | setup | doctor | devices [--modes]
+       ul capture list | last | open | reveal | copy | delete | trim | convert | wave
 Screenshots (shot):
   screen (default) the whole display; area / window let you select with the mouse
   --display N      which display (1 = main; see `devices`)   --delay S  wait S seconds
   --clipboard      copy instead of saving   --cursor  include the pointer
   --jpg            JPEG instead of PNG      --open    open the file afterwards
-Recording (record) runs in the background until `ul capture stop`:
-  screen (default) the display with system audio (macOS screencapture) and the
-                   microphone; --camera puts the camera in a corner (capture.overlay)
-  camera           the camera with the microphone
-  audio            the microphone only (m4a, mp3 or wav)
+Recording (record) runs in the background until `ul capture stop`. Every recording is a
+project folder in storage.root/captures/projects: the screen, the camera and the
+microphone are separate files in media/, and project.json says how to put them
+together (scenes, layouts per format, marks). Nothing is re-encoded while recording.
+  screen (default) the display with the Mac's sound and the microphone
+  camera           the camera with the microphone (scene Camera)
+  audio            the microphone only
+  --camera / --no-camera   add the camera to a screen recording (or not)
+  --scene N|ID     the scene to start with (1 Screen + camera, 2 Screen, 3 Camera, 4 Side by side)
+  --canvas C       16:9, 9:16, 1:1, 4:5 or source: the format the project opens in
   --mic NAME|N     microphone by name or number; --no-mic records without it
   --cam NAME|N     camera by name or number (default: capture.camera_device)
+  --cam-mode WxH@FPS|auto   a camera mode from `devices --modes` (auto: 1080p, highest fps)
+  --cam-quality max|high|light   camera file: 1080p 12 Mbps, 1080p 6 Mbps (default), 720p 3 Mbps
+  --mic-format flac|wav|m4a      microphone file: lossless flac (default), wav, or AAC
   --system-audio / --no-system-audio   sound of the Mac (screen only)
   --display N      --rect X,Y,W,H (part of the screen, in points)   --no-clicks
-  --format F       mov|mp4 for video, m4a|mp3|wav for audio
+  --countdown N    wait N seconds before recording
   --duration S     record S seconds in the foreground, then save
   --wait           stay in the foreground: Enter stops, p + Enter pauses
-  pause / resume   pause and continue; the parts are joined when you stop
-  stop             stop and save (adds the camera and microphone; may take a moment)
-  status           what is recording, for how long, and where it goes
+  --export         export right after stop (with the last export settings)
+  --output PATH    export to PATH after stop (.mov or .mp4 picks the container)
+  --format F       mov|mp4 (or m4a|mp3|wav for audio): the export's container
+  pause / resume   pause and continue; every pause starts a new part
+  scene N|ID       switch the scene now (it is written into the timeline)
+  mark [TEXT]      put a marker at the current time
+  stop             stop every recorder together and save the project; a recorder that
+                   does not stop is never killed: the rest is saved and `stop` tries again
+  stop --force     end a recorder that hangs (its track is lost)
+  stop --export [export options]   save and export at once
+  status           what is recording, for how long, the scene, mic level and warnings
+Projects and export (the export never changes the project):
+  projects         the projects, newest first, with state, length, size and exports
+  project X        a project's details (X: name, folder or `last`); --remember lists a
+                   folder from elsewhere; --set-json - saves edits read from stdin
+  export X         render a video: --canvas 16:9|9:16|1:1|4:5|source (source = the screen
+                   as recorded, ready in seconds), --height 1080|1440|2160 (short side),
+                   --fps 60|30, --codec h264|hevc, --quality high|max, --format mov|mp4,
+                   --no-normalize (loudness -14 LUFS is on), --delete-sources (move the
+                   project to the Trash afterwards), --output PATH, --background
+                   Defaults: the project's last export, else the last one anywhere,
+                   else 16:9 1440p 60 fps H.264 (vertical formats 1080).
+  export --status  progress of the running export
+  setup            the studio setup (sources, devices, scenes, layouts, export defaults)
+                   as JSON; --set-json - saves it from stdin, --reset restores defaults
+  doctor           Screen Recording permission, ffmpeg, and which app needs the
+                   permissions; --open screen|camera|microphone opens System Settings
 Library:
-  list [N] [--all] the newest captures with kind, length and size
+  list [N] [--all] the newest exported files and screenshots with kind, length and size
   last [--reveal]  open the newest capture (or show it in Finder)
   open|reveal X    open a capture, or show it in Finder (X: name, path or `last`)
   copy X           put a screenshot on the clipboard
-  delete X         move a capture to the Trash (only from the capture folders)
+  delete X         move a capture or a project to the Trash (only from the capture folders)
   trim X --from T [--to T]   cut a recording exactly (T: seconds or m:ss); keeps the original
   convert X --to mp4|mov|gif|m4a|mp3|wav   a new file next to the original
   devices          displays, cameras and microphones with their numbers
+  devices --modes [--camera NAME]   the modes each camera offers (turns its light on briefly)
   wave X [--bars N] the loudness of a recording as bars (like Voice Memos)
   thumb X / preview [--display N]   small JPEGs (used by `ul desk`)
 Add --json to any action for machine-readable output.
-Files: storage.root/captures/screenshots and /recordings; never overwritten (" 2" is added).
+Files: storage.root/captures/projects, /recordings (exports) and /screenshots; never
+  overwritten (" 2" is added). The studio setup is storage.root/studio/setup.json.
 Settings: capture.audio_device and capture.camera_device (`default` = what macOS
   uses, a name, or a number from `devices`), capture.screen_audio (microphone in
   screen recordings, true), capture.system_audio (true), capture.show_clicks (true),
-  capture.video_format (mov), capture.audio_format (m4a), capture.overlay
-  (bottom-right, bottom-left, top-right, top-left).
-Permissions: the terminal (or the app running ul) needs Screen Recording, Camera
-  and Microphone in System Settings > Privacy & Security.
+  capture.video_format (mov) and capture.audio_format (m4a) for exports.
+Permissions: macOS gives Screen Recording, Camera and Microphone to the app that
+  starts ul (Ghostty, Zed, ...). `ul capture doctor` names it.
 Dependencies: macOS screencapture; ffmpeg + ffprobe (brew install ffmpeg) for the
-  camera, a non-default microphone, audio, pause, MP4, trim and convert.
-`ul desk` has a Studio tab with the same controls, a preview and a player.
-Examples: ul capture shot area; ul capture record --camera; ul capture stop
-  ul capture record audio --duration 60; ul capture convert last --to gif
+  camera, the microphone track, audio, export, trim and convert.
+`ul desk` has a Studio tab with the same controls, a live layout and an export dialog.
+Examples: ul capture record --camera; ul capture scene 3; ul capture stop
+  ul capture export last --canvas 9:16; ul capture record audio --duration 60
 ''',
     "cpp": '''Create a C++ project from the configured templates.
 Usage: ul cpp <project-name> [--std 11|14|17|20|23|26] [--git]

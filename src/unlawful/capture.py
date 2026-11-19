@@ -23,27 +23,37 @@ from pathlib import Path
 from unlawful.command_help import COMMAND_HELP
 
 from .capture_mac import LEVELS_FILE, BackendError, backend, pick_mode, virtual_device
+from .capture_export import ExportError, export_project, export_settings, read_export_status
 from .capture_project import (
     CAMERA_QUALITY,
     CANVASES,
+    CODECS,
+    FPS,
+    HEIGHTS,
     MIC_FORMATS,
+    QUALITIES,
     ProjectError,
     add_event,
     create_project,
+    default_setup,
     load_setup,
     projects_dir,
     read_project,
+    save_setup,
     segment_starts,
+    write_json_atomic,
     write_project,
 )
 from .config import ConfigError, load_config, storage_path
 
-USAGE = """Usage: ul capture                      (menu: pick what to capture)
+USAGE = """Usage: ul capture                      (the studio in a terminal)
        ul capture shot [screen|area|window] [--display N] [--delay S] [--clipboard] [--cursor] [--jpg] [--open] [--output PATH]
-       ul capture record [screen|camera|audio] [--camera] [--mic NAME|--no-mic] [--system-audio|--no-system-audio]
-                         [--display N] [--rect X,Y,W,H] [--format mov|mp4|m4a|mp3|wav] [--duration S] [--wait] [--output PATH]
-       ul capture pause|resume|stop|status
-       ul capture list|last|open|reveal|copy|delete|trim|convert|devices
+       ul capture record [screen|camera|audio] [--camera] [--scene N] [--canvas C] [--mic NAME|--no-mic] [--cam NAME]
+                         [--cam-quality max|high|light] [--mic-format flac|wav|m4a] [--display N] [--rect X,Y,W,H]
+                         [--duration S] [--wait] [--countdown N] [--export] [--output PATH]
+       ul capture pause|resume|status|scene N|mark [TEXT]|stop [--force] [--export]
+       ul capture projects|project X|export X [options]|setup|doctor|devices [--modes]
+       ul capture list|last|open|reveal|copy|delete|trim|convert
 Run `ul capture --help` for details.
 """
 
@@ -794,6 +804,12 @@ def start_recording(
             raise CaptureError(
                 f"video format must be one of {', '.join(VIDEO_FORMATS)}"
             )
+    if not fmt and options.get("output"):
+        suffix = Path(options["output"]).suffix[1:].casefold()
+        if mode == "audio" and suffix in AUDIO_FORMATS:
+            audio_format = suffix
+        elif mode != "audio" and suffix in VIDEO_FORMATS:
+            video_format = suffix
     rect = options.get("rect")
     if rect is not None:
         numbers = rect.split(",")
@@ -1344,7 +1360,7 @@ def _stuck_message(stuck: list[str]) -> str:
     )
 
 
-def stop_recording(*, force: bool = False) -> dict:
+def stop_recording(*, force: bool = False, export: dict | None = None) -> dict:
     """Stop all recorders and save the project; a recorder that hangs is reported, not killed."""
     with _locked():
         state = _load_state()
@@ -1356,6 +1372,8 @@ def stop_recording(*, force: bool = False) -> dict:
                     state["problems"].append(
                         f"the {item['track']} recorder stopped during the recording"
                     )
+        if export is not None:
+            state["export"] = {**(state["export"] or {}), **export}
         stuck = _stop_segment(state, force=force)
         _stop_helpers(state)
         state["phase"] = "saving"
@@ -1368,7 +1386,6 @@ def stop_recording(*, force: bool = False) -> dict:
                 error = CaptureError(_stuck_message(stuck), 1)
                 error.data = {"stuck": stuck, "project": result["project"]}
                 raise error
-            result = _export_after_stop(state, result)
         except CaptureError:
             if recording_state_file().exists() and state["phase"] != "stuck":
                 state["phase"] = "unsaved"
@@ -1380,7 +1397,7 @@ def stop_recording(*, force: bool = False) -> dict:
                 _write_json(recording_state_file(), state)
             raise
         recording_state_file().unlink(missing_ok=True)
-    return result
+    return _export_after_stop(state, result)
 
 
 def _stop_helpers(state: dict) -> None:
@@ -1390,7 +1407,218 @@ def _stop_helpers(state: dict) -> None:
 
 
 def _export_after_stop(state: dict, result: dict) -> dict:
-    return result
+    """`record --output/--export` and `stop --export`: export right away (outside the recording lock,
+    so a new recording can start meanwhile). A failed export keeps the saved project."""
+    if state["export"] is None:
+        return result
+    folder = Path(result["project"])
+    overrides = dict(state["export"])
+    if state["output"] and state["mode"] != "audio":
+        overrides["container"] = Path(state["output"]).suffix[1:].casefold()
+    try:
+        project = read_project(folder)
+        setup, _ = load_setup()
+        settings = export_settings(project, setup["export"], overrides)
+        path = export_project(folder, settings, Path(state["output"]) if state["output"] else None)
+    except (ExportError, ProjectError) as error:
+        return {**result, "export_error": str(error)}
+    return {**result, "saved": str(path)}
+
+
+# ---------------------------------------------------------------- projects
+
+
+def _recent_projects_file() -> Path:
+    return storage_path("studio", "recent-projects.json")
+
+
+def _recent_projects() -> list[str]:
+    try:
+        data = json.loads(_recent_projects_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [item for item in data if isinstance(item, str)] if isinstance(data, list) else []
+
+
+def remember_project(folder: Path) -> None:
+    """Projects opened from elsewhere (a moved folder) stay listed; at most 20."""
+    items = [str(folder)] + [item for item in _recent_projects() if item != str(folder)]
+    write_json_atomic(_recent_projects_file(), items[:20])
+
+
+def _project_folders() -> list[Path]:
+    root = projects_dir()
+    found = [item for item in root.iterdir() if (item / "project.json").is_file()] if root.is_dir() else []
+    for item in _recent_projects():
+        path = Path(item)
+        if (path / "project.json").is_file() and path not in found:
+            found.append(path)
+    return found
+
+
+def project_summary(folder: Path) -> dict | None:
+    try:
+        project = read_project(folder)
+    except ProjectError:
+        return None
+    size = sum(item.stat().st_size for item in (folder / "media").iterdir() if item.is_file()) if (folder / "media").is_dir() else 0
+    return {
+        "name": project["name"],
+        "path": str(folder),
+        "created": project["created"],
+        "mode": project["mode"],
+        "state": project["state"],
+        "problems": project["problems"],
+        "duration": project["duration"],
+        "size": size,
+        "tracks": sorted({track for segment in project["segments"] for track in segment["files"]}, key=TRACK_ORDER.index),
+        "exports": [item.get("path") for item in project["exports"] if isinstance(item.get("path"), str)],
+        "canvas": project["export"]["canvas"],
+    }
+
+
+def list_projects() -> list[dict]:
+    items = [summary for folder in _project_folders() if (summary := project_summary(folder))]
+    items.sort(key=lambda item: item["created"], reverse=True)
+    return items
+
+
+def find_project(name: str) -> Path:
+    """`last`, a project name in the projects folder, or the path of a project folder."""
+    if name == "last":
+        items = list_projects()
+        if not items:
+            raise CaptureError("no Studio projects yet; record one with `ul capture record`")
+        return Path(items[0]["path"])
+    if "/" not in name and (projects_dir() / name / "project.json").is_file():
+        return projects_dir() / name
+    path = Path(name).expanduser().absolute()
+    if (path / "project.json").is_file():
+        return path
+    if path.name == "project.json" and path.is_file():
+        return path.parent
+    raise CaptureError(f"no Studio project named {name!r}; see `ul capture projects`")
+
+
+# Recorded facts a page or a person editing project.json can never change.
+_RECORDED_KEYS = ("format", "version", "name", "created", "mode", "state", "problems", "duration", "segments", "exports")
+
+
+def update_project(folder: Path, data: object) -> dict:
+    """Save edits (layouts, scenes, sources, sound, events, export choices) and keep what was recorded."""
+    if not isinstance(data, dict):
+        raise CaptureError("a project must be a JSON object")
+    try:
+        current = read_project(folder)
+        merged = {**current, **{key: value for key, value in data.items() if key not in _RECORDED_KEYS and key != "path"}}
+        for key in _RECORDED_KEYS:
+            merged[key] = current[key]
+        write_project(folder, merged)
+    except ProjectError as error:
+        raise CaptureError(str(error)) from error
+    return merged
+
+
+def _export_flags(rest: list[str]) -> dict:
+    """Export choices from flags; unknown values are refused with the allowed ones."""
+    chosen: dict = {}
+    for flag, key, allowed, cast in (
+        ("--canvas", "canvas", CANVASES, str),
+        ("--height", "height", HEIGHTS, int),
+        ("--fps", "fps", FPS, int),
+        ("--codec", "codec", CODECS, str),
+        ("--quality", "quality", QUALITIES, str),
+        ("--format", "container", ("mov", "mp4"), str),
+    ):
+        value = _take(rest, flag)
+        if value is None:
+            continue
+        names = [str(item) for item in allowed]
+        if value not in names:
+            listing = ", ".join(names[:-1]) + " or " + names[-1] if flag != "--canvas" else ", ".join(names)
+            raise CaptureError(f"{flag} must be {'one of ' if flag == '--canvas' else ''}{listing}")
+        chosen[key] = cast(value)
+    if _flag(rest, "--no-normalize"):
+        chosen["normalize"] = False
+    elif _flag(rest, "--normalize"):
+        chosen["normalize"] = True
+    if _flag(rest, "--delete-sources"):
+        chosen["delete_sources"] = True
+    return chosen
+
+
+def export_recording(name: str, overrides: dict, output: str | None = None) -> dict:
+    folder = find_project(name)
+    try:
+        project = read_project(folder)
+        setup, _ = load_setup()
+        settings = export_settings(project, setup["export"], overrides)
+        path = export_project(folder, settings, Path(output).expanduser().absolute() if output else None)
+    except (ExportError, ProjectError) as error:
+        raise CaptureError(str(error), 1) from error
+    return {"saved": str(path), "project": str(folder), "settings": settings}
+
+
+def _export_in_background(arguments: list[str]) -> dict:
+    """Re-run the same export detached (the desk does not wait minutes for an HTTP answer)."""
+    program = os.environ.get("UNLAW_BIN")
+    if not program:
+        raise CaptureError("--background needs UNLAW_BIN (run it through ul)", 2)
+    log = storage_path("runtime", "export-background.log")
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("ab") as stream:
+        subprocess.Popen(
+            [program, "capture", "export", *arguments],
+            stdin=subprocess.DEVNULL,
+            stdout=stream,
+            stderr=stream,
+            start_new_session=True,
+        )
+    return {"queued": True}
+
+
+def doctor() -> dict:
+    mac = _backend()
+    return {
+        "screen": mac.permission_probe()["screen"],
+        "app": mac.responsible_app(),
+        "ffmpeg": shutil.which("ffmpeg") is not None,
+        "ffprobe": shutil.which("ffprobe") is not None,
+        "screencapture": shutil.which("screencapture") is not None,
+    }
+
+
+def _doctor_text(info: dict) -> str:
+    app = info["app"] or "the app that runs ul"
+    lines = [
+        f"Screen Recording: {'allowed' if info['screen'] else f'NOT allowed for {app}'}",
+        f"ffmpeg: {'found' if info['ffmpeg'] else 'missing (brew install ffmpeg): no camera, microphone track or export'}",
+        f"ffprobe: {'found' if info['ffprobe'] else 'missing (comes with ffmpeg)'}",
+        f"Permissions belong to the app that starts ul ({app}).",
+        "Camera and Microphone are checked when a recording starts; to change them:",
+        "  ul capture doctor --open screen|camera|microphone",
+    ]
+    return "\n".join(lines)
+
+
+def _projects_text(items: list[dict]) -> str:
+    if not items:
+        return "No Studio projects yet. Try: ul capture record"
+    return "\n".join(
+        f"{item['created'][:16].replace('T', ' ')}  {item['state']:<10}  {_clock(item['duration']):>8}"
+        f"  {item['size'] / 1e6:8.1f} MB  {item['name']}" + (f"  ({len(item['exports'])} exported)" if item["exports"] else "")
+        for item in items
+    )
+
+
+def _modes_text(modes: dict) -> str:
+    lines = []
+    for name, items in modes.items():
+        lines.append(f"{name}:")
+        lines += [
+            f"  {item['width']}x{item['height']} {float(item['min_fps']):g}-{float(item['max_fps']):g} fps" for item in items
+        ] or ["  no modes reported"]
+    return "\n".join(lines) or "No cameras."
 
 
 # ---------------------------------------------------------------- library
@@ -1495,6 +1723,18 @@ def _inside_captures(path: Path) -> bool:
 
 
 def delete_capture(name: str) -> Path:
+    try:
+        folder = find_project(name) if name != "last" else None
+    except CaptureError:
+        folder = None
+    if folder is not None:
+        if folder.is_symlink() or folder.parent != projects_dir():
+            raise CaptureError("delete only removes projects from the projects folder")
+        trash = Path.home() / ".Trash"
+        trash.mkdir(exist_ok=True)
+        target = _free(trash / folder.name)
+        shutil.move(str(folder), target)
+        return target
     path = find_capture(name)
     if not _inside_captures(path) or path.is_symlink():
         raise CaptureError("delete only removes files from the capture folders")
@@ -1837,6 +2077,13 @@ def _describe(info: dict) -> str:
     return line
 
 
+def _countdown(seconds: int, *, quiet: bool) -> None:
+    for left in range(seconds, 0, -1):
+        if not quiet:
+            print(f"Recording in {left}…", file=sys.stderr, flush=True)
+        time.sleep(1)
+
+
 def _saved_text(result: dict) -> str:
     if result["saved"] != result.get("project"):
         return f"Saved: {result['saved']}"
@@ -2065,12 +2312,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             duration_text = _take(rest, "--duration")
             duration = _number(duration_text, "--duration", 0, 1) if duration_text is not None else None
             wait = _flag(rest, "--wait")
+            countdown = _number(_take(rest, "--countdown"), "--countdown", 0)
             if rest and not rest[0].startswith("-") and options["output"] is None:
                 options["output"] = rest.pop(0)
             if rest:
                 raise CaptureError(f"unexpected argument: {rest[0]}")
             if options.get("camera") and mode != "screen":
                 raise CaptureError("--camera adds the camera to a screen recording")
+            _countdown(min(countdown, 60), quiet=as_json)
             info = start_recording(
                 mode, scene=scene, canvas=canvas, overrides={key: value for key, value in options.items() if value is not None}
             )
@@ -2095,12 +2344,125 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if action == "stop":
             force = _flag(rest, "--force")
+            export = _flag(rest, "--export")
+            chosen = _export_flags(rest)
             if rest:
-                raise CaptureError("stop takes no arguments (only --force)")
-            result = stop_recording(force=force)
+                raise CaptureError("stop takes no arguments (only --force and --export with export flags)")
+            if chosen and not export:
+                raise CaptureError("export flags need --export")
+            result = stop_recording(force=force, export=chosen if export else None)
+            if result.get("export_error"):
+                print(f"unlaw capture: the project was saved, but the export failed: {result['export_error']}", file=sys.stderr)
             _print(result, as_json, _saved_text(result))
             return 0
-        if rest and action in {"pause", "resume", "status", "devices"}:
+        if action == "devices":
+            modes = _flag(rest, "--modes")
+            camera = _take(rest, "--camera")
+            if rest:
+                raise CaptureError(f"unexpected argument: {rest[0]}")
+            info = devices()
+            if not modes and camera is None:
+                _print(info, as_json, _devices_text(info))
+                return 0
+            names = info["cameras"]
+            if camera is not None:
+                resolved = _resolve(camera, names, "camera")
+                names = [resolved] if resolved else []
+            info["modes"] = {name: _backend().camera_modes(name, refresh=True) for name in names}
+            _print(info, as_json, _modes_text(info["modes"]))
+            return 0
+        if action == "projects":
+            if rest:
+                raise CaptureError(f"unexpected argument: {rest[0]}")
+            items = list_projects()
+            _print(items, as_json, _projects_text(items))
+            return 0
+        if action == "project":
+            set_json = _take(rest, "--set-json")
+            remember = _flag(rest, "--remember")
+            if len(rest) != 1 or set_json not in (None, "-"):
+                raise CaptureError("usage: ul capture project NAME|PATH|last [--set-json -] [--remember]")
+            folder = find_project(rest[0])
+            if set_json == "-":
+                try:
+                    data = json.loads(sys.stdin.read())
+                except ValueError as error:
+                    raise CaptureError(f"not JSON: {error}") from error
+                update_project(folder, data)
+            if remember:
+                remember_project(folder)
+            try:
+                project = read_project(folder)
+            except ProjectError as error:
+                raise CaptureError(str(error), 1) from error
+            summary = project_summary(folder) or {}
+            _print({**project, "path": str(folder), "size": summary.get("size", 0)}, as_json, _projects_text([summary]))
+            return 0
+        if action == "export":
+            if _flag(rest, "--status"):
+                if rest:
+                    raise CaptureError(f"unexpected argument: {rest[0]}")
+                info = read_export_status()
+                text = f"{info.get('phase', 'idle')} {info.get('percent', '')}% {info.get('output') or info.get('error') or ''}".strip()
+                _print(info, as_json, text)
+                return 0
+            background = _flag(rest, "--background")
+            arguments = list(rest)
+            output = _take(rest, "--output")
+            chosen = _export_flags(rest)
+            if len(rest) != 1 or rest[0].startswith("-"):
+                raise CaptureError(
+                    "usage: ul capture export NAME|PATH|last [--canvas C] [--height H] [--fps F] [--codec C] "
+                    "[--quality Q] [--format mov|mp4] [--no-normalize] [--delete-sources] [--output PATH] [--background]"
+                )
+            if background:
+                folder = find_project(rest[0])
+                arguments[arguments.index(rest[0])] = str(folder)
+                write_json_atomic(
+                    storage_path("runtime", "export.json"),
+                    {"project": str(folder), "phase": "queued", "percent": 0, "eta": None, "output": None, "error": None},
+                )
+                info = _export_in_background(arguments)
+                _print(info, as_json, "Export started; see `ul capture export --status`.")
+                return 0
+            if not as_json and sys.stderr.isatty():
+                print("Exporting… (ul capture export --status shows the progress)", file=sys.stderr, flush=True)
+            result = export_recording(rest[0], chosen, output)
+            _print(result, as_json, f"Saved: {result['saved']}")
+            return 0
+        if action == "setup":
+            set_json = _take(rest, "--set-json")
+            reset = _flag(rest, "--reset")
+            if rest or set_json not in (None, "-"):
+                raise CaptureError("usage: ul capture setup [--set-json -] [--reset]")
+            try:
+                if reset:
+                    save_setup(default_setup(_settings()))
+                elif set_json == "-":
+                    try:
+                        data = json.loads(sys.stdin.read())
+                    except ValueError as error:
+                        raise CaptureError(f"not JSON: {error}") from error
+                    save_setup(data)
+                setup, warnings = load_setup()
+            except ProjectError as error:
+                raise CaptureError(str(error)) from error
+            for warning in warnings:
+                print(f"Note: {warning}", file=sys.stderr)
+            _print(setup, as_json, json.dumps(setup, indent=2, ensure_ascii=False))
+            return 0
+        if action == "doctor":
+            kind = _take(rest, "--open")
+            if rest:
+                raise CaptureError(f"unexpected argument: {rest[0]}")
+            if kind is not None:
+                if kind not in ("screen", "camera", "microphone"):
+                    raise CaptureError("--open takes screen, camera or microphone")
+                subprocess.run(["open", _backend().settings_url(kind)], check=False)
+            info = doctor()
+            _print(info, as_json, _doctor_text(info))
+            return 0
+        if rest and action in {"pause", "resume", "status"}:
             raise CaptureError(f"{action} takes no arguments")
         if action == "pause":
             info = pause_recording()
@@ -2113,10 +2475,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         if action == "status":
             info = status()
             _print(info, as_json, _describe(info))
-            return 0
-        if action == "devices":
-            info = devices()
-            _print(info, as_json, _devices_text(info))
             return 0
         if action == "list":
             show_all = _flag(rest, "--all")
