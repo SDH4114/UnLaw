@@ -1,8 +1,9 @@
-const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const raw = fs.readFileSync(path.join(__dirname, '../src/unlawful/desk_ui.py'), 'utf8');
+const {execFileSync} = require('node:child_process');
+// The page is assembled by Python (desk_ui.PAGE with the Studio code from studio_ui.py injected).
+const raw = execFileSync(process.env.PYTHON || 'python3', ['-c', 'import sys; sys.path.insert(0, "src"); from unlawful.desk_ui import PAGE; sys.stdout.write(PAGE)'], {cwd: path.join(__dirname, '..'), encoding: 'utf8'});
 const script = raw.split('<script>')[1].split('</script>')[0].replace(/start\(\);\s*$/, '');
 // No browser, HTTP or operating-system media API is available in this VM.
 function harness() {
@@ -71,7 +72,11 @@ function harness() {
   });
   vm.runInContext(script + `
     globalThis.audit = {studio, state, arcade, toggleRecord, loadRecordStatus,
-      leaveStudio, toggleCamera, toggleMeter, stopStream, start, sendGame, pollWhileBusy, drawCell,
+      leaveStudio, toggleCamera, toggleMeter, stopStream, start, sendGame, drawCell,
+      applyShape, pinPlacement, placementPx, snapPlacement, moveFocus, resizePlacement, studioKey, studioPollDelay,
+      countdownSteps, saveSetupSoon, permissionBanner, openSettings,
+      renderStudio, renderStudioBody, renderSources, updateRecordControls,
+      projectClock, sceneAt, exportDefaults, exportHeightFor, renderExportDialog, startExport, pollExport, renderProjects, openProject, changePlacement, projectAction,
       cv, mulberry32, toScreen, toWorld, zoomAt, fitView, roughStrokes, hitElement, hitTest, edgeCurve, hitEdge,
       nearestSide, resizeBox, handleAt, applyBox, wrapText, adaptInk, nodeColor, noteName, makeLinear, makeFreedraw,
       snapAngle, applyStyle, containedIds, groupAround, moveItems, removeItems, copyItems, pasteItems, makeHistory,
@@ -85,6 +90,39 @@ function harness() {
   return {context, a: context.audit, listeners, timers, intervals, frames, ids,
     run: code => vm.runInContext(code, context)};
 }
+// harness() plus a tiny DOM: ids, text that clears children, firstChild; enough to render whole Studio tabs.
+function treeHarness() {
+  const h = harness();
+  const E = h.context.Node;
+  Object.defineProperty(E.prototype, 'textContent', {configurable: true, get() { return this._text || ''; }, set(value) { this._text = String(value); this.children = []; }});
+  Object.defineProperty(E.prototype, 'firstChild', {configurable: true, get() { return this.children.find(child => typeof child !== 'string') || null; }});
+  E.prototype.setAttribute = function (key, value) { (this.attrs = this.attrs || {})[key] = value; if (key === 'id') this.id = value; };
+  E.prototype.getBoundingClientRect = () => ({left: 0, top: 0, right: 640, bottom: 360, width: 640, height: 360});
+  h.context.Image = class { set src(value) { this.url = value; } };
+  const main = new E('main');
+  const find = (id, node = main) => {
+   if (node.id === id && node.isConnected) return node;
+   for (const child of node.children || []) {
+    if (typeof child === 'string') continue;
+    const found = find(id, child);
+    if (found) return found;
+   }
+   return null;
+  };
+  const byId = h.context.document.getElementById;
+  h.context.document.getElementById = id => find(id) || byId(id);
+  return {...h, main, find};
+}
+// A recorded project as `ul capture project --json` describes it (the setup copied, one segment, a mark).
+function sampleProject() {
+  const setup = sampleSetup();
+  setup.sources[1].enabled = true;
+  return {format: 'unlaw-studio-project', version: 1, name: 'talk', path: '/p/talk', size: 100, created: '2026-11-19T22:15:00+04:00',
+    mode: 'screen', state: 'ready', problems: [], duration: 5, sources: setup.sources, audio: setup.audio,
+    segments: [{duration: 5, files: {screen: 'media/screen-001.mp4', camera: 'media/camera-001.mp4', mic: 'media/mic-001.flac'}, starts: {screen: 0, camera: 0.31, mic: 0.94}}],
+    scenes: setup.scenes, layouts: setup.layouts, events: [{t: 0, scene: 'screen-camera'}, {t: 2, mark: 'intro done'}],
+    export: setup.export, exports: []};
+}
 function deferred() {
   let resolve, reject;
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
@@ -95,6 +133,15 @@ function stream() {
   return {track, getTracks() { return [track]; }};
 }
 const plain = value => JSON.parse(JSON.stringify(value));
+const textOf = node => node == null ? '' : typeof node === 'string' ? node : [node.textContent || '', ...(node.children || []).map(textOf)].join(' ');
+let setupJson = null;
+// The default Studio setup exactly as capture writes it.
+function sampleSetup() {
+  if (setupJson === null) {
+    setupJson = execFileSync(process.env.PYTHON || 'python3', ['-c', 'import sys, json; sys.path.insert(0, "src"); from unlawful.capture_project import default_setup; print(json.dumps(default_setup({})))'], {cwd: path.join(__dirname, '..'), encoding: 'utf8'});
+  }
+  return JSON.parse(setupJson);
+}
 const response = data => ({status: 200, json: async () => data});
 function sampleShape() {
   return {path: '/c/a.canvas', name: 'a', version: 'v1', canvas: {
@@ -130,7 +177,8 @@ const tests = {
  async camera_lookup_leave() {
   const h = harness(), devices = deferred(), cam = stream();
   h.a.state.view = 'studio';
-  h.a.studio.cam = 'Webcam';
+  h.a.studio.setup = sampleSetup();
+  h.a.studio.setup.sources[1].device = 'Webcam';
   let opens = 0;
   h.context.navigator.mediaDevices.getUserMedia = async () => { opens++; return cam; };
   h.context.navigator.mediaDevices.enumerateDevices = () => devices.promise;
@@ -146,7 +194,8 @@ const tests = {
  async microphone_lookup_leave() {
   const h = harness(), devices = deferred(), mic = stream();
   h.a.state.view = 'studio';
-  h.a.studio.mic = 'Microphone';
+  h.a.studio.setup = sampleSetup();
+  h.a.studio.setup.audio.mic.device = 'Microphone';
   let opens = 0;
   h.context.navigator.mediaDevices.getUserMedia = async () => { opens++; return mic; };
   h.context.navigator.mediaDevices.enumerateDevices = () => devices.promise;
@@ -176,6 +225,8 @@ const tests = {
   for (const active of [false, true]) {
    const h = harness();
    h.a.state.view = 'studio';
+   h.a.studio.setup = sampleSetup();
+   h.a.studio.setup.countdown = 0;
    h.a.studio.status = {active, phase: active ? 'recording' : undefined};
    let calls = 0;
    h.context.fetch = async () => { calls++; throw Error('connection reset'); };
@@ -186,17 +237,6 @@ const tests = {
    await h.a.toggleRecord().catch(() => {});
    assert.ok(calls > before, 'another click must reach the server');
   }
- },
- async game_network() {
-  const h = harness();
-  h.a.arcade.session = 'session';
-  h.context.fetch = async () => { throw Error('connection reset'); };
-  await h.a.sendGame([{key: 'up'}]).catch(() => {});
-  assert.equal(h.a.arcade.sending, false, 'input sender must recover from fetch failure');
-  let calls = 0;
-  h.context.fetch = async () => { calls++; return response({}); };
-  await h.a.sendGame([{key: 'down'}]);
-  assert.equal(calls, 1);
  },
  async camera_leave() {
   const h = harness(), pending = deferred(), cam = stream();
@@ -211,17 +251,22 @@ const tests = {
   assert.equal(h.a.studio.camStream, null);
  },
  async camera_record() {
-  const h = harness(), pending = deferred(), cam = stream();
+  const h = harness(), cam = stream();
   h.a.state.view = 'studio';
-  h.a.studio.mode = 'camera';
-  h.context.navigator.mediaDevices.getUserMedia = () => pending.promise;
-  h.context.fetch = async () => response({active: true, phase: 'recording', elapsed: 0});
-  const job = h.a.toggleCamera();
+  h.a.studio.setup = sampleSetup();
+  h.a.studio.setup.countdown = 0;
+  h.a.studio.setup.sources[1].enabled = true;
+  h.context.navigator.mediaDevices.getUserMedia = async () => cam;
+  await h.a.toggleCamera();
+  const sent = [];
+  h.context.fetch = async (url, options) => { sent.push([url, options.body]); return response({active: true, phase: 'recording', elapsed: 0}); };
   await h.a.toggleRecord();
-  pending.resolve(cam);
-  await job;
-  assert.equal(cam.track.stopped, true, 'recording must keep the camera released for ffmpeg');
-  assert.equal(h.a.studio.camStream, null);
+  assert.equal(sent[0][0], '/api/studio/record');
+  assert.deepEqual(JSON.parse(sent[0][1]), {scene: 'screen-camera', canvas: '16:9'}, 'the page records the saved setup');
+  assert.equal(cam.track.stopped, false, 'the live camera preview stays while recording (spec 9)');
+  assert.equal(h.a.studio.camStream, cam);
+  h.a.leaveStudio();
+  assert.equal(cam.track.stopped, true, 'leaving the Studio still releases it');
  },
  async microphone_leave() {
   const h = harness(), pending = deferred(), mic = stream();
@@ -284,12 +329,331 @@ const tests = {
   let calls = 0;
   h.context.fetch = async () => { calls++; return response({active: true, phase: 'recording', elapsed: 2}); };
   await h.a.start();
-  const periodic = [...h.intervals.values()].find(x => x.ms === 8000);
-  await periodic.fn();
-  await Promise.resolve();
+  const idle = [...h.timers.entries()].find(([, x]) => x.ms === 5000);
+  assert.ok(idle, 'an idle Studio polls every 5 s for recordings started elsewhere');
+  h.timers.delete(idle[0]);
+  await idle[1].fn();
   assert.equal(calls, 1, 'visible Studio must poll for terminal recording changes');
   assert.equal(h.a.studio.status.active, true);
-  assert.ok([...h.timers.values()].some(x => x.ms === 1500), 'an observed active recording must keep polling');
+  assert.ok([...h.timers.values()].some(x => x.ms === 1000), 'an observed active recording polls every second on the Studio tab');
+  h.context.document.hidden = true;
+  const next = [...h.timers.entries()].find(([, x]) => x.ms === 1000);
+  h.timers.delete(next[0]);
+  await next[1].fn();
+  assert.equal(calls, 1, 'a hidden page does not poll');
+  assert.ok(![...h.timers.values()].some(x => x.ms === 1000 || x.ms === 5000), 'and schedules nothing until it is visible again');
+ },
+ async studio_record_tab_renders() {
+  // The whole Record tab is built in a small DOM (ids, children, text): no exception, and the pieces are there.
+  const h = treeHarness();
+  const a = h.a;
+  a.state.view = 'studio';
+  a.studio.info = {available: true, settings: {}};
+  a.studio.setup = sampleSetup();
+  a.studio.setup.sources[1].enabled = true;
+  a.studio.devices = {displays: [{number: 1, name: 'Color LCD', pixels: '3024 x 1964'}], cameras: ['FaceTime HD Camera'], microphones: [{name: "Haos's Phone Microphone", virtual: false}, {name: 'BlackHole 2ch', virtual: true}], ffmpeg: true};
+  a.studio.doctor = {screen: false, app: 'Ghostty'};
+  a.studio.status = {active: false, free_bytes: 182e9};
+  h.context.fetch = async (url) => response(url.startsWith('/api/studio/doctor') ? {screen: false, app: 'Ghostty'} : url.startsWith('/api/studio/status') ? {active: false, free_bytes: 182e9} : {});
+  a.renderStudio(h.main);
+  const scenes = h.find('scenesPane');
+  assert.equal(scenes.children[1].children.length, 4, 'four default scenes');
+  assert.match(textOf(scenes), /Screen \+ camera/);
+  assert.match(textOf(h.find('permBanner')), /Ghostty/);
+  const stage = h.find('stage');
+  assert.equal(stage.children.filter(n => /\bph\b/.test(n.className)).length, 2, 'screen and camera are drawn in the 16:9 screen-camera scene');
+  const cam = stage.children.filter(n => /\bph\b/.test(n.className))[1];
+  assert.deepEqual([cam.style.left, cam.style.top, cam.style.width], ['0%', '76%', '24%']);
+  assert.ok(stage.children.some(n => /\bfloat\b/.test(n.className)), 'the selected camera has its mini toolbar');
+  assert.match(textOf(h.find('soundPane')), /Haos's Phone Microphone/);
+  assert.match(textOf(h.find('soundPane')), /BlackHole 2ch \(virtual\)/);
+  assert.match(textOf(h.find('propsPane')), /FaceTime HD Camera/);
+  assert.match(textOf(h.find('outputPane')), /FLAC lossless/);
+  assert.match(textOf(h.find('recInfo')), /3024×1964 · 60 fps/);
+  assert.match(textOf(h.find('recInfo')), /free 182 GB · ≈ 93 MB\/min/);
+  // Format switch: 9:16 stacks the camera on top at 40 %.
+  a.studio.setup.canvas = '9:16';
+  a.renderStudioBody();
+  const tall = h.find('stage').children.filter(n => /\bph\b/.test(n.className));
+  assert.deepEqual(tall.map(n => [n.style.top, n.style.height]), [['40%', '60%'], ['0%', '40%']], 'screen below, camera on top (z order = sources)');
+  // A recording that is stuck offers the forced stop.
+  a.studio.status = {active: true, phase: 'stuck', stuck: ['screencapture'], warnings: ['the microphone is silent (below -60 dB for 10 s)'], elapsed: 3, free_bytes: 2e9};
+  a.updateRecordControls();
+  assert.match(textOf(h.find('warnStrip')), /microphone is silent/);
+  assert.match(textOf(h.find('warnStrip')), /screencapture does not stop/);
+  // Text in source names stays text.
+  a.studio.setup.sources.push({id: 'text-1', kind: 'text', enabled: true, asset: 'x.png', text: '<b>hi</b>', font: 'Georgia, serif', size: 64, color: '#ffffff', background: null});
+  a.renderSources();
+  assert.match(textOf(h.find('sourcesPane')), /Text “<b>hi<\/b>”/);
+  a.studio.tab = 'projects';
+  a.renderStudioBody();
+  assert.ok(h.find('studioProjects'), 'the Projects tab renders');
+ },
+ async project_clock_maps_segments() {
+  const h = harness();
+  const p = {segments: [{duration: 10}, {duration: 5}]};
+  assert.deepEqual(plain(h.a.projectClock(p, 12.5)), {segment: 1, local: 2.5});
+  assert.deepEqual(plain(h.a.projectClock(p, 99)), {segment: 1, local: 5});
+  assert.deepEqual(plain(h.a.projectClock(p, 0)), {segment: 0, local: 0});
+  assert.deepEqual(plain(h.a.projectClock(p, 10)), {segment: 1, local: 0}, 'a boundary belongs to the next segment');
+  assert.deepEqual(plain(h.a.projectClock(p, -3)), {segment: 0, local: 0});
+  assert.deepEqual(plain(h.a.projectClock({segments: []}, 3)), {segment: -1, local: 0});
+  // The scene shown at a moment comes from the scene events (marks do not change it).
+  const events = {events: [{t: 0, scene: 'screen-camera'}, {t: 4, scene: 'camera'}, {t: 5, mark: 'x'}, {t: 12, scene: 'screen'}]};
+  assert.deepEqual([0, 3.9, 4, 6, 12, 50].map(t => h.a.sceneAt(events, t)), ['screen-camera', 'screen-camera', 'camera', 'camera', 'screen', 'screen']);
+ },
+ async export_dialog_prefill() {
+  const h = harness();
+  assert.equal(h.a.exportDefaults({export: {canvas: '9:16', height: 1080}}, {export: {canvas: '16:9', height: 1440, fps: 60}}).canvas, '9:16');
+  assert.equal(h.a.exportDefaults({}, {export: {canvas: '16:9', height: 1440, fps: 60}}).height, 1440);
+  assert.equal(h.a.exportDefaults({mode: 'camera', export: {canvas: '16:9'}}, {export: {height: 1440}}).height, 1080, 'a camera-only project defaults to the camera height');
+  assert.equal(h.a.exportDefaults({export: {delete_sources: true}}, {export: {delete_sources: true}}).delete_sources, false, 'deleting the sources is never pre-checked');
+  const all = h.a.exportDefaults({}, {});
+  assert.deepEqual(plain(all), {canvas: '16:9', height: 1440, fps: 60, codec: 'h264', quality: 'high', container: 'mov', normalize: true, delete_sources: false});
+  assert.equal(h.a.exportHeightFor('9:16', 'screen'), 1080, 'a new vertical format starts at 1080');
+  assert.equal(h.a.exportHeightFor('16:9', 'screen'), 1440);
+  assert.equal(h.a.exportHeightFor('16:9', 'camera'), 1080);
+ },
+ async export_progress_polls_until_done() {
+  const h = treeHarness(), a = h.a;
+  const sheet = new h.context.Node('viewerSheet');
+  h.main.append(sheet);
+  a.studio.setup = sampleSetup();
+  const project = sampleProject();
+  const answers = [{phase: 'running', percent: 40, eta: 12, project: project.path}, {phase: 'done', percent: 100, output: '/r/talk 16x9.mov', project: project.path}];
+  const sent = [];
+  h.context.fetch = async (url, options) => {
+   sent.push([url, options.body ? JSON.parse(options.body) : null]);
+   if (url === '/api/studio/export') return response({queued: true});
+   if (url === '/api/studio/export/status') return response(answers.shift());
+   return response([]);
+  };
+  a.renderExportDialog(project);
+  assert.match(textOf(sheet), /Export talk/);
+  const values = a.exportDefaults(project, a.studio.setup);
+  values.canvas = '9:16';
+  values.height = 1080;
+  await a.startExport(project, values);
+  assert.deepEqual(sent[0], ['/api/studio/export', {path: project.path, canvas: '9:16', height: 1080, fps: 60, codec: 'h264', quality: 'high', format: 'mov', normalize: true, delete_sources: false}]);
+  assert.match(textOf(h.find('exportState')), /40%/);
+  assert.match(textOf(h.find('exportState')), /12 s left/);
+  const next = [...h.timers.entries()].find(([, x]) => x.ms === 1000);
+  assert.ok(next, 'a running export is polled every second');
+  h.timers.delete(next[0]);
+  await next[1].fn();
+  assert.match(textOf(h.find('exportState')), /Saved talk 16x9\.mov/);
+  assert.ok(![...h.timers.values()].some(x => x.ms === 1000), 'polling stops when the export is done');
+  // A failed export says why and stops too.
+  answers.push({phase: 'failed', error: 'disk full', project: project.path});
+  await a.pollExport();
+  assert.match(textOf(h.find('exportState')), /Export failed: disk full/);
+  assert.ok(![...h.timers.values()].some(x => x.ms === 1000));
+  // An audio project exports sound only: no picture choices are sent.
+  sent.length = 0;
+  answers.push({phase: 'done', output: '/r/voice.m4a'});
+  await a.startExport({...project, mode: 'audio'}, a.exportDefaults(project, a.studio.setup));
+  assert.deepEqual(sent[0][1], {path: project.path, normalize: true, delete_sources: false});
+ },
+ async studio_projects_tab_renders() {
+  const h = treeHarness(), a = h.a;
+  a.state.view = 'studio';
+  a.studio.info = {available: true, settings: {}};
+  a.studio.setup = sampleSetup();
+  a.studio.tab = 'projects';
+  a.studio.filter = 'projects';
+  a.studio.projects = [{name: 'talk', path: '/p/talk', created: '2026-11-19T22:15:00+04:00', mode: 'screen', state: 'incomplete', problems: ['the camera stopped'], duration: 754.2, size: 1.4e9, tracks: ['screen', 'mic'], exports: ['/r/talk 16x9.mov', '/r/talk 9x16.mp4'], canvas: '16:9'}];
+  a.studio.library = [{name: 'shot.png', path: '/s/shot.png', kind: 'image', size: 2000, modified: '2026-11-19T22:00:00+04:00', duration: null}];
+  const sent = [];
+  h.context.fetch = async (url, options) => {
+   sent.push([url, options && options.body ? JSON.parse(options.body) : null]);
+   if (url.startsWith('/api/studio/project?')) return response(sampleProject());
+   return response({ok: true});
+  };
+  a.renderStudio(h.main);
+  const list = textOf(h.find('studioProjects'));
+  assert.match(list, /talk/);
+  assert.match(list, /12:34/);
+  assert.match(list, /incomplete/);
+  assert.match(list, /16:9 MOV/);
+  assert.match(list, /9:16 MP4/);
+  assert.match(list, /1\.4 GB/);
+  assert.match(list, /Open project…/);
+  a.studio.filter = 'screenshots';
+  a.renderProjects();
+  assert.match(textOf(h.find('studioProjects')), /shot\.png/);
+  // A project page: preview, scenes on the timeline, layout edits saved to that project.
+  await a.openProject('/p/talk');
+  assert.ok(sent.some(([url]) => url === '/api/studio/project?path=' + encodeURIComponent('/p/talk')));
+  const page = textOf(h.find('studioProjects'));
+  assert.match(page, /Screen \+ camera/);
+  assert.match(page, /intro done/);
+  assert.match(page, /Export…/);
+  assert.equal(h.find('stage').children.filter(n => /\bph\b/.test(n.className)).length, 2);
+  sent.length = 0;
+  a.changePlacement('camera', p => a.pinPlacement(p, 'top-right'));
+  const save = [...h.timers.values()].filter(x => x.ms === 500).pop();
+  await save.fn();
+  const posted = sent.find(([url]) => url === '/api/studio/project');
+  assert.ok(posted, 'layout edits on a project page go to that project');
+  assert.equal(posted[1].path, '/p/talk');
+  assert.equal(posted[1].project.layouts['16:9']['screen-camera'].placements.camera.anchor, 'top-right');
+  assert.equal(posted[1].project.path, undefined, 'only project.json keys are sent');
+  assert.equal(posted[1].project.size, undefined);
+  assert.equal(a.studio.setup.layouts['16:9']['screen-camera'].placements.camera.anchor, 'bottom-left', 'the studio setup is not touched');
+  assert.equal(a.studio.player.camera.style.transform, 'scaleX(-1)', 'the camera is mirrored like the export');
+  a.changePlacement('camera', p => ({...p, mirror: false}));
+  assert.equal(a.studio.player.camera.style.transform, '', 'the reused video element loses the mirror again');
+  sent.length = 0;
+  await a.projectAction('delete');
+  assert.deepEqual(sent[0], ['/api/studio/action', {action: 'delete', path: '/p/talk'}]);
+  assert.equal(a.studio.project, null, 'a trashed project closes');
+ },
+ async studio_shape_math() {
+  const h = harness();
+  const cam = {visible: true, box: [0, 0.76, 0.24, 0.24], fit: 'cover', focus: [0.5, 0.5], radius: 0, border: {width: 0, color: '#ffc933'}, shadow: false, mirror: true, anchor: 'bottom-left'};
+  const circle = h.a.applyShape(cam, 'circle', '16:9');
+  assert.ok(Math.abs(circle.box[3] - 0.24 * 16 / 9) < 1e-9);
+  assert.ok(Math.abs(circle.box[1] + circle.box[3] - 1) < 1e-9);
+  assert.equal(circle.radius, 0.5);
+  assert.deepEqual(plain(cam.box), [0, 0.76, 0.24, 0.24], 'shapes never change the placement in place');
+  assert.deepEqual(plain(h.a.placementPx(cam, 2560, 1440)), {x: 0, y: 1094, w: 614, h: 346});
+  const moved = h.a.snapPlacement({...cam, box: [0.015, 0.75, 0.24, 0.24], anchor: null}, '16:9');
+  assert.equal(moved.anchor, 'bottom-left');
+  assert.deepEqual(plain(moved.box), [0, 0.76, 0.24, 0.24], 'a snapped box sits flush in the corner');
+  assert.equal(h.a.snapPlacement({...cam, box: [0.3, 0.3, 0.24, 0.24]}, '16:9').anchor, null);
+  const edge = h.a.snapPlacement({...cam, box: [0.3, 0.01, 0.24, 0.24], anchor: null}, '16:9');
+  assert.deepEqual(plain(edge.box), [0.3, 0, 0.24, 0.24], 'near an edge the box snaps to it without a corner');
+  const pinned = h.a.pinPlacement({...cam, box: [0.4, 0.4, 0.2, 0.3], anchor: null}, 'top-right');
+  assert.ok(Math.abs(pinned.box[0] - 0.8) < 1e-9);
+  assert.equal(pinned.box[1], 0);
+  const bigger = h.a.resizePlacement(cam, 'top-right', 0.06, 0, true);
+  assert.ok(Math.abs(bigger.box[2] - 0.30) < 1e-9 && Math.abs(bigger.box[3] - 0.30) < 1e-9, 'the preset aspect is kept');
+  assert.ok(Math.abs(bigger.box[1] + bigger.box[3] - 1) < 1e-9 && bigger.box[0] === 0, 'a pinned box stays in its corner');
+  const tiny = h.a.resizePlacement(cam, 'top-right', -1, 0, true);
+  assert.ok(tiny.box[2] >= 0.04, 'a box never shrinks to nothing');
+  assert.deepEqual(plain(h.a.moveFocus(cam, 0.1, -0.7).focus), [0.4, 1], 'focus moves against the drag and stays inside');
+ },
+ async studio_shape_parity() {
+  // The page and the export (capture_project.apply_shape / pin) must agree on every shape and format.
+  const h = harness();
+  const cases = [];
+  for (const canvas of ['16:9', '9:16', '1:1', '4:5']) for (const shape of ['circle', 'square', 'rounded', 'wide', 'tall']) for (const anchor of [null, 'bottom-left', 'top-right']) {
+   const item = {visible: true, box: [0.3, 0.2, 0.45, 0.3], fit: 'cover', focus: [0.5, 0.5], radius: 0, border: {width: 0, color: '#ffc933'}, shadow: false, mirror: false, anchor};
+   cases.push({canvas, shape, item, page: plain(h.a.applyShape(item, shape, canvas))});
+  }
+  const python = execFileSync(process.env.PYTHON || 'python3', ['-c', 'import sys, json; sys.path.insert(0, "src"); from unlawful.capture_project import apply_shape; cases = json.load(sys.stdin); print(json.dumps([apply_shape(c["item"], c["shape"], c["canvas"]) for c in cases]))'], {cwd: path.join(__dirname, '..'), input: JSON.stringify(cases), encoding: 'utf8'});
+  JSON.parse(python).forEach((expected, index) => {
+   const got = cases[index].page;
+   for (let i = 0; i < 4; i++) assert.ok(Math.abs(got.box[i] - expected.box[i]) < 1e-9, JSON.stringify([cases[index].canvas, cases[index].shape, got.box, expected.box]));
+   assert.equal(got.radius, expected.radius);
+   assert.equal(got.anchor, expected.anchor);
+  });
+ },
+ async studio_keys_and_polling() {
+  const h = harness();
+  assert.equal(h.a.studioKey('KeyR', {active: false}), 'record');
+  assert.equal(h.a.studioKey('KeyR', {active: true}), 'stop');
+  assert.equal(h.a.studioKey('KeyP', {active: true}), 'pause');
+  assert.equal(h.a.studioKey('KeyM', {active: true}), 'mark');
+  assert.equal(h.a.studioKey('Digit3', {active: true, scenes: ['screen-camera', 'screen', 'camera']}), 'scene:camera');
+  assert.equal(h.a.studioKey('Digit9', {active: true, scenes: ['screen-camera']}), null, 'a missing scene is no key');
+  assert.equal(h.a.studioKey('KeyR', {active: false, typing: true}), null, 'keys are ignored while typing');
+  assert.equal(h.a.studioKey('KeyQ', {active: false}), null);
+  assert.equal(h.a.studioPollDelay(false, true, true), null);
+  assert.equal(h.a.studioPollDelay(true, true, true), 1000);
+  assert.equal(h.a.studioPollDelay(true, true, false), 5000);
+  assert.equal(h.a.studioPollDelay(true, false, false), 5000);
+  assert.deepEqual(plain(h.a.countdownSteps(3)), [3, 2, 1]);
+  assert.deepEqual(plain(h.a.countdownSteps(0)), []);
+ },
+ async studio_countdown_then_record() {
+  const h = harness();
+  h.a.state.view = 'studio';
+  h.a.studio.setup = sampleSetup();
+  h.a.studio.setup.countdown = 3;
+  const sent = [];
+  h.context.fetch = async (url, options) => { sent.push(url); return response({active: true, phase: 'recording', elapsed: 0}); };
+  const job = h.a.toggleRecord();
+  assert.equal(sent.length, 0, 'nothing records during the countdown');
+  assert.equal(h.a.studio.counting, 3);
+  for (const left of [2, 1]) {
+   const tick = [...h.timers.entries()].find(([, x]) => x.ms === 1000);
+   h.timers.delete(tick[0]);
+   tick[1].fn();
+   assert.equal(h.a.studio.counting, left);
+  }
+  const last = [...h.timers.entries()].find(([, x]) => x.ms === 1000);
+  h.timers.delete(last[0]);
+  last[1].fn();
+  await job;
+  assert.deepEqual(sent, ['/api/studio/record']);
+  // R again during a countdown cancels it.
+  h.a.studio.status = {active: false};
+  sent.length = 0;
+  const second = h.a.toggleRecord();
+  await h.a.toggleRecord();
+  await second;
+  assert.equal(h.a.studio.counting, 0);
+  assert.equal(sent.length, 0, 'a cancelled countdown never records');
+ },
+ async studio_setup_save_is_debounced() {
+  const h = harness();
+  h.a.studio.setup = sampleSetup();
+  const sent = [];
+  h.context.fetch = async (url, options) => { sent.push([url, JSON.parse(options.body)]); return response(JSON.parse(options.body)); };
+  h.a.studio.setup.canvas = '9:16';
+  h.a.saveSetupSoon();
+  h.a.studio.setup.canvas = '1:1';
+  h.a.saveSetupSoon();
+  const pending = [...h.timers.values()].filter(x => x.ms === 500);
+  assert.equal(pending.length, 1, 'two edits within 500 ms wait for one save');
+  await pending[0].fn();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0][0], '/api/studio/setup');
+  assert.equal(sent[0][1].canvas, '1:1', 'the last value is saved');
+  // A refused setup is reported and reloaded from the server.
+  h.context.fetch = async (url, options) => options && options.method === 'POST' ? {status: 400, json: async () => ({error: 'setup.countdown: bad'})} : response(sampleSetup());
+  h.a.studio.setup.countdown = 99;
+  h.a.saveSetupSoon();
+  await [...h.timers.values()].filter(x => x.ms === 500).pop().fn();
+  assert.equal(h.ids.get('toast').textContent, 'setup.countdown: bad');
+  assert.equal(h.a.studio.setup.countdown, 3);
+ },
+ async studio_permission_banner() {
+  const h = harness();
+  const banner = h.a.permissionBanner({screen: false, app: 'Zed'});
+  assert.match(textOf(banner), /Zed/);
+  assert.match(textOf(banner), /Screen Recording/);
+  assert.equal(h.a.permissionBanner({screen: true, app: 'Zed'}), null);
+  assert.match(textOf(h.a.permissionBanner({screen: false, app: null})), /the app that runs ul/);
+  const sent = [];
+  h.context.fetch = async (url, options) => { sent.push([url, JSON.parse(options.body)]); return response({screen: false, app: 'Zed'}); };
+  await h.a.openSettings('screen');
+  assert.deepEqual(sent, [['/api/studio/open-settings', {kind: 'screen'}]]);
+ },
+ async rec_pill_shows_terminal_recordings() {
+  const h = harness();
+  h.a.state.view = 'board';
+  h.a.studio.info = {available: true};
+  h.run('loadBoard=async()=>{};loadBoards=async()=>{};loadTimer=async()=>{};loadGames=async()=>{};loadStudioInfo=async()=>{};render=()=>{};');
+  h.context.fetch = async () => response({active: true, phase: 'recording', elapsed: 2, paused: false});
+  await h.a.start();
+  const poll = [...h.timers.entries()].find(([, x]) => x.ms === 5000);
+  h.timers.delete(poll[0]);
+  await poll[1].fn();
+  assert.match(h.ids.get('recPill').textContent, /^REC 00:0[23]$/);
+  assert.ok([...h.timers.values()].some(x => x.ms === 5000), 'off the Studio tab a recording is polled every 5 s');
+ },
+ async game_network() {
+  const h = harness();
+  h.a.arcade.session = 'session';
+  h.context.fetch = async () => { throw Error('connection reset'); };
+  await h.a.sendGame([{key: 'up'}]).catch(() => {});
+  assert.equal(h.a.arcade.sending, false, 'input sender must recover from fetch failure');
+  let calls = 0;
+  h.context.fetch = async () => { calls++; return response({}); };
+  await h.a.sendGame([{key: 'down'}]);
+  assert.equal(calls, 1);
  },
  async canvas_prng_and_rough() {
   const h = harness(), a = h.a;
