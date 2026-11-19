@@ -1030,7 +1030,7 @@ const studio = { info: null, setup: null, devices: null, modes: {}, doctor: null
   tab: localStorage.getItem("studio-tab") === "projects" ? "projects" : "record", selected: "camera", library: [], projects: [], filter: localStorage.getItem("studio-filter") || "projects",
   camStream: null, camVideo: null, micStream: null, audio: null, analyser: null, sampler: 0, levels: [], screenUrl: "", screenFailed: false, previewTimer: 0,
   drag: null, saveTimer: 0, counting: 0, countTimer: 0, countdownDone: null, menu: null, delay: 0, clipboard: false,
-  item: null, trim: { from: null, to: null }, project: null, exportJob: null, exportTimer: 0, playTimer: 0 };
+  item: null, trim: { from: null, to: null }, project: null, projectCanvas: "16:9", projectTimer: 0, player: null, projectsLoaded: false, libraryLoaded: false, exportJob: null, exportTimer: 0 };
 const media = (path, name) => path + "?t=" + encodeURIComponent(TOKEN) + (name ? "&name=" + encodeURIComponent(name) : "");
 
 // ---- studio geometry: the same numbers as capture_project.py (apply_shape, pin) and capture_export.py (placement_px) ----
@@ -1149,11 +1149,17 @@ function countdownSteps(n) { return Array.from({ length: Math.max(0, n) }, (_, i
 // ---- studio data ----
 function cameraSource() { return studio.setup ? studio.setup.sources.find((item) => item.kind === "camera") || null : null; }
 function screenSource() { return studio.setup ? studio.setup.sources.find((item) => item.kind === "screen") || null : null; }
-function sourceById(id) { return studio.setup ? studio.setup.sources.find((item) => item.id === id) || null : null; }
-function currentCanvas() { return studio.setup ? studio.setup.canvas : "16:9"; }
-function currentScene() { return (studio.status.active && studio.status.scene) || (studio.setup ? studio.setup.scene : "screen-camera"); }
+// The layout being edited: the studio setup on the Record tab, or the open project (saved to that project).
+function studioDoc() { return studio.project || studio.setup; }
+function sourceById(id) { const doc = studioDoc(); return doc ? doc.sources.find((item) => item.id === id) || null : null; }
+function currentCanvas() { return studio.project ? studio.projectCanvas : studio.setup ? studio.setup.canvas : "16:9"; }
+function currentScene() {
+  if (studio.project) return sceneAt(studio.project, studio.player ? studio.player.t : 0);
+  return (studio.status.active && studio.status.scene) || (studio.setup ? studio.setup.scene : "screen-camera");
+}
 function currentLayout() {
-  const layouts = studio.setup && studio.setup.layouts[currentCanvas()];
+  const doc = studioDoc();
+  const layouts = doc && doc.layouts[currentCanvas()];
   return layouts ? layouts[currentScene()] || null : null;
 }
 function placementOf(id) { const layout = currentLayout(); return layout ? layout.placements[id] || null : null; }
@@ -1223,7 +1229,8 @@ async function flushSetup() {
 }
 
 function edited(...parts) {
-  saveSetupSoon();
+  if (studio.project) saveProjectSoon();
+  else saveSetupSoon();
   for (const part of parts) part();
 }
 
@@ -1266,7 +1273,7 @@ async function loadRecordStatus() {
 function recordingSaved(done) {
   if (done.export_error) toast("Saved, but the export failed: " + done.export_error);
   else toast("Saved " + String(done.saved || done.project || "").split("/").pop());
-  studio.projects = [];
+  studio.projectsLoaded = false;
   if (state.view === "studio" && done.project && done.saved === done.project) openProject(done.project, true);
   else if (state.view === "studio" && studio.tab === "projects") loadProjects();
 }
@@ -1437,7 +1444,9 @@ function leaveStudio() {
   stopStream("micStream");
   closeStudioMenu();
   closeViewer();
+  if (studio.projectTimer) flushProject();
   stopProjectPlayer();
+  studio.project = null;
 }
 
 function stopStream(key) {
@@ -1575,6 +1584,7 @@ function setStudioTab(tab) {
   studio.tab = tab;
   localStorage.setItem("studio-tab", tab);
   if (tab !== "record") { clearTimeout(studio.previewTimer); stopStream("camStream"); stopStream("micStream"); }
+  if (studio.projectTimer) flushProject();
   stopProjectPlayer();
   studio.project = null;
   renderStudioBody();
@@ -1872,6 +1882,10 @@ function removeSource(id) {
 function stageRatio() {
   const canvas = currentCanvas();
   if (STUDIO_RATIOS[canvas]) return STUDIO_RATIOS[canvas][0] / STUDIO_RATIOS[canvas][1];
+  if (studio.project) {
+    const info = ((studio.project.segments[0] || {}).info || {}).screen;
+    return info && info.width && info.height ? info.width / info.height : 16 / 10;
+  }
   const display = displayInfo();
   const pixels = display && /(\d+)\s*x\s*(\d+)/.exec(display.pixels || "");
   return pixels ? Number(pixels[1]) / Number(pixels[2]) : 16 / 10;
@@ -1896,9 +1910,13 @@ function drawStage() {
   const scale = Math.min(width, height) / 1080;
   const items = [];
   if (canvas === "source") {
-    const screen = screenSource();
+    const screen = studioDoc().sources.find((source) => source.kind === "screen");
     if (screen) items.push([screen, { visible: true, box: [0, 0, 1, 1], fit: "contain", focus: [0.5, 0.5], radius: 0, border: { width: 0, color: "#000000" }, shadow: false, mirror: false, anchor: null }]);
     stage.style.background = "#000000";
+  } else if (studio.project) {
+    const [background, placed] = projectPlacements(studio.project, currentScene(), canvas);
+    stage.style.background = background.kind === "color" ? background.color : "#000000";
+    items.push(...placed);
   } else if (layout) {
     const background = layout.background;
     stage.style.background = background.kind === "color" ? background.color : "#000000";
@@ -1913,7 +1931,9 @@ function drawStage() {
   stage.append(h("span", { class: "badge", id: "stageBadge" }));
   const selected = items.find(([source]) => source.id === studio.selected);
   if (selected && selected[0].kind === "camera" && canvas !== "source") stage.append(cameraToolbar(selected[1]));
-  $("stageHint").textContent = canvas === "source" ? "As recorded: the screen exactly as captured, no layout." : "Drag to move (corners and edges snap) · drag the yellow corner to resize · ⌥-drag inside to pan · click the camera for shapes";
+  const hint = $("stageHint");
+  if (hint) hint.textContent = canvas === "source" ? "As recorded: the screen exactly as captured, no layout." : "Drag to move (corners and edges snap) · drag the yellow corner to resize · ⌥-drag inside to pan · click the camera for shapes";
+  if (studio.project) { resumePlayer(); return; }
   drawCountdown();
   drawRecording();
 }
@@ -1928,10 +1948,16 @@ function stageNode(source, item, width, height, scale, editable) {
   const fitStyle = (child) => {
     child.style.objectFit = item.fit;
     child.style.objectPosition = item.focus[0] * 100 + "% " + item.focus[1] * 100 + "%";
-    if (item.mirror) child.style.transform = "scaleX(-1)";
+    // The camera's <video> is reused across redraws, so the transform is always set (or cleared).
+    child.style.transform = item.mirror ? "scaleX(-1)" : "";
     return child;
   };
-  if (source.kind === "screen") {
+  const player = studio.project && studio.player;
+  if (player && (source.kind === "screen" || source.kind === "camera")) {
+    node.append(fitStyle(player[source.kind]));
+  } else if (player) {
+    node.append(fitStyle(h("img", { src: projectMedia(studio.project.path, "assets/" + source.asset), alt: "" })));
+  } else if (source.kind === "screen") {
     if (studio.screenUrl && !studio.screenFailed) node.append(fitStyle(h("img", { class: "screen", src: studio.screenUrl, alt: "" })));
     else node.append(h("div", { class: "camph", text: studio.screenFailed ? "No screen preview (see above)" : "Screen " + source.display }));
   } else if (source.kind === "camera") {
@@ -2013,7 +2039,7 @@ function changePlacement(id, change) {
 }
 
 function cameraToolbar(item) {
-  const id = cameraSource().id;
+  const id = studioDoc().sources.find((source) => source.kind === "camera").id;
   const bar = h("div", { class: "float" },
     shapeButtons(item, (shape) => changePlacement(id, (p) => applyShape(p, shape, currentCanvas()))),
     cornerButtons(item, (anchor) => changePlacement(id, (p) => pinPlacement(p, anchor))));
@@ -2155,6 +2181,7 @@ function placementControls(source, item) {
 }
 
 function renderProps() {
+  if (studio.project) { renderProjectProps(); return; }
   const box = $("propsPane");
   if (!box || !studio.setup) return;
   box.textContent = "";
@@ -2253,37 +2280,461 @@ async function takeShot(kind) {
   if (status !== 200) { toast(data.error || "Screenshot failed"); return; }
   if (data.clipboard) { toast("Copied to the clipboard"); return; }
   toast("Saved " + data.saved.split("/").pop());
-  studio.library = [];
+  studio.libraryLoaded = false;
 }
 
 // ---- projects tab ----
-async function loadLibrary() {
-  const { status, data } = await api("GET", "/api/studio/library");
-  if (status !== 200) return;
-  studio.library = data;
-  if (state.view === "studio" && studio.tab === "projects") renderProjects();
+const projectMedia = (path, file) => "/media/project?t=" + encodeURIComponent(TOKEN) + "&path=" + encodeURIComponent(path) + "&file=" + encodeURIComponent(file);
+const PROJECT_TRACKS = ["screen", "camera", "mic"];
+
+// Global project time -> the segment file that plays it and the time inside that segment.
+function projectClock(project, t) {
+  const segments = project.segments || [];
+  if (!segments.length) return { segment: -1, local: 0 };
+  const at = Math.max(0, t);
+  let start = 0;
+  for (let index = 0; index < segments.length; index++) {
+    const length = segments[index].duration;
+    if (at < start + length || index === segments.length - 1) return { segment: index, local: Math.min(length, Math.max(0, at - start)) };
+    start += length;
+  }
+  return { segment: -1, local: 0 };
 }
 
-async function loadProjects() {
-  const { status, data } = await api("GET", "/api/studio/projects");
-  if (status !== 200) { toast(data.error || "Could not list the projects"); return; }
-  studio.projects = data;
+function segmentStart(project, index) {
+  let start = 0;
+  for (let i = 0; i < index; i++) start += project.segments[i].duration;
+  return start;
+}
+
+// The scene shown at a moment: the last scene event at or before it (marks change nothing).
+function sceneAt(project, t) {
+  let scene = project.scenes && project.scenes.length ? project.scenes[0].id : "screen";
+  let first = true;
+  for (const event of project.events || []) {
+    if (!event.scene) continue;
+    if (first || event.t <= t + 1e-9) scene = event.scene;
+    first = false;
+    if (event.t > t + 1e-9) break;
+  }
+  return scene;
+}
+
+function sceneName(id) {
+  const doc = studioDoc();
+  const scene = doc && doc.scenes.find((item) => item.id === id);
+  return scene ? scene.name : id;
+}
+
+// What a project shows in a scene, like capture_project.effective_placements: sources that were not recorded
+// are skipped, and a scene left with only the screen uses the `screen` scene's layout.
+function projectPlacements(project, scene, canvas) {
+  const tracks = new Set();
+  for (const segment of project.segments) for (const track of Object.keys(segment.files || {})) tracks.add(track);
+  const available = new Set(project.sources.filter((source) => source.enabled && (source.kind === "image" || source.kind === "text" || tracks.has(source.kind))).map((source) => source.id));
+  const layouts = project.layouts[canvas] || {};
+  const pick = (name) => {
+    const layout = layouts[name];
+    if (!layout) return [{ kind: "color", color: "#000000" }, [], false];
+    const chosen = [];
+    let dropped = false;
+    for (const source of project.sources) {
+      const item = layout.placements[source.id];
+      if (!item || !item.visible) continue;
+      if (available.has(source.id)) chosen.push([source, item]);
+      else dropped = true;
+    }
+    return [layout.background, chosen, dropped];
+  };
+  let [background, chosen, dropped] = pick(scene);
+  const onlyScreen = chosen.length === 1 && chosen[0][0].id === "screen";
+  if (scene !== "screen" && (!chosen.length || (onlyScreen && dropped)) && layouts.screen) [background, chosen] = pick("screen");
+  return [background, chosen];
+}
+
+// ---- project player: the screen video is the clock; camera and microphone follow their `starts` ----
+function makePlayer() {
+  const screen = h("video", { playsinline: true, preload: "auto" });
+  const camera = h("video", { playsinline: true, preload: "auto" });
+  camera.muted = true;
+  const mic = h("audio", { preload: "auto" });
+  return { screen, camera, mic, segment: -1, t: 0, playing: false, timer: 0 };
+}
+
+function stopProjectPlayer() {
+  const player = studio.player;
+  if (!player) return;
+  clearInterval(player.timer);
+  for (const track of PROJECT_TRACKS) {
+    const node = player[track];
+    if (node.pause) node.pause();
+    if (node.removeAttribute) node.removeAttribute("src");
+  }
+  studio.player = null;
+}
+
+function clockTrack(segment) { return PROJECT_TRACKS.find((track) => segment.files && segment.files[track]) || null; }
+function playMedia(node) { const playing = node.play && node.play(); if (playing && playing.catch) playing.catch(() => {}); }
+function setMediaTime(node, value) {
+  if (node.readyState >= 1) node.currentTime = value;
+  else node.addEventListener("loadedmetadata", () => { node.currentTime = value; }, { once: true });
+}
+
+function seekProject(t) {
+  const project = studio.project, player = studio.player;
+  if (!project || !player) return;
+  const { segment, local } = projectClock(project, t);
+  if (segment < 0) return;
+  const before = currentScene();
+  const part = project.segments[segment], starts = part.starts || {};
+  if (segment !== player.segment) {
+    player.segment = segment;
+    for (const track of PROJECT_TRACKS) {
+      const file = part.files && part.files[track];
+      if (file) player[track].src = projectMedia(project.path, file);
+      else { if (player[track].pause) player[track].pause(); if (player[track].removeAttribute) player[track].removeAttribute("src"); }
+    }
+  }
+  player.t = segmentStart(project, segment) + local;
+  for (const track of PROJECT_TRACKS) if (part.files && part.files[track]) setMediaTime(player[track], Math.max(0, local - (starts[track] || 0)));
+  resumePlayer();
+  drawPlayerClock();
+  if (currentScene() !== before) { drawStage(); renderProjectProps(); }
+}
+
+function resumePlayer() {
+  const player = studio.player;
+  if (!player || !player.playing || !studio.project) return;
+  const part = studio.project.segments[player.segment];
+  if (part) for (const track of PROJECT_TRACKS) if (part.files && part.files[track]) playMedia(player[track]);
+}
+
+function toggleProjectPlay() {
+  const player = studio.player;
+  if (!player) return;
+  player.playing = !player.playing;
+  if (player.playing) {
+    if (player.t >= studio.project.duration - 0.05) seekProject(0);
+    resumePlayer();
+  } else for (const track of PROJECT_TRACKS) if (player[track].pause) player[track].pause();
+  drawPlayerClock();
+}
+
+function syncPlayer() {
+  const project = studio.project, player = studio.player;
+  if (!project || !player || player.segment < 0) return;
+  const part = project.segments[player.segment], clock = clockTrack(part);
+  if (!clock) return;
+  const starts = part.starts || {};
+  const local = (player[clock].currentTime || 0) + (starts[clock] || 0);
+  const before = currentScene();
+  player.t = segmentStart(project, player.segment) + Math.min(local, part.duration);
+  if (player.playing) {
+    for (const track of PROJECT_TRACKS) {
+      if (track === clock || !part.files[track]) continue;
+      const node = player[track], wanted = local - (starts[track] || 0);
+      if (wanted < 0) { if (!node.paused) node.pause(); continue; }
+      if (Math.abs(node.currentTime - wanted) > 0.25) node.currentTime = wanted;
+      if (node.paused && !node.ended) playMedia(node);
+    }
+    if (player[clock].ended || local >= part.duration - 0.03) {
+      if (player.segment + 1 < project.segments.length) seekProject(segmentStart(project, player.segment + 1));
+      else { player.playing = false; for (const track of PROJECT_TRACKS) if (player[track].pause) player[track].pause(); }
+    }
+  }
+  drawPlayerClock();
+  if (currentScene() !== before) { drawStage(); renderProjectProps(); }
+}
+
+function drawPlayerClock() {
+  const player = studio.player, project = studio.project;
+  if (!player || !project) return;
+  const time = $("projTime"), seek = $("projSeek"), play = $("projPlay");
+  if (time) time.textContent = clockText(player.t) + " / " + clockText(project.duration);
+  if (seek && document.activeElement !== seek) seek.value = String(player.t);
+  if (play) play.textContent = player.playing ? "❚❚" : "▶";
+}
+
+// ---- projects list ----
+async function loadLibrary() {
+  studio.libraryLoaded = true;
+  const { status, data } = await api("GET", "/api/studio/library");
+  if (status !== 200) return;
+  studio.library = Array.isArray(data) ? data : [];
   if (state.view === "studio" && studio.tab === "projects" && !studio.project) renderProjects();
 }
 
-function stopProjectPlayer() {}
-function openProject(path) { setStudioTab("projects"); return path; }
+async function loadProjects() {
+  studio.projectsLoaded = true;
+  const { status, data } = await api("GET", "/api/studio/projects");
+  if (status !== 200) { toast(data.error || "Could not list the projects"); return; }
+  studio.projects = Array.isArray(data) ? data : [];
+  if (state.view === "studio" && studio.tab === "projects" && !studio.project) renderProjects();
+}
+
+function exportLabel(path) {
+  const found = /\s(16x9|9x16|1x1|4x5|source)(?:\s\d+)?\.(\w+)$/.exec(path);
+  return found ? found[1].replace("x", ":") + " " + found[2].toUpperCase() : String(path).split(".").pop().toUpperCase();
+}
 
 function renderProjects() {
   const box = $("studioProjects");
   if (!box) return;
+  if (studio.project) { renderProjectPage(box); return; }
   box.textContent = "";
   const filters = h("div", { class: "levels", id: "libFilters" }, [["projects", "Projects"], ["exports", "Exports"], ["screenshots", "Screenshots"]].map(([value, label]) =>
     h("button", { class: studio.filter === value ? "on" : "", text: label, onclick: () => { studio.filter = value; localStorage.setItem("studio-filter", value); renderProjects(); } })));
-  box.append(h("div", { class: "projbar" }, filters, h("span", { class: "spacer" }), h("button", { class: "ghost", text: "Refresh", onclick: () => { loadProjects(); loadLibrary(); } })));
+  box.append(h("div", { class: "projbar" }, filters, h("span", { class: "spacer" }),
+    h("button", { text: "Open project…", title: "Open a project folder from anywhere (a moved or copied project)", onclick: openProjectDialog }),
+    h("button", { class: "ghost", text: "Refresh", onclick: () => { loadProjects(); loadLibrary(); } })));
   const grid = h("div", { class: "library", id: "library" });
   box.append(grid);
+  if (studio.filter === "projects") {
+    if (!studio.projectsLoaded) loadProjects();
+    if (!studio.projects.length) { grid.append(h("div", { class: "empty", text: "No projects yet. Every recording becomes one." })); return; }
+    for (const item of studio.projects.slice(0, 200)) grid.append(projectCard(item));
+    return;
+  }
+  if (!studio.libraryLoaded) loadLibrary();
   renderLibrary(grid);
+}
+
+function projectCard(item) {
+  const pic = h("div", { class: "pic" });
+  if (item.tracks.includes("screen") || item.tracks.includes("camera")) pic.append(h("img", { src: media("/media/thumb") + "&path=" + encodeURIComponent(item.path), alt: "", loading: "lazy" }));
+  else pic.append(svgIcon(ICONS.audio));
+  pic.append(h("span", { class: "len", text: clockText(item.duration) }));
+  if (item.state !== "ready") pic.append(h("span", { class: "state " + item.state, text: item.state, title: (item.problems || []).join("\n") }));
+  const formats = item.exports.map(exportLabel);
+  const when = new Date(item.created).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return h("button", { class: "item", title: item.path, onclick: () => openProject(item.path) }, pic,
+    h("div", { class: "cap" }, h("b", { text: item.name }), h("span", { text: when + " · " + sizeText(item.size) + " · " + (formats.length ? formats.join(", ") : "not exported") })));
+}
+
+async function openProjectDialog() {
+  const { status, data } = await api("POST", "/api/studio/open-project", {});
+  if (status !== 200) { toast(data.error || "Could not open the project"); return; }
+  if (data.unavailable) { toast("The folder dialog needs macOS (osascript)"); return; }
+  if (!data.path) return;
+  studio.projectsLoaded = false;
+  await openProject(data.path);
+}
+
+// ---- one project: synced preview, timeline, layout edits saved to the project, export ----
+async function openProject(path, withExport) {
+  const { status, data } = await api("GET", "/api/studio/project?path=" + encodeURIComponent(path));
+  if (status !== 200) { toast(data.error || "Could not open the project"); return; }
+  if (studio.projectTimer) await flushProject();
+  stopProjectPlayer();
+  studio.tab = "projects";
+  localStorage.setItem("studio-tab", "projects");
+  clearTimeout(studio.previewTimer);
+  stopStream("camStream");
+  stopStream("micStream");
+  delete data.warnings;
+  studio.project = data;
+  studio.projectCanvas = STUDIO_RATIOS[data.export.canvas] ? data.export.canvas : "16:9";
+  const shown = projectPlacements(data, sceneAt(data, 0), studio.projectCanvas)[1];
+  studio.selected = shown.length ? shown[shown.length - 1][0].id : data.sources[0].id;
+  studio.player = makePlayer();
+  studio.player.timer = setInterval(syncPlayer, 200);
+  if (state.view === "studio") renderStudioBody();
+  seekProject(0);
+  if (withExport) renderExportDialog(data);
+}
+
+async function closeProject() {
+  if (studio.projectTimer) await flushProject();
+  stopProjectPlayer();
+  studio.project = null;
+  studio.projectsLoaded = false;
+  renderStudioBody();
+}
+
+function saveProjectSoon() {
+  clearTimeout(studio.projectTimer);
+  studio.projectTimer = setTimeout(flushProject, 500);
+}
+
+async function flushProject() {
+  clearTimeout(studio.projectTimer);
+  studio.projectTimer = 0;
+  const project = studio.project;
+  if (!project) return;
+  // Only project.json keys go back; capture keeps what was recorded (segments, exports, ...) from disk.
+  const body = {};
+  for (const [key, value] of Object.entries(project)) if (!["path", "size", "warnings"].includes(key)) body[key] = value;
+  const { status, data } = await api("POST", "/api/studio/project", { path: project.path, project: body });
+  if (status !== 200) toast(data.error || "Could not save the project");
+}
+
+async function projectAction(action) {
+  const project = studio.project;
+  if (!project) return;
+  if (action === "delete" && !confirm("Move the project “" + project.name + "” to the Trash? Exported videos stay.")) return;
+  const { status, data } = await api("POST", "/api/studio/action", { action, path: project.path });
+  if (status !== 200) { toast(data.error || "Failed"); return; }
+  if (action !== "delete") return;
+  toast("Moved to the Trash");
+  clearTimeout(studio.projectTimer);
+  studio.projectTimer = 0;
+  stopProjectPlayer();
+  studio.project = null;
+  studio.projects = studio.projects.filter((item) => item.path !== project.path);
+  if (state.view === "studio") renderStudioBody();
+}
+
+function renderProjectPage(box) {
+  const project = studio.project;
+  box.textContent = "";
+  const meta = [clockText(project.duration), project.state, sizeText(project.size || 0)].join(" · ");
+  box.append(h("div", { class: "projbar" },
+    h("button", { class: "ghost", text: "← Projects", onclick: closeProject }),
+    h("b", { text: project.name }), h("span", { class: "where", text: meta }), h("span", { class: "spacer" }),
+    h("div", { class: "seg fmt" }, STUDIO_FORMATS.map(([value, label]) =>
+      h("button", { class: studio.projectCanvas === value ? "on" : "", text: label, onclick: () => { studio.projectCanvas = value; renderProjectPage(box); } }))),
+    h("button", { class: "primary", text: "Export…", onclick: () => renderExportDialog(project) }),
+    h("button", { text: "Show in Finder", onclick: () => projectAction("reveal") }),
+    h("button", { class: "ghost", text: "Move to Trash", onclick: () => projectAction("delete") })));
+  if (project.problems.length) box.append(h("div", { class: "warns" }, project.problems.map((problem) => h("div", { text: "⚠ " + problem }))));
+  const seek = h("input", { type: "range", id: "projSeek", min: "0", max: String(project.duration), step: "0.01", value: "0" });
+  seek.addEventListener("input", () => seekProject(Number(seek.value)));
+  const timeline = h("div", { class: "scenelist" });
+  for (const event of project.events) {
+    if (!event.scene && !("mark" in event)) continue;
+    timeline.append(h("div", { role: "button", tabindex: "0", style: "cursor:pointer", onclick: () => seekProject(event.t) },
+      h("span", { class: "t", text: clockText(event.t) }), h("span", { text: event.scene ? sceneName(event.scene) : "⚑ " + (event.mark || "mark") })));
+  }
+  const exports = h("div", { class: "scenelist" }, project.exports.length ? project.exports.map((item) => {
+    const name = String(item.path).split("/").pop();
+    return h("div", { role: "button", tabindex: "0", style: "cursor:pointer", title: "Show in Finder", onclick: () => revealExport(name) }, h("span", { text: name }));
+  }) : h("div", { class: "where", text: "Not exported yet." }));
+  box.append(h("div", { class: "projpage" },
+    h("div", { class: "centre" },
+      h("div", { class: "stage", id: "stage" }),
+      h("div", { class: "player" }, h("button", { id: "projPlay", text: "▶", onclick: toggleProjectPlay }), seek, h("span", { class: "where", id: "projTime" })),
+      h("div", { class: "sthint", id: "stageHint" })),
+    h("div", { class: "right" },
+      h("div", { class: "pane" }, h("h5", { text: "Timeline" }), timeline),
+      h("div", { class: "pane", id: "propsPane" }),
+      h("div", { class: "pane" }, h("h5", { text: "Exports" }), exports))));
+  drawStage();
+  drawPlayerClock();
+  renderProjectProps();
+}
+
+function renderProjectProps() {
+  const box = $("propsPane");
+  if (!box || !studio.project) return;
+  box.textContent = "";
+  box.append(h("h5", { text: "Layout · " + sceneName(currentScene()) + " · " + currentCanvas() }));
+  if (currentCanvas() === "source") { box.append(h("p", { class: "note", text: "“As recorded” is the screen as captured; pick a format to change the layout." })); return; }
+  const shown = projectPlacements(studio.project, currentScene(), currentCanvas())[1].map(([source]) => source);
+  if (!shown.length) { box.append(h("p", { class: "note", text: "Nothing of this project is visible in this scene." })); return; }
+  if (!shown.some((source) => source.id === studio.selected)) studio.selected = shown[shown.length - 1].id;
+  box.append(prow("Source", studioSelect(shown.map((source) => [source.id, sourceName(source)]), studio.selected, (value) => { studio.selected = value; drawStage(); renderProjectProps(); })));
+  const source = sourceById(studio.selected), item = placementOf(studio.selected);
+  if (source && item) box.append(...placementControls(source, item));
+  else box.append(h("p", { class: "note", text: "Shown through the Screen scene's layout; edit it while that scene plays." }));
+  box.append(h("p", { class: "note", text: "Saved to this project only; the studio setup stays as it is." }));
+}
+
+async function revealExport(name) {
+  const { status, data } = await api("POST", "/api/studio/action", { action: "reveal", name });
+  if (status !== 200) toast(data.error || "Not in the recordings folder");
+}
+
+// ---- export dialog ----
+const EXPORT_DEFAULTS = { canvas: "16:9", height: 1440, fps: 60, codec: "h264", quality: "high", container: "mov", normalize: true, delete_sources: false };
+
+// Pre-fill: this project's last export, else the last settings used anywhere (setup.export), like capture's export_settings.
+function exportDefaults(project, setup) {
+  const values = { ...EXPORT_DEFAULTS };
+  for (const layer of [(setup && setup.export) || {}, (project && project.export) || {}]) {
+    for (const key of Object.keys(EXPORT_DEFAULTS)) if (key in layer) values[key] = layer[key];
+  }
+  if (project && project.mode === "camera" && !(project.export && "height" in project.export)) values.height = 1080;
+  values.delete_sources = false;
+  return values;
+}
+
+function exportHeightFor(canvas, mode) { return canvas === "16:9" && mode !== "camera" ? 1440 : 1080; }
+
+function renderExportDialog(project) {
+  const sheet = $("viewerSheet");
+  if (!sheet) return;
+  studio.item = null;
+  sheet.textContent = "";
+  const values = exportDefaults(project, studio.setup);
+  const audioOnly = project.mode === "audio";
+  const field = (label, control) => h("label", {}, label, control);
+  const tick = (label, key) => {
+    const input = h("input", { type: "checkbox" });
+    input.checked = values[key];
+    input.addEventListener("change", () => { values[key] = input.checked; });
+    return h("label", { class: "check" }, input, label);
+  };
+  sheet.append(h("div", { class: "top" }, h("b", { text: "Export " + project.name }), h("button", { class: "ghost", text: "Close", onclick: closeViewer })));
+  const form = h("div", { class: "export" });
+  if (!audioOnly) {
+    const height = studioSelect([["1080", "1080p"], ["1440", "1440p"], ["2160", "2160p (4K)"]], String(values.height), (value) => { values.height = Number(value); });
+    height.disabled = values.canvas === "source";
+    form.append(
+      field("Format", studioSelect(STUDIO_FORMATS, values.canvas, (value) => {
+        values.canvas = value;
+        values.height = exportHeightFor(value, project.mode);
+        height.value = String(values.height);
+        height.disabled = value === "source";
+      })),
+      field("Size (short side)", height),
+      field("Frame rate", studioSelect([["60", "60 fps"], ["30", "30 fps"]], String(values.fps), (value) => { values.fps = Number(value); })),
+      field("Codec", studioSelect([["h264", "H.264 (plays everywhere)"], ["hevc", "HEVC (smaller files)"]], values.codec, (value) => { values.codec = value; })),
+      field("Quality", studioSelect([["high", "High"], ["max", "Max (1.5× bitrate)"]], values.quality, (value) => { values.quality = value; })),
+      field("File", studioSelect([["mov", "MOV"], ["mp4", "MP4"]], values.container, (value) => { values.container = value; })));
+  }
+  form.append(tick("Loudness to −14 LUFS", "normalize"), tick("Delete the recorded tracks after a successful export", "delete_sources"));
+  sheet.append(form);
+  sheet.append(h("p", { class: "where", text: audioOnly ? "Saved to captures/recordings in the audio format of capture.audio_format." : "Saved to captures/recordings as “" + project.name + " 16x9.mov” (the format in the name), never over another file. 10 minutes of 1440p60 take about 5 minutes; “As recorded” takes seconds." }));
+  sheet.append(h("div", { class: "progress" }, h("i", { id: "exportBar" })), h("div", { class: "where", id: "exportState" }));
+  sheet.append(h("div", { class: "tools" }, h("button", { class: "primary", text: "Export", onclick: () => startExport(project, values) })));
+  $("viewer").classList.add("on");
+  if (studio.exportJob && ["queued", "running"].includes(studio.exportJob.phase)) pollExport();
+}
+
+async function startExport(project, values) {
+  if (values.delete_sources && !confirm("Delete the recorded tracks of “" + project.name + "” after the export? Only the exported file stays.")) return;
+  const body = project.mode === "audio"
+    ? { path: project.path, normalize: values.normalize, delete_sources: values.delete_sources }
+    : { path: project.path, canvas: values.canvas, height: values.height, fps: values.fps, codec: values.codec, quality: values.quality, format: values.container, normalize: values.normalize, delete_sources: values.delete_sources };
+  drawExportState({ phase: "queued", percent: 0 });
+  const { status, data } = await api("POST", "/api/studio/export", body);
+  if (status !== 200) { drawExportState({ phase: "failed", error: data.error || "the export did not start" }); return; }
+  await pollExport();
+}
+
+// One export runs at a time (capture keeps the queue); the page follows it every second until it ends.
+async function pollExport() {
+  clearTimeout(studio.exportTimer);
+  studio.exportTimer = 0;
+  const { status, data } = await api("GET", "/api/studio/export/status");
+  if (status !== 200) { drawExportState({ phase: "failed", error: data.error || "no export status" }); return; }
+  drawExportState(data);
+  if (data.phase === "queued" || data.phase === "running") studio.exportTimer = setTimeout(pollExport, 1000);
+  else if (data.phase === "done") { studio.projectsLoaded = false; studio.libraryLoaded = false; }
+}
+
+function drawExportState(job) {
+  studio.exportJob = job;
+  const bar = $("exportBar"), node = $("exportState");
+  if (bar) bar.style.width = (job.phase === "done" ? 100 : Math.max(0, Math.min(100, Number(job.percent) || 0))) + "%";
+  if (!node) return;
+  node.textContent = "";
+  const name = String(job.output || "").split("/").pop();
+  const left = Number(job.eta) > 90 ? Math.round(job.eta / 60) + " min" : Math.round(Number(job.eta) || 0) + " s";
+  if (job.phase === "queued") node.append("Waiting for the export to start…");
+  else if (job.phase === "running") node.append("Exporting… " + Math.round(Number(job.percent) || 0) + "%" + (job.eta ? " · about " + left + " left" : ""));
+  else if (job.phase === "done") node.append("Saved " + name + " ", h("button", { class: "ghost", text: "Show in Finder", onclick: () => revealExport(name) }));
+  else if (job.phase === "failed") node.append("Export failed: " + (job.error || "unknown error"));
 }
 
 function renderLibrary(box) {

@@ -72,6 +72,18 @@ class DeskUITests(unittest.TestCase):
     def test_studio_record_tab_renders_every_panel(self) -> None:
         self.run_case("studio_record_tab_renders")
 
+    def test_project_clock_maps_segments_and_scenes(self) -> None:
+        self.run_case("project_clock_maps_segments")
+
+    def test_export_dialog_prefill(self) -> None:
+        self.run_case("export_dialog_prefill")
+
+    def test_export_progress_polls_until_done(self) -> None:
+        self.run_case("export_progress_polls_until_done")
+
+    def test_studio_projects_tab_and_project_page(self) -> None:
+        self.run_case("studio_projects_tab_renders")
+
     def test_studio_shapes_snap_resize_and_focus(self) -> None:
         self.run_case("studio_shape_math")
 

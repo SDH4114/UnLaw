@@ -76,6 +76,7 @@ function harness() {
       applyShape, pinPlacement, placementPx, snapPlacement, moveFocus, resizePlacement, studioKey, studioPollDelay,
       countdownSteps, saveSetupSoon, permissionBanner, openSettings,
       renderStudio, renderStudioBody, renderSources, updateRecordControls,
+      projectClock, sceneAt, exportDefaults, exportHeightFor, renderExportDialog, startExport, pollExport, renderProjects, openProject, changePlacement, projectAction,
       cv, mulberry32, toScreen, toWorld, zoomAt, fitView, roughStrokes, hitElement, hitTest, edgeCurve, hitEdge,
       nearestSide, resizeBox, handleAt, applyBox, wrapText, adaptInk, nodeColor, noteName, makeLinear, makeFreedraw,
       snapAngle, applyStyle, containedIds, groupAround, moveItems, removeItems, copyItems, pasteItems, makeHistory,
@@ -111,6 +112,16 @@ function treeHarness() {
   const byId = h.context.document.getElementById;
   h.context.document.getElementById = id => find(id) || byId(id);
   return {...h, main, find};
+}
+// A recorded project as `ul capture project --json` describes it (the setup copied, one segment, a mark).
+function sampleProject() {
+  const setup = sampleSetup();
+  setup.sources[1].enabled = true;
+  return {format: 'unlaw-studio-project', version: 1, name: 'talk', path: '/p/talk', size: 100, created: '2026-11-19T22:15:00+04:00',
+    mode: 'screen', state: 'ready', problems: [], duration: 5, sources: setup.sources, audio: setup.audio,
+    segments: [{duration: 5, files: {screen: 'media/screen-001.mp4', camera: 'media/camera-001.mp4', mic: 'media/mic-001.flac'}, starts: {screen: 0, camera: 0.31, mic: 0.94}}],
+    scenes: setup.scenes, layouts: setup.layouts, events: [{t: 0, scene: 'screen-camera'}, {t: 2, mark: 'intro done'}],
+    export: setup.export, exports: []};
 }
 function deferred() {
   let resolve, reject;
@@ -377,6 +388,125 @@ const tests = {
   a.studio.tab = 'projects';
   a.renderStudioBody();
   assert.ok(h.find('studioProjects'), 'the Projects tab renders');
+ },
+ async project_clock_maps_segments() {
+  const h = harness();
+  const p = {segments: [{duration: 10}, {duration: 5}]};
+  assert.deepEqual(plain(h.a.projectClock(p, 12.5)), {segment: 1, local: 2.5});
+  assert.deepEqual(plain(h.a.projectClock(p, 99)), {segment: 1, local: 5});
+  assert.deepEqual(plain(h.a.projectClock(p, 0)), {segment: 0, local: 0});
+  assert.deepEqual(plain(h.a.projectClock(p, 10)), {segment: 1, local: 0}, 'a boundary belongs to the next segment');
+  assert.deepEqual(plain(h.a.projectClock(p, -3)), {segment: 0, local: 0});
+  assert.deepEqual(plain(h.a.projectClock({segments: []}, 3)), {segment: -1, local: 0});
+  // The scene shown at a moment comes from the scene events (marks do not change it).
+  const events = {events: [{t: 0, scene: 'screen-camera'}, {t: 4, scene: 'camera'}, {t: 5, mark: 'x'}, {t: 12, scene: 'screen'}]};
+  assert.deepEqual([0, 3.9, 4, 6, 12, 50].map(t => h.a.sceneAt(events, t)), ['screen-camera', 'screen-camera', 'camera', 'camera', 'screen', 'screen']);
+ },
+ async export_dialog_prefill() {
+  const h = harness();
+  assert.equal(h.a.exportDefaults({export: {canvas: '9:16', height: 1080}}, {export: {canvas: '16:9', height: 1440, fps: 60}}).canvas, '9:16');
+  assert.equal(h.a.exportDefaults({}, {export: {canvas: '16:9', height: 1440, fps: 60}}).height, 1440);
+  assert.equal(h.a.exportDefaults({mode: 'camera', export: {canvas: '16:9'}}, {export: {height: 1440}}).height, 1080, 'a camera-only project defaults to the camera height');
+  assert.equal(h.a.exportDefaults({export: {delete_sources: true}}, {export: {delete_sources: true}}).delete_sources, false, 'deleting the sources is never pre-checked');
+  const all = h.a.exportDefaults({}, {});
+  assert.deepEqual(plain(all), {canvas: '16:9', height: 1440, fps: 60, codec: 'h264', quality: 'high', container: 'mov', normalize: true, delete_sources: false});
+  assert.equal(h.a.exportHeightFor('9:16', 'screen'), 1080, 'a new vertical format starts at 1080');
+  assert.equal(h.a.exportHeightFor('16:9', 'screen'), 1440);
+  assert.equal(h.a.exportHeightFor('16:9', 'camera'), 1080);
+ },
+ async export_progress_polls_until_done() {
+  const h = treeHarness(), a = h.a;
+  const sheet = new h.context.Node('viewerSheet');
+  h.main.append(sheet);
+  a.studio.setup = sampleSetup();
+  const project = sampleProject();
+  const answers = [{phase: 'running', percent: 40, eta: 12, project: project.path}, {phase: 'done', percent: 100, output: '/r/talk 16x9.mov', project: project.path}];
+  const sent = [];
+  h.context.fetch = async (url, options) => {
+   sent.push([url, options.body ? JSON.parse(options.body) : null]);
+   if (url === '/api/studio/export') return response({queued: true});
+   if (url === '/api/studio/export/status') return response(answers.shift());
+   return response([]);
+  };
+  a.renderExportDialog(project);
+  assert.match(textOf(sheet), /Export talk/);
+  const values = a.exportDefaults(project, a.studio.setup);
+  values.canvas = '9:16';
+  values.height = 1080;
+  await a.startExport(project, values);
+  assert.deepEqual(sent[0], ['/api/studio/export', {path: project.path, canvas: '9:16', height: 1080, fps: 60, codec: 'h264', quality: 'high', format: 'mov', normalize: true, delete_sources: false}]);
+  assert.match(textOf(h.find('exportState')), /40%/);
+  assert.match(textOf(h.find('exportState')), /12 s left/);
+  const next = [...h.timers.entries()].find(([, x]) => x.ms === 1000);
+  assert.ok(next, 'a running export is polled every second');
+  h.timers.delete(next[0]);
+  await next[1].fn();
+  assert.match(textOf(h.find('exportState')), /Saved talk 16x9\.mov/);
+  assert.ok(![...h.timers.values()].some(x => x.ms === 1000), 'polling stops when the export is done');
+  // A failed export says why and stops too.
+  answers.push({phase: 'failed', error: 'disk full', project: project.path});
+  await a.pollExport();
+  assert.match(textOf(h.find('exportState')), /Export failed: disk full/);
+  assert.ok(![...h.timers.values()].some(x => x.ms === 1000));
+  // An audio project exports sound only: no picture choices are sent.
+  sent.length = 0;
+  answers.push({phase: 'done', output: '/r/voice.m4a'});
+  await a.startExport({...project, mode: 'audio'}, a.exportDefaults(project, a.studio.setup));
+  assert.deepEqual(sent[0][1], {path: project.path, normalize: true, delete_sources: false});
+ },
+ async studio_projects_tab_renders() {
+  const h = treeHarness(), a = h.a;
+  a.state.view = 'studio';
+  a.studio.info = {available: true, settings: {}};
+  a.studio.setup = sampleSetup();
+  a.studio.tab = 'projects';
+  a.studio.filter = 'projects';
+  a.studio.projects = [{name: 'talk', path: '/p/talk', created: '2026-11-19T22:15:00+04:00', mode: 'screen', state: 'incomplete', problems: ['the camera stopped'], duration: 754.2, size: 1.4e9, tracks: ['screen', 'mic'], exports: ['/r/talk 16x9.mov', '/r/talk 9x16.mp4'], canvas: '16:9'}];
+  a.studio.library = [{name: 'shot.png', path: '/s/shot.png', kind: 'image', size: 2000, modified: '2026-11-19T22:00:00+04:00', duration: null}];
+  const sent = [];
+  h.context.fetch = async (url, options) => {
+   sent.push([url, options && options.body ? JSON.parse(options.body) : null]);
+   if (url.startsWith('/api/studio/project?')) return response(sampleProject());
+   return response({ok: true});
+  };
+  a.renderStudio(h.main);
+  const list = textOf(h.find('studioProjects'));
+  assert.match(list, /talk/);
+  assert.match(list, /12:34/);
+  assert.match(list, /incomplete/);
+  assert.match(list, /16:9 MOV/);
+  assert.match(list, /9:16 MP4/);
+  assert.match(list, /1\.4 GB/);
+  assert.match(list, /Open project…/);
+  a.studio.filter = 'screenshots';
+  a.renderProjects();
+  assert.match(textOf(h.find('studioProjects')), /shot\.png/);
+  // A project page: preview, scenes on the timeline, layout edits saved to that project.
+  await a.openProject('/p/talk');
+  assert.ok(sent.some(([url]) => url === '/api/studio/project?path=' + encodeURIComponent('/p/talk')));
+  const page = textOf(h.find('studioProjects'));
+  assert.match(page, /Screen \+ camera/);
+  assert.match(page, /intro done/);
+  assert.match(page, /Export…/);
+  assert.equal(h.find('stage').children.filter(n => /\bph\b/.test(n.className)).length, 2);
+  sent.length = 0;
+  a.changePlacement('camera', p => a.pinPlacement(p, 'top-right'));
+  const save = [...h.timers.values()].filter(x => x.ms === 500).pop();
+  await save.fn();
+  const posted = sent.find(([url]) => url === '/api/studio/project');
+  assert.ok(posted, 'layout edits on a project page go to that project');
+  assert.equal(posted[1].path, '/p/talk');
+  assert.equal(posted[1].project.layouts['16:9']['screen-camera'].placements.camera.anchor, 'top-right');
+  assert.equal(posted[1].project.path, undefined, 'only project.json keys are sent');
+  assert.equal(posted[1].project.size, undefined);
+  assert.equal(a.studio.setup.layouts['16:9']['screen-camera'].placements.camera.anchor, 'bottom-left', 'the studio setup is not touched');
+  assert.equal(a.studio.player.camera.style.transform, 'scaleX(-1)', 'the camera is mirrored like the export');
+  a.changePlacement('camera', p => ({...p, mirror: false}));
+  assert.equal(a.studio.player.camera.style.transform, '', 'the reused video element loses the mirror again');
+  sent.length = 0;
+  await a.projectAction('delete');
+  assert.deepEqual(sent[0], ['/api/studio/action', {action: 'delete', path: '/p/talk'}]);
+  assert.equal(a.studio.project, null, 'a trashed project closes');
  },
  async studio_shape_math() {
   const h = harness();
