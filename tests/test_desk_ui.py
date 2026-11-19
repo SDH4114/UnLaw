@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,7 +20,7 @@ NODE = shutil.which("node")
 class DeskUITests(unittest.TestCase):
     def run_case(self, name: str) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            env = {**os.environ, "HOME": directory, "XDG_CONFIG_HOME": directory}
+            env = {**os.environ, "HOME": directory, "XDG_CONFIG_HOME": directory, "PYTHON": sys.executable}
             result = subprocess.run(
                 [NODE, str(ROOT / "tests" / "test_desk_ui.cjs"), name],
                 env=env, capture_output=True, text=True, timeout=15, check=False,

@@ -1,8 +1,9 @@
-const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const raw = fs.readFileSync(path.join(__dirname, '../src/unlawful/desk_ui.py'), 'utf8');
+const {execFileSync} = require('node:child_process');
+// The page is assembled by Python (desk_ui.PAGE with the Studio code from studio_ui.py injected).
+const raw = execFileSync(process.env.PYTHON || 'python3', ['-c', 'import sys; sys.path.insert(0, "src"); from unlawful.desk_ui import PAGE; sys.stdout.write(PAGE)'], {cwd: path.join(__dirname, '..'), encoding: 'utf8'});
 const script = raw.split('<script>')[1].split('</script>')[0].replace(/start\(\);\s*$/, '');
 // No browser, HTTP or operating-system media API is available in this VM.
 function harness() {
