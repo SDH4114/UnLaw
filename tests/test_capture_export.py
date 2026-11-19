@@ -376,6 +376,59 @@ class ExportRunTests(ExportTestCase):
             1,
         )
 
+    def drop_track(self, folder: Path, segment: int, track: str) -> None:
+        project = capture_project.read_project(folder)
+        relative = project["segments"][segment]["files"].pop(track)
+        project["segments"][segment]["starts"].pop(track, None)
+        (folder / relative).unlink()
+        project["state"] = "incomplete"
+        capture_project.write_project(folder, project)
+
+    def test_a_segment_without_a_track_exports_without_it(self) -> None:
+        # A screen recorder that hung (stop --force) or a display that went away leaves the
+        # second part without a screen: that part shows what it has instead of crashing.
+        folder = self.make_project(segments=2)
+        self.drop_track(folder, 1, "screen")
+        capture_export.export_project(folder, self.settings(folder))
+        renders = [call for call in self.calls() if any(arg.startswith("color=c=") for arg in call)]
+        self.assertEqual(len(renders), 2)
+        self.assertIn("screen-001.mp4", "|".join(renders[0]))
+        self.assertNotIn("screen-002.mp4", "|".join(renders[1]))
+        self.assertIn("camera-002.mp4", "|".join(renders[1]))
+
+    def test_source_canvas_refuses_a_part_without_the_screen(self) -> None:
+        folder = self.make_project(segments=2)
+        self.drop_track(folder, 1, "screen")
+        with self.assertRaises(capture_export.ExportError) as caught:
+            capture_export.export_project(folder, self.settings(folder, canvas="source"))
+        self.assertIn("part 2", str(caught.exception))
+
+    def test_a_recording_shorter_than_a_frame_says_so(self) -> None:
+        folder = self.make_project(segments=1)
+        project = capture_project.read_project(folder)
+        project["segments"][0]["duration"] = 0.004
+        capture_project.write_project(folder, project)
+        with self.assertRaises(capture_export.ExportError) as caught:
+            capture_export.export_project(folder, self.settings(folder))
+        self.assertIn("shorter than one frame", str(caught.exception))
+        self.assertFalse(self.calls(), "no ffmpeg run for nothing")
+
+    def test_a_symlinked_asset_is_refused(self) -> None:  # Review Focus 5
+        folder = self.make_project(segments=1)
+        project = capture_project.read_project(folder)
+        project["sources"].append({"id": "image-1", "kind": "image", "enabled": True, "asset": "logo.png"})
+        scene = project["layouts"]["16:9"]["screen-camera"]
+        scene["placements"]["image-1"] = dict(scene["placements"]["camera"])
+        outside = self.root / "outside.png"
+        outside.write_bytes(b"\x89PNG elsewhere")
+        (folder / "assets").mkdir(exist_ok=True)
+        (folder / "assets" / "logo.png").symlink_to(outside)
+        capture_project.write_project(folder, project)
+        with self.assertRaises(capture_export.ExportError) as caught:
+            capture_export.export_project(folder, self.settings(folder))
+        self.assertIn("symbolic link", str(caught.exception))
+        self.assertFalse(any(str(outside) in "|".join(call) for call in self.calls()))
+
     def test_audio_projects_export_audio(self) -> None:
         folder = self.make_project(camera=False, mode="audio")
         out = capture_export.export_project(folder, self.settings(folder))

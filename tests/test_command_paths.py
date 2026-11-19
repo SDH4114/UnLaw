@@ -197,8 +197,12 @@ elif "+faststart" in args and "copy" in args and "-i" in args:
 open(out, "wb").write(data)
 """
 
-FAKE_FFPROBE = """import json
-print(json.dumps({"format": {"duration": "2.5"}, "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}, {"codec_type": "audio", "codec_name": "aac"}]}))
+FAKE_FFPROBE = """import json, os
+duration = "2.5"
+for part, value in json.loads(os.environ.get("FAKE_PROBE_DURATIONS", "{}")).items():
+    if os.path.basename(sys.argv[-1]).startswith(part):
+        duration = str(value)
+print(json.dumps({"format": {"duration": duration}, "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}, {"codec_type": "audio", "codec_name": "aac"}]}))
 """
 
 FAKE_SIPS = """args = sys.argv[1:]
@@ -758,6 +762,32 @@ class CaptureTests(ToolTestCase):
         self.assertEqual(project["state"], "incomplete")
         self.assertIn("screen", project["segments"][0]["files"])
         self.assertTrue(any("stopped during the recording" in problem for problem in project["problems"]))
+
+    def test_a_recorder_that_died_keeps_its_place_on_the_timeline(self) -> None:
+        # The camera died after ~1 s of a 10 s part: its footage belongs at the start, not at the end
+        # (only recorders that stop together have their ends lined up).
+        self.media_tools()
+        durations = {"screen-": 10.0, "camera-": 1.0, "mic-": 10.0}
+        with patch.dict(os.environ, {"FAKE_RECORDER_DIES": "0.9", "FAKE_PROBE_DURATIONS": json.dumps(durations)}):
+            self.ok("record", "--camera", "--no-mic")
+            time.sleep(1.4)
+            _, project = self.project(json.loads(self.ok("stop", "--json")))
+        starts = project["segments"][0]["starts"]
+        self.assertEqual(starts["camera"], 0.0)
+        self.assertEqual(project["segments"][0]["duration"], 10.0)
+
+    def test_a_recorder_that_died_before_a_pause_is_reported(self) -> None:
+        self.media_tools()
+        with patch.dict(os.environ, {"FAKE_RECORDER_DIES": "0.9"}):
+            self.ok("record", "--camera", "--no-mic")
+            time.sleep(1.4)
+            self.ok("pause")
+        _, project = self.project(json.loads(self.ok("stop", "--json")))
+        self.assertEqual(project["state"], "incomplete")
+        self.assertTrue(
+            any("part 1: the camera recorder stopped during the recording" in problem for problem in project["problems"]),
+            project["problems"],
+        )
 
     def test_stop_right_after_start_saves(self) -> None:
         self.media_tools()

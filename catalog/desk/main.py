@@ -9051,9 +9051,11 @@ class Studio:
     def project_thumb(self, raw: object) -> Path:
         """The first frame of the project's screen (or camera) track, through `ul capture thumb`."""
         folder = self.project_folder(raw)
+        root = folder.resolve()
         for track in ("screen", "camera"):
             for item in sorted((folder / "media").glob(f"{track}-*.mp4")):
-                if item.is_file() and not item.is_symlink():
+                # Resolved, so a symlinked media/ folder never hands out a file from elsewhere.
+                if item.is_file() and not item.is_symlink() and item.resolve().is_relative_to(root):
                     data = self.run("thumb", str(item), timeout=60)
                     return Path(str(data.get("thumbnail") if isinstance(data, dict) else ""))
         raise FileNotFoundError("this project has no picture")

@@ -808,10 +808,14 @@ def recorded_tracks(project: dict) -> set[str]:
     return {track for segment in project["segments"] for track in segment["files"]}
 
 
-def effective_placements(project: dict, scene: str, canvas: str) -> tuple[dict, list[tuple[str, dict]]]:
+def effective_placements(
+    project: dict, scene: str, canvas: str, tracks: set[str] | None = None
+) -> tuple[dict, list[tuple[str, dict]]]:
     """Background and visible placements in z order; a source that was not recorded is skipped, and a scene
-    left with only the screen uses the `screen` scene's layout."""
-    tracks = recorded_tracks(project)
+    left with only the screen uses the `screen` scene's layout. `tracks` = the tracks of one segment (a
+    recorder that hung or died leaves a later part without its track); default: any segment's."""
+    if tracks is None:
+        tracks = recorded_tracks(project)
     available = {
         source["id"]
         for source in project["sources"]
@@ -1648,7 +1652,7 @@ def interval_argv(
     fps, length, start = settings["fps"], interval["length"], interval["start"]
     segment = project["segments"][interval["segment"]]
     background, placements = effective_placements(
-        project, interval["scene"], settings["canvas"]
+        project, interval["scene"], settings["canvas"], set(segment["files"])
     )
     color = (
         background.get("color", "#000000")
@@ -1700,7 +1704,11 @@ def interval_argv(
             )
             filters += fitted
         else:
-            index = still_input(folder / "assets" / source["asset"])
+            try:
+                still = inside(folder, f"assets/{source['asset']}", f"source {source_id}")
+            except ProjectError as error:
+                raise ExportError(str(error)) from error
+            index = still_input(still)
             ratio = "increase" if item["fit"] == "cover" else "decrease"
             filters.append(
                 f"scale={box_width}:{box_height}:force_original_aspect_ratio={ratio}"
@@ -2062,11 +2070,18 @@ def _export(
             progress(fraction)
 
     try:
+        # Parts shorter than one frame are dropped everywhere (a stop or pause right after a start).
+        kept = [
+            index
+            for index, segment in enumerate(project["segments"])
+            if segment["duration"] >= 1 / settings["fps"]
+        ]
+        if not kept:
+            raise ExportError("the recording is shorter than one frame")
         # Sound: one WAV per segment (silence where nothing is audible), joined.
         audio_parts = []
-        for index, segment in enumerate(project["segments"]):
-            if segment["duration"] < 1 / settings["fps"]:
-                continue
+        for index in kept:
+            segment = project["segments"][index]
             wav = work / f"audio-{index:03d}.wav"
             argv = audio_argv(folder, project, index, settings, wav)
             _run_ffmpeg(
@@ -2075,7 +2090,7 @@ def _export(
             audio_parts.append(wav)
         audible = any(
             audio_argv(folder, project, index, settings, Path(os.devnull))
-            for index in range(len(project["segments"]))
+            for index in kept
         )
         sound = work / "audio.wav"
         if audible:
@@ -2115,11 +2130,14 @@ def _export(
                     )
                     else "camera"
                 )
-                files = [
-                    folder / segment["files"][track]
-                    for segment in project["segments"]
-                    if track in segment["files"]
-                ]
+                for index in kept:
+                    if track not in project["segments"][index]["files"]:
+                        # Skipping the part would put the sound after it out of sync.
+                        raise ExportError(
+                            f"part {index + 1} has no {track} track (its recorder stopped early): "
+                            "export to a format such as 16:9 instead of source"
+                        )
+                files = [folder / project["segments"][index]["files"][track] for index in kept]
                 _run_ffmpeg(
                     _concat_argv(files, work / "video.txt", video),
                     log,
@@ -3012,6 +3030,12 @@ def _valid_state(state: object) -> bool:
         _finite(value) for value in durations
     ):
         return False
+    early = state.get("early", [])
+    if not isinstance(early, list) or not all(
+        isinstance(tracks, list) and all(track in TRACK_ORDER for track in tracks)
+        for tracks in early
+    ):
+        return False
     for key in ("warnings", "problems", "stuck"):
         value = state.get(key)
         if not isinstance(value, list) or not all(
@@ -3318,6 +3342,15 @@ def _stop_segment(state: dict, *, force: bool = False) -> list[str]:
 
     def alive() -> list[dict]:
         return [item for item in processes if _alive(item["pid"], item["program"])]
+
+    if running:
+        # A recorder that is already gone did not stop with the others, so its end must not be lined up
+        # with theirs (`_finish`); pause and stop both come through here, so neither loses the problem.
+        part = len(state["durations"]) + 1
+        early = sorted({item["track"] for item in processes if not _alive(item["pid"], item["program"])})
+        for track in early:
+            state["problems"].append(f"part {part}: the {track} recorder stopped during the recording")
+        state["early"] = state.get("early", []) + [[]] * (part - 1 - len(state.get("early", []))) + [early]
 
     steps = [
         (signal.SIGINT, max(STOP_GRACE, 0.05 * elapsed)),
@@ -3934,15 +3967,20 @@ def _finish(state: dict) -> dict:
         if not final:
             continue
         measured = state["durations"][index] if index < len(state["durations"]) else 0.0
-        reference = next(
-            (track for track in TRACK_ORDER if lengths.get(track, 0) > 0), None
-        )
-        if reference is None:
-            starts, duration = {track: 0.0 for track in final}, measured
+        early = state.get("early", [])
+        died = set(early[index]) if index < len(early) else set()
+        known = {track: length for track, length in lengths.items() if length > 0}
+        # Recorders that stopped together line up at their ends; one that died early began with the others.
+        together = {track: length for track, length in known.items() if track not in died}
+        reference = next((track for track in TRACK_ORDER if track in together), None)
+        starts = {track: 0.0 for track in final}
+        if reference is not None:
+            starts |= segment_starts(together, reference)
+            duration = together[reference]
+        elif known:
+            duration = max(known.values())
         else:
-            known = {track: length for track, length in lengths.items() if length > 0}
-            starts = {track: 0.0 for track in final} | segment_starts(known, reference)
-            duration = lengths[reference]
+            duration = measured
         segments.append(
             {"duration": round(duration, 3), "files": final, "starts": starts, "info": info}
         )
@@ -3991,12 +4029,6 @@ def stop_recording(*, force: bool = False, export: dict | None = None) -> dict:
         state = _load_state()
         if state is None:
             raise CaptureError("no active recording", 1)
-        if state["phase"] == "recording" and not state["paused"]:
-            for item in state["processes"]:
-                if not _alive(item["pid"], item["program"]):
-                    state["problems"].append(
-                        f"the {item['track']} recorder stopped during the recording"
-                    )
         if export is not None:
             state["export"] = {**(state["export"] or {}), **export}
         stuck = _stop_segment(state, force=force)

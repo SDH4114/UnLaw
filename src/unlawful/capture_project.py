@@ -753,10 +753,14 @@ def recorded_tracks(project: dict) -> set[str]:
     return {track for segment in project["segments"] for track in segment["files"]}
 
 
-def effective_placements(project: dict, scene: str, canvas: str) -> tuple[dict, list[tuple[str, dict]]]:
+def effective_placements(
+    project: dict, scene: str, canvas: str, tracks: set[str] | None = None
+) -> tuple[dict, list[tuple[str, dict]]]:
     """Background and visible placements in z order; a source that was not recorded is skipped, and a scene
-    left with only the screen uses the `screen` scene's layout."""
-    tracks = recorded_tracks(project)
+    left with only the screen uses the `screen` scene's layout. `tracks` = the tracks of one segment (a
+    recorder that hung or died leaves a later part without its track); default: any segment's."""
+    if tracks is None:
+        tracks = recorded_tracks(project)
     available = {
         source["id"]
         for source in project["sources"]

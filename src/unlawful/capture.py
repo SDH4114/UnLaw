@@ -409,6 +409,12 @@ def _valid_state(state: object) -> bool:
         _finite(value) for value in durations
     ):
         return False
+    early = state.get("early", [])
+    if not isinstance(early, list) or not all(
+        isinstance(tracks, list) and all(track in TRACK_ORDER for track in tracks)
+        for tracks in early
+    ):
+        return False
     for key in ("warnings", "problems", "stuck"):
         value = state.get(key)
         if not isinstance(value, list) or not all(
@@ -715,6 +721,15 @@ def _stop_segment(state: dict, *, force: bool = False) -> list[str]:
 
     def alive() -> list[dict]:
         return [item for item in processes if _alive(item["pid"], item["program"])]
+
+    if running:
+        # A recorder that is already gone did not stop with the others, so its end must not be lined up
+        # with theirs (`_finish`); pause and stop both come through here, so neither loses the problem.
+        part = len(state["durations"]) + 1
+        early = sorted({item["track"] for item in processes if not _alive(item["pid"], item["program"])})
+        for track in early:
+            state["problems"].append(f"part {part}: the {track} recorder stopped during the recording")
+        state["early"] = state.get("early", []) + [[]] * (part - 1 - len(state.get("early", []))) + [early]
 
     steps = [
         (signal.SIGINT, max(STOP_GRACE, 0.05 * elapsed)),
@@ -1331,15 +1346,20 @@ def _finish(state: dict) -> dict:
         if not final:
             continue
         measured = state["durations"][index] if index < len(state["durations"]) else 0.0
-        reference = next(
-            (track for track in TRACK_ORDER if lengths.get(track, 0) > 0), None
-        )
-        if reference is None:
-            starts, duration = {track: 0.0 for track in final}, measured
+        early = state.get("early", [])
+        died = set(early[index]) if index < len(early) else set()
+        known = {track: length for track, length in lengths.items() if length > 0}
+        # Recorders that stopped together line up at their ends; one that died early began with the others.
+        together = {track: length for track, length in known.items() if track not in died}
+        reference = next((track for track in TRACK_ORDER if track in together), None)
+        starts = {track: 0.0 for track in final}
+        if reference is not None:
+            starts |= segment_starts(together, reference)
+            duration = together[reference]
+        elif known:
+            duration = max(known.values())
         else:
-            known = {track: length for track, length in lengths.items() if length > 0}
-            starts = {track: 0.0 for track in final} | segment_starts(known, reference)
-            duration = lengths[reference]
+            duration = measured
         segments.append(
             {"duration": round(duration, 3), "files": final, "starts": starts, "info": info}
         )
@@ -1388,12 +1408,6 @@ def stop_recording(*, force: bool = False, export: dict | None = None) -> dict:
         state = _load_state()
         if state is None:
             raise CaptureError("no active recording", 1)
-        if state["phase"] == "recording" and not state["paused"]:
-            for item in state["processes"]:
-                if not _alive(item["pid"], item["program"]):
-                    state["problems"].append(
-                        f"the {item['track']} recorder stopped during the recording"
-                    )
         if export is not None:
             state["export"] = {**(state["export"] or {}), **export}
         stuck = _stop_segment(state, force=force)

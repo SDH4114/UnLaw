@@ -1095,6 +1095,18 @@ class DeskStudioTests(unittest.TestCase):
         (folder / "project.json").write_text(json.dumps(data))
         self.assertEqual(self.call(port, token, f"/api/studio/project?path={quote(project)}")[0], 400)
 
+    def test_project_thumbnail_never_follows_a_symlinked_media_folder(self) -> None:  # Review Focus 5
+        self.media()
+        port, token = self.start()
+        folder = Path(self.record_project(port, token)["project"])
+        outside = self.root / "elsewhere"
+        outside.mkdir()
+        (outside / "screen-001.mp4").write_bytes(b"not this project's")
+        (folder / "media").rename(folder / "media-moved")
+        (folder / "media").symlink_to(outside)
+        status = self.raw(port, f"/media/thumb?t={token}&path={quote(str(folder))}")[0]
+        self.assertEqual(status, 404)
+
     def test_assets_only_take_images(self) -> None:
         self.media()
         port, token = self.start()

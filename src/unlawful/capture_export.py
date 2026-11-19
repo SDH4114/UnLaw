@@ -28,6 +28,7 @@ from .capture_project import (
     ProjectError,
     canvas_size,
     effective_placements,
+    inside,
     load_setup,
     read_project,
     save_setup,
@@ -351,7 +352,7 @@ def interval_argv(
     fps, length, start = settings["fps"], interval["length"], interval["start"]
     segment = project["segments"][interval["segment"]]
     background, placements = effective_placements(
-        project, interval["scene"], settings["canvas"]
+        project, interval["scene"], settings["canvas"], set(segment["files"])
     )
     color = (
         background.get("color", "#000000")
@@ -403,7 +404,11 @@ def interval_argv(
             )
             filters += fitted
         else:
-            index = still_input(folder / "assets" / source["asset"])
+            try:
+                still = inside(folder, f"assets/{source['asset']}", f"source {source_id}")
+            except ProjectError as error:
+                raise ExportError(str(error)) from error
+            index = still_input(still)
             ratio = "increase" if item["fit"] == "cover" else "decrease"
             filters.append(
                 f"scale={box_width}:{box_height}:force_original_aspect_ratio={ratio}"
@@ -765,11 +770,18 @@ def _export(
             progress(fraction)
 
     try:
+        # Parts shorter than one frame are dropped everywhere (a stop or pause right after a start).
+        kept = [
+            index
+            for index, segment in enumerate(project["segments"])
+            if segment["duration"] >= 1 / settings["fps"]
+        ]
+        if not kept:
+            raise ExportError("the recording is shorter than one frame")
         # Sound: one WAV per segment (silence where nothing is audible), joined.
         audio_parts = []
-        for index, segment in enumerate(project["segments"]):
-            if segment["duration"] < 1 / settings["fps"]:
-                continue
+        for index in kept:
+            segment = project["segments"][index]
             wav = work / f"audio-{index:03d}.wav"
             argv = audio_argv(folder, project, index, settings, wav)
             _run_ffmpeg(
@@ -778,7 +790,7 @@ def _export(
             audio_parts.append(wav)
         audible = any(
             audio_argv(folder, project, index, settings, Path(os.devnull))
-            for index in range(len(project["segments"]))
+            for index in kept
         )
         sound = work / "audio.wav"
         if audible:
@@ -818,11 +830,14 @@ def _export(
                     )
                     else "camera"
                 )
-                files = [
-                    folder / segment["files"][track]
-                    for segment in project["segments"]
-                    if track in segment["files"]
-                ]
+                for index in kept:
+                    if track not in project["segments"][index]["files"]:
+                        # Skipping the part would put the sound after it out of sync.
+                        raise ExportError(
+                            f"part {index + 1} has no {track} track (its recorder stopped early): "
+                            "export to a format such as 16:9 instead of source"
+                        )
+                files = [folder / project["segments"][index]["files"][track] for index in kept]
                 _run_ffmpeg(
                     _concat_argv(files, work / "video.txt", video),
                     log,
