@@ -83,6 +83,28 @@ class LayoutTests(CoreTestCase):
         self.assertIn("d8d409d637af098272a0fd4d4b2f9e172b831ca160e5836144f89c5307424c3f", LEGACY_SOURCE_HASHES["capture"])
         self.assertIn("940143d0f2ba8d0a0965a1084bf3ebc84d9e752d1c126cdc5f254b803df08fad", LEGACY_SOURCE_HASHES["desk"])
 
+    def test_split_seed_modules_never_share_a_top_level_name(self) -> None:
+        import ast
+        from collections import defaultdict
+
+        from unlawful import command_sources
+
+        for seed in ("capture", "desk"):
+            owners: dict[str, set[str]] = defaultdict(set)
+            for name in command_sources._COMMAND_FILES[seed]:
+                tree = ast.parse((Path(__file__).parents[1] / "src" / "unlawful" / name).read_text())
+                for node in tree.body:
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                        owners[node.name].add(name)
+                    elif isinstance(node, ast.Assign):
+                        for target in node.targets:
+                            if isinstance(target, ast.Name):
+                                owners[target.id].add(name)
+                    elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                        owners[node.target.id].add(name)
+            clashes = {name: sorted(files) for name, files in owners.items() if len(files) > 1}
+            self.assertEqual(clashes, {}, f"{seed}: one namespace after concatenation")
+
     def test_bootstrap_does_not_overwrite_customized_seed_command(self) -> None:
         custom = self.command("music", "print('mine')\n")
         edited = self.command("yt", command_source("yt") + "\n# My custom change\n")
