@@ -1247,7 +1247,8 @@ class MacBackend:
         """Can this process record the screen? A 1x1-pixel screenshot answers in a moment."""
         folder = storage_path("runtime")
         folder.mkdir(parents=True, exist_ok=True)
-        handle, name = tempfile.mkstemp(prefix=".probe.", suffix=".png", dir=folder)
+        # Not a dot name: screencapture refuses hidden file names for screenshots and still exits 0.
+        handle, name = tempfile.mkstemp(prefix="permission-probe-", suffix=".png", dir=folder)
         os.close(handle)
         probe = Path(name)
         probe.unlink()
@@ -4552,7 +4553,9 @@ def _atomic_jpeg(target: Path) -> Iterator[Path]:
     """A tool writes a temporary file that replaces `target` only when it succeeds,
     so a failed or concurrent run never leaves a half-written image to be cached or served."""
     target.parent.mkdir(parents=True, exist_ok=True)
-    handle, name = tempfile.mkstemp(prefix=".capture.", suffix=".jpg", dir=target.parent)
+    # Not a dot name: screencapture refuses hidden file names for screenshots (and still exits 0),
+    # which left the desk without a preview.
+    handle, name = tempfile.mkstemp(prefix=f"{target.stem}-tmp-", suffix=".jpg", dir=target.parent)
     os.close(handle)
     temporary = Path(name)
     try:

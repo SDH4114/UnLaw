@@ -1950,7 +1950,9 @@ def _atomic_jpeg(target: Path) -> Iterator[Path]:
     """A tool writes a temporary file that replaces `target` only when it succeeds,
     so a failed or concurrent run never leaves a half-written image to be cached or served."""
     target.parent.mkdir(parents=True, exist_ok=True)
-    handle, name = tempfile.mkstemp(prefix=".capture.", suffix=".jpg", dir=target.parent)
+    # Not a dot name: screencapture refuses hidden file names for screenshots (and still exits 0),
+    # which left the desk without a preview.
+    handle, name = tempfile.mkstemp(prefix=f"{target.stem}-tmp-", suffix=".jpg", dir=target.parent)
     os.close(handle)
     temporary = Path(name)
     try:

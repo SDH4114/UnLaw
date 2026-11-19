@@ -128,6 +128,10 @@ if "-v" in args:
     raise SystemExit(0)
 if "-c" in args or ("-i" in args and os.environ.get("FAKE_CANCEL")):
     raise SystemExit(0)
+if os.path.basename(out).startswith("."):
+    # Like the real tool (macOS 27): screenshots refuse hidden file names, and it still exits 0.
+    sys.stderr.write(f"screencapture: cannot write file to intended destination, {out}\\n")
+    raise SystemExit(0)
 open(out, "wb").write(b"png")
 """
 

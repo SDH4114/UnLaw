@@ -407,7 +407,8 @@ class MacBackend:
         """Can this process record the screen? A 1x1-pixel screenshot answers in a moment."""
         folder = storage_path("runtime")
         folder.mkdir(parents=True, exist_ok=True)
-        handle, name = tempfile.mkstemp(prefix=".probe.", suffix=".png", dir=folder)
+        # Not a dot name: screencapture refuses hidden file names for screenshots and still exits 0.
+        handle, name = tempfile.mkstemp(prefix="permission-probe-", suffix=".png", dir=folder)
         os.close(handle)
         probe = Path(name)
         probe.unlink()

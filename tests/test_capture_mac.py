@@ -160,7 +160,11 @@ class MacBackendTests(unittest.TestCase):
         self.assertIsNone(self.backend.responsible_app(500))
 
     def test_permission_probe(self) -> None:
-        self.tool("screencapture", "open(sys.argv[-1], 'wb').write(b'png')\n")
+        # The real tool refuses hidden file names for screenshots (and exits 0), so the probe must not use one.
+        self.tool(
+            "screencapture",
+            "import os\nif not os.path.basename(sys.argv[-1]).startswith('.'):\n    open(sys.argv[-1], 'wb').write(b'png')\n",
+        )
         self.assertEqual(self.backend.permission_probe(), {"screen": True})
         self.tool("screencapture", "raise SystemExit(1)\n")
         self.assertEqual(self.backend.permission_probe(), {"screen": False})
