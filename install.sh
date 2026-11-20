@@ -60,7 +60,7 @@ FEATURES = [
     ("game", "Fun", "Terminal arcade: Tetris, Snake, Minesweeper, Invaders, Chomp, Dash"),
 ]
 REQUIRES = {"agent": ("lm",)}
-CARGO = ("lm", "agent", "game")
+CARGO = ("lm", "agent", "game", "capture")
 NAMES = [name for name, _, _ in FEATURES]
 
 

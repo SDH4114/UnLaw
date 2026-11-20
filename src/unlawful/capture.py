@@ -311,7 +311,8 @@ KILL_GRACE = 2.0
 SILENCE_SECONDS = 10.0
 SILENCE_DB = -60.0
 LOW_SPACE = 5 * 10**9
-PROGRAMS = ("screencapture", "ffmpeg", "osascript")
+PROGRAMS = ("screencapture", "ffmpeg", "osascript", "ul-rec")
+NATIVE_WAIT = 40.0  # ul-rec lists the screens (up to 20 s) and waits 15 s for every device
 PHASES = ("recording", "paused", "saving", "interrupted", "unsaved", "stuck")
 TRACK_ORDER = ("screen", "camera", "mic")
 FALLBACK_MODE = {"width": 1280, "height": 720, "fps": "30"}
@@ -362,6 +363,10 @@ def _valid_plan(plan: object) -> bool:
     if any(key not in plan for key in ("area", "camera", "mic", "mode")):
         return False
     if plan.get("encoder", "h264_videotoolbox") not in ("libx264", "h264_videotoolbox"):
+        return False
+    if plan.get("engine", "tools") not in ("tools", "native"):
+        return False
+    if plan.get("engine") == "native" and not isinstance(plan.get("rec"), str):
         return False
     mode = plan["mode"]
     if mode is not None and not (
@@ -540,13 +545,18 @@ def _track_files(state: dict, index: int) -> dict[str, str]:
     """Files of one segment, relative to the project. Video tracks start with a dot until they are
     remuxed at stop (a file that is still being written is never offered to a player)."""
     plan, number = state["plan"], index + 1
+    native = plan.get("engine") == "native"
     files = {}
     if state["mode"] == "screen":
         files["screen"] = f"media/.screen-{number:03d}.mov"
     if plan["camera"]:
-        files["camera"] = f"media/.camera-{number:03d}.mp4"
+        files["camera"] = f"media/.camera-{number:03d}.{'mov' if native else 'mp4'}"
     if plan["mic"]:
-        files["mic"] = f"media/mic-{number:03d}{MIC_FORMATS[plan['mic_format']]}"
+        if native and plan["mic_format"] != "m4a":
+            # AVFoundation writes WAV (float, as the device gives it); stop turns it into the chosen format.
+            files["mic"] = f"media/.mic-{number:03d}.wav"
+        else:
+            files["mic"] = f"media/mic-{number:03d}{MIC_FORMATS[plan['mic_format']]}"
     return files
 
 
@@ -635,7 +645,108 @@ def _wait_until_live(folder: Path, files: dict[str, str], started: list, levels_
         time.sleep(0.05)
 
 
+def _native_events(folder: Path, number: int) -> list[dict]:
+    """What ul-rec reported for segment `number` (logs/rec-NNN.jsonl); unreadable lines are skipped."""
+    try:
+        text = (folder / "logs" / f"rec-{number:03d}.jsonl").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    events = []
+    for line in text.splitlines():
+        try:
+            item = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(item, dict):
+            events.append(item)
+    return events
+
+
+def _native_lost(events: list[dict]) -> list[str]:
+    """Tracks that failed after the recording began, as `the camera recording stopped: why`."""
+    ready = next((index for index, item in enumerate(events) if item.get("event") == "ready"), None)
+    if ready is None:
+        return []
+    return [
+        f"the {item.get('track')} recording stopped: {_plain_text(str(item.get('error') or 'it stopped'))}"
+        for item in events[ready + 1 :]
+        if item.get("event") == "failed" and item.get("track") in TRACK_ORDER
+    ]
+
+
+def _native_starts(events: list[dict]) -> dict[str, float]:
+    """When each track's first data was written (unix seconds, ul-rec's clock)."""
+    return {
+        item["track"]: float(item["wall"])
+        for item in events
+        if item.get("event") == "started" and item.get("track") in TRACK_ORDER and _finite(item.get("wall"))
+    }
+
+
+def _plain_text(text: str) -> str:
+    return "".join(character for character in text if character.isprintable())[:300]
+
+
+def _start_native_segment(state: dict) -> None:
+    """One ul-rec for every track of the segment; it reports `ready` once each track writes or failed."""
+    folder = Path(state["project"])
+    number = len(state["segments"]) + 1
+    files = _track_files(state, number - 1)
+    logs = folder / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    events_file = logs / f"rec-{number:03d}.jsonl"
+    events_file.unlink(missing_ok=True)  # left by a start that failed
+    request = _backend().native_request(
+        state["plan"], {track: folder / relative for track, relative in files.items()}, events_file, logs / LEVELS_FILE
+    )
+    request_file = logs / f"rec-{number:03d}.json"
+    _write_json(request_file, request)
+    spawned = time.time()
+    process = _spawn([state["plan"]["rec"], str(request_file)], folder, "rec")
+    try:
+        deadline = time.monotonic() + NATIVE_WAIT
+        events: list[dict] = []
+        while time.monotonic() < deadline:
+            events = _native_events(folder, number)
+            if any(item.get("event") == "ready" for item in events) or process.poll() is not None:
+                break
+            time.sleep(0.05)
+        failed = {
+            item["track"]: _plain_text(str(item.get("error") or ""))
+            for item in events
+            if item.get("event") == "failed" and item.get("track") in files
+        }
+        for track in files:
+            if track in failed:
+                raise CaptureError(_start_failure(track, failed[track]), 1)
+        ready = any(item.get("event") == "ready" for item in events)
+        if not ready or process.poll() is not None:
+            reason = _log_tail(folder, "rec", 0) or "ul-rec did not start"
+            raise CaptureError(f"the recorder could not start: {reason}", 1)
+        starts = _native_starts(events)
+        state["segments"].append(files)
+        state["processes"] = [{"pid": process.pid, "program": "ul-rec", "track": track} for track in files]
+        # The clock starts with the first track's data; a value outside this start is not trusted.
+        first = min(starts.values(), default=spawned)
+        state["segment_started"] = first if spawned <= first <= time.time() else spawned
+        state["paused"] = False
+        state["phase"] = "recording"
+        _write_json(recording_state_file(), state)
+    except BaseException:
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=STOP_GRACE)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        raise
+
+
 def _start_segment(state: dict) -> None:
+    if state["plan"].get("engine") == "native":
+        _start_native_segment(state)
+        return
     folder = Path(state["project"])
     files = _track_files(state, len(state["segments"]))
     offsets = {track: _log_size(folder, track) for track in files}
@@ -898,7 +1009,8 @@ def start_recording(
         mic_value = "none"
     plain_mic = _plain(mic_value)
     has_ffmpeg = shutil.which("ffmpeg") is not None
-    if want_camera or mode == "audio" or not plain_mic:
+    rec = _backend().native_recorder()
+    if not plain_mic or ((want_camera or mode == "audio") and rec is None):
         _need("ffmpeg", "for camera, microphone and audio recording")
     cam_value = str(
         options.get("cam") or (camera_source["device"] if camera_source else "default")
@@ -924,7 +1036,7 @@ def start_recording(
             raise CaptureError("system audio is recorded with the screen only")
         system = False
     warnings = list(setup_warnings)
-    mic_in_screen = mode == "screen" and mic_name == "default" and not has_ffmpeg
+    mic_in_screen = mode == "screen" and mic_name == "default" and not has_ffmpeg and rec is None
     if mic_in_screen:
         warnings.append(
             "ffmpeg is not installed: the microphone goes into the screen track (brew install ffmpeg)"
@@ -1031,7 +1143,9 @@ def start_recording(
                 "camera": camera_name,
                 "mode": camera_mode,
                 "bitrate": CAMERA_QUALITY[quality][1],
-                "encoder": _backend().camera_encoder() if camera_name else "h264_videotoolbox",
+                "encoder": _backend().camera_encoder() if camera_name and rec is None else "h264_videotoolbox",
+                "engine": "native" if rec else "tools",
+                "rec": rec,
                 "nv12": True,
                 "mic": None if mic_in_screen else mic_name,
                 "mic_format": mic_format,
@@ -1183,6 +1297,8 @@ def status() -> dict:
     ):
         phase = "interrupted"
     warnings = list(state["warnings"])
+    if state["plan"].get("engine") == "native" and state["segments"]:
+        warnings.extend(_native_lost(_native_events(Path(state["project"]), len(state["segments"]))))
     level, silent = _mic_level(state) if phase == "recording" else (None, False)
     if silent:
         warnings.append(
@@ -1295,10 +1411,39 @@ def _repair_wav(path: Path) -> None:
         return
 
 
-def _finished_track(folder: Path, track: str, relative: str) -> str | None:
+def _finished_wav(folder: Path, relative: str, mic_format: str) -> str | None:
+    """ul-rec's microphone WAV (float) in the chosen format: FLAC, or a 24-bit WAV; as it is without ffmpeg."""
+    path = folder / relative
+    stem = Path(relative).name[1:]
+    has_ffmpeg = shutil.which("ffmpeg") is not None
+    extension = MIC_FORMATS[mic_format] if has_ffmpeg and mic_format in ("flac", "wav") else ".wav"
+    final_relative = f"media/{Path(stem).with_suffix(extension).name}"
+    final = folder / final_relative
+    if not (path.is_file() and path.stat().st_size > 0):
+        return final_relative if final.is_file() and final.stat().st_size > 0 else None
+    if not has_ffmpeg:
+        os.replace(path, final)
+        return final_relative
+    codec = ["-c:a", "flac"] if extension == ".flac" else ["-c:a", "pcm_s24le"]
+    temporary = final.with_name(f".convert-{final.name}")
+    try:
+        _run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(path), *codec, str(temporary)],
+            "saving the mic recording",
+        )
+        os.replace(temporary, final)
+    finally:
+        temporary.unlink(missing_ok=True)
+    path.unlink()
+    return final_relative
+
+
+def _finished_track(folder: Path, track: str, relative: str, mic_format: str = "flac") -> str | None:
     """The track's playable file (relative), remuxing a dot file the first time; None if nothing was recorded."""
     path = folder / relative
     name = Path(relative).name
+    if name.startswith(".") and path.suffix == ".wav":
+        return _finished_wav(folder, relative, mic_format)
     if not name.startswith("."):
         if path.suffix == ".wav" and path.is_file():
             _repair_wav(path)
@@ -1361,7 +1506,7 @@ def _finish(state: dict) -> dict:
             done = (
                 None
                 if track in stuck_tracks and index == len(state["segments"]) - 1
-                else _finished_track(folder, track, relative)
+                else _finished_track(folder, track, relative, state["plan"]["mic_format"])
             )
             if done is None:
                 why = "is still running" if track in stuck_tracks else "is missing"
@@ -1382,7 +1527,15 @@ def _finish(state: dict) -> dict:
         together = {track: length for track, length in known.items() if track not in died}
         reference = next((track for track in TRACK_ORDER if track in together), None)
         starts = {track: 0.0 for track in final}
-        if reference is not None:
+        events = _native_events(folder, index + 1) if state["plan"].get("engine") == "native" else []
+        problems.extend(f"part {index + 1}: {lost}" for lost in _native_lost(events))
+        walls = {track: wall for track, wall in _native_starts(events).items() if track in final}
+        if walls and set(walls) >= set(known):
+            # ul-rec timed every track on one clock: exact starts instead of lining up the ends.
+            first = min(walls.values())
+            starts |= {track: round(wall - first, 3) for track, wall in walls.items()}
+            duration = max((starts[track] + length for track, length in known.items()), default=measured)
+        elif reference is not None:
             starts |= segment_starts(together, reference)
             duration = together[reference]
         elif known:

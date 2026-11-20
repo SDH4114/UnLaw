@@ -48,6 +48,8 @@ class CoreTestCase(unittest.TestCase):
             "HOME": str(self.home),
             "UNLAW_PYTHON": sys.executable,
             "PATH": f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            # ul-rec sits next to a built ul and would record this Mac.
+            "UNLAW_CAPTURE_REC": "off",
         }
         for key in ("VISUAL", "EDITOR"):
             self.env.pop(key, None)

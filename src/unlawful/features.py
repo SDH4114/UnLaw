@@ -41,7 +41,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("game", "Fun", "Terminal arcade: Tetris, Snake, Minesweeper, Invaders, Chomp, Dash"),
 )
 # Cargo features of the Rust core; `agent` only gates the ula/unlawagent shortcuts.
-CARGO = ("lm", "agent", "game")
+CARGO = ("lm", "agent", "game", "capture")
 REQUIRES: dict[str, tuple[str, ...]] = {"agent": ("lm",)}
 NAMES = tuple(name for name, _, _ in FEATURES)
 # Features of earlier releases: still accepted in core.features, never installed.

@@ -331,6 +331,8 @@ LEGACY_SOURCE_HASHES["capture"].add("cf00f560c82b49ed0bf074303d6f8d24dc06ac8c687
 # 3.21.0 Studio seeds before the live-preview and camera fixes (the branch build and a dev build installed on the maintainer machine).
 LEGACY_SOURCE_HASHES["capture"].add("8b49d65073d19063bc28e0fb36bf4b27d02ac61fb03d7724d194cb1bc3cf763d")
 LEGACY_SOURCE_HASHES["capture"].add("b127ff6da58c064a579e81dc9a45070b28ab10de6cb8c0d56f92c5b7257c994c")
+# 3.21.0 capture on screencapture + ffmpeg only, before ul-rec (branch commits 1768d74..407fb73).
+LEGACY_SOURCE_HASHES["capture"].add("d40c1cc6b1b4732dd8a659fa8514eefae2e61e051c17eca2cf3782f3fbac8a43")
 LEGACY_SOURCE_HASHES["desk"].add("9433489a4df8e7c6a0058d0bcb5618d4917a20fe30407e673b3bb37d2ac32a5f")
 LEGACY_SOURCE_HASHES["desk"].add("62a0f4e9541241c1840b93af0e73e0e1115fdccc2f9ce57cefd33aefc8a87adf")
 LEGACY_SOURCE_HASHES["tg"].add("59521bc6e03acb1f48903fd7c95f894b26b0e705d8168d28c5a2850a99342ba2")

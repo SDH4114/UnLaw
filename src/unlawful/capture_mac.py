@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -431,6 +432,52 @@ class MacBackend:
             str(out),
         ]
 
+    def native_recorder(self) -> str | None:
+        """ul-rec next to ul (macOS 15+): one process records the screen with ScreenCaptureKit and the
+        camera and microphone with AVFoundation, on one clock, like OBS and Cap. `UNLAW_CAPTURE_REC`
+        names another binary, or `off` for the separate tools (screencapture and ffmpeg)."""
+        chosen = os.environ.get("UNLAW_CAPTURE_REC", "")
+        if chosen == "off":
+            return None
+        if chosen:
+            path = Path(chosen)
+        else:
+            unlaw_bin = os.environ.get("UNLAW_BIN")
+            if not unlaw_bin or macos_major() < 15:  # SCRecordingOutput came with macOS 15
+                return None
+            path = Path(unlaw_bin).with_name("ul-rec")
+        return str(path) if path.is_file() and os.access(path, os.X_OK) else None
+
+    def native_request(self, plan: dict, files: dict[str, Path], events: Path, levels: Path) -> dict:
+        """The JSON plan ul-rec reads (its format is at the top of rust/src/bin/ul-rec.rs)."""
+        request: dict = {"events": str(events), "levels": str(levels), "screen": None, "camera": None, "mic": None}
+        if "screen" in files:
+            request["screen"] = {
+                "path": str(files["screen"]),
+                "display": plan["display"],
+                "area": plan["area"],
+                "clicks": plan["clicks"],
+                "system_audio": plan["system"],
+                "fps": 60,
+            }
+        if "camera" in files:
+            mode = plan["mode"] or {}
+            request["camera"] = {
+                "path": str(files["camera"]),
+                "device": plan["camera"],
+                "width": mode.get("width"),
+                "height": mode.get("height"),
+                "fps": mode.get("fps"),
+                "bitrate": plan["bitrate"],
+            }
+        if "mic" in files:
+            request["mic"] = {
+                "path": str(files["mic"]),
+                "device": plan["mic"],
+                "format": "m4a" if files["mic"].suffix == ".m4a" else "wav",
+            }
+        return request
+
     def preview_argv(self, display: int, out: Path) -> list[str]:
         return ["screencapture", "-x", "-tjpg", f"-D{display}", str(out)]
 
@@ -493,6 +540,14 @@ class MacBackend:
         if kind not in SETTINGS_PANES:
             raise ValueError(f"no privacy pane for {kind}")
         return f"x-apple.systempreferences:com.apple.preference.security?{SETTINGS_PANES[kind]}"
+
+
+def macos_major() -> int:
+    """The macOS major version (15 for Sequoia); 0 when unknown or not a Mac."""
+    try:
+        return int(platform.mac_ver()[0].split(".")[0])
+    except ValueError:
+        return 0
 
 
 def backend() -> MacBackend:

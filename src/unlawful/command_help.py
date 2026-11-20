@@ -249,8 +249,10 @@ Settings: capture.audio_device and capture.camera_device (`default` = what macOS
   capture.video_format (mov) and capture.audio_format (m4a) for exports.
 Permissions: macOS gives Screen Recording, Camera and Microphone to the app that
   starts ul (Ghostty, Zed, ...). `ul capture doctor` names it.
-Dependencies: macOS screencapture; ffmpeg + ffprobe (brew install ffmpeg) for the
-  camera, the microphone track, audio, export, trim and convert.
+Engine: on macOS 15+ ul-rec (installed next to ul) records screen, Mac sound, camera
+  and microphone in one process on one clock; UNLAW_CAPTURE_REC=off uses the tools below.
+Dependencies: macOS screencapture; ffmpeg + ffprobe (brew install ffmpeg) for export,
+  trim and convert, and without ul-rec for the camera, the microphone track and audio.
 `ul desk` has a Studio tab with the same controls, a live layout and an export dialog.
 Examples: ul capture record --camera; ul capture scene 3; ul capture stop
   ul capture export last --canvas 9:16; ul capture record audio --duration 60

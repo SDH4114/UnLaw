@@ -45,7 +45,12 @@ pub fn find(name: &str) -> Option<&'static Feature> {
 
 /// Whether this ul was built with a feature; seeded ones are always available.
 fn in_binary(name: &str) -> bool {
-    let built = [("game", cfg!(feature = "game")), ("lm", cfg!(feature = "lm")), ("agent", cfg!(feature = "agent"))];
+    let built = [
+        ("game", cfg!(feature = "game")),
+        ("lm", cfg!(feature = "lm")),
+        ("agent", cfg!(feature = "agent")),
+        ("capture", cfg!(feature = "capture")),
+    ];
     built.iter().all(|(feature, present)| *present || *feature != name)
 }
 
@@ -394,6 +399,9 @@ mod tests {
     #[test]
     fn this_build_reports_its_cargo_features() {
         let all = resolve(&["all"]);
-        assert_eq!(needs_rebuild(&all), !(cfg!(feature = "game") && cfg!(feature = "lm") && cfg!(feature = "agent")));
+        assert_eq!(
+            needs_rebuild(&all),
+            !(cfg!(feature = "game") && cfg!(feature = "lm") && cfg!(feature = "agent") && cfg!(feature = "capture"))
+        );
     }
 }

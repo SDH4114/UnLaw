@@ -43,7 +43,7 @@ class FeatureListTests(unittest.TestCase):
         self.assertEqual(namespace["CARGO"], features.CARGO)
         self.assertEqual(len(features.FEATURES), 27)
         self.assertEqual(set(DEFAULT_COMMAND_NAMES), SEEDED)
-        self.assertEqual(set(features.NAMES) - set(features.CARGO), SEEDED - {"agent"})
+        self.assertEqual(set(features.NAMES) - set(features.CARGO), SEEDED - {"agent", "capture"})
 
     def run_chooser(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run([sys.executable, "-I", "-c", chooser_source(), *args], capture_output=True, text=True, check=False)
@@ -89,10 +89,10 @@ class FeatureListTests(unittest.TestCase):
 
     def test_presets_resolve_requirements_and_cargo_features(self) -> None:
         self.assertEqual(self.run_chooser("--preset", "agent,yt").stdout, "lm agent yt\nlm,agent\n")
-        self.assertEqual(self.run_chooser("--preset", "all").stdout, "all\nlm,agent,game\n")
+        self.assertEqual(self.run_chooser("--preset", "all").stdout, "all\nlm,agent,capture,game\n")
         self.assertEqual(self.run_chooser("--preset", "music").stdout, "music\n\n")
         self.assertEqual(self.run_chooser("--preset", "none").stdout, "none\n\n")
-        self.assertEqual(self.run_chooser("--all").stdout, "all\nlm,agent,game\n")
+        self.assertEqual(self.run_chooser("--all").stdout, "all\nlm,agent,capture,game\n")
         for bad in ("music nope", " "):
             result = self.run_chooser("--preset", bad)
             self.assertEqual(result.returncode, 2, bad)
@@ -105,7 +105,7 @@ class FeatureListTests(unittest.TestCase):
             config.write_text('[core]\nfeatures = ["game", "yt", "gone"]\n')
             self.assertEqual(self.run_chooser("--config", str(config)).stdout, "yt game\ngame\n")
             config.write_text("[core]\ncolor = true\n")
-            self.assertEqual(self.run_chooser("--config", str(config)).stdout, "all\nlm,agent,game\n", "older releases had everything")
+            self.assertEqual(self.run_chooser("--config", str(config)).stdout, "all\nlm,agent,capture,game\n", "older releases had everything")
             config.write_text("[core]\nfeatures = []\n")
             self.assertEqual(self.run_chooser("--config", str(config)).stdout, "none\n\n")
             config.write_text("not toml [")
@@ -151,7 +151,7 @@ class FeatureListTests(unittest.TestCase):
         self.assertEqual(code, 0, text)
         self.assertIn("Core (always)", text)
         selection, cargo = self.result(text)
-        self.assertEqual(cargo, "game")
+        self.assertEqual(cargo, "capture,game")
         self.assertEqual(selection, "gpt claude yt music lofi netflix capture desk obsidian work timer clip weather git py rust cpp zed awake sys mac steam minecraft game")
         code, _ = self.interactive([b"q"])
         self.assertEqual(code, 1)
@@ -275,13 +275,13 @@ class FeatureCommandTests(CoreTestCase):
         self.ok("init")
         log = self.cargo_log
         saved = self.ok("features", "remove", "game", "--no-build")
-        self.assertIn("Run `ul update` to rebuild ul with: lm, agent", saved.stdout)
+        self.assertIn("Run `ul update` to rebuild ul with: lm, agent, capture", saved.stdout)
         self.assertEqual(self.calls(log), [])
         self.assertIn("still built in until `ul update`", self.ok("features").stdout)
         rebuilt = self.ok("features", "remove", "agent")
-        self.assertIn("Rebuilding ul with: lm", rebuilt.stdout)
+        self.assertIn("Rebuilding ul with: lm, capture", rebuilt.stdout)
         unlaw, ule = self.calls(log)
-        self.assertEqual(unlaw[-4:], ["--root", str(self.home / ".local"), "--no-default-features", "--features", "lm", "unlaw"][-4:])
+        self.assertEqual(unlaw[-4:], ["--root", str(self.home / ".local"), "--no-default-features", "--features", "lm,capture", "unlaw"][-4:])
         self.assertIn("--features", unlaw)
         self.assertEqual(ule[-1], "ule")
         commit = self.ok("--version").stdout.strip().split("(")[-1].rstrip(")")

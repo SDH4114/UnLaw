@@ -505,6 +505,8 @@ class DeskServerTests(unittest.TestCase):
             "HOME": str(self.root / "home"),
             "XDG_CONFIG_HOME": str(self.root / "config"),
             "PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin",
+            # The Studio tests run the real `ul capture`; the ul-rec built next to ul would record this Mac.
+            "UNLAW_CAPTURE_REC": "off",
         }
         from unlawful.config import ensure_layout, set_config_value
 

@@ -720,9 +720,15 @@ ends it. `status` warns when the microphone is silent or the disk is almost full
 While recording, the menu bar shows the clock with Stop, Pause, the scenes, Add
 mark and Open Studio.
 
-Screen recordings use macOS `screencapture`, which records the sound of the Mac
-without extra drivers. ffmpeg (`brew install ffmpeg`) is needed for the camera,
-the microphone track, audio, export, trim and convert. macOS gives Screen
+On macOS 15 and later, recording goes through `ul-rec`, a small program
+installed next to `ul` (cargo feature `capture`): one process records the screen
+with the sound of the Mac (ScreenCaptureKit, no extra drivers), the camera and
+the microphone (AVFoundation), each to its own file, and notes when each track
+started, so they line up exactly. On older macOS, or with
+`UNLAW_CAPTURE_REC=off`, the screen is recorded with macOS `screencapture` and
+the camera and microphone with ffmpeg. ffmpeg (`brew install ffmpeg`) is needed
+for export, trim and convert, and without `ul-rec` also for the camera, the
+microphone track and audio. macOS gives Screen
 Recording, Camera and Microphone to the app that starts `ul` (Ghostty, Zed, …),
 so a recording can work from one terminal and fail from another;
 `ul capture doctor` names that app and `--open screen|camera|microphone` opens

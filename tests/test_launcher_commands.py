@@ -175,7 +175,7 @@ class CurlInstallerTests(unittest.TestCase):
         ]
         self.assertEqual(
             self.cargo_calls(root),
-            [[*common, "--no-default-features", "--features", "lm,agent,game", "unlaw"], [*common, "ule"]],
+            [[*common, "--no-default-features", "--features", "lm,agent,capture,game", "unlaw"], [*common, "ule"]],
         )
         self.assertEqual((root / "ul.txt").read_text().splitlines(),
                          ["features", "set", "--no-build", "all", "==", "doctor", "--fix", "=="])

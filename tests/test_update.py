@@ -80,7 +80,7 @@ class UpdateTests(CoreTestCase):
         common = [sys.executable, "install", "--locked", "--force", "--git", REPOSITORY, "--root", str(self.home / ".local")]
         self.assertEqual(
             log.read_text().splitlines(),
-            [*common, "--no-default-features", "--features", "lm,agent,game", "unlaw", "==", *common, "ule", "=="],
+            [*common, "--no-default-features", "--features", "lm,agent,capture,game", "unlaw", "==", *common, "ule", "=="],
         )
         self.assertIn("Updated to Unlaw 9.9.9", result.stdout)
         self.assertIn("edited ones are kept", result.stdout)

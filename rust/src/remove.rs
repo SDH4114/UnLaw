@@ -19,7 +19,7 @@ use crate::update;
 use crate::util::{home, is_executable, which};
 
 /// What `cargo install` puts into `<root>/bin` for both packages.
-const BINARIES: [&str; 5] = ["ul", "unlaw", "ula", "unlawagent", "ule"];
+const BINARIES: [&str; 6] = ["ul", "unlaw", "ula", "unlawagent", "ul-rec", "ule"];
 /// The launchd job of `ula setup` (agent.py `LABEL`).
 const AGENT_LABEL: &str = "com.unlaw.agent";
 /// The launchd job of `ul awake schedule` (awake.py `JOB_LABEL`).

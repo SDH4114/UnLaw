@@ -119,6 +119,41 @@ class MacBackendTests(unittest.TestCase):
         self.backend.camera_modes("FaceTime HD Camera", refresh=True)
         self.assertEqual(len(log.read_text().splitlines()), 2)
 
+    def test_ul_rec_is_used_next_to_ul_on_macos_15_or_later(self) -> None:
+        rec = self.bin / "ul-rec"
+        rec.write_text("#!/bin/sh\n")
+        rec.chmod(0o755)
+        environment = {"UNLAW_BIN": str(self.bin / "ul")}
+        with patch.dict(os.environ, environment), patch.object(capture_mac, "macos_major", return_value=15):
+            os.environ.pop("UNLAW_CAPTURE_REC", None)
+            self.assertEqual(self.backend.native_recorder(), str(rec))
+        with patch.dict(os.environ, environment), patch.object(capture_mac, "macos_major", return_value=14):
+            os.environ.pop("UNLAW_CAPTURE_REC", None)
+            self.assertIsNone(self.backend.native_recorder(), "SCRecordingOutput needs macOS 15")
+        with patch.dict(os.environ, {**environment, "UNLAW_CAPTURE_REC": "off"}):
+            self.assertIsNone(self.backend.native_recorder(), "off goes back to screencapture and ffmpeg")
+        rec.chmod(0o644)
+        with patch.dict(os.environ, {"UNLAW_CAPTURE_REC": str(rec)}):
+            self.assertIsNone(self.backend.native_recorder(), "only an executable")
+
+    def test_ul_rec_request_carries_the_plan(self) -> None:
+        plan = {
+            "display": 2, "area": "0,0,800,600", "clicks": False, "system": True, "camera": "FaceTime HD Camera",
+            "mode": {"width": 1920, "height": 1080, "fps": "30.000030"}, "bitrate": 8_000_000, "mic": "default",
+        }
+        files = {"screen": Path("/p/.screen-001.mov"), "camera": Path("/p/.camera-001.mov"), "mic": Path("/p/.mic-001.wav")}
+        request = self.backend.native_request(plan, files, Path("/p/rec.jsonl"), Path("/p/levels.txt"))
+        self.assertEqual(request["screen"], {
+            "path": "/p/.screen-001.mov", "display": 2, "area": "0,0,800,600", "clicks": False, "system_audio": True, "fps": 60,
+        })
+        self.assertEqual(request["camera"], {
+            "path": "/p/.camera-001.mov", "device": "FaceTime HD Camera", "width": 1920, "height": 1080,
+            "fps": "30.000030", "bitrate": 8_000_000,
+        })
+        self.assertEqual(request["mic"], {"path": "/p/.mic-001.wav", "device": "default", "format": "wav"})
+        only_mic = self.backend.native_request(plan, {"mic": Path("/p/mic-001.m4a")}, Path("/e"), Path("/l"))
+        self.assertEqual((only_mic["screen"], only_mic["camera"], only_mic["mic"]["format"]), (None, None, "m4a"))
+
     def test_camera_on_libx264_keeps_bitrate_and_420(self) -> None:
         camera = self.backend.camera_argv({**PLAN, "encoder": "libx264"}, Path("c.mp4"))
         self.assertEqual(camera[camera.index("-c:v") + 1], "libx264")

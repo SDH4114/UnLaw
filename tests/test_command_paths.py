@@ -36,7 +36,12 @@ class ToolTestCase(unittest.TestCase):
         self.bin.mkdir()
         environment = patch.dict(
             os.environ,
-            {"XDG_CONFIG_HOME": str(self.root / "config"), "PATH": f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin"},
+            {
+                "XDG_CONFIG_HOME": str(self.root / "config"),
+                "PATH": f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
+                # The real ul-rec (next to a built ul) would record this Mac; native tests install a fake.
+                "UNLAW_CAPTURE_REC": "off",
+            },
         )
         environment.start()
         self.addCleanup(environment.stop)
@@ -201,6 +206,47 @@ if "concat" in args:
 elif "+faststart" in args and "copy" in args and "-i" in args:
     data = open(args[args.index("-i") + 1], "rb").read()  # a remux keeps the media
 open(out, "wb").write(data)
+"""
+
+FAKE_UL_REC = """import json, os, signal, time
+plan = json.load(open(sys.argv[1]))
+events = open(plan["events"], "a")
+def event(**item):
+    events.write(json.dumps(item) + "\\n")
+    events.flush()
+stop = []
+signal.signal(signal.SIGINT, lambda *_: stop.append(1))
+signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
+failing = os.environ.get("FAKE_REC_FAIL", "")
+dropping = os.environ.get("FAKE_REC_DROP", "")
+offsets = {"screen": 0.0, "mic": 0.25, "camera": 0.75}
+started = []
+for track in ("screen", "camera", "mic"):
+    part = plan.get(track)
+    if not part:
+        continue
+    if track == failing:
+        event(track=track, event="failed", error="the camera is busy or not allowed")
+        continue
+    open(part["path"], "wb").write(b"rec")
+    event(track=track, event="started", wall=1700000000.0 + offsets[track])
+    started.append(track)
+event(event="ready", tracks=started)
+began = time.monotonic()
+frame = 0
+while not stop:
+    if dropping in started and time.monotonic() - began > 0.3:
+        event(track=dropping, event="failed", error="the device was disconnected")
+        started.remove(dropping)
+    if "mic" in started:
+        with open(plan["levels"], "a") as stream:
+            stream.write(f"frame:{frame} pts:0 pts_time:{frame / 10}\\nlavfi.astats.Overall.Peak_level=-21.5\\n")
+        frame += 1
+    time.sleep(0.1)
+for track in started:
+    event(track=track, event="finished")
+event(event="stopped")
+open(sys.argv[0] + ".exit", "w").write("stopped")
 """
 
 FAKE_FFPROBE = """import json, os
@@ -756,6 +802,72 @@ class CaptureTests(ToolTestCase):
             self.ok("stop")
         cameras = [line for line in self.lines(logs["ffmpeg"]) if ":none" in line and "-video_size" in line]
         self.assertIn("|-c:v|h264_videotoolbox|", "|" + cameras[-1] + "|")
+
+    def native(self) -> Path:
+        self.media_tools()
+        log = self.tool("ul-rec", body=FAKE_UL_REC)
+        environment = patch.dict(os.environ, {"UNLAW_CAPTURE_REC": str(self.bin / "ul-rec")})
+        environment.start()
+        self.addCleanup(environment.stop)
+        return log
+
+    def test_the_native_recorder_records_every_track_in_one_process(self) -> None:
+        log = self.native()
+        self.ok("record", "--camera")
+        state = json.loads(capture.recording_state_file().read_text())
+        self.assertEqual(state["plan"]["engine"], "native")
+        self.assertEqual({item["program"] for item in state["processes"]}, {"ul-rec"})
+        self.assertEqual({item["track"] for item in state["processes"]}, {"screen", "camera", "mic"})
+        self.assertEqual(len({item["pid"] for item in state["processes"]}), 1, "one process records everything")
+        request = json.loads(Path(self.lines(log)[0]).read_text())
+        self.assertEqual(request["camera"]["device"], "default")
+        self.assertEqual((request["camera"]["width"], request["camera"]["height"]), (1920, 1080))
+        self.assertEqual(request["mic"]["format"], "wav", "flac is made from a WAV at stop")
+        self.assertFalse(any(line.startswith("-v") for line in self.lines(self.root / "screencapture.log")))
+        time.sleep(0.3)
+        self.assertEqual(json.loads(self.ok("status", "--json"))["level_db"], -21.5)
+        self.ok("pause")
+        self.ok("resume")
+        folder, project = self.project(json.loads(self.ok("stop", "--json")))
+        self.assertEqual(project["state"], "ready", project["problems"])
+        self.assertEqual(len(project["segments"]), 2)
+        for number, segment in enumerate(project["segments"], 1):
+            # Exact starts from the recorder's clock, not guessed from when the tools stopped.
+            self.assertEqual(segment["starts"], {"screen": 0.0, "mic": 0.25, "camera": 0.75})
+            self.assertEqual(segment["duration"], 3.25)
+            self.assertEqual(segment["files"]["mic"], f"media/mic-{number:03d}.flac")
+            self.assertEqual(segment["files"]["screen"], f"media/screen-{number:03d}.mp4")
+            self.assertEqual(segment["files"]["camera"], f"media/camera-{number:03d}.mp4")
+        self.assertTrue((folder / "media" / "mic-001.flac").is_file())
+        self.assertFalse((folder / "media" / ".mic-001.wav").exists())
+
+    def test_the_native_recorder_reports_a_track_that_cannot_start(self) -> None:
+        self.native()
+        with patch.dict(os.environ, {"FAKE_REC_FAIL": "camera"}):
+            code, _, error = self.run_main(capture.main, ["record", "--camera"])
+        self.assertEqual(code, 1)
+        self.assertIn("the camera recorder could not start: the camera is busy or not allowed", error)
+        self.assertFalse(capture.recording_state_file().exists())
+        self.assertTrue((self.bin / "ul-rec.exit").exists(), "the recorder was stopped")
+
+    def test_the_native_recorder_reports_a_track_lost_mid_recording(self) -> None:
+        self.native()
+        with patch.dict(os.environ, {"FAKE_REC_DROP": "camera"}):
+            self.ok("record", "--camera")
+            time.sleep(0.8)
+            status = json.loads(self.ok("status", "--json"))
+        self.assertIn("the camera recording stopped: the device was disconnected", status["warnings"])
+        _, project = self.project(json.loads(self.ok("stop", "--json")))
+        self.assertEqual(project["state"], "incomplete")
+        self.assertIn("part 1: the camera recording stopped: the device was disconnected", project["problems"])
+
+    def test_without_ffmpeg_the_native_microphone_stays_a_wav(self) -> None:
+        self.native()
+        (self.bin / "ffmpeg").unlink()
+        self.ok("record", "--mic", "default")
+        _, project = self.project(json.loads(self.ok("stop", "--json")))
+        self.assertEqual(project["segments"][0]["files"]["mic"], "media/mic-001.wav")
+        self.assertEqual(project["segments"][0]["files"]["screen"], "media/screen-001.mov")
 
     def test_record_returns_once_the_microphone_and_camera_deliver(self) -> None:
         # The microphone and the camera need a second or two to wake up; "recording" is only

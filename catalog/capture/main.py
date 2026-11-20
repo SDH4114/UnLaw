@@ -2,7 +2,7 @@
 """Screenshots, screen/camera/audio recording projects and video export on macOS."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Screenshots, screen/camera/audio recording projects and video export on macOS.\nUsage: ul capture                 the studio in a terminal (scenes, sources, REC, export)\n       ul capture shot [screen|area|window] [options] [PATH]\n       ul capture record [screen|camera|audio] [options] [PATH]\n       ul capture pause | resume | status | scene N | mark [TEXT] | stop [--force] [--export]\n       ul capture projects | project X | export X [options] | setup | doctor | devices [--modes]\n       ul capture list | last | open | reveal | copy | delete | trim | convert | wave\nScreenshots (shot):\n  screen (default) the whole display; area / window let you select with the mouse\n  --display N      which display (1 = main; see `devices`)   --delay S  wait S seconds\n  --clipboard      copy instead of saving   --cursor  include the pointer\n  --jpg            JPEG instead of PNG      --open    open the file afterwards\nRecording (record) runs in the background until `ul capture stop`. Every recording is a\nproject folder in storage.root/captures/projects: the screen, the camera and the\nmicrophone are separate files in media/, and project.json says how to put them\ntogether (scenes, layouts per format, marks). Nothing is re-encoded while recording.\n  screen (default) the display with the Mac\'s sound and the microphone\n  camera           the camera with the microphone (scene Camera)\n  audio            the microphone only\n  --camera / --no-camera   add the camera to a screen recording (or not)\n  --scene N|ID     the scene to start with (1 Screen + camera, 2 Screen, 3 Camera, 4 Side by side)\n  --canvas C       16:9, 9:16, 1:1, 4:5 or source: the format the project opens in\n  --mic NAME|N     microphone by name or number; --no-mic records without it\n  --cam NAME|N     camera by name or number (default: capture.camera_device)\n  --cam-mode WxH@FPS|auto   a camera mode from `devices --modes` (auto: 1080p, highest fps)\n  --cam-quality max|high|light   camera file: 1080p 12 Mbps, 1080p 6 Mbps (default), 720p 3 Mbps\n  --mic-format flac|wav|m4a      microphone file: lossless flac (default), wav, or AAC\n  --system-audio / --no-system-audio   sound of the Mac (screen only)\n  --display N      --rect X,Y,W,H (part of the screen, in points)   --no-clicks\n  --countdown N    wait N seconds before recording\n  --duration S     record S seconds in the foreground, then save\n  --wait           stay in the foreground: Enter stops, p + Enter pauses\n  --export         export right after stop (with the last export settings)\n  --output PATH    export to PATH after stop (.mov or .mp4 picks the container)\n  --format F       mov|mp4 (or m4a|mp3|wav for audio): the export\'s container\n  pause / resume   pause and continue; every pause starts a new part\n  scene N|ID       switch the scene now (it is written into the timeline)\n  mark [TEXT]      put a marker at the current time\n  stop             stop every recorder together and save the project; a recorder that\n                   does not stop is never killed: the rest is saved and `stop` tries again\n  stop --force     end a recorder that hangs (its track is lost)\n  stop --export [export options]   save and export at once\n  status           what is recording, for how long, the scene, mic level and warnings\nProjects and export (the export never changes the project):\n  projects         the projects, newest first, with state, length, size and exports\n  project X        a project\'s details (X: name, folder or `last`); --remember lists a\n                   folder from elsewhere; --set-json - saves edits read from stdin\n  export X         render a video: --canvas 16:9|9:16|1:1|4:5|source (source = the screen\n                   as recorded, ready in seconds), --height 1080|1440|2160 (short side),\n                   --fps 60|30, --codec h264|hevc, --quality high|max, --format mov|mp4,\n                   --no-normalize (loudness -14 LUFS is on), --delete-sources (move the\n                   project to the Trash afterwards), --output PATH, --background\n                   Defaults: the project\'s last export, else the last one anywhere,\n                   else 16:9 1440p 60 fps H.264 (vertical formats 1080).\n  export --status  progress of the running export\n  setup            the studio setup (sources, devices, scenes, layouts, export defaults)\n                   as JSON; --set-json - saves it from stdin, --reset restores defaults\n  doctor           Screen Recording permission, ffmpeg, and which app needs the\n                   permissions; --open screen|camera|microphone opens System Settings\nLibrary:\n  list [N] [--all] the newest exported files and screenshots with kind, length and size\n  last [--reveal]  open the newest capture (or show it in Finder)\n  open|reveal X    open a capture, or show it in Finder (X: name, path or `last`)\n  copy X           put a screenshot on the clipboard\n  delete X         move a capture or a project to the Trash (only from the capture folders)\n  trim X --from T [--to T]   cut a recording exactly (T: seconds or m:ss); keeps the original\n  convert X --to mp4|mov|gif|m4a|mp3|wav   a new file next to the original\n  devices          displays, cameras and microphones with their numbers\n  devices --modes [--camera NAME]   the modes each camera offers (turns its light on briefly)\n  wave X [--bars N] the loudness of a recording as bars (like Voice Memos)\n  thumb X / preview [--display N]   small JPEGs (used by `ul desk`)\nAdd --json to any action for machine-readable output.\nFiles: storage.root/captures/projects, /recordings (exports) and /screenshots; never\n  overwritten (" 2" is added). The studio setup is storage.root/studio/setup.json.\nSettings: capture.audio_device and capture.camera_device (`default` = what macOS\n  uses, a name, or a number from `devices`), capture.screen_audio (microphone in\n  screen recordings, true), capture.system_audio (true), capture.show_clicks (true),\n  capture.video_format (mov) and capture.audio_format (m4a) for exports.\nPermissions: macOS gives Screen Recording, Camera and Microphone to the app that\n  starts ul (Ghostty, Zed, ...). `ul capture doctor` names it.\nDependencies: macOS screencapture; ffmpeg + ffprobe (brew install ffmpeg) for the\n  camera, the microphone track, audio, export, trim and convert.\n`ul desk` has a Studio tab with the same controls, a live layout and an export dialog.\nExamples: ul capture record --camera; ul capture scene 3; ul capture stop\n  ul capture export last --canvas 9:16; ul capture record audio --duration 60\n'
+COMMAND_HELP = 'Screenshots, screen/camera/audio recording projects and video export on macOS.\nUsage: ul capture                 the studio in a terminal (scenes, sources, REC, export)\n       ul capture shot [screen|area|window] [options] [PATH]\n       ul capture record [screen|camera|audio] [options] [PATH]\n       ul capture pause | resume | status | scene N | mark [TEXT] | stop [--force] [--export]\n       ul capture projects | project X | export X [options] | setup | doctor | devices [--modes]\n       ul capture list | last | open | reveal | copy | delete | trim | convert | wave\nScreenshots (shot):\n  screen (default) the whole display; area / window let you select with the mouse\n  --display N      which display (1 = main; see `devices`)   --delay S  wait S seconds\n  --clipboard      copy instead of saving   --cursor  include the pointer\n  --jpg            JPEG instead of PNG      --open    open the file afterwards\nRecording (record) runs in the background until `ul capture stop`. Every recording is a\nproject folder in storage.root/captures/projects: the screen, the camera and the\nmicrophone are separate files in media/, and project.json says how to put them\ntogether (scenes, layouts per format, marks). Nothing is re-encoded while recording.\n  screen (default) the display with the Mac\'s sound and the microphone\n  camera           the camera with the microphone (scene Camera)\n  audio            the microphone only\n  --camera / --no-camera   add the camera to a screen recording (or not)\n  --scene N|ID     the scene to start with (1 Screen + camera, 2 Screen, 3 Camera, 4 Side by side)\n  --canvas C       16:9, 9:16, 1:1, 4:5 or source: the format the project opens in\n  --mic NAME|N     microphone by name or number; --no-mic records without it\n  --cam NAME|N     camera by name or number (default: capture.camera_device)\n  --cam-mode WxH@FPS|auto   a camera mode from `devices --modes` (auto: 1080p, highest fps)\n  --cam-quality max|high|light   camera file: 1080p 12 Mbps, 1080p 6 Mbps (default), 720p 3 Mbps\n  --mic-format flac|wav|m4a      microphone file: lossless flac (default), wav, or AAC\n  --system-audio / --no-system-audio   sound of the Mac (screen only)\n  --display N      --rect X,Y,W,H (part of the screen, in points)   --no-clicks\n  --countdown N    wait N seconds before recording\n  --duration S     record S seconds in the foreground, then save\n  --wait           stay in the foreground: Enter stops, p + Enter pauses\n  --export         export right after stop (with the last export settings)\n  --output PATH    export to PATH after stop (.mov or .mp4 picks the container)\n  --format F       mov|mp4 (or m4a|mp3|wav for audio): the export\'s container\n  pause / resume   pause and continue; every pause starts a new part\n  scene N|ID       switch the scene now (it is written into the timeline)\n  mark [TEXT]      put a marker at the current time\n  stop             stop every recorder together and save the project; a recorder that\n                   does not stop is never killed: the rest is saved and `stop` tries again\n  stop --force     end a recorder that hangs (its track is lost)\n  stop --export [export options]   save and export at once\n  status           what is recording, for how long, the scene, mic level and warnings\nProjects and export (the export never changes the project):\n  projects         the projects, newest first, with state, length, size and exports\n  project X        a project\'s details (X: name, folder or `last`); --remember lists a\n                   folder from elsewhere; --set-json - saves edits read from stdin\n  export X         render a video: --canvas 16:9|9:16|1:1|4:5|source (source = the screen\n                   as recorded, ready in seconds), --height 1080|1440|2160 (short side),\n                   --fps 60|30, --codec h264|hevc, --quality high|max, --format mov|mp4,\n                   --no-normalize (loudness -14 LUFS is on), --delete-sources (move the\n                   project to the Trash afterwards), --output PATH, --background\n                   Defaults: the project\'s last export, else the last one anywhere,\n                   else 16:9 1440p 60 fps H.264 (vertical formats 1080).\n  export --status  progress of the running export\n  setup            the studio setup (sources, devices, scenes, layouts, export defaults)\n                   as JSON; --set-json - saves it from stdin, --reset restores defaults\n  doctor           Screen Recording permission, ffmpeg, and which app needs the\n                   permissions; --open screen|camera|microphone opens System Settings\nLibrary:\n  list [N] [--all] the newest exported files and screenshots with kind, length and size\n  last [--reveal]  open the newest capture (or show it in Finder)\n  open|reveal X    open a capture, or show it in Finder (X: name, path or `last`)\n  copy X           put a screenshot on the clipboard\n  delete X         move a capture or a project to the Trash (only from the capture folders)\n  trim X --from T [--to T]   cut a recording exactly (T: seconds or m:ss); keeps the original\n  convert X --to mp4|mov|gif|m4a|mp3|wav   a new file next to the original\n  devices          displays, cameras and microphones with their numbers\n  devices --modes [--camera NAME]   the modes each camera offers (turns its light on briefly)\n  wave X [--bars N] the loudness of a recording as bars (like Voice Memos)\n  thumb X / preview [--display N]   small JPEGs (used by `ul desk`)\nAdd --json to any action for machine-readable output.\nFiles: storage.root/captures/projects, /recordings (exports) and /screenshots; never\n  overwritten (" 2" is added). The studio setup is storage.root/studio/setup.json.\nSettings: capture.audio_device and capture.camera_device (`default` = what macOS\n  uses, a name, or a number from `devices`), capture.screen_audio (microphone in\n  screen recordings, true), capture.system_audio (true), capture.show_clicks (true),\n  capture.video_format (mov) and capture.audio_format (m4a) for exports.\nPermissions: macOS gives Screen Recording, Camera and Microphone to the app that\n  starts ul (Ghostty, Zed, ...). `ul capture doctor` names it.\nEngine: on macOS 15+ ul-rec (installed next to ul) records screen, Mac sound, camera\n  and microphone in one process on one clock; UNLAW_CAPTURE_REC=off uses the tools below.\nDependencies: macOS screencapture; ffmpeg + ffprobe (brew install ffmpeg) for export,\n  trim and convert, and without ul-rec for the camera, the microphone track and audio.\n`ul desk` has a Studio tab with the same controls, a live layout and an export dialog.\nExamples: ul capture record --camera; ul capture scene 3; ul capture stop\n  ul capture export last --canvas 9:16; ul capture record audio --duration 60\n'
 
 import copy
 import os
@@ -853,6 +853,7 @@ here, so a Windows or Linux backend can replace this one module.
 
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -1275,6 +1276,52 @@ class MacBackend:
             str(out),
         ]
 
+    def native_recorder(self) -> str | None:
+        """ul-rec next to ul (macOS 15+): one process records the screen with ScreenCaptureKit and the
+        camera and microphone with AVFoundation, on one clock, like OBS and Cap. `UNLAW_CAPTURE_REC`
+        names another binary, or `off` for the separate tools (screencapture and ffmpeg)."""
+        chosen = os.environ.get("UNLAW_CAPTURE_REC", "")
+        if chosen == "off":
+            return None
+        if chosen:
+            path = Path(chosen)
+        else:
+            unlaw_bin = os.environ.get("UNLAW_BIN")
+            if not unlaw_bin or macos_major() < 15:  # SCRecordingOutput came with macOS 15
+                return None
+            path = Path(unlaw_bin).with_name("ul-rec")
+        return str(path) if path.is_file() and os.access(path, os.X_OK) else None
+
+    def native_request(self, plan: dict, files: dict[str, Path], events: Path, levels: Path) -> dict:
+        """The JSON plan ul-rec reads (its format is at the top of rust/src/bin/ul-rec.rs)."""
+        request: dict = {"events": str(events), "levels": str(levels), "screen": None, "camera": None, "mic": None}
+        if "screen" in files:
+            request["screen"] = {
+                "path": str(files["screen"]),
+                "display": plan["display"],
+                "area": plan["area"],
+                "clicks": plan["clicks"],
+                "system_audio": plan["system"],
+                "fps": 60,
+            }
+        if "camera" in files:
+            mode = plan["mode"] or {}
+            request["camera"] = {
+                "path": str(files["camera"]),
+                "device": plan["camera"],
+                "width": mode.get("width"),
+                "height": mode.get("height"),
+                "fps": mode.get("fps"),
+                "bitrate": plan["bitrate"],
+            }
+        if "mic" in files:
+            request["mic"] = {
+                "path": str(files["mic"]),
+                "device": plan["mic"],
+                "format": "m4a" if files["mic"].suffix == ".m4a" else "wav",
+            }
+        return request
+
     def preview_argv(self, display: int, out: Path) -> list[str]:
         return ["screencapture", "-x", "-tjpg", f"-D{display}", str(out)]
 
@@ -1337,6 +1384,14 @@ class MacBackend:
         if kind not in SETTINGS_PANES:
             raise ValueError(f"no privacy pane for {kind}")
         return f"x-apple.systempreferences:com.apple.preference.security?{SETTINGS_PANES[kind]}"
+
+
+def macos_major() -> int:
+    """The macOS major version (15 for Sequoia); 0 when unknown or not a Mac."""
+    try:
+        return int(platform.mac_ver()[0].split(".")[0])
+    except ValueError:
+        return 0
 
 
 def backend() -> MacBackend:
@@ -2963,7 +3018,8 @@ KILL_GRACE = 2.0
 SILENCE_SECONDS = 10.0
 SILENCE_DB = -60.0
 LOW_SPACE = 5 * 10**9
-PROGRAMS = ("screencapture", "ffmpeg", "osascript")
+PROGRAMS = ("screencapture", "ffmpeg", "osascript", "ul-rec")
+NATIVE_WAIT = 40.0  # ul-rec lists the screens (up to 20 s) and waits 15 s for every device
 PHASES = ("recording", "paused", "saving", "interrupted", "unsaved", "stuck")
 TRACK_ORDER = ("screen", "camera", "mic")
 FALLBACK_MODE = {"width": 1280, "height": 720, "fps": "30"}
@@ -3014,6 +3070,10 @@ def _valid_plan(plan: object) -> bool:
     if any(key not in plan for key in ("area", "camera", "mic", "mode")):
         return False
     if plan.get("encoder", "h264_videotoolbox") not in ("libx264", "h264_videotoolbox"):
+        return False
+    if plan.get("engine", "tools") not in ("tools", "native"):
+        return False
+    if plan.get("engine") == "native" and not isinstance(plan.get("rec"), str):
         return False
     mode = plan["mode"]
     if mode is not None and not (
@@ -3192,13 +3252,18 @@ def _track_files(state: dict, index: int) -> dict[str, str]:
     """Files of one segment, relative to the project. Video tracks start with a dot until they are
     remuxed at stop (a file that is still being written is never offered to a player)."""
     plan, number = state["plan"], index + 1
+    native = plan.get("engine") == "native"
     files = {}
     if state["mode"] == "screen":
         files["screen"] = f"media/.screen-{number:03d}.mov"
     if plan["camera"]:
-        files["camera"] = f"media/.camera-{number:03d}.mp4"
+        files["camera"] = f"media/.camera-{number:03d}.{'mov' if native else 'mp4'}"
     if plan["mic"]:
-        files["mic"] = f"media/mic-{number:03d}{MIC_FORMATS[plan['mic_format']]}"
+        if native and plan["mic_format"] != "m4a":
+            # AVFoundation writes WAV (float, as the device gives it); stop turns it into the chosen format.
+            files["mic"] = f"media/.mic-{number:03d}.wav"
+        else:
+            files["mic"] = f"media/mic-{number:03d}{MIC_FORMATS[plan['mic_format']]}"
     return files
 
 
@@ -3287,7 +3352,108 @@ def _wait_until_live(folder: Path, files: dict[str, str], started: list, levels_
         time.sleep(0.05)
 
 
+def _native_events(folder: Path, number: int) -> list[dict]:
+    """What ul-rec reported for segment `number` (logs/rec-NNN.jsonl); unreadable lines are skipped."""
+    try:
+        text = (folder / "logs" / f"rec-{number:03d}.jsonl").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    events = []
+    for line in text.splitlines():
+        try:
+            item = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(item, dict):
+            events.append(item)
+    return events
+
+
+def _native_lost(events: list[dict]) -> list[str]:
+    """Tracks that failed after the recording began, as `the camera recording stopped: why`."""
+    ready = next((index for index, item in enumerate(events) if item.get("event") == "ready"), None)
+    if ready is None:
+        return []
+    return [
+        f"the {item.get('track')} recording stopped: {_plain_text(str(item.get('error') or 'it stopped'))}"
+        for item in events[ready + 1 :]
+        if item.get("event") == "failed" and item.get("track") in TRACK_ORDER
+    ]
+
+
+def _native_starts(events: list[dict]) -> dict[str, float]:
+    """When each track's first data was written (unix seconds, ul-rec's clock)."""
+    return {
+        item["track"]: float(item["wall"])
+        for item in events
+        if item.get("event") == "started" and item.get("track") in TRACK_ORDER and _finite(item.get("wall"))
+    }
+
+
+def _plain_text(text: str) -> str:
+    return "".join(character for character in text if character.isprintable())[:300]
+
+
+def _start_native_segment(state: dict) -> None:
+    """One ul-rec for every track of the segment; it reports `ready` once each track writes or failed."""
+    folder = Path(state["project"])
+    number = len(state["segments"]) + 1
+    files = _track_files(state, number - 1)
+    logs = folder / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    events_file = logs / f"rec-{number:03d}.jsonl"
+    events_file.unlink(missing_ok=True)  # left by a start that failed
+    request = _backend().native_request(
+        state["plan"], {track: folder / relative for track, relative in files.items()}, events_file, logs / LEVELS_FILE
+    )
+    request_file = logs / f"rec-{number:03d}.json"
+    _write_json(request_file, request)
+    spawned = time.time()
+    process = _spawn([state["plan"]["rec"], str(request_file)], folder, "rec")
+    try:
+        deadline = time.monotonic() + NATIVE_WAIT
+        events: list[dict] = []
+        while time.monotonic() < deadline:
+            events = _native_events(folder, number)
+            if any(item.get("event") == "ready" for item in events) or process.poll() is not None:
+                break
+            time.sleep(0.05)
+        failed = {
+            item["track"]: _plain_text(str(item.get("error") or ""))
+            for item in events
+            if item.get("event") == "failed" and item.get("track") in files
+        }
+        for track in files:
+            if track in failed:
+                raise CaptureError(_start_failure(track, failed[track]), 1)
+        ready = any(item.get("event") == "ready" for item in events)
+        if not ready or process.poll() is not None:
+            reason = _log_tail(folder, "rec", 0) or "ul-rec did not start"
+            raise CaptureError(f"the recorder could not start: {reason}", 1)
+        starts = _native_starts(events)
+        state["segments"].append(files)
+        state["processes"] = [{"pid": process.pid, "program": "ul-rec", "track": track} for track in files]
+        # The clock starts with the first track's data; a value outside this start is not trusted.
+        first = min(starts.values(), default=spawned)
+        state["segment_started"] = first if spawned <= first <= time.time() else spawned
+        state["paused"] = False
+        state["phase"] = "recording"
+        _write_json(recording_state_file(), state)
+    except BaseException:
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=STOP_GRACE)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        raise
+
+
 def _start_segment(state: dict) -> None:
+    if state["plan"].get("engine") == "native":
+        _start_native_segment(state)
+        return
     folder = Path(state["project"])
     files = _track_files(state, len(state["segments"]))
     offsets = {track: _log_size(folder, track) for track in files}
@@ -3550,7 +3716,8 @@ def start_recording(
         mic_value = "none"
     plain_mic = _plain(mic_value)
     has_ffmpeg = shutil.which("ffmpeg") is not None
-    if want_camera or mode == "audio" or not plain_mic:
+    rec = _backend().native_recorder()
+    if not plain_mic or ((want_camera or mode == "audio") and rec is None):
         _need("ffmpeg", "for camera, microphone and audio recording")
     cam_value = str(
         options.get("cam") or (camera_source["device"] if camera_source else "default")
@@ -3576,7 +3743,7 @@ def start_recording(
             raise CaptureError("system audio is recorded with the screen only")
         system = False
     warnings = list(setup_warnings)
-    mic_in_screen = mode == "screen" and mic_name == "default" and not has_ffmpeg
+    mic_in_screen = mode == "screen" and mic_name == "default" and not has_ffmpeg and rec is None
     if mic_in_screen:
         warnings.append(
             "ffmpeg is not installed: the microphone goes into the screen track (brew install ffmpeg)"
@@ -3683,7 +3850,9 @@ def start_recording(
                 "camera": camera_name,
                 "mode": camera_mode,
                 "bitrate": CAMERA_QUALITY[quality][1],
-                "encoder": _backend().camera_encoder() if camera_name else "h264_videotoolbox",
+                "encoder": _backend().camera_encoder() if camera_name and rec is None else "h264_videotoolbox",
+                "engine": "native" if rec else "tools",
+                "rec": rec,
                 "nv12": True,
                 "mic": None if mic_in_screen else mic_name,
                 "mic_format": mic_format,
@@ -3835,6 +4004,8 @@ def status() -> dict:
     ):
         phase = "interrupted"
     warnings = list(state["warnings"])
+    if state["plan"].get("engine") == "native" and state["segments"]:
+        warnings.extend(_native_lost(_native_events(Path(state["project"]), len(state["segments"]))))
     level, silent = _mic_level(state) if phase == "recording" else (None, False)
     if silent:
         warnings.append(
@@ -3947,10 +4118,39 @@ def _repair_wav(path: Path) -> None:
         return
 
 
-def _finished_track(folder: Path, track: str, relative: str) -> str | None:
+def _finished_wav(folder: Path, relative: str, mic_format: str) -> str | None:
+    """ul-rec's microphone WAV (float) in the chosen format: FLAC, or a 24-bit WAV; as it is without ffmpeg."""
+    path = folder / relative
+    stem = Path(relative).name[1:]
+    has_ffmpeg = shutil.which("ffmpeg") is not None
+    extension = MIC_FORMATS[mic_format] if has_ffmpeg and mic_format in ("flac", "wav") else ".wav"
+    final_relative = f"media/{Path(stem).with_suffix(extension).name}"
+    final = folder / final_relative
+    if not (path.is_file() and path.stat().st_size > 0):
+        return final_relative if final.is_file() and final.stat().st_size > 0 else None
+    if not has_ffmpeg:
+        os.replace(path, final)
+        return final_relative
+    codec = ["-c:a", "flac"] if extension == ".flac" else ["-c:a", "pcm_s24le"]
+    temporary = final.with_name(f".convert-{final.name}")
+    try:
+        _run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(path), *codec, str(temporary)],
+            "saving the mic recording",
+        )
+        os.replace(temporary, final)
+    finally:
+        temporary.unlink(missing_ok=True)
+    path.unlink()
+    return final_relative
+
+
+def _finished_track(folder: Path, track: str, relative: str, mic_format: str = "flac") -> str | None:
     """The track's playable file (relative), remuxing a dot file the first time; None if nothing was recorded."""
     path = folder / relative
     name = Path(relative).name
+    if name.startswith(".") and path.suffix == ".wav":
+        return _finished_wav(folder, relative, mic_format)
     if not name.startswith("."):
         if path.suffix == ".wav" and path.is_file():
             _repair_wav(path)
@@ -4013,7 +4213,7 @@ def _finish(state: dict) -> dict:
             done = (
                 None
                 if track in stuck_tracks and index == len(state["segments"]) - 1
-                else _finished_track(folder, track, relative)
+                else _finished_track(folder, track, relative, state["plan"]["mic_format"])
             )
             if done is None:
                 why = "is still running" if track in stuck_tracks else "is missing"
@@ -4034,7 +4234,15 @@ def _finish(state: dict) -> dict:
         together = {track: length for track, length in known.items() if track not in died}
         reference = next((track for track in TRACK_ORDER if track in together), None)
         starts = {track: 0.0 for track in final}
-        if reference is not None:
+        events = _native_events(folder, index + 1) if state["plan"].get("engine") == "native" else []
+        problems.extend(f"part {index + 1}: {lost}" for lost in _native_lost(events))
+        walls = {track: wall for track, wall in _native_starts(events).items() if track in final}
+        if walls and set(walls) >= set(known):
+            # ul-rec timed every track on one clock: exact starts instead of lining up the ends.
+            first = min(walls.values())
+            starts |= {track: round(wall - first, 3) for track, wall in walls.items()}
+            duration = max((starts[track] + length for track, length in known.items()), default=measured)
+        elif reference is not None:
             starts |= segment_starts(together, reference)
             duration = together[reference]
         elif known:
