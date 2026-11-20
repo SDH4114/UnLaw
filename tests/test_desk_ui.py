@@ -27,6 +27,18 @@ class DeskUITests(unittest.TestCase):
             )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_page_scripts_define_each_top_level_name_once(self) -> None:
+        # The page scripts share one global scope: a second `function isLocked` silently replaces the first.
+        import re
+
+        seen: dict[str, str] = {}
+        for name in ("desk_ui.py", "studio_ui.py", "studio_edit.py"):
+            text = (ROOT / "src" / "unlawful" / name).read_text()
+            for match in re.finditer(r"^(?:async )?function (\w+)|^(?:const|let) (\w+) ?=", text, re.M):
+                found = match.group(1) or match.group(2)
+                self.assertNotIn(found, seen, f"{found} is defined in {seen.get(found)} and {name}")
+                seen[found] = name
+
     def test_failed_save_can_be_retried(self) -> None:
         self.run_case("failed_save")
 

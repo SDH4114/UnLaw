@@ -80,7 +80,7 @@ function harness() {
       parseLayout, defaultLayout, resizeLayout, swapPanels, layoutFrame, LAYOUT_PANELS,
       addWaveSample, voiceClock, wavePeaks, recordingAudio, drawVoice, releaseWaveMic,
       loadStudioInfo, loadSetup, setStudioTab, runCountdown, cancelCountdown, closeProject, rememberEdit,
-      ed, editOf, edClips, edLength, toRecording, toOutput, bladeAt, rippleDelete, deleteRange, subtractRanges, silences, snapTime, captionSpans, captionAt, splitCaption, mergeCaption, captionsFrom, captionAssetName, joinPeaks, soundFiles, audioOnly, renderEdit, editKeydown, edSeek, edEnter, edDelete, edBlade, edAddText, edRemoveSilences, edTranscribe, renderProjectPage,
+      ed, editOf, defaultEdit, edLength, bladeAt, rippleDelete, liftClips, extractRange, moveClips, trimClip, linkedIds, toggleLink, addTrack, insertMedia, videoAt, audibleClips, captionsToClips, captionAt, mergeCaption, removeSilences, soundParts, silences, snapTime, captionAssetName, joinPeaks, soundFiles, audioOnly, renderEdit, renderEditSide, editKeydown, edSeek, edEnter, edTranscribe, edLoadModels, edToggleTrack, renderProjectPage,
       countdownSteps, saveSetupSoon, permissionBanner, openSettings,
       renderStudio, renderStudioBody, renderSources, updateRecordControls, startPreview,
       startHistory, undoEdit, addScene, moveScene, removeScene, defaultPlacement, currentScene, edited, selectSource, placementOf, nudgeSelected, deleteSelected, sourceById, toggleVisible, moveSource, toggleInput, openRecordSettings, closeStudioMenu,
@@ -446,48 +446,107 @@ const tests = {
   assert.equal(a.studioKey('KeyA', {active: false, typing: true}), null);
  },
  async edit_model() {
+  // Version 2: tracks of clips like Resolve/Premiere. The recording is linked picture + mic + Mac sound.
   const a = harness().a;
-  const edit = {version: 1, clips: [{id: 'c1', in: 0, out: 10}], captions: [], caption_style: {}, texts: [], audio: []};
-  assert.equal(a.bladeAt(edit, 4), true);
-  assert.equal(a.bladeAt(edit, 4.01), false, 'too close to a cut');
-  assert.equal(JSON.stringify(edit.clips), JSON.stringify([{id: 'c1', in: 0, out: 4}, {id: 'c2', in: 4, out: 10}]));
-  assert.equal(a.rippleDelete(edit, 0), true);
-  assert.equal(a.edLength(edit), 6);
-  assert.equal(a.toRecording(edit, 1).t, 5);
-  assert.equal(a.toOutput(edit, 5), 1);
-  assert.equal(a.toOutput(edit, 2), null, 'cut away');
-  assert.equal(a.rippleDelete(edit, 0), false, 'the last clip stays');
-  edit.clips = [{id: 'c1', in: 0, out: 10}];
-  assert.equal(a.deleteRange(edit, 2, 5), true);
-  assert.equal(JSON.stringify(edit.clips.map(clip => [clip.in, clip.out])), '[[0,2],[5,10]]');
-  assert.equal(a.subtractRanges(edit, [[1, 1.5], [6, 7]]), true);
-  assert.equal(JSON.stringify(edit.clips.map(clip => [clip.in, clip.out])), '[[0,1],[1.5,2],[5,6],[7,10]]');
-  assert.equal(new Set(edit.clips.map(clip => clip.id)).size, 4, 'ids stay unique');
-  assert.equal(a.subtractRanges(edit, [[0, 100]]), false, 'never cuts everything');
-  // Pauses: 25 bars a second, quiet between 1 s and 2 s.
-  const peaks = Array.from({length: 75}, (_, i) => i >= 25 && i < 50 ? 0.01 : 0.6);
-  assert.equal(JSON.stringify(a.silences(peaks, 25, 0.1, 0.6, 0.1)), '[[1.1,1.9]]');
-  assert.equal(a.silences(peaks, 25, 0.1, 1.5, 0.1).length, 0, 'shorter than the minimum');
+  const project = sampleProject();
+  const edit = a.defaultEdit(project);
+  assert.deepEqual(plain(edit.tracks.map(track => [track.id, track.kind])), [['s1', 'subtitle'], ['t1', 'text'], ['v1', 'video'], ['a1', 'audio'], ['a2', 'audio'], ['a3', 'audio']]);
+  assert.deepEqual(plain(edit.clips.map(clip => [clip.track, clip.source, clip.start, clip.in, clip.out, clip.link])),
+   [['v1', 'recording', 0, 0, 5, 'l1'], ['a1', 'mic', 0, 0, 5, 'l1'], ['a2', 'system', 0, 0, 5, 'l1']]);
+  assert.equal(a.edLength(edit), 5);
+  // Blade at 2 s cuts the three linked clips; the right halves are linked to each other, not to the left ones.
+  assert.equal(a.bladeAt(edit, 2), 3);
+  assert.equal(a.bladeAt(edit, 2.01), 0, 'too close to a cut');
+  const right = edit.clips.filter(clip => clip.start === 2);
+  assert.equal(right.length, 3);
+  assert.equal(new Set(right.map(clip => clip.link)).size, 1);
+  assert.notEqual(right[0].link, 'l1');
+  assert.deepEqual(plain(a.linkedIds(edit, [right[0].id]).sort()), plain(right.map(clip => clip.id).sort()));
+  // Ripple delete closes the gap on every unlocked track.
+  assert.equal(a.rippleDelete(edit, right.map(clip => clip.id)), true);
+  assert.equal(a.edLength(edit), 2);
+  // Lift leaves a gap; picture and sound cut apart (Alt-click selects one clip).
+  a.bladeAt(edit, 1);
+  const picture = edit.clips.find(clip => clip.track === 'v1' && clip.start === 0);
+  a.liftClips(edit, [picture.id]);
+  assert.equal(a.videoAt(edit, 0.5), null, 'a gap is black');
+  assert.ok(a.videoAt(edit, 1.5));
+  assert.equal(a.audibleClips(edit).filter(clip => clip.start === 0).length, 2, 'its sound stays');
+  // Moving overwrites what is under the moved clip on its track.
+  const mic = edit.clips.filter(clip => clip.track === 'a1').sort((x, y) => x.start - y.start);
+  assert.equal(a.moveClips(edit, [mic[0].id], 0.5, 0), true);
+  const mics = edit.clips.filter(clip => clip.track === 'a1').sort((x, y) => x.start - y.start);
+  assert.deepEqual(plain(mics.map(clip => [clip.start, clip.in, clip.out])), [[0.5, 0, 1], [1.5, 1.5, 2]], 'the second mic clip lost its covered part');
+  assert.equal(a.moveClips(edit, [mics[0].id], -9, 0), true);
+  assert.equal(edit.clips.find(clip => clip.id === mics[0].id).start, 0, 'never before 0');
+  assert.equal(a.moveClips(edit, [mics[0].id], 0, -1), false, 'an audio clip cannot go onto a video track');
+  assert.equal(a.moveClips(edit, [mics[0].id], 0, 2), true, 'down to another audio track');
+  assert.equal(edit.clips.find(clip => clip.id === mics[0].id).track, 'a3');
+  // Trims stop at the source's ends and at the neighbours.
+  const fresh = a.defaultEdit(project);
+  const v = fresh.clips[0];
+  a.trimClip(fresh, v.id, 'end', 9, project, false);
+  assert.equal(v.out, 5, 'not past the end of the recording');
+  a.trimClip(fresh, v.id, 'start', 1, project, true);
+  assert.deepEqual(plain(fresh.clips.map(clip => [clip.start, clip.in])), [[1, 1], [1, 1], [1, 1]], 'linked clips trim together');
+  a.trimClip(fresh, v.id, 'start', -3, project, false);
+  assert.deepEqual(plain([v.start, v.in]), [0, 0], 'not before the start of the recording');
+  // Locked tracks are left alone by a range extract.
+  const locked = a.defaultEdit(project);
+  locked.tracks.find(track => track.id === 'a2').locked = true;
+  assert.equal(a.extractRange(locked, 1, 2), true);
+  assert.deepEqual(plain(locked.clips.filter(clip => clip.track === 'v1').map(clip => [clip.start, clip.in, clip.out])), [[0, 0, 1], [1, 2, 5]]);
+  assert.deepEqual(plain(locked.clips.filter(clip => clip.track === 'a2').map(clip => [clip.start, clip.in, clip.out])), [[0, 0, 5]]);
+  // Mute and solo decide what is heard.
+  const heard = a.defaultEdit(project);
+  heard.tracks.find(track => track.id === 'a2').muted = true;
+  assert.deepEqual(plain(a.audibleClips(heard).map(clip => clip.source)), ['mic']);
+  heard.tracks.find(track => track.id === 'a3').solo = true;
+  assert.deepEqual(plain(a.audibleClips(heard)), [], 'with a solo only solo tracks play');
+  // A new video track goes above the others and covers them.
+  const layered = a.defaultEdit(project);
+  const top = a.addTrack(layered, 'video');
+  assert.equal(top.id, 'v2');
+  assert.ok(layered.tracks.findIndex(track => track.id === 'v2') < layered.tracks.findIndex(track => track.id === 'v1'));
+  const ids = a.insertMedia(layered, project, 'recording', 1, {video: 'v2'});
+  assert.equal(ids.length, 3, 'picture, mic and Mac sound');
+  assert.equal(a.videoAt(layered, 1.5).track, 'v2');
+  assert.equal(a.videoAt(layered, 0.5).track, 'v1');
+  // Link and unlink.
+  assert.equal(a.toggleLink(layered, ids), 'unlinked');
+  assert.deepEqual(plain(a.linkedIds(layered, [ids[0]])), [ids[0]]);
+  assert.equal(a.toggleLink(layered, ids), 'linked');
+  assert.equal(a.linkedIds(layered, [ids[0]]).length, 3);
+  // Subtitles: lines of the recording clock follow the mic clips onto the timeline.
+  const cut = a.defaultEdit(project);
+  a.bladeAt(cut, 2); a.bladeAt(cut, 3);
+  a.rippleDelete(cut, cut.clips.filter(clip => clip.start === 2).map(clip => clip.id));
+  assert.equal(a.captionsToClips(cut, project, [{in: 0.5, out: 1.5, text: 'one'}, {in: 1.5, out: 3.5, text: 'two words'}, {in: 2.2, out: 2.8, text: 'gone'}]), 2);
+  const subs = cut.clips.filter(clip => clip.source === 'caption').sort((x, y) => x.start - y.start);
+  assert.deepEqual(plain(subs.map(clip => [clip.start, Math.round((clip.out - clip.in) * 1000) / 1000, clip.text])), [[0.5, 1, 'one'], [1.5, 1, 'two words']]);
+  assert.equal(a.captionAt(cut, 2.1).text, 'two words');
+  assert.equal(a.mergeCaption(cut, subs[0].id), true);
+  assert.equal(cut.clips.filter(clip => clip.source === 'caption').length, 1);
+  assert.equal(cut.clips.find(clip => clip.source === 'caption').text, 'one two words');
+  // Remove silences: quiet 1-2 s of the recording (mic peaks at 25 a second) is extracted from every track.
+  const quiet = a.defaultEdit(project);
+  const peaks = Array.from({length: 125}, (_, i) => i >= 25 && i < 50 ? 0.01 : 0.6);
+  const removed = a.removeSilences(quiet, project, peaks);
+  assert.ok(Math.abs(removed - 0.76) < 1e-9, String(removed));  // 1.12-1.88: 0.12 s of the pause kept on each side
+  assert.ok(Math.abs(a.edLength(quiet) - 4.24) < 1e-9);
+  assert.equal(a.removeSilences(quiet, project, peaks), 0, 'nothing left to remove');
+  // Pure helpers kept from version 1.
+  assert.equal(JSON.stringify(a.silences(peaks.slice(0, 75), 25, 0.1, 0.6, 0.1)), '[[1.1,1.9]]');
   assert.equal(a.snapTime(4.03, [4, 9], 0.05), 4);
   assert.equal(a.snapTime(4.2, [4, 9], 0.05), 4.2);
-  // Captions live on the recording clock and follow the cuts.
-  edit.clips = [{id: 'c1', in: 0, out: 2}, {id: 'c2', in: 5, out: 7}];
-  edit.captions = a.captionsFrom([{in: 0.5, out: 1.5, text: 'one'}, {in: 1.5, out: 5.5, text: 'two words here'}, {in: 3, out: 4, text: 'gone'}, {in: 4, out: 4, text: 'empty'}]);
-  assert.equal(JSON.stringify(a.captionSpans(edit).map(span => [span.start, span.end, span.text])), '[[0.5,1.5,"one"],[1.5,2.5,"two words here"]]');
-  assert.equal(a.captionAt(edit, 2).text, 'two words here');
-  assert.equal(a.splitCaption(edit, 's2', 3.5), true);
-  assert.equal(JSON.stringify(edit.captions.map(line => line.text)), '["one","two words","here","gone"]');
-  assert.equal(a.mergeCaption(edit, 's2'), true);
-  assert.equal(edit.captions.find(line => line.id === 's2').text, 'two words gone', 'merges with the next line in time');
-  assert.equal(a.captionAssetName('hi', {size: 54}), a.captionAssetName('hi', {size: 54}));
   assert.notEqual(a.captionAssetName('hi', {size: 54}), a.captionAssetName('hi', {size: 56}), 'a new style draws again');
   assert.match(a.captionAssetName('hi', {}), /^cap-[0-9a-f]{16}\.png$/);
-  // Two parts of sound on one clock.
   assert.equal(JSON.stringify(a.joinPeaks([{start: 0, duration: 1, peaks: [0.2, 0.4]}, {start: 1.5, duration: 0.5, peaks: [1]}], 2, 2)), '[0.2,0.4,0,1]');
-  const project = sampleProject();
   assert.equal(JSON.stringify(a.soundFiles(project)), JSON.stringify([{file: 'media/mic-001.flac', start: 0.94, duration: 5}]));
   assert.equal(a.audioOnly(project), false);
-  assert.equal(JSON.stringify(a.editOf(project).clips), '[{"id":"c1","in":0,"out":5}]');
+  // Where a recording's sound sits in its files: the mic file starts 0.94 s into part 1.
+  assert.deepEqual(plain(a.soundParts(project, 'mic')), [{segment: 0, begin: 0, end: 5, file: 'media/mic-001.flac', offset: 0.94}]);
+  assert.deepEqual(plain(a.soundParts(project, 'system')), [{segment: 0, begin: 0, end: 5, file: 'media/screen-001.mp4', offset: 0}]);
  },
  async edit_tab_keys_and_page() {
   const h = treeHarness(), a = h.a;
@@ -499,34 +558,65 @@ const tests = {
   project.segments[0].files = {mic: 'media/mic-001.flac'};
   project.mode = 'audio';
   const calls = [];
-  h.context.fetch = async (url, options) => { calls.push([url, options && options.body]); return response(url.includes('/wave') ? {peaks: [0.5, 0.5], duration: 5} : url.includes('transcribe') ? {captions: [{in: 1, out: 2, text: 'hello'}], language: 'en'} : {}); };
+  h.context.fetch = async (url, options) => {
+   calls.push([url, options && options.body]);
+   return response(url.includes('/wave') ? {peaks: [0.5, 0.5], duration: 5} : url.includes('speech-models') ? [{id: 'mlx/whisper', format: 'mlx', default: false}, {id: 'gguf/whisper', format: 'gguf', default: false}]
+    : url.includes('transcribe') ? {captions: [{in: 3, out: 4, text: 'hello'}], language: 'en', model: 'mlx/whisper'} : url.includes('proxy') ? {state: 'done', files: {}} : {});
+  };
   h.main.append(h.context.document.createElement('div'));
   const root = new h.context.Node('div'); root.id = 'studioRoot'; h.main.append(root);
   a.studio.project = project;
   a.studio.player = null;
   a.edEnter();
   assert.equal(a.studio.tab, 'edit');
-  assert.ok(h.find('edTimeline'), 'the timeline is drawn');
+  assert.ok(h.find('edTracks'), 'the timeline is drawn');
   assert.ok(h.find('edWave'), 'an audio project shows its sound, not a stage');
   assert.equal(h.find('stage'), null);
-  const key = code => a.editKeydown({code, key: code, shiftKey: false, metaKey: false, ctrlKey: false, altKey: false});
+  assert.match(textOf(h.find('edHeads')), /Mic/, 'track headers name the tracks');
+  assert.doesNotMatch(textOf(h.find('edHeads')), /Video 1/, 'an audio project has no picture track to show');
+  const key = (code, more = {}) => a.editKeydown({code, key: code, shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, ...more});
   a.edSeek(2);
-  assert.equal(key('KeyB'), true);
-  assert.equal(project.edit.clips.length, 2, 'B cuts at the playhead');
-  a.ed.sel = {kind: 'clip', id: project.edit.clips[0].id};
-  assert.equal(key('Delete'), true);
-  assert.equal(a.edLength(project.edit), 3, 'Delete closes the gap');
+  assert.equal(key('KeyB', {metaKey: true}), true);
+  assert.equal(project.edit.clips.length, 2, '⌘B cuts at the playhead');
+  a.ed.sel = new Set([project.edit.clips.find(clip => clip.start === 0).id]);
+  assert.equal(key('Backspace', {shiftKey: true}), true);
+  assert.equal(a.edLength(project.edit), 3, '⇧⌫ ripple deletes');
   a.edSeek(0.5); key('KeyI'); a.edSeek(1.5); key('KeyO');
-  key('Delete');
-  assert.equal(a.edLength(project.edit), 2, 'I/O range removed');
+  key('Quote');
+  assert.equal(a.edLength(project.edit), 2, 'the I/O range is extracted');
   a.undoEdit(false);
   assert.equal(a.edLength(project.edit), 3, '⌘Z brings it back');
+  a.ed.in = a.ed.out = null;
+  a.edSeek(1);
+  key('KeyB', {metaKey: true});
+  a.ed.sel = new Set([project.edit.clips.find(clip => clip.start === 0).id]);
+  key('Backspace');
+  assert.equal(a.edLength(project.edit), 3, '⌫ lifts and leaves a gap');
+  assert.equal(project.edit.clips.filter(clip => clip.source === 'mic').length, 1);
+  a.undoEdit(false);
   key('KeyT');
-  assert.equal(project.edit.texts.length, 1);
+  assert.equal(project.edit.clips.filter(clip => clip.source === 'text').length, 1, 'T adds a text');
+  key('KeyB');
+  assert.equal(a.ed.tool, 'blade');
+  key('KeyA');
+  assert.equal(a.ed.tool, 'select');
+  // Subtitles use the chosen speech model.
+  await a.edLoadModels();
+  assert.equal(a.ed.model, 'mlx/whisper', 'the best model is chosen when none was');
   a.ed.language = 'en';
   await a.edTranscribe();
-  assert.equal(project.edit.captions.length, 1);
-  assert.ok(calls.some(([url, body]) => url === '/api/studio/transcribe' && JSON.parse(body).language === 'en'));
+  assert.equal(project.edit.clips.filter(clip => clip.source === 'caption').length, 1);
+  const sent = calls.find(([url]) => url === '/api/studio/transcribe');
+  assert.deepEqual(plain(JSON.parse(sent[1])), {path: project.path, language: 'en', model: 'mlx/whisper'});
+  // Track header buttons mute a track; the inspector shows a selected clip.
+  const mic = project.edit.tracks.find(track => track.id === 'a1');
+  a.edToggleTrack('a1', 'muted');
+  assert.equal(mic.muted, true);
+  a.undoEdit(false);
+  assert.equal(project.edit.tracks.find(track => track.id === 'a1').muted, false, 'track changes are undoable');
+  a.ed.sel = new Set([project.edit.clips.find(clip => clip.source === 'mic').id]);
+  a.renderEditSide();
+  assert.match(textOf(h.find('edInspect')), /Volume/);
   // The Projects page of an audio project: no format buttons, its sound instead of a stage.
   a.studio.tab = 'projects';
   const box = new h.context.Node('div'); box.id = 'studioProjects'; h.main.append(box);

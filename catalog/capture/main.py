@@ -2,7 +2,7 @@
 """Screenshots, screen/camera/audio recording projects and video export on macOS."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Screenshots, screen/camera/audio recording projects and video export on macOS.\nUsage: ul capture                 the studio in a terminal (scenes, sources, REC, export)\n       ul capture shot [screen|area|window] [options] [PATH]\n       ul capture record [screen|camera|audio] [options] [PATH]\n       ul capture pause | resume | status | scene N | mark [TEXT] | stop [--force] [--export]\n       ul capture projects | project X | export X [options] | setup | doctor | devices [--modes]\n       ul capture list | last | open | reveal | copy | delete | trim | convert | wave\nScreenshots (shot):\n  screen (default) the whole display; area / window let you select with the mouse\n  --display N      which display (1 = main; see `devices`)   --delay S  wait S seconds\n  --clipboard      copy instead of saving   --cursor  include the pointer\n  --jpg            JPEG instead of PNG      --open    open the file afterwards\nRecording (record) runs in the background until `ul capture stop`. Every recording is a\nproject folder in storage.root/captures/projects: the screen, the camera and the\nmicrophone are separate files in media/, and project.json says how to put them\ntogether (scenes, layouts per format, marks). Nothing is re-encoded while recording.\n  screen (default) the display with the Mac\'s sound and the microphone\n  camera           the camera with the microphone (scene Camera)\n  audio            the microphone only\n  --camera / --no-camera   add the camera to a screen recording (or not)\n  --scene N|ID     the scene to start with (1 Screen + camera, 2 Screen, 3 Camera, 4 Side by side)\n  --canvas C       16:9, 9:16, 1:1, 4:5 or source: the format the project opens in\n  --mic NAME|N     microphone by name or number; --no-mic records without it\n  --cam NAME|N     camera by name or number (default: capture.camera_device)\n  --cam-mode WxH@FPS|auto   a camera mode from `devices --modes` (auto: 1080p, highest fps)\n  --cam-quality max|high|light   camera file: 1080p 12 Mbps, 1080p 6 Mbps (default), 720p 3 Mbps\n  --mic-format flac|wav|m4a      microphone file: lossless flac (default), wav, or AAC\n  --system-audio / --no-system-audio   sound of the Mac (screen only)\n  --display N      --rect X,Y,W,H (part of the screen, in points)   --no-clicks\n  --countdown N    wait N seconds before recording\n  --duration S     record S seconds in the foreground, then save\n  --wait           stay in the foreground: Enter stops, p + Enter pauses\n  --export         export right after stop (with the last export settings)\n  --output PATH    export to PATH after stop (.mov or .mp4 picks the container)\n  --format F       mov|mp4 (or m4a|mp3|wav for audio): the export\'s container\n  pause / resume   pause and continue; every pause starts a new part\n  scene N|ID       switch the scene now (it is written into the timeline)\n  mark [TEXT]      put a marker at the current time\n  stop             stop every recorder together and save the project; a recorder that\n                   does not stop is never killed: the rest is saved and `stop` tries again\n  stop --force     end a recorder that hangs (its track is lost)\n  stop --export [export options]   save and export at once\n  status           what is recording, for how long, the scene, mic level and warnings\nProjects and export (the export never changes the project):\n  projects         the projects, newest first, with state, length, size and exports\n  project X        a project\'s details (X: name, folder or `last`); --remember lists a\n                   folder from elsewhere; --set-json - saves edits read from stdin\n  export X         render a video: --canvas 16:9|9:16|1:1|4:5|source (source = the screen\n                   as recorded, ready in seconds), --height 1080|1440|2160 (short side),\n                   --fps 60|30, --codec h264|hevc, --quality high|max, --format mov|mp4,\n                   --no-normalize (loudness -14 LUFS is on), --delete-sources (move the\n                   project to the Trash afterwards), --output PATH, --background\n                   Defaults: the project\'s last export, else the last one anywhere,\n                   else 16:9 1440p 60 fps H.264 (vertical formats 1080).\n  export --status  progress of the running export\n                   An edit made in the desk\'s Edit tab (project.json `edit`: cuts, subtitles,\n                   text, music) is applied; subtitles are burned in and saved as a .srt too.\n  setup            the studio setup (sources, devices, scenes, layouts, export defaults)\n                   as JSON; --set-json - saves it from stdin, --reset restores defaults\n  doctor           Screen Recording permission, ffmpeg, and which app needs the\n                   permissions; --open screen|camera|microphone opens System Settings\nLibrary:\n  list [N] [--all] the newest exported files and screenshots with kind, length and size\n  last [--reveal]  open the newest capture (or show it in Finder)\n  open|reveal X    open a capture, or show it in Finder (X: name, path or `last`)\n  copy X           put a screenshot on the clipboard\n  delete X         move a capture or a project to the Trash (only from the capture folders)\n  trim X --from T [--to T]   cut a recording exactly (T: seconds or m:ss); keeps the original\n  convert X --to mp4|mov|gif|m4a|mp3|wav   a new file next to the original\n  devices          displays, cameras and microphones with their numbers\n  devices --modes [--camera NAME]   the modes each camera offers (turns its light on briefly)\n  wave X [--bars N] the loudness of a recording as bars (like Voice Memos)\n                    (--project P: X is a file of project P, up to 20000 bars)\n  transcribe P      subtitles for project P from `ul lm transcribe` (--language CODE --model NAME), JSON with --json;\n                   without --model the default speech model is used, else an MLX one;\n                   `transcribe --models` lists the speech models\n  thumb X / preview [--display N]   small JPEGs (used by `ul desk`)\nAdd --json to any action for machine-readable output.\nFiles: storage.root/captures/projects, /recordings (exports) and /screenshots; never\n  overwritten (" 2" is added). The studio setup is storage.root/studio/setup.json.\nSettings: capture.audio_device and capture.camera_device (`default` = what macOS\n  uses, a name, or a number from `devices`), capture.screen_audio (microphone in\n  screen recordings, true), capture.system_audio (true), capture.show_clicks (true),\n  capture.video_format (mov) and capture.audio_format (m4a) for exports.\nPermissions: macOS gives Screen Recording, Camera and Microphone to the app that\n  starts ul (Ghostty, Zed, ...). `ul capture doctor` names it.\nEngine: on macOS 15+ ul-rec (installed next to ul) records screen, Mac sound, camera\n  and microphone in one process on one clock; UNLAW_CAPTURE_REC=off uses the tools below.\nDependencies: macOS screencapture; ffmpeg + ffprobe (brew install ffmpeg) for export,\n  trim and convert, and without ul-rec for the camera, the microphone track and audio.\n`ul desk` has a Studio tab with the same controls, a live layout and an export dialog.\nExamples: ul capture record --camera; ul capture scene 3; ul capture stop\n  ul capture export last --canvas 9:16; ul capture record audio --duration 60\n'
+COMMAND_HELP = 'Screenshots, screen/camera/audio recording projects and video export on macOS.\nUsage: ul capture                 the studio in a terminal (scenes, sources, REC, export)\n       ul capture shot [screen|area|window] [options] [PATH]\n       ul capture record [screen|camera|audio] [options] [PATH]\n       ul capture pause | resume | status | scene N | mark [TEXT] | stop [--force] [--export]\n       ul capture projects | project X | export X [options] | setup | doctor | devices [--modes]\n       ul capture list | last | open | reveal | copy | delete | trim | convert | wave\nScreenshots (shot):\n  screen (default) the whole display; area / window let you select with the mouse\n  --display N      which display (1 = main; see `devices`)   --delay S  wait S seconds\n  --clipboard      copy instead of saving   --cursor  include the pointer\n  --jpg            JPEG instead of PNG      --open    open the file afterwards\nRecording (record) runs in the background until `ul capture stop`. Every recording is a\nproject folder in storage.root/captures/projects: the screen, the camera and the\nmicrophone are separate files in media/, and project.json says how to put them\ntogether (scenes, layouts per format, marks). Nothing is re-encoded while recording.\n  screen (default) the display with the Mac\'s sound and the microphone\n  camera           the camera with the microphone (scene Camera)\n  audio            the microphone only\n  --camera / --no-camera   add the camera to a screen recording (or not)\n  --scene N|ID     the scene to start with (1 Screen + camera, 2 Screen, 3 Camera, 4 Side by side)\n  --canvas C       16:9, 9:16, 1:1, 4:5 or source: the format the project opens in\n  --mic NAME|N     microphone by name or number; --no-mic records without it\n  --cam NAME|N     camera by name or number (default: capture.camera_device)\n  --cam-mode WxH@FPS|auto   a camera mode from `devices --modes` (auto: 1080p, highest fps)\n  --cam-quality max|high|light   camera file: 1080p 12 Mbps, 1080p 6 Mbps (default), 720p 3 Mbps\n  --mic-format flac|wav|m4a      microphone file: lossless flac (default), wav, or AAC\n  --system-audio / --no-system-audio   sound of the Mac (screen only)\n  --display N      --rect X,Y,W,H (part of the screen, in points)   --no-clicks\n  --countdown N    wait N seconds before recording\n  --duration S     record S seconds in the foreground, then save\n  --wait           stay in the foreground: Enter stops, p + Enter pauses\n  --export         export right after stop (with the last export settings)\n  --output PATH    export to PATH after stop (.mov or .mp4 picks the container)\n  --format F       mov|mp4 (or m4a|mp3|wav for audio): the export\'s container\n  pause / resume   pause and continue; every pause starts a new part\n  scene N|ID       switch the scene now (it is written into the timeline)\n  mark [TEXT]      put a marker at the current time\n  stop             stop every recorder together and save the project; a recorder that\n                   does not stop is never killed: the rest is saved and `stop` tries again\n  stop --force     end a recorder that hangs (its track is lost)\n  stop --export [export options]   save and export at once\n  status           what is recording, for how long, the scene, mic level and warnings\nProjects and export (the export never changes the project):\n  projects         the projects, newest first, with state, length, size and exports\n  project X        a project\'s details (X: name, folder or `last`); --remember lists a\n                   folder from elsewhere; --set-json - saves edits read from stdin\n  export X         render a video: --canvas 16:9|9:16|1:1|4:5|source (source = the screen\n                   as recorded, ready in seconds), --height 1080|1440|2160 (short side),\n                   --fps 60|30, --codec h264|hevc, --quality high|max, --format mov|mp4,\n                   --no-normalize (loudness -14 LUFS is on), --delete-sources (move the\n                   project to the Trash afterwards), --output PATH, --background\n                   Defaults: the project\'s last export, else the last one anywhere,\n                   else 16:9 1440p 60 fps H.264 (vertical formats 1080).\n  export --status  progress of the running export\n                   An edit made in the desk\'s Edit tab (project.json `edit`: cuts, subtitles,\n                   text, music) is applied; subtitles are burned in and saved as a .srt too.\n  setup            the studio setup (sources, devices, scenes, layouts, export defaults)\n                   as JSON; --set-json - saves it from stdin, --reset restores defaults\n  doctor           Screen Recording permission, ffmpeg, and which app needs the\n                   permissions; --open screen|camera|microphone opens System Settings\nLibrary:\n  list [N] [--all] the newest exported files and screenshots with kind, length and size\n  last [--reveal]  open the newest capture (or show it in Finder)\n  open|reveal X    open a capture, or show it in Finder (X: name, path or `last`)\n  copy X           put a screenshot on the clipboard\n  delete X         move a capture or a project to the Trash (only from the capture folders)\n  trim X --from T [--to T]   cut a recording exactly (T: seconds or m:ss); keeps the original\n  convert X --to mp4|mov|gif|m4a|mp3|wav   a new file next to the original\n  devices          displays, cameras and microphones with their numbers\n  devices --modes [--camera NAME]   the modes each camera offers (turns its light on briefly)\n  wave X [--bars N] the loudness of a recording as bars (like Voice Memos)\n                    (--project P: X is a file of project P, up to 20000 bars)\n  transcribe P      subtitles for project P from `ul lm transcribe` (--language CODE --model NAME), JSON with --json;\n                   without --model the default speech model is used, else an MLX one;\n                   `transcribe --models` lists the speech models\n  proxy P          light copies of project P for smooth editing (1080p H.264, AAC) in its cache/proxy\n  thumb X / preview [--display N]   small JPEGs (used by `ul desk`)\nAdd --json to any action for machine-readable output.\nFiles: storage.root/captures/projects, /recordings (exports) and /screenshots; never\n  overwritten (" 2" is added). The studio setup is storage.root/studio/setup.json.\nSettings: capture.audio_device and capture.camera_device (`default` = what macOS\n  uses, a name, or a number from `devices`), capture.screen_audio (microphone in\n  screen recordings, true), capture.system_audio (true), capture.show_clicks (true),\n  capture.video_format (mov) and capture.audio_format (m4a) for exports.\nPermissions: macOS gives Screen Recording, Camera and Microphone to the app that\n  starts ul (Ghostty, Zed, ...). `ul capture doctor` names it.\nEngine: on macOS 15+ ul-rec (installed next to ul) records screen, Mac sound, camera\n  and microphone in one process on one clock; UNLAW_CAPTURE_REC=off uses the tools below.\nDependencies: macOS screencapture; ffmpeg + ffprobe (brew install ffmpeg) for export,\n  trim and convert, and without ul-rec for the camera, the microphone track and audio.\n`ul desk` has a Studio tab with the same controls, a live layout and an export dialog.\nExamples: ul capture record --camera; ul capture scene 3; ul capture stop\n  ul capture export last --canvas 9:16; ul capture record audio --duration 60\n'
 
 import copy
 import os
@@ -715,7 +715,10 @@ def read_project(folder: Path) -> dict:
         raise ProjectError(f"{folder} is not a Studio project (no project.json)") from error
     except (OSError, ValueError) as error:
         raise ProjectError(f"{path}: {error}") from error
-    return validate_project(data, folder)
+    project = validate_project(data, folder)
+    if "edit" in project and project["edit"].get("version") != EDIT_VERSION:
+        project["edit"] = upgrade_edit(project["edit"], project)
+    return project
 
 
 def write_project(folder: Path, data: dict) -> None:
@@ -864,38 +867,140 @@ def effective_placements(
 
 # ---------------------------------------------------------------- the montage (Edit tab)
 #
-# project["edit"] (optional; without it a project exports as recorded):
-#   clips     ranges of the recording's own clock ({id, in, out}), played one after another (ripple, no gaps);
-#   captions  subtitle lines on the recording's clock ({id, in, out, text, asset}), so they follow every cut;
-#             `asset` is the line drawn to a PNG by the page ("" until drawn);
-#   texts     text on the output timeline ({id, start, end, text, asset, x, y, w}: centre and width as fractions);
-#   audio     music and voice-over on the output timeline ({id, asset, name, start, in, out, volume, fade_in, fade_out}).
+# project["edit"] (optional; without it a project exports as recorded), version 2, like Resolve/Premiere:
+#   tracks  [{id, kind, name, hidden, muted, solo, locked, volume}] in display order: subtitle and text tracks
+#           on top, then video tracks (an upper one covers a lower one), then audio tracks;
+#   clips   [{id, track, source, start, in, out, link, ...}]: `start` on the output timeline, `in`/`out` in the
+#           source; gaps are black and silent. Sources by track kind:
+#             video     recording (the composed scenes, on the recording's clock);
+#             audio     mic | system (the recording's microphone / Mac sound) | asset (assets/<asset>), with
+#                       name, asset, volume, fade_in, fade_out;
+#             text      text, asset, x, y, w (centre and width as fractions), color, background;
+#             subtitle  caption: text, asset.
+#           `asset` of a text or caption is its PNG drawn by the page ("" until drawn). Clips with the same
+#           non-empty `link` move and cut together (a recording dropped on the timeline: picture and sounds).
+#   caption_style  the look of every subtitle.
+# Version 1 (cuts as recording ranges without gaps, captions on the recording clock) is upgraded on read.
 
-EDIT_VERSION = 1
+EDIT_VERSION = 2
 CAPTION_STYLE = {"font": "system-ui", "size": 54, "color": "#ffffff", "outline": "#000000", "box": False, "position": "bottom"}
 CAPTION_FONTS = ("system-ui", "serif", "monospace", "rounded")
 CAPTION_POSITIONS = ("bottom", "middle", "top")
 AUDIO_ASSETS = (".m4a", ".mp3", ".wav", ".flac", ".aac", ".aiff", ".caf")
 IMAGE_ASSETS = (".png", ".jpg", ".jpeg")
-EDIT_LIMITS = {"clips": 5000, "captions": 10000, "texts": 500, "audio": 200}
-_EDIT_KEYS = {"version", "clips", "captions", "caption_style", "texts", "audio"}
+TRACK_KINDS = ("video", "audio", "text", "subtitle")
+TRACK_SOURCES = {"video": ("recording",), "audio": ("mic", "system", "asset"), "text": ("text",), "subtitle": ("caption",)}
+EDIT_LIMITS = {"tracks": 40, "clips": 20000}
+_EDIT_KEYS = {"version", "tracks", "clips", "caption_style"}
+_TRACK_KEYS = {"id", "kind", "name", "hidden", "muted", "solo", "locked", "volume"}
+_CLIP_KEYS = {"id", "track", "source", "start", "in", "out", "link"}
+_KIND_KEYS = {
+    "video": set(),
+    "audio": {"name", "asset", "volume", "fade_in", "fade_out"},
+    "text": {"text", "asset", "x", "y", "w", "color", "background"},
+    "subtitle": {"text", "asset"},
+}
+_V1_KEYS = {"version", "clips", "captions", "caption_style", "texts", "audio"}
+_V1_LIMITS = {"clips": 5000, "captions": 10000, "texts": 500, "audio": 200}
+
+
+def _track(ident: str, kind: str, name: str) -> dict:
+    return {"id": ident, "kind": kind, "name": name, "hidden": False, "muted": False, "solo": False, "locked": False, "volume": 1.0}
+
+
+def _recording_sounds(project: dict) -> tuple[bool, bool]:
+    """Whether the recording has a microphone and Mac sound anywhere."""
+    mic = system = False
+    for segment in project["segments"]:
+        files = segment.get("files", {})
+        mic = mic or "mic" in files
+        if "screen" in files and segment.get("info", {}).get("screen", {}).get("audio", True) is not False:
+            system = True
+    return mic, system
+
+
+def _has_picture(project: dict) -> bool:
+    return any("screen" in segment.get("files", {}) or "camera" in segment.get("files", {}) for segment in project["segments"])
+
+
+def _duration(project: dict) -> float:
+    if isinstance(project.get("duration"), (int, float)):
+        return float(project["duration"])
+    return round(sum(segment["duration"] for segment in project["segments"]), 6)
+
+
+def _sound_clip(ident: str, track: str, source: str, start: float, begin: float, end: float, link: str, **more: object) -> dict:
+    clip = {"id": ident, "track": track, "source": source, "start": start, "in": begin, "out": end, "link": link,
+            "name": "", "asset": "", "volume": 1.0, "fade_in": 0.0, "fade_out": 0.0}
+    clip.update(more)
+    return clip
+
+
+def _recording_clips(project: dict, ranges: list[tuple[float, float, float]]) -> list[dict]:
+    """Linked picture + microphone + Mac-sound clips for ranges (start, in, out) of the recording."""
+    mic, system = _recording_sounds(project)
+    picture = _has_picture(project)
+    clips: list[dict] = []
+    for number, (start, begin, end) in enumerate(ranges, 1):
+        link = f"l{number}"
+        if picture:
+            clips.append({"id": f"v{number}", "track": "v1", "source": "recording", "start": start, "in": begin, "out": end, "link": link})
+        if mic:
+            clips.append(_sound_clip(f"m{number}", "a1", "mic", start, begin, end, link))
+        if system and picture:
+            clips.append(_sound_clip(f"s{number}", "a2", "system", start, begin, end, link))
+    return clips
+
+
+def default_tracks() -> list[dict]:
+    return [_track("s1", "subtitle", "Subtitles"), _track("t1", "text", "Text"), _track("v1", "video", "Video 1"),
+            _track("a1", "audio", "Mic"), _track("a2", "audio", "Mac sound"), _track("a3", "audio", "Music")]
 
 
 def default_edit(project: dict) -> dict:
-    return {
-        "version": EDIT_VERSION,
-        "clips": [{"id": "c1", "in": 0.0, "out": float(project["duration"])}],
-        "captions": [],
-        "caption_style": dict(CAPTION_STYLE),
-        "texts": [],
-        "audio": [],
-    }
+    duration = _duration(project)
+    ranges = [(0.0, 0.0, duration)] if duration > 0 else []
+    return {"version": EDIT_VERSION, "tracks": default_tracks(), "clips": _recording_clips(project, ranges), "caption_style": dict(CAPTION_STYLE)}
 
 
-def _edit_list(edit: dict, key: str) -> list:
+def _v1_clips(edit: dict) -> list[dict]:
+    clips, at = [], 0.0
+    for clip in edit["clips"]:
+        clips.append({"in": clip["in"], "out": clip["out"], "at": round(at, 6)})
+        at += clip["out"] - clip["in"]
+    return clips
+
+
+def upgrade_edit(edit: dict, project: dict) -> dict:
+    """A version 1 edit as tracks: its cuts become linked clips placed one after another, its captions are
+    mapped through the cuts, texts and music keep their place on the output."""
+    if edit.get("version") == EDIT_VERSION:
+        return edit
+    cuts = _v1_clips(edit)
+    upgraded = {"version": EDIT_VERSION, "tracks": default_tracks(), "caption_style": dict(edit.get("caption_style") or CAPTION_STYLE),
+                "clips": _recording_clips(project, [(clip["at"], clip["in"], clip["out"]) for clip in cuts])}
+    for number, line in enumerate(sorted(edit.get("captions", []), key=lambda item: item["in"]), 1):
+        parts = [(clip["at"] + max(line["in"], clip["in"]) - clip["in"], clip["at"] + min(line["out"], clip["out"]) - clip["in"])
+                 for clip in cuts if min(line["out"], clip["out"]) > max(line["in"], clip["in"])]
+        if parts:
+            start, end = round(parts[0][0], 3), round(parts[-1][1], 3)
+            upgraded["clips"].append({"id": f"w{number}", "track": "s1", "source": "caption", "start": start, "in": 0.0,
+                                      "out": round(end - start, 3), "link": "", "text": line["text"], "asset": line.get("asset", "")})
+    for number, item in enumerate(edit.get("texts", []), 1):
+        upgraded["clips"].append({"id": f"x{number}", "track": "t1", "source": "text", "start": item["start"], "in": 0.0,
+                                  "out": round(item["end"] - item["start"], 3), "link": "", "text": item["text"], "asset": item.get("asset", ""),
+                                  "x": item["x"], "y": item["y"], "w": item["w"], "color": item.get("color", "#ffffff"),
+                                  "background": item.get("background", "")})
+    for number, item in enumerate(edit.get("audio", []), 1):
+        upgraded["clips"].append(_sound_clip(f"y{number}", "a3", "asset", item["start"], item["in"], item["out"], "", name=item["name"],
+                                             asset=item["asset"], volume=item["volume"], fade_in=item["fade_in"], fade_out=item["fade_out"]))
+    return upgraded
+
+
+def _edit_list(edit: dict, key: str, limits: dict) -> list:
     value = edit.get(key)
-    if not isinstance(value, list) or len(value) > EDIT_LIMITS[key]:
-        _fail(f"edit.{key}", f"must be a list of at most {EDIT_LIMITS[key]} items")
+    if not isinstance(value, list) or len(value) > limits[key]:
+        _fail(f"edit.{key}", f"must be a list of at most {limits[key]} items")
     ids: set[str] = set()
     for index, item in enumerate(value):  # type: ignore[arg-type]
         here = f"edit.{key}[{index}]"
@@ -922,20 +1027,7 @@ def _edit_asset(folder: Path, value: object, where: str, suffixes: tuple, empty:
     inside(folder, f"assets/{name}", where)
 
 
-def validate_edit(value: object, folder: Path) -> dict:
-    edit = _dict(value, "edit")
-    if edit.get("version") != EDIT_VERSION:
-        _fail("edit.version", f"must be {EDIT_VERSION}")
-    unknown = set(edit) - _EDIT_KEYS
-    if unknown:
-        _fail("edit", "has unknown keys: " + ", ".join(sorted(unknown)))
-    for index, clip in enumerate(_edit_list(edit, "clips")):
-        _span(clip, f"edit.clips[{index}]", "in", "out")
-    for index, line in enumerate(_edit_list(edit, "captions")):
-        here = f"edit.captions[{index}]"
-        _span(line, here, "in", "out")
-        _text(line.get("text"), f"{here}.text", 500)
-        _edit_asset(folder, line.get("asset"), f"{here}.asset", (".png",), empty=True)
+def _caption_style(edit: dict) -> None:
     style = _dict(edit.get("caption_style"), "edit.caption_style")
     if set(style) != set(CAPTION_STYLE):
         _fail("edit.caption_style", "must have " + ", ".join(sorted(CAPTION_STYLE)))
@@ -946,7 +1038,21 @@ def validate_edit(value: object, folder: Path) -> dict:
         _color(style["outline"], "edit.caption_style.outline")
     _bool(style["box"], "edit.caption_style.box")
     _choice(style["position"], "edit.caption_style.position", CAPTION_POSITIONS)
-    for index, item in enumerate(_edit_list(edit, "texts")):
+
+
+def _validate_edit_v1(edit: dict, folder: Path) -> dict:
+    unknown = set(edit) - _V1_KEYS
+    if unknown:
+        _fail("edit", "has unknown keys: " + ", ".join(sorted(unknown)))
+    for index, clip in enumerate(_edit_list(edit, "clips", _V1_LIMITS)):
+        _span(clip, f"edit.clips[{index}]", "in", "out")
+    for index, line in enumerate(_edit_list(edit, "captions", _V1_LIMITS)):
+        here = f"edit.captions[{index}]"
+        _span(line, here, "in", "out")
+        _text(line.get("text"), f"{here}.text", 500)
+        _edit_asset(folder, line.get("asset"), f"{here}.asset", (".png",), empty=True)
+    _caption_style(edit)
+    for index, item in enumerate(_edit_list(edit, "texts", _V1_LIMITS)):
         here = f"edit.texts[{index}]"
         _span(item, here, "start", "end")
         _text(item.get("text"), f"{here}.text", 500)
@@ -954,7 +1060,7 @@ def validate_edit(value: object, folder: Path) -> dict:
         _numeric(item.get("x"), f"{here}.x", 0, 1)
         _numeric(item.get("y"), f"{here}.y", 0, 1)
         _numeric(item.get("w"), f"{here}.w", 0.01, 1)
-    for index, item in enumerate(_edit_list(edit, "audio")):
+    for index, item in enumerate(_edit_list(edit, "audio", _V1_LIMITS)):
         here = f"edit.audio[{index}]"
         _edit_asset(folder, item.get("asset"), f"{here}.asset", AUDIO_ASSETS)
         _text(item.get("name"), f"{here}.name", 200)
@@ -966,71 +1072,180 @@ def validate_edit(value: object, folder: Path) -> dict:
     return edit
 
 
+def validate_edit(value: object, folder: Path) -> dict:
+    edit = _dict(value, "edit")
+    if edit.get("version") == 1:
+        return _validate_edit_v1(edit, folder)
+    if edit.get("version") != EDIT_VERSION:
+        _fail("edit.version", f"must be {EDIT_VERSION}")
+    unknown = set(edit) - _EDIT_KEYS
+    if unknown:
+        _fail("edit", "has unknown keys: " + ", ".join(sorted(unknown)))
+    kinds: dict[str, str] = {}
+    for index, track in enumerate(_edit_list(edit, "tracks", EDIT_LIMITS)):
+        here = f"edit.tracks[{index}]"
+        if set(track) != _TRACK_KEYS:
+            _fail(here, "must have " + ", ".join(sorted(_TRACK_KEYS)))
+        kinds[track["id"]] = _choice(track["kind"], f"{here}.kind", TRACK_KINDS)  # type: ignore[assignment]
+        _text(track["name"], f"{here}.name", 60, empty=True)
+        for key in ("hidden", "muted", "solo", "locked"):
+            _bool(track[key], f"{here}.{key}")
+        _numeric(track["volume"], f"{here}.volume", 0, 4)
+    _caption_style(edit)
+    spans: dict[str, list[tuple[float, float, str]]] = {}
+    for index, clip in enumerate(_edit_list(edit, "clips", EDIT_LIMITS)):
+        here = f"edit.clips[{index}]"
+        kind = kinds.get(clip.get("track"))  # type: ignore[arg-type]
+        if kind is None:
+            _fail(f"{here}.track", "is not a track of the edit")
+        source = _choice(clip.get("source"), f"{here}.source", TRACK_SOURCES[kind])
+        if set(clip) != _CLIP_KEYS | _KIND_KEYS[kind]:
+            _fail(here, "must have " + ", ".join(sorted(_CLIP_KEYS | _KIND_KEYS[kind])))
+        start = _numeric(clip["start"], f"{here}.start", 0, 1e7)
+        _span(clip, here, "in", "out")
+        if clip["link"] != "":
+            _ident(clip["link"], f"{here}.link")
+        if kind == "audio":
+            _text(clip["name"], f"{here}.name", 200, empty=True)
+            _edit_asset(folder, clip["asset"], f"{here}.asset", AUDIO_ASSETS, empty=source != "asset")
+            if source != "asset" and clip["asset"] != "":
+                _fail(f"{here}.asset", "is only for an imported sound")
+            _numeric(clip["volume"], f"{here}.volume", 0, 4)
+            _numeric(clip["fade_in"], f"{here}.fade_in", 0, 600)
+            _numeric(clip["fade_out"], f"{here}.fade_out", 0, 600)
+        if kind in ("text", "subtitle"):
+            _text(clip["text"], f"{here}.text", 500)
+            _edit_asset(folder, clip["asset"], f"{here}.asset", (".png",), empty=True)
+        if kind == "text":
+            _numeric(clip["x"], f"{here}.x", 0, 1)
+            _numeric(clip["y"], f"{here}.y", 0, 1)
+            _numeric(clip["w"], f"{here}.w", 0.01, 1)
+            _color(clip["color"], f"{here}.color")
+            if clip["background"] != "":
+                _color(clip["background"], f"{here}.background")
+        spans.setdefault(clip["track"], []).append((start, start + clip["out"] - clip["in"], here))
+    for items in spans.values():
+        items.sort()
+        for (_, end, _), (start, _, here) in zip(items, items[1:]):
+            if start < end - 1e-3:
+                _fail(here, "overlaps another clip on its track")
+    return edit
+
+
 def _snap(value: float, fps: int) -> float:
     return round(value * fps) / fps
 
 
-def edit_clips(project: dict, fps: int) -> list[dict]:
-    """The clips on frame boundaries with their place on the output (`at`); pieces under a frame go."""
-    edit = project.get("edit")
-    raw = edit["clips"] if edit else [{"in": 0.0, "out": float(project["duration"])}]
-    clips, at = [], 0.0
-    for clip in raw:
-        begin, end = _snap(clip["in"], fps), _snap(clip["out"], fps)
-        if end - begin < 1 / fps - 1e-9:
-            continue
-        clips.append({"in": begin, "out": end, "at": round(at, 6)})
-        at += end - begin
-    return clips
+def _tracks(project: dict) -> dict[str, dict]:
+    return {track["id"]: track for track in project["edit"]["tracks"]}
+
+
+def _clips(project: dict, kind: str) -> list[tuple[int, dict, dict]]:
+    """(display row, track, clip) of every clip on a track of `kind`."""
+    order = {track["id"]: row for row, track in enumerate(project["edit"]["tracks"])}
+    tracks = _tracks(project)
+    return [(order[clip["track"]], tracks[clip["track"]], clip) for clip in project["edit"]["clips"] if tracks[clip["track"]]["kind"] == kind]
 
 
 def edit_length(project: dict, fps: int) -> float:
-    return round(sum(clip["out"] - clip["in"] for clip in edit_clips(project, fps)), 6)
+    """Where the timeline ends: the end of its last clip, on a frame."""
+    if "edit" not in project:
+        return _snap(_duration(project), fps)
+    ends = [clip["start"] + clip["out"] - clip["in"] for clip in project["edit"]["clips"]]
+    return round(_snap(max(ends, default=0.0), fps), 6)
 
 
-def edit_pieces(project: dict, fps: int) -> list[dict]:
-    """timeline_intervals cut to the clips, in output order; each piece knows its place on the output (`at`)."""
+def edit_video(project: dict, fps: int) -> list[dict]:
+    """The picture of the output in pieces: the top visible video clip at each moment, cut at the recording's
+    pauses and scene switches (timeline_intervals); `gap` pieces are black. Every piece knows `at` and `length`."""
     frame = 1 / fps
-    intervals, begins, elapsed = timeline_intervals(project, fps), [], 0.0
+    length = edit_length(project, fps)
+    clips = [(row, clip) for row, track, clip in _clips(project, "video") if not track["hidden"]]
+    cuts = {0.0, length}
+    for _, clip in clips:
+        cuts.add(_snap(clip["start"], fps))
+        cuts.add(_snap(clip["start"] + clip["out"] - clip["in"], fps))
+    edges = sorted(cut for cut in cuts if 0 <= cut <= length)
+    intervals = timeline_intervals(project, fps)
+    begins, elapsed = [], 0.0
     for segment in project["segments"]:
         begins.append(_snap(elapsed, fps))
         elapsed += segment["duration"]
-    pieces = []
-    for clip in edit_clips(project, fps):
-        at = clip["at"]
+    pieces: list[dict] = []
+
+    def add(piece: dict) -> None:
+        last = pieces[-1] if pieces else None
+        if last and last["kind"] == "gap" and piece["kind"] == "gap" and abs(last["at"] + last["length"] - piece["at"]) < 1e-6:
+            last["length"] = round(last["length"] + piece["length"], 6)
+            return
+        pieces.append(piece)
+
+    for low, high in zip(edges, edges[1:]):
+        if high - low < frame - 1e-9:
+            continue
+        middle = (low + high) / 2
+        covering = [(row, clip) for row, clip in clips if clip["start"] - 1e-9 <= middle < clip["start"] + clip["out"] - clip["in"]]
+        if not covering:
+            add({"kind": "gap", "at": round(low, 6) + 0.0, "length": round(high - low, 6)})
+            continue
+        _, clip = min(covering, key=lambda item: item[0])
+        a, b = _snap(clip["in"] + low - clip["start"], fps), _snap(clip["in"] + high - clip["start"], fps)
         for interval in intervals:
             start = begins[interval["segment"]] + interval["start"]
-            low, high = max(start, clip["in"]), min(start + interval["length"], clip["out"])
-            if high - low < frame - 1e-9:
+            x, y = max(start, a), min(start + interval["length"], b)
+            if y - x < frame - 1e-9:
                 continue
-            pieces.append({
-                "segment": interval["segment"],
-                "start": round(low - begins[interval["segment"]], 6) + 0.0,
-                "length": round(high - low, 6),
-                "scene": interval["scene"],
-                "at": round(at + low - clip["in"], 6) + 0.0,
-            })
+            add({"kind": "recording", "segment": interval["segment"], "start": round(x - begins[interval["segment"]], 6) + 0.0,
+                 "length": round(y - x, 6), "scene": interval["scene"], "at": round(low + x - a, 6) + 0.0})
+        covered = sum(piece["length"] for piece in pieces if piece["kind"] == "recording" and low - 1e-6 <= piece["at"] < high - 1e-6)
+        if covered < high - low - frame / 2:
+            # The clip reaches past the recording (or into a part shorter than a frame): black for the rest.
+            add({"kind": "gap", "at": round(low + covered, 6) + 0.0, "length": round(high - low - covered, 6)})
     return pieces
 
 
-def caption_spans(project: dict, fps: int) -> list[dict]:
-    """Captions on the output: each line clipped to what the cuts keep (a line across a cut stays one line)."""
-    edit = project.get("edit") or {}
-    clips = edit_clips(project, fps)
-    spans = []
-    for line in sorted(edit.get("captions", []), key=lambda item: item["in"]):
-        parts = []
-        for clip in clips:
-            low, high = max(line["in"], clip["in"]), min(line["out"], clip["out"])
-            if high > low:
-                parts.append((clip["at"] + low - clip["in"], clip["at"] + high - clip["in"]))
-        if not parts:
+def edit_sounds(project: dict) -> list[dict]:
+    """Every clip that is heard: on a track that is not muted (with a solo anywhere, only the solo tracks),
+    its volume multiplied by the track's."""
+    clips = _clips(project, "audio")
+    solo = any(track["solo"] for _, track, _ in clips) or any(track["solo"] for track in project["edit"]["tracks"] if track["kind"] == "audio")
+    sounds = []
+    for _, track, clip in clips:
+        if track["muted"] or (solo and not track["solo"]):
             continue
-        start, end = parts[0][0], parts[-1][1]
+        volume = round(clip["volume"] * track["volume"], 6)
+        if volume <= 0:
+            continue
+        sounds.append({"source": clip["source"], "asset": clip["asset"], "name": clip["name"], "start": clip["start"], "in": clip["in"],
+                       "out": clip["out"], "volume": volume, "fade_in": clip["fade_in"], "fade_out": clip["fade_out"]})
+    return sounds
+
+
+def caption_spans(project: dict, fps: int) -> list[dict]:
+    """The subtitles on visible subtitle tracks, in time order (the .srt and the burned-in lines)."""
+    edit = project.get("edit")
+    if not edit:
+        return []
+    spans = []
+    for _, track, clip in _clips(project, "subtitle"):
+        if track["hidden"]:
+            continue
+        start, end = clip["start"], clip["start"] + clip["out"] - clip["in"]
         if end - start < 1 / fps:
             continue
-        spans.append({"start": round(start, 3) + 0.0, "end": round(end, 3) + 0.0, "text": line["text"], "asset": line.get("asset", "")})
-    return spans
+        spans.append({"start": round(start, 3) + 0.0, "end": round(end, 3) + 0.0, "text": clip["text"], "asset": clip["asset"], "id": clip["id"]})
+    return sorted(spans, key=lambda span: span["start"])
+
+
+def edit_texts(project: dict) -> list[dict]:
+    """Texts on visible text tracks, lower tracks first (an upper track is drawn over them)."""
+    edit = project.get("edit")
+    if not edit:
+        return []
+    found = [(row, clip) for row, track, clip in _clips(project, "text") if not track["hidden"]]
+    found.sort(key=lambda item: (-item[0], item[1]["start"]))
+    return [{"id": clip["id"], "start": clip["start"], "end": round(clip["start"] + clip["out"] - clip["in"], 6), "text": clip["text"],
+             "asset": clip["asset"], "x": clip["x"], "y": clip["y"], "w": clip["w"]} for _, clip in found]
 
 
 def _srt_time(value: float) -> str:
@@ -2140,7 +2355,7 @@ def piece_overlays(folder: Path, project: dict, settings: dict, at: float, lengt
     found = []
     style = edit.get("caption_style", {})
     items = [("caption", span) for span in caption_spans(project, settings["fps"])]
-    items += [("text", item) for item in edit.get("texts", [])]
+    items += [("text", item) for item in edit_texts(project)]
     for kind, item in items:
         low, high = max(item["start"], at), min(item["end"], at + length)
         if high <= low:
@@ -2187,34 +2402,56 @@ def source_piece_argv(folder: Path, project: dict, piece: dict, track: str, sett
     ]
 
 
-def edited_sound_argv(folder: Path, project: dict, settings: dict, recording: Path | None, out: Path) -> list[str] | None:
-    """The recording's sound cut to the clips, with music and voice-over mixed in; None when nothing is audible."""
-    edit = project["edit"]
-    clips = edit_clips(project, settings["fps"])
-    total = sum(clip["out"] - clip["in"] for clip in clips)
+def gap_argv(piece: dict, settings: dict, size: tuple[int, int], out: Path) -> list[str]:
+    """A black stretch of the output (a gap between clips), with the captions and texts over it."""
+    width, height = size
+    inputs = ["-f", "lavfi", "-i", f"color=c=0x000000:s={width}x{height}:r={settings['fps']}"]
+    count = 1
+
+    def still_input(path: Path) -> int:
+        nonlocal count
+        inputs.extend(["-loop", "1", "-t", f"{piece['length']:.3f}", "-i", str(path)])
+        count += 1
+        return count - 1
+
+    graph: list[str] = []
+    current = _overlay_stills(piece.get("overlays", []), width, height, still_input, graph, "[0:v]")
+    graph.append(f"{current}format=yuv420p[vout]")
+    return [
+        *FFMPEG_BASE, *inputs, "-filter_complex", ";".join(graph), "-map", "[vout]", "-an",
+        *_encoder(settings, width, height), "-t", f"{piece['length']:.3f}", "-progress", "pipe:1", "-nostats", str(out),
+    ]
+
+
+def edited_sound_argv(folder: Path, project: dict, settings: dict, recorded: dict[str, Path], out: Path) -> list[str] | None:
+    """Every sound clip that is heard, cut, faded, put at its place and mixed; None when nothing is.
+
+    `recorded` holds the recording's microphone and Mac sound, each one WAV on the recording's clock.
+    """
+    total = edit_length(project, settings["fps"])
     inputs: list[str] = []
     graph: list[str] = []
     labels: list[str] = []
-    if recording is not None and clips:
-        inputs += ["-i", str(recording)]
-        for number, clip in enumerate(clips):
-            graph.append(f"[0:a]atrim=start={clip['in']:.6f}:end={clip['out']:.6f},asetpts=PTS-STARTPTS[c{number}]")
-        graph.append("".join(f"[c{number}]" for number in range(len(clips))) + f"concat=n={len(clips)}:v=0:a=1[main]")
-        labels.append("[main]")
-    for item in edit["audio"]:
+    for number, item in enumerate(edit_sounds(project)):
         if item["start"] >= total:
             continue
-        try:
-            path = inside(folder, f"assets/{item['asset']}", f"audio {item['name']}")
-        except ProjectError as error:
-            raise ExportError(str(error)) from error
-        if not path.is_file():
-            raise ExportError(f"the sound file {item['asset']} is missing from the project")
+        if item["source"] == "asset":
+            try:
+                path = inside(folder, f"assets/{item['asset']}", f"sound {item['name'] or item['asset']}")
+            except ProjectError as error:
+                raise ExportError(str(error)) from error
+            if not path.is_file():
+                raise ExportError(f"the sound file {item['asset']} is missing from the project")
+        else:
+            path = recorded.get(item["source"])
+            if path is None:
+                continue
+        # Every clip reads its own input: two branches of one input mixed back together stall ffmpeg.
         index = len(inputs) // 2
         inputs += ["-i", str(path)]
         length = item["out"] - item["in"]
         chain = (
-            f"[{index}:a]atrim=start={item['in']:.3f}:end={item['out']:.3f},asetpts=PTS-STARTPTS,"
+            f"[{index}:a]atrim=start={item['in']:.6f}:end={item['out']:.6f},asetpts=PTS-STARTPTS,"
             f"aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume={item['volume']:g}"
         )
         if item["fade_in"] > 0:
@@ -2224,8 +2461,8 @@ def edited_sound_argv(folder: Path, project: dict, settings: dict, recording: Pa
             chain += f",afade=t=out:st={length - fade:.3f}:d={fade:.3f}"
         if item["start"] > 0:
             chain += f",adelay={round(item['start'] * 1000)}:all=1"
-        graph.append(f"{chain}[m{index}]")
-        labels.append(f"[m{index}]")
+        graph.append(f"{chain}[c{number}]")
+        labels.append(f"[c{number}]")
     if not labels:
         return None
     if len(labels) > 1:
@@ -2233,7 +2470,9 @@ def edited_sound_argv(folder: Path, project: dict, settings: dict, recording: Pa
         last = "[mix]"
     else:
         last = labels[0]
-    graph.append(f"{last}apad,atrim=0:{total:.6f}[aout]")
+    # apad with whole_dur ends by itself: a bare apad is endless, and ffmpeg 8 sometimes spins forever on it
+    # even with an atrim after it (measured: one run in two of the same command hung).
+    graph.append(f"{last}apad=whole_dur={total:.6f},atrim=0:{total:.6f}[aout]")
     return [
         *FFMPEG_BASE, *inputs, "-filter_complex", ";".join(graph), "-map", "[aout]",
         "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", str(out),
@@ -2241,23 +2480,33 @@ def edited_sound_argv(folder: Path, project: dict, settings: dict, recording: Pa
 
 
 def audio_argv(
-    folder: Path, project: dict, segment: int, settings: dict, out: Path
+    folder: Path, project: dict, segment: int, settings: dict, out: Path, only: str | None = None
 ) -> list[str] | None:
     """System sound (from the screen file) and the microphone of one segment, each at its start offset,
-    mixed to stereo 48 kHz WAV of exactly the segment's length; None when nothing is audible."""
+    mixed to stereo 48 kHz WAV of exactly the segment's length; None when nothing is audible.
+
+    `only` ("mic" or "system") takes that one sound as recorded, for the Edit tab's separate tracks (their
+    mute and volume then live in the edit)."""
     part = project["segments"][segment]
     duration = part["duration"]
     audio = project["audio"]
     chosen = []
-    if (
-        "screen" in part["files"]
-        and audio["system"]["enabled"]
-        and not audio["system"]["muted"]
-    ):
-        if _track_info(folder, part, "screen").get("audio"):
-            chosen.append(("screen", audio["system"]["volume"]))
-    if "mic" in part["files"] and not audio["mic"]["muted"]:
-        chosen.append(("mic", audio["mic"]["volume"]))
+    if only == "system":
+        if "screen" in part["files"] and _track_info(folder, part, "screen").get("audio"):
+            chosen.append(("screen", 1.0))
+    elif only == "mic":
+        if "mic" in part["files"]:
+            chosen.append(("mic", 1.0))
+    else:
+        if (
+            "screen" in part["files"]
+            and audio["system"]["enabled"]
+            and not audio["system"]["muted"]
+        ):
+            if _track_info(folder, part, "screen").get("audio"):
+                chosen.append(("screen", audio["system"]["volume"]))
+        if "mic" in part["files"] and not audio["mic"]["muted"]:
+            chosen.append(("mic", audio["mic"]["volume"]))
     if not chosen:
         return None
     inputs: list[str] = []
@@ -2280,7 +2529,7 @@ def audio_argv(
         last = "[mix]"
     else:
         last = labels[0]
-    graph.append(f"{last}apad,atrim=0:{duration:.3f}[aout]")
+    graph.append(f"{last}apad=whole_dur={duration:.3f},atrim=0:{duration:.3f}[aout]")  # never a bare, endless apad
     return [
         *FFMPEG_BASE,
         *inputs,
@@ -2525,19 +2774,27 @@ def export_project(
 
 
 def _render_edit(folder: Path, project: dict, settings: dict, work: Path, video: Path, log: Path, report: Callable[[float], None]) -> None:
-    """The edited picture: one chunk per piece of a clip (cut at pauses and scene switches), joined."""
-    pieces = edit_pieces(project, settings["fps"])
+    """The edited picture: one chunk per piece of the timeline (a clip cut at pauses and scene switches, or a
+    black gap), joined."""
+    pieces = edit_video(project, settings["fps"])
     if not pieces:
         raise ExportError("the edit keeps less than one frame of picture")
     source = settings["canvas"] == "source"
     track = "screen" if any("screen" in segment["files"] for segment in project["segments"]) else "camera"
+    if source:
+        info = next((_track_info(folder, segment, track) for segment in project["segments"] if track in segment["files"]), {})
+        size = (_even(info.get("width") or 1920), _even(info.get("height") or 1080))
+    else:
+        size = canvas_size(settings["canvas"], settings["height"])
     total = sum(piece["length"] for piece in pieces) or 1.0
     done = 0.0
     chunks = []
     for number, piece in enumerate(pieces):
         piece["overlays"] = piece_overlays(folder, project, settings, piece["at"], piece["length"])
         chunk = work / f"chunk-{number:04d}.mp4"
-        if source:
+        if piece["kind"] == "gap":
+            argv = gap_argv(piece, settings, size, chunk)
+        elif source:
             if track not in project["segments"][piece["segment"]]["files"]:
                 raise ExportError(
                     f"part {piece['segment'] + 1} has no {track} track (its recorder stopped early): "
@@ -2614,33 +2871,39 @@ def _export(
             raise ExportError("the recording is shorter than one frame")
         edited = "edit" in project
         if edited and edit_length(project, settings["fps"]) <= 0:
-            raise ExportError("the edit is empty: every clip was cut away")
-        # Sound: one WAV per segment (silence where nothing is audible), joined. An edit keeps every part with
-        # any length, so the joined sound runs on the recording's own clock, which the clips are written in.
-        audio_parts = []
-        sound_parts = [index for index, segment in enumerate(project["segments"]) if segment["duration"] > 0] if edited else kept
-        for index in sound_parts:
-            segment = project["segments"][index]
-            wav = work / f"audio-{index:03d}.wav"
-            argv = audio_argv(folder, project, index, settings, wav)
-            _run_ffmpeg(
-                argv or _silence_argv(segment["duration"], wav), log, "mixing the sound"
-            )
-            audio_parts.append(wav)
-        audible = any(
-            audio_argv(folder, project, index, settings, Path(os.devnull))
-            for index in sound_parts
-        )
+            raise ExportError("the edit is empty: put a clip on the timeline")
         sound = work / "audio.wav"
         if edited:
-            recording = work / "recording.wav" if audible else None
-            if recording is not None:
-                _run_ffmpeg(_concat_argv(audio_parts, work / "audio.txt", recording), log, "joining the sound")
-            argv = edited_sound_argv(folder, project, settings, recording, sound)
+            # The microphone and the Mac sound are separate tracks of the edit: each becomes one WAV on the
+            # recording's clock (every part with any length, silence where a part has none), only when heard.
+            heard = {item["source"] for item in edit_sounds(project)}
+            recorded: dict[str, Path] = {}
+            parts = [index for index, segment in enumerate(project["segments"]) if segment["duration"] > 0]
+            for name in ("mic", "system"):
+                if name not in heard or not any(audio_argv(folder, project, index, settings, Path(os.devnull), name) for index in parts):
+                    continue
+                files = []
+                for index in parts:
+                    wav = work / f"{name}-{index:03d}.wav"
+                    argv = audio_argv(folder, project, index, settings, wav, name)
+                    _run_ffmpeg(argv or _silence_argv(project["segments"][index]["duration"], wav), log, "preparing the sound")
+                    files.append(wav)
+                recorded[name] = work / f"{name}.wav"
+                _run_ffmpeg(_concat_argv(files, work / f"{name}.txt", recorded[name]), log, "joining the sound")
+            argv = edited_sound_argv(folder, project, settings, recorded, sound)
             audible = argv is not None
             if argv is not None:
-                _run_ffmpeg(argv, log, "cutting the sound")
-        elif audible:
+                _run_ffmpeg(argv, log, "mixing the sound")
+        else:
+            audio_parts = []
+            for index in kept:
+                segment = project["segments"][index]
+                wav = work / f"audio-{index:03d}.wav"
+                argv = audio_argv(folder, project, index, settings, wav)
+                _run_ffmpeg(argv or _silence_argv(segment["duration"], wav), log, "mixing the sound")
+                audio_parts.append(wav)
+            audible = any(audio_argv(folder, project, index, settings, Path(os.devnull)) for index in kept)
+        if not edited and audible:
             _run_ffmpeg(
                 _concat_argv(audio_parts, work / "audio.txt", sound),
                 log,
@@ -3222,7 +3485,7 @@ import sys
 import tempfile
 import time
 from array import array
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -5006,6 +5269,87 @@ def transcribe_project(folder: Path, language: str | None = None, model: str | N
     return {"captions": captions, "language": found_language, "model": model}
 
 
+PROXY_HEIGHT = 1080
+
+
+def _video_encoder() -> list[str]:
+    """The Mac's hardware H.264 encoder when ffmpeg has it (fast, cool), else libx264."""
+    try:
+        listed = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30, check=False).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        listed = ""
+    if "h264_videotoolbox" in listed:
+        return ["-c:v", "h264_videotoolbox", "-b:v", "8M"]
+    return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
+
+
+def make_proxies(folder: Path) -> dict:
+    """Light copies of a project's media for the Edit tab, like Resolve's optimized media.
+
+    Video: at most 1080 lines of H.264 with a keyframe every second and no sound, so the page seeks at once
+    and decodes without falling behind (a 3600x2338 screen recording did). Sound: AAC that the page decodes
+    for Web Audio (the Mac sound comes out of the screen file). Kept in cache/proxy/, made again only when
+    the original is newer; the export always uses the originals.
+    """
+    if shutil.which("ffmpeg") is None:
+        raise CaptureError("ffmpeg is needed to prepare media for editing (brew install ffmpeg)")
+    try:
+        project = read_project(folder)
+        cache = inside(folder, "cache", "cache")
+        if cache.exists() and (cache.is_symlink() or not cache.is_dir()):
+            raise ProjectError("the project's cache folder is a link")
+        cache.mkdir(exist_ok=True)
+        proxy = inside(folder, "cache/proxy", "cache/proxy")
+        if proxy.is_symlink():
+            raise ProjectError("the project's cache/proxy folder is a link")
+        proxy.mkdir(exist_ok=True)
+    except ProjectError as error:
+        raise CaptureError(str(error), 1) from error
+    encoder: list[str] | None = None
+    files: dict[str, dict[str, str]] = {}
+
+    def made(source: Path, target: Path, argv: Callable[[], list[str]]) -> bool:
+        if target.is_file() and target.stat().st_size > 0 and target.stat().st_mtime >= source.stat().st_mtime:
+            return True
+        argv = argv()
+        part = target.with_name(target.name + ".part" + target.suffix)
+        result = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(source), *argv, str(part)],
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
+        if result.returncode != 0 or not part.is_file():
+            part.unlink(missing_ok=True)
+            return False
+        os.replace(part, target)
+        return True
+
+    for segment in project["segments"]:
+        for track, relative in segment["files"].items():
+            source = folder / relative
+            if not source.is_file() or relative in files:
+                continue
+            stem = Path(relative).stem
+            entry: dict[str, str] = {}
+            if track in ("screen", "camera"):
+                def video_argv() -> list[str]:
+                    nonlocal encoder
+                    encoder = encoder or _video_encoder()
+                    return ["-map", "0:v:0", "-an", "-vf", f"scale=-2:'min({PROXY_HEIGHT},ih)'", *encoder,
+                            "-force_key_frames", "expr:gte(t,n_forced*1)", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+
+                video = proxy / f"{stem}.mp4"
+                if made(source, video, video_argv):
+                    entry["video"] = f"cache/proxy/{video.name}"
+                has_sound = track == "screen" and segment.get("info", {}).get("screen", {}).get("audio", True) is not False
+            else:
+                has_sound = True
+            if has_sound:
+                name = f"{stem}-system.m4a" if track == "screen" else f"{stem}.m4a"
+                sound = proxy / name
+                if made(source, sound, lambda: ["-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]):
+                    entry["audio"] = f"cache/proxy/{name}"
+            files[relative] = entry
+    return {"files": files}
+
+
 def update_project(folder: Path, data: object) -> dict:
     """Save edits (layouts, scenes, sources, sound, events, export choices) and keep what was recorded."""
     if not isinstance(data, dict):
@@ -5875,6 +6219,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise CaptureError("usage: ul capture transcribe PROJECT [--language CODE] [--model NAME]")
             data = transcribe_project(find_project(rest[0]), language, model)
             _print(data, as_json, "\n".join(f"{line['in']:8.2f}  {line['text']}" for line in data["captions"]))
+            return 0
+        if action == "proxy":
+            if len(rest) != 1 or rest[0].startswith("-"):
+                raise CaptureError("usage: ul capture proxy PROJECT [--json]")
+            data = make_proxies(find_project(rest[0]))
+            _print(data, as_json, "\n".join(f"{source}: {', '.join(entry.values()) or 'no proxy'}" for source, entry in data["files"].items()))
             return 0
         if action == "projects":
             if rest:

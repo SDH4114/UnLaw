@@ -245,6 +245,7 @@ Library:
   transcribe P      subtitles for project P from `ul lm transcribe` (--language CODE --model NAME), JSON with --json;
                    without --model the default speech model is used, else an MLX one;
                    `transcribe --models` lists the speech models
+  proxy P          light copies of project P for smooth editing (1080p H.264, AAC) in its cache/proxy
   thumb X / preview [--display N]   small JPEGs (used by `ul desk`)
 Add --json to any action for machine-readable output.
 Files: storage.root/captures/projects, /recordings (exports) and /screenshots; never

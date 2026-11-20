@@ -670,22 +670,32 @@ files in Finder and move them to the Trash. A red REC badge in the header shows
 a running recording from any tab; recordings started in the terminal appear there
 too, and a recording keeps going when the page is closed.
 
-The **Edit** tab is the montage of one project, laid out like DaVinci Resolve:
-added media on the left, the viewer in the middle, the inspector on the right and
-a timeline below with text, subtitles, the recording (with its sound wave) and a
-row for music and voice-over. Cut at the playhead with B, delete a clip and close
-the gap with Delete, mark a range with I and O and delete it, drag a clip's edge
-to trim it, move and trim texts and sounds (they snap to the playhead, cuts and
-marks; N turns snapping off), zoom with ⌘= / ⌘- or a pinch, play with Space, J,
-K, L, step with the arrows. Remove silences cuts every pause longer than 0.6 s.
-Transcribe makes subtitles on this Mac with `ul lm transcribe` (any speech model
-from `ul lm`), and the lines follow your cuts; edit, split, merge and style them
-(font, size, colour, outline, box, position). Music and sound files, or a
-voice-over recorded with "Record audio only", go on the music row with volume and
-fades. Every change can be undone with ⌘Z and is saved in the project's
-`project.json` (`edit`); the recorded files are never changed. The export renders
-the edit in any format, burns the subtitles in and saves a `.srt` next to the
-video. An audio project shows its sound wave instead of a video stage.
+The **Edit** tab is the montage of one project, laid out like DaVinci Resolve and
+Premiere Pro: a media pool on the left, the viewer in the middle, the inspector on
+the right and a timeline of tracks below; every border can be dragged and the
+sizes are kept. Tracks are video, audio, text and subtitles: add, rename, reorder,
+hide, mute, solo and lock them in their headers (an upper video track covers the
+lower ones). The recording sits on the timeline as linked clips: its picture, the
+microphone and the Mac sound each on their own track with their own wave. Clicking
+picks the linked group, Alt-click one clip, ⌘L links or unlinks. Cut with the
+blade (B, then click) or at the playhead (⌘B), delete and leave a gap with ⌫,
+ripple delete with ⇧⌫ or ⌦, mark a range with I and O and take it out with ' or
+leave a gap with ;. Drag clips (also to another track of the same kind; what they
+land on is overwritten) and drag edges to trim (bound by the source and the
+neighbours); everything snaps to the playhead, edges and marks (N turns it off).
+Space, J, K, L play, the arrows step a frame (⇧ a second), ↑/↓ jump between cuts,
+⌘= / ⌘- or ⌥ with the wheel zoom, ⇧Z fits. Playback is sample-exact: the sound is
+played by the page (Web Audio) and the picture follows it, from light copies that
+`ul capture proxy` makes when the tab opens. Remove silences cuts every pause of
+the voice longer than 0.6 s. Transcribe makes subtitles on this Mac with
+`ul lm transcribe` (pick the language and the speech model; the choice is kept)
+and the lines follow your cuts; edit, merge and style them. Import music or a
+sound, or a voice-over recorded with "Record audio only", with volume and fades
+per clip and per track. Every change can be undone with ⌘Z and is saved in the
+project's `project.json` (`edit`); the recorded files are never changed. The
+export renders the edit in any format, mixes the tracks you hear, burns the
+subtitles in and saves a `.srt` next to the video. An audio project shows its
+sound wave instead of a video stage.
 
 ## Screen, video and audio capture
 

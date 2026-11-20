@@ -2355,7 +2355,7 @@ function undoEdit(redo) {
   Object.assign(doc, previous);
   studio.historyLast = JSON.stringify(doc);
   if (studio.selected && !sourceById(studio.selected)) studio.selected = null;
-  if (studio.project && studio.tab === "edit") { saveProjectSoon(); ed.sel = null; renderEdit(); return; }
+  if (studio.project && studio.tab === "edit") { saveProjectSoon(); ed.sel = new Set(); renderEdit(); return; }
   if (studio.project) { saveProjectSoon(); drawStage(); renderProps(); return; }
   saveSetupSoon();
   renderStudioBody();
