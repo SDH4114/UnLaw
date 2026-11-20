@@ -1654,7 +1654,7 @@ async function toggleMeter() {
 }
 
 const dbLevel = (db) => Math.min(1, Math.max(0, (db + 60) / 60));
-// Fast up, slow down (like a hardware meter), so the bar follows the voice without flicker.
+// Instant rise, steady fall (peak meter ballistics), so the bar follows the voice without flicker.
 function drawMeter() {
   const meter = $("micMeter");
   if (!meter) return;
@@ -1665,7 +1665,8 @@ function drawMeter() {
   const now = Date.now(), shown = studio.meterShown || 0;
   const dt = Math.min(0.25, Math.max(0, (now - (studio.meterAt || now)) / 1000));
   studio.meterAt = now;
-  studio.meterShown = level >= shown ? level : Math.max(level, shown - dt * 0.6);
+  // OBS's default "Fast" ballistics: falls 40 dB in 1.7 s (the scale here is 60 dB wide).
+  studio.meterShown = level >= shown ? level : Math.max(level, shown - (dt * 40) / 1.7 / 60);
   meter.firstChild.style.width = Math.round(studio.meterShown * 100) + "%";
   // The colours (green, yellow, red) sit at fixed dB, so the gradient spans the whole meter, not the bar.
   if (meter.clientWidth) meter.firstChild.style.backgroundSize = meter.clientWidth + "px 100%";
