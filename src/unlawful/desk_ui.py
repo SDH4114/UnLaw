@@ -142,6 +142,8 @@ main { flex: 1; overflow: auto; }
 .card:hover .actions { display: flex; }
 .card .actions button { padding: 1px 7px; font-size: 12px; border: none; background: transparent; }
 .card .actions button:hover { background: var(--column); }
+.card .actions button.del svg { width: 13px; height: 13px; display: block; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; }
+#filter svg { width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 2.2; stroke-linecap: round; vertical-align: -1px; }
 .card input.edit { width: 100%; }
 .chip { display: inline-block; font-size: 11px; font-weight: 550; padding: 0 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-ink); cursor: pointer; border: none; line-height: 18px; }
 .chip.due { background: var(--column); color: var(--muted); cursor: default; }
@@ -501,7 +503,7 @@ function cardNode(card, column, index, options) {
   const actions = h("div", { class: "actions" },
     card.checked ? null : h("button", { title: "Focus on this card (pomodoro)", text: "Focus", onclick: (event) => { event.stopPropagation(); timer("start", plain(card)); } }),
     h("button", { title: "Edit", text: "Edit", onclick: (event) => { event.stopPropagation(); state.editing = where; render(); } }),
-    h("button", { title: "Delete", text: "✕", onclick: (event) => { event.stopPropagation(); if (confirm("Delete this card?\n\n" + card.title)) change({ op: "delete", ...where }); } }));
+    h("button", { class: "del", title: "Delete", "aria-label": "Delete", onclick: (event) => { event.stopPropagation(); if (confirm("Delete this card?\n\n" + card.title)) change({ op: "delete", ...where }); } }, svgIcon("M6 6l12 12M18 6L6 18")));
   node.append(check, body, actions);
   node.addEventListener("dblclick", () => { state.editing = where; render(); });
   if (options.drag) {
@@ -716,7 +718,8 @@ function render() {
   $("toolbar").classList.toggle("hidden", ["games", "stats", "studio", "canvas"].includes(state.view));
   const filter = $("filter");
   filter.classList.toggle("on", Boolean(state.tag));
-  filter.textContent = state.tag ? "#" + state.tag + " ✕" : "";
+  filter.textContent = state.tag ? "#" + state.tag + " " : "";
+  if (state.tag) filter.append(svgIcon("M6 6l12 12M18 6L6 18"));
   renderSummary();
   if (state.view === "games") { renderGames(main); return; }
   if (state.view === "studio") { renderStudio(main); return; }

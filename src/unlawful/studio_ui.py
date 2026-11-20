@@ -157,8 +157,8 @@ STUDIO_CSS = r""".studio { display: flex; flex-direction: column; gap: 10px; pad
 .isec { border-bottom: 1px solid var(--line); padding: 0 12px 8px; }
 .isec > summary { cursor: pointer; list-style: none; padding: 8px 0 3px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 650; user-select: none; }
 .isec > summary::-webkit-details-marker { display: none; }
-.isec > summary::before { content: "▾"; display: inline-block; width: 14px; }
-.isec:not([open]) > summary::before { content: "▸"; }
+.isec > summary::before { content: ""; display: inline-block; width: 5px; height: 5px; margin: 0 8px 2px 1px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); }
+.isec:not([open]) > summary::before { transform: rotate(-45deg); margin-bottom: 0; }
 .xywh { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; margin: 6px 0; }
 .xywh label { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); }
 .xywh input { width: 100%; min-width: 0; padding: 3px 4px; font: 11.5px var(--mono); }
@@ -178,7 +178,7 @@ STUDIO_CSS = r""".studio { display: flex; flex-direction: column; gap: 10px; pad
 .drow.off .name { color: var(--muted); }
 .drow kbd { font-size: 10px; }
 .drow input.rename { flex: 1; min-width: 0; font-size: 12.5px; padding: 1px 5px; }
-.studio svg.ico { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.studio svg.ico, #viewer svg.ico { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .studio .drow > svg.ico { color: var(--muted); }
 .studio .ib, .stmenu .ib { border: none; background: transparent; padding: 4px; border-radius: 5px; color: var(--text); display: inline-grid; place-items: center; line-height: 0; box-shadow: none; }
 .studio .ib:hover:not(:disabled) { background: var(--sunken); }
@@ -214,6 +214,13 @@ STUDIO_CSS = r""".studio { display: flex; flex-direction: column; gap: 10px; pad
 .controls .crow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .controls .crow .recclock { font-size: 18px; }
 .controls .pill { display: inline-flex; gap: 5px; align-items: center; border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+.studio .pill svg.ico, .warns svg.ico, .markname svg.ico { width: 13px; height: 13px; }
+.warns div svg.ico { color: var(--warn); flex: none; }
+.corners button svg.ico { width: 14px; height: 14px; }
+.stage .badge .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; margin-right: 5px; vertical-align: 1px; }
+.projbar .back { display: inline-flex; align-items: center; gap: 4px; }
+.markname { display: inline-flex; align-items: center; gap: 4px; }
+#projPlay { display: inline-grid; place-items: center; width: 32px; height: 28px; padding: 0; }
 .controls .info { color: var(--muted); font-size: 11px; line-height: 1.45; margin-top: auto; }
 @media (max-width: 1100px) {
   .obs { grid-template-columns: 1fr; grid-template-rows: minmax(320px, 58vh) auto auto auto; }
@@ -236,7 +243,7 @@ const media = (path, name) => path + "?t=" + encodeURIComponent(TOKEN) + (name ?
 const STUDIO_RATIOS = { "16:9": [16, 9], "9:16": [9, 16], "1:1": [1, 1], "4:5": [4, 5] };
 const STUDIO_FORMATS = [["16:9", "16:9"], ["9:16", "9:16"], ["1:1", "1:1"], ["4:5", "4:5"], ["source", "As recorded"]];
 const STUDIO_SHAPES = { circle: [1, 1, 0.5], square: [1, 1, 0], rounded: [1, 1, 0.18], wide: [16, 9, 0], tall: [9, 16, 0] };
-const STUDIO_ANCHORS = [["top-left", "↖"], ["top-right", "↗"], ["bottom-left", "↙"], ["bottom-right", "↘"]];
+const STUDIO_ANCHORS = ["top-left", "top-right", "bottom-left", "bottom-right"];
 const SNAP = 0.02, MIN_BOX = 0.04;
 const studioClone = (value) => JSON.parse(JSON.stringify(value));
 // Python's round(): halves go to the even neighbour, so page and export agree on pixels.
@@ -502,7 +509,8 @@ function drawRecording() {
   const badge = $("stageBadge");
   if (badge) {
     badge.className = "badge" + (active && !studio.saving ? " on" : "") + (s.paused ? " paused" : "");
-    badge.textContent = studio.starting ? "● STARTING…" : s.paused ? "❚❚ PAUSED " + clockText(recordElapsed()) : "● REC " + clockText(recordElapsed());
+    badge.textContent = "";
+    badge.append(h("i", { class: "dot" }), studio.starting ? "STARTING…" : (s.paused ? "PAUSED " : "REC ") + clockText(recordElapsed()));
   }
   drawMeter();
 }
@@ -1298,8 +1306,8 @@ function shapeButtons(item, onpick) {
 }
 
 function cornerButtons(item, onpick) {
-  return h("div", { class: "corners" }, STUDIO_ANCHORS.map(([anchor, arrow]) =>
-    h("button", { class: item.anchor === anchor ? "on" : "", text: arrow, title: "Pin to the " + anchor.replace("-", " ") + " corner", onclick: () => onpick(anchor) })));
+  return h("div", { class: "corners" }, STUDIO_ANCHORS.map((anchor) =>
+    h("button", { class: item.anchor === anchor ? "on" : "", title: "Pin to the " + anchor.replace("-", " ") + " corner", "aria-label": "Pin to the " + anchor.replace("-", " ") + " corner", onclick: () => onpick(anchor) }, studioIcon(anchor))));
 }
 
 function changePlacement(id, change) {
@@ -1318,10 +1326,10 @@ function renderRecBar() {
       h("button", { class: "recbtn", id: "recButton", title: "Start / stop recording (R)", onclick: toggleRecord }, h("i"), h("span", { id: "recLabel", text: "Start recording" })),
       h("div", { class: "crow" }, h("span", { class: "recclock", id: "recClock", text: "00:00" }), h("span", { class: "recstate", id: "recState" })),
       h("div", { class: "crow" },
-        h("button", { class: "pill", id: "recPause", title: "Pause / resume (P)", onclick: pauseRecord }, h("span", { id: "recPauseLabel", text: "❚❚ Pause" })),
-        h("button", { class: "pill", id: "recMark", title: "Add a mark at this moment (M)", onclick: addMark }, "⚑ Mark")),
+        h("button", { class: "pill", id: "recPause", title: "Pause / resume (P)", onclick: pauseRecord }, studioIcon("pause"), "Pause"),
+        h("button", { class: "pill", id: "recMark", title: "Add a mark at this moment (M)", onclick: addMark }, studioIcon("flag"), "Mark")),
       h("div", { class: "crow" },
-        h("button", { class: "pill", title: "Take a screenshot", onclick: (event) => openShotMenu(event.currentTarget) }, "Screenshot ▾"),
+        h("button", { class: "pill", title: "Take a screenshot", onclick: (event) => openShotMenu(event.currentTarget) }, studioIcon("shot"), "Screenshot", studioIcon("chevron")),
         h("button", { class: "pill", title: "Recording files, countdown, menu-bar clock", onclick: (event) => openRecordSettings(event.currentTarget) }, studioIcon("gear"), "Settings")),
       h("div", { class: "info", id: "recInfo" })));
 }
@@ -1348,7 +1356,8 @@ function updateRecordControls() {
   $("recLabel").textContent = studio.counting ? "Cancel (" + studio.counting + ")" : studio.starting ? "Starting…" : busy ? "Saving…" : s.active ? "Stop recording" : "Start recording";
   const pause = $("recPause");
   pause.disabled = !s.active || busy || Boolean(studio.starting);
-  $("recPauseLabel").textContent = s.paused ? "▶ Resume" : "❚❚ Pause";
+  pause.textContent = "";
+  pause.append(studioIcon(s.paused ? "play" : "pause"), s.paused ? "Resume" : "Pause");
   $("recMark").disabled = !s.active || Boolean(studio.starting);
   $("recState").textContent = studio.counting ? "Starting in " + studio.counting + "…" : studio.starting ? "Waking the microphone and camera…" : busy ? "Saving…" : s.phase === "interrupted" ? "A recorder stopped; press stop to save the rest" : s.phase === "unsaved" ? "Not saved; press stop to try again" : s.phase === "stuck" ? "A recorder hangs" : s.active ? (s.paused ? "Paused" : "Recording") : "Ready";
   const display = displayInfo();
@@ -1366,9 +1375,9 @@ function renderWarnings() {
   if (!box) return;
   box.textContent = "";
   const s = studio.status;
-  for (const warning of s.warnings || []) box.append(h("div", { text: "⚠ " + warning }));
+  for (const warning of s.warnings || []) box.append(h("div", {}, studioIcon("alert"), h("span", { text: warning })));
   if ((s.stuck && s.stuck.length) || s.phase === "stuck") {
-    box.append(h("div", {}, "⚠ " + ((s.stuck || []).join(", ") || "A recorder") + " does not stop. Stop again to retry, or kill it (its track is lost).",
+    box.append(h("div", {}, studioIcon("alert"), ((s.stuck || []).join(", ") || "A recorder") + " does not stop. Stop again to retry, or kill it (its track is lost).",
       h("button", { text: "Force stop", onclick: forceStop })));
   }
 }
@@ -1493,7 +1502,7 @@ function renderProps() {
     if (!modes.some(([value]) => value === source.mode)) modes.push([source.mode, source.mode]);
     const mode = studioSelect(modes, source.mode, (value) => { source.mode = value; edited(); });
     mode.disabled = recording;
-    settings.push(prow("Mode", mode, h("button", { class: "ghost", text: "↻", title: "Read the camera's modes (the camera light turns on for a moment)", disabled: recording || !name, onclick: () => loadCameraModes(name) })));
+    settings.push(prow("Mode", mode, iconButton("refresh", "Read the camera's modes (the camera light turns on for a moment)", () => loadCameraModes(name), "", recording || !name)));
     const quality = studioSelect([["max", "Max · 1080p · ~90 MB/min"], ["high", "High · 1080p · ~45 MB/min"], ["light", "Light · 720p · ~22 MB/min"]], source.quality, (value) => { source.quality = value; edited(updateRecordControls); });
     quality.disabled = recording;
     settings.push(prow("File", quality));
@@ -1564,6 +1573,18 @@ const STUDIO_ICON = {
   speakerOff: "M11 5L6 9H2v6h4l5 4zM23 9l-6 6M17 9l6 6",
   scene: "M12 2l10 5-10 5L2 7zM2 17l10 5 10-5M2 12l10 5 10-5",
   undo: "M9 14L4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3",
+  play: "M7 4l13 8-13 8z",
+  pause: "M8 5v14M16 5v14",
+  flag: "M5 21V4h12l-2 4 2 4H5",
+  alert: "M12 3l10 18H2zM12 10v5M12 18h.01",
+  refresh: "M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5",
+  chevron: "M6 9l6 6 6-6",
+  back: "M15 18l-6-6 6-6",
+  shot: "M4 8h3l2-3h6l2 3h3v11H4zM12 16a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
+  "top-left": "M4 4h16v16H4zM8 8h4M8 8v4",
+  "top-right": "M4 4h16v16H4zM16 8h-4M16 8v4",
+  "bottom-left": "M4 4h16v16H4zM8 16h4M8 16v-4",
+  "bottom-right": "M4 4h16v16H4zM16 16h-4M16 16v-4",
 };
 const SOURCE_ICON = { screen: "screen", camera: "camera", image: "image", text: "text" };
 const CANVAS_PIXELS = { "16:9": [1920, 1080], "9:16": [1080, 1920], "1:1": [1080, 1080], "4:5": [1080, 1350] };
@@ -2151,7 +2172,7 @@ function drawPlayerClock() {
   const time = $("projTime"), seek = $("projSeek"), play = $("projPlay");
   if (time) time.textContent = clockText(player.t) + " / " + clockText(project.duration);
   if (seek && document.activeElement !== seek) seek.value = String(player.t);
-  if (play) play.textContent = player.playing ? "❚❚" : "▶";
+  if (play) { play.textContent = ""; play.append(studioIcon(player.playing ? "pause" : "play")); }
 }
 
 // ---- projects list ----
@@ -2290,21 +2311,21 @@ function renderProjectPage(box) {
   box.textContent = "";
   const meta = [clockText(project.duration), project.state, sizeText(project.size || 0)].join(" · ");
   box.append(h("div", { class: "projbar" },
-    h("button", { class: "ghost", text: "← Projects", onclick: closeProject }),
+    h("button", { class: "ghost back", onclick: closeProject }, studioIcon("back"), "Projects"),
     h("b", { text: project.name }), h("span", { class: "where", text: meta }), h("span", { class: "spacer" }),
     h("div", { class: "seg fmt" }, STUDIO_FORMATS.map(([value, label]) =>
       h("button", { class: studio.projectCanvas === value ? "on" : "", text: label, onclick: () => { studio.projectCanvas = value; renderProjectPage(box); } }))),
     h("button", { class: "primary", text: "Export…", onclick: () => renderExportDialog(project) }),
     h("button", { text: "Show in Finder", onclick: () => projectAction("reveal") }),
     h("button", { class: "ghost", text: "Move to Trash", onclick: () => projectAction("delete") })));
-  if (project.problems.length) box.append(h("div", { class: "warns" }, project.problems.map((problem) => h("div", { text: "⚠ " + problem }))));
+  if (project.problems.length) box.append(h("div", { class: "warns" }, project.problems.map((problem) => h("div", {}, studioIcon("alert"), h("span", { text: problem })))));
   const seek = h("input", { type: "range", id: "projSeek", min: "0", max: String(project.duration), step: "0.01", value: "0" });
   seek.addEventListener("input", () => seekProject(Number(seek.value)));
   const timeline = h("div", { class: "scenelist" });
   for (const event of project.events) {
     if (!event.scene && !("mark" in event)) continue;
     timeline.append(h("div", { role: "button", tabindex: "0", style: "cursor:pointer", onclick: () => seekProject(event.t) },
-      h("span", { class: "t", text: clockText(event.t) }), h("span", { text: event.scene ? sceneName(event.scene) : "⚑ " + (event.mark || "mark") })));
+      h("span", { class: "t", text: clockText(event.t) }), event.scene ? h("span", { text: sceneName(event.scene) }) : h("span", { class: "markname" }, studioIcon("flag"), event.mark || "mark")));
   }
   const exports = h("div", { class: "scenelist" }, project.exports.length ? project.exports.map((item) => {
     const name = String(item.path).split("/").pop();
@@ -2313,7 +2334,7 @@ function renderProjectPage(box) {
   box.append(h("div", { class: "projpage" },
     h("div", { class: "centre" },
       stageFrame(),
-      h("div", { class: "player" }, h("button", { id: "projPlay", text: "▶", onclick: toggleProjectPlay }), seek, h("span", { class: "where", id: "projTime" })),
+      h("div", { class: "player" }, h("button", { id: "projPlay", title: "Play / pause", "aria-label": "Play / pause", onclick: toggleProjectPlay }, studioIcon("play")), seek, h("span", { class: "where", id: "projTime" })),
       h("div", { class: "sthint", id: "stageHint" })),
     h("div", { class: "right" },
       h("div", { class: "pane" }, h("h5", { text: "Timeline" }), timeline),
