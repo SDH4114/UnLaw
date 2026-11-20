@@ -333,6 +333,10 @@ LEGACY_SOURCE_HASHES["capture"].add("8b49d65073d19063bc28e0fb36bf4b27d02ac61fb03
 LEGACY_SOURCE_HASHES["capture"].add("b127ff6da58c064a579e81dc9a45070b28ab10de6cb8c0d56f92c5b7257c994c")
 # 3.21.0 capture on screencapture + ffmpeg only, before ul-rec (branch commits 1768d74..407fb73).
 LEGACY_SOURCE_HASHES["capture"].add("d40c1cc6b1b4732dd8a659fa8514eefae2e61e051c17eca2cf3782f3fbac8a43")
+# 3.21.0 branch builds with ul-rec (9290176, c41400c), before movable panels and audio only.
+LEGACY_SOURCE_HASHES["capture"].add("5d2af51d1d081914b397719053bc3a8d3c6a8a65a97a3f7a45fa0c1646ddde65")
+LEGACY_SOURCE_HASHES["capture"].add("0c5c45945d22daec5e2091384fbc2d97c8aca48856a965575ca6af526a2491db")
+LEGACY_SOURCE_HASHES["desk"].add("62327be27d6ce187efaf9c21b4174551a1b74f298e849da0c9c18ceab9bf9977")
 LEGACY_SOURCE_HASHES["desk"].add("9433489a4df8e7c6a0058d0bcb5618d4917a20fe30407e673b3bb37d2ac32a5f")
 LEGACY_SOURCE_HASHES["desk"].add("62a0f4e9541241c1840b93af0e73e0e1115fdccc2f9ce57cefd33aefc8a87adf")
 LEGACY_SOURCE_HASHES["tg"].add("59521bc6e03acb1f48903fd7c95f894b26b0e705d8168d28c5a2850a99342ba2")

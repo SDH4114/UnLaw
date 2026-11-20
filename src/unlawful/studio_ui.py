@@ -120,7 +120,27 @@ STUDIO_CSS = r""".studio { display: flex; flex-direction: column; gap: 10px; pad
 #viewer .export label { display: grid; gap: 3px; font-size: 12px; color: var(--muted); }
 #viewer .export label.check { display: flex; align-items: center; gap: 7px; color: var(--text); }
 .studio.rec { height: 100%; padding: 8px 10px 10px; gap: 8px; box-sizing: border-box; }
-.obs { flex: 1; min-height: 600px; display: grid; grid-template-columns: minmax(0, 1fr) 300px; grid-template-rows: minmax(300px, 1fr) 238px; gap: 8px; }
+.obs { flex: 1; min-height: 600px; display: grid; grid-template-columns: minmax(0, 1fr) 8px var(--right, 300px); grid-template-rows: minmax(200px, 1fr) 8px var(--bottom, 238px); }
+.obs .slot { min-width: 0; min-height: 0; display: flex; border-radius: 10px; transition: box-shadow .12s, opacity .12s; }
+.obs .slot > * { flex: 1; min-width: 0; min-height: 0; }
+.obs .slot.s0 { grid-column: 3; grid-row: 1; }
+.obs .slot.s4 { grid-column: 3; grid-row: 3; }
+.obs .slot > * > header { cursor: grab; }
+.obs .slot.lifted { opacity: .55; }
+.obs .slot.droptarget { box-shadow: 0 0 0 2px var(--accent); }
+body.moving-panel, body.moving-panel * { cursor: grabbing !important; user-select: none; }
+body.resizing, body.resizing * { user-select: none; }
+body.resizing.col-resize, body.resizing.col-resize * { cursor: col-resize !important; }
+body.resizing.row-resize, body.resizing.row-resize * { cursor: row-resize !important; }
+.obs .gut { position: relative; z-index: 2; touch-action: none; }
+.obs .gut::after { content: ""; position: absolute; border-radius: 2px; background: var(--accent); opacity: 0; transition: opacity .12s; }
+.obs .gut:hover::after, body.resizing .obs .gut:active::after { opacity: .7; }
+.obs .gut-right { grid-column: 2; grid-row: 1 / -1; cursor: col-resize; }
+.obs .gut-right::after { left: 3px; width: 2px; top: 30%; bottom: 30%; }
+.obs .gut-bottom { grid-column: 1; grid-row: 2; cursor: row-resize; }
+.obs .gut-bottom::after { top: 3px; height: 2px; left: 30%; right: 30%; }
+.obs .gut-col { cursor: col-resize; }
+.obs .gut-col::after { left: 3px; width: 2px; top: 20%; bottom: 20%; }
 .obs .preview { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: #0f0f0f; border-radius: 10px; border: 1px solid var(--line); overflow: hidden; position: relative; }
 .obs .pvtop { position: absolute; left: 10px; right: 10px; top: 10px; z-index: 9; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
 .obs .pvtop > * > * { pointer-events: auto; }
@@ -147,7 +167,7 @@ STUDIO_CSS = r""".studio { display: flex; flex-direction: column; gap: 10px; pad
 .pvbar .live i { width: 7px; height: 7px; border-radius: 50%; background: #6b6b6b; }
 .pvbar .live.on { color: #fff; border-color: #3b8a4a; }
 .pvbar .live.on i { background: #3fbf5a; box-shadow: 0 0 6px #3fbf5a; }
-.obs .inspector { grid-column: 2; grid-row: 1; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-height: 0; transition: box-shadow .3s; }
+.obs .inspector { overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-height: 0; transition: box-shadow .3s; }
 .obs .inspector.flash { box-shadow: 0 0 0 2px var(--accent); }
 .inspector .ihead { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 1; }
 .inspector .ihead b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
@@ -164,7 +184,7 @@ STUDIO_CSS = r""".studio { display: flex; flex-direction: column; gap: 10px; pad
 .xywh input { width: 100%; min-width: 0; padding: 3px 4px; font: 11.5px var(--mono); }
 .btnrow { display: flex; gap: 4px; flex-wrap: wrap; margin: 6px 0; }
 .btnrow button { padding: 3px 9px; font-size: 12px; }
-.obs .docks { grid-column: 1; grid-row: 2; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr) minmax(0, 1.35fr); gap: 8px; min-height: 0; }
+.obs .docks { grid-column: 1; grid-row: 3; display: grid; grid-template-columns: minmax(0, var(--c1, 1fr)) 8px minmax(0, var(--c2, 1.15fr)) 8px minmax(0, var(--c3, 1.35fr)); min-height: 0; }
 .dock { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
 .dock > header { display: flex; align-items: center; gap: 6px; padding: 6px 10px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 650; border-bottom: 1px solid var(--line); background: var(--column); }
 .dock .dlist { flex: 1; overflow: auto; padding: 4px; min-height: 0; }
@@ -204,13 +224,13 @@ STUDIO_CSS = r""".studio { display: flex; flex-direction: column; gap: 10px; pad
 .chan .cctl .val { font: 11px var(--mono); color: var(--muted); min-width: 36px; text-align: right; }
 .chan.muted .meter, .chan.muted input[type=range] { opacity: .35; }
 .chan .tiny { padding: 1px 7px; font-size: 11px; }
-.dock.controls { grid-column: 2; grid-row: 2; }
 .controls .cbody { flex: 1; padding: 9px 10px; display: flex; flex-direction: column; gap: 7px; overflow: auto; min-height: 0; }
 .controls .recbtn { width: 100%; min-height: 38px; border-radius: 8px; border: 1px solid var(--line); background: var(--sunken); display: flex; align-items: center; justify-content: center; gap: 9px; font-weight: 650; font-size: 13px; color: var(--text); }
 .controls .recbtn i { width: 13px; height: 13px; border-radius: 50%; background: var(--danger); flex: none; transition: border-radius .15s; }
 .controls .recbtn:hover { border-color: var(--danger); }
 .controls .recbtn.on { background: var(--danger); border-color: var(--danger); color: #fff; }
 .controls .recbtn.on i { background: #fff; border-radius: 2px; }
+.controls .audiobtn { justify-content: center; }
 .controls .crow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .controls .crow .recclock { font-size: 18px; }
 .controls .pill { display: inline-flex; gap: 5px; align-items: center; border-radius: 999px; padding: 3px 10px; font-size: 12px; }
@@ -223,10 +243,10 @@ STUDIO_CSS = r""".studio { display: flex; flex-direction: column; gap: 10px; pad
 #projPlay { display: inline-grid; place-items: center; width: 32px; height: 28px; padding: 0; }
 .controls .info { color: var(--muted); font-size: 11px; line-height: 1.45; margin-top: auto; }
 @media (max-width: 1100px) {
-  .obs { grid-template-columns: 1fr; grid-template-rows: minmax(320px, 58vh) auto auto auto; }
-  .obs .preview, .obs .inspector, .obs .docks, .dock.controls { grid-column: 1; grid-row: auto; }
-  .obs .docks { grid-template-columns: 1fr 1fr; } .obs .docks > .dock { min-height: 200px; }
-  .obs .inspector { max-height: none; }
+  .obs { grid-template-columns: 1fr; grid-template-rows: minmax(320px, 58vh) auto auto auto; gap: 8px; }
+  .obs > *, .obs .slot.s0, .obs .slot.s4 { grid-column: 1; grid-row: auto; }
+  .obs .gut { display: none; }
+  .obs .docks { grid-template-columns: 1fr 1fr; gap: 8px; } .obs .docks > .slot { min-height: 200px; }
 }
 @media (max-width: 860px) { .projpage { grid-template-columns: 1fr; } .obs .docks { grid-template-columns: 1fr; } }
 """
@@ -329,10 +349,11 @@ function resizePlacement(item, corner, dx, dy, keepAspect) {
   return out.anchor ? pinPlacement(out, out.anchor) : out;
 }
 
-// R record/stop, P pause, M mark, 1-9 scenes (by key position, so every keyboard layout works).
+// R record/stop, A audio only (stops too), P pause, M mark, 1-9 scenes (by key position, so every keyboard layout works).
 function studioKey(code, current) {
   if (current.typing) return null;
   if (code === "KeyR") return current.active ? "stop" : "record";
+  if (code === "KeyA") return current.active ? "stop" : "audio";
   if (code === "KeyP") return "pause";
   if (code === "KeyM") return "mark";
   const digit = /^Digit([1-9])$/.exec(code);
@@ -550,7 +571,8 @@ function drawCountdown() {
   node.textContent = String(studio.counting);
 }
 
-async function toggleRecord() {
+/** Start or stop. `audio` records the microphone alone (no screen, no camera) into its own project. */
+async function toggleRecord(mode) {
   if (studio.counting) { cancelCountdown(); return; }
   if (studio.saving || studio.starting) return;
   if (studio.status.active) {
@@ -568,7 +590,7 @@ async function toggleRecord() {
   if (studio.status.active || studio.starting || studio.saving) return;
   // The recording copies the saved setup, so a pending edit is saved first.
   if (studio.saveTimer) await flushSetup();
-  const body = studio.setup ? { scene: studio.setup.scene, canvas: studio.setup.canvas } : {};
+  const body = mode === "audio" ? { mode: "audio" } : studio.setup ? { scene: studio.setup.scene, canvas: studio.setup.canvas } : {};
   // Show the recording at once; the server's clock replaces this one when it answers.
   studio.starting = Date.now();
   studio.shown = 0;
@@ -654,6 +676,7 @@ function studioKeydown(event) {
   if (!action) return false;
   event.preventDefault();
   if (action === "record" || action === "stop") toggleRecord();
+  else if (action === "audio") toggleRecord("audio");
   else if (action === "pause") pauseRecord();
   else if (action === "mark") addMark();
   else selectScene(action.slice(6));
@@ -839,6 +862,158 @@ function setStudioTab(tab) {
   renderStudioBody();
 }
 
+// ---- studio layout: every panel is resized by dragging the gaps between panels and moved by dragging its
+// title onto another panel (the two swap places); the layout is kept in localStorage, the preview stays put ----
+const LAYOUT_KEY = "studio-layout";
+const LAYOUT_PANELS = ["propsPane", "scenesPane", "sourcesPane", "soundPane", "recBar"];  // slots: right top, 3 bottom, right bottom
+const LAYOUT_DEFAULT = { right: 300, bottom: 238, cols: [1, 1.15, 1.35] };
+const LAYOUT_MIN = { right: 220, bottom: 110, main: 420, preview: 200, share: 0.12 };
+
+function defaultLayout() {
+  return { right: LAYOUT_DEFAULT.right, bottom: LAYOUT_DEFAULT.bottom, cols: LAYOUT_DEFAULT.cols.slice(), order: LAYOUT_PANELS.slice() };
+}
+
+/** The saved layout, every value checked; anything odd falls back to the default for that value. */
+function parseLayout(text) {
+  const layout = defaultLayout();
+  let saved = null;
+  try { saved = JSON.parse(text || "null"); } catch (error) { return layout; }
+  if (!saved || typeof saved !== "object") return layout;
+  const size = (value, low, high) => Number.isFinite(value) && value >= low && value <= high;
+  if (size(saved.right, LAYOUT_MIN.right, 2000)) layout.right = saved.right;
+  if (size(saved.bottom, LAYOUT_MIN.bottom, 2000)) layout.bottom = saved.bottom;
+  if (Array.isArray(saved.cols) && saved.cols.length === 3 && saved.cols.every((value) => size(value, 0.05, 20))) layout.cols = saved.cols.slice();
+  if (Array.isArray(saved.order) && saved.order.length === LAYOUT_PANELS.length && new Set(saved.order).size === LAYOUT_PANELS.length
+      && LAYOUT_PANELS.every((id) => saved.order.includes(id))) layout.order = saved.order.slice();
+  return layout;
+}
+
+function saveLayout() { localStorage.setItem(LAYOUT_KEY, JSON.stringify(studio.layout)); }
+
+function layoutPanel(id) {
+  return id === "propsPane" ? h("aside", { class: "inspector", id }) : h("section", { class: "dock" + (id === "recBar" ? " controls" : ""), id });
+}
+
+/** The Record tab's grid: the preview, the slots for the five panels and the gutters between them. */
+function layoutFrame(preview) {
+  if (!studio.layout) studio.layout = parseLayout(localStorage.getItem(LAYOUT_KEY));
+  const slots = [0, 1, 2, 3, 4].map((index) => h("div", { class: "slot s" + index }));
+  const gutter = (kind, index) => h("div", {
+    class: "gut gut-" + kind, title: "Drag to resize; double-click resets",
+    onpointerdown: (event) => startGutter(event, kind, index), ondblclick: () => resetGutter(kind, index) });
+  const obs = h("div", { class: "obs", id: "obsRoot", onpointerdown: startPanelMove },
+    preview, gutter("right"), slots[0], gutter("bottom"),
+    h("div", { class: "docks" }, slots[1], gutter("col", 0), slots[2], gutter("col", 1), slots[3]),
+    slots[4]);
+  studio.layoutNodes = { obs, slots, panels: Object.fromEntries(LAYOUT_PANELS.map((id) => [id, layoutPanel(id)])) };
+  applyLayout();
+  return obs;
+}
+
+/** Put each panel into its slot and the sizes into the grid's CSS variables. */
+function applyLayout() {
+  const nodes = studio.layoutNodes;
+  if (!nodes) return;
+  const layout = studio.layout;
+  layout.order.forEach((id, index) => {
+    const slot = nodes.slots[index], panel = nodes.panels[id];
+    if (panel.parentNode !== slot) slot.append(panel);  // append moves the panel with everything in it
+  });
+  const style = nodes.obs.style;
+  if (style && style.setProperty) {
+    style.setProperty("--right", layout.right + "px");
+    style.setProperty("--bottom", layout.bottom + "px");
+    layout.cols.forEach((value, index) => style.setProperty("--c" + (index + 1), value + "fr"));
+  }
+}
+
+const clampTo = (value, low, high) => Math.min(Math.max(value, low), Math.max(low, high));
+
+/** Resize while the pointer moves: `right` = the right column's width, `bottom` = the docks' height, `col` = two neighbouring docks. */
+function resizeLayout(layout, kind, index, box, point, pair) {
+  if (kind === "right") layout.right = Math.round(clampTo(box.right - point.x - 4, LAYOUT_MIN.right, box.width - LAYOUT_MIN.main));
+  else if (kind === "bottom") layout.bottom = Math.round(clampTo(box.bottom - point.y - 4, LAYOUT_MIN.bottom, box.height - LAYOUT_MIN.preview));
+  else {
+    const total = layout.cols[index] + layout.cols[index + 1];
+    const share = clampTo((point.x - pair.left) / Math.max(1, pair.right - pair.left), LAYOUT_MIN.share, 1 - LAYOUT_MIN.share);
+    layout.cols[index] = +(total * share).toFixed(3);
+    layout.cols[index + 1] = +(total - layout.cols[index]).toFixed(3);
+  }
+}
+
+function startGutter(event, kind, index) {
+  if (event.button !== 0 || !studio.layoutNodes) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const { obs, slots } = studio.layoutNodes;
+  const box = obs.getBoundingClientRect();
+  const pair = kind === "col" ? { left: slots[index + 1].getBoundingClientRect().left, right: slots[index + 2].getBoundingClientRect().right } : null;
+  document.body.classList.add("resizing", kind === "bottom" ? "row-resize" : "col-resize");
+  const move = (moved) => { resizeLayout(studio.layout, kind, index, box, { x: moved.clientX, y: moved.clientY }, pair); applyLayout(); };
+  const up = () => {
+    removeEventListener("pointermove", move);
+    removeEventListener("pointerup", up);
+    document.body.classList.remove("resizing", "row-resize", "col-resize");
+    saveLayout();
+  };
+  addEventListener("pointermove", move);
+  addEventListener("pointerup", up);
+}
+
+function resetGutter(kind, index) {
+  const layout = studio.layout;
+  if (kind === "col") { layout.cols[index] = LAYOUT_DEFAULT.cols[index]; layout.cols[index + 1] = LAYOUT_DEFAULT.cols[index + 1]; }
+  else layout[kind] = LAYOUT_DEFAULT[kind];
+  saveLayout();
+  applyLayout();
+}
+
+function resetLayout() {
+  studio.layout = defaultLayout();
+  saveLayout();
+  applyLayout();
+  toast("Panel layout reset");
+}
+
+/** Two slots trade their panels. */
+function swapPanels(layout, from, to) {
+  if (from === to || from < 0 || to < 0) return false;
+  [layout.order[from], layout.order[to]] = [layout.order[to], layout.order[from]];
+  return true;
+}
+
+/** Drag a panel by its title onto another panel: they swap places. A click (under 6 px) stays a click. */
+function startPanelMove(event) {
+  const nodes = studio.layoutNodes;
+  if (!nodes || event.button !== 0 || !event.target.closest) return;
+  const header = event.target.closest("header");
+  if (!header || event.target.closest("button, input, select, label, a, kbd")) return;
+  const from = nodes.slots.indexOf(header.parentNode && header.parentNode.parentNode);
+  if (from < 0) return;
+  const start = { x: event.clientX, y: event.clientY };
+  let moving = false, target = -1;
+  const mark = (index) => { if (target >= 0) nodes.slots[target].classList.remove("droptarget"); target = index; if (target >= 0) nodes.slots[target].classList.add("droptarget"); };
+  const move = (moved) => {
+    if (!moving && Math.hypot(moved.clientX - start.x, moved.clientY - start.y) < 6) return;
+    if (!moving) { moving = true; nodes.slots[from].classList.add("lifted"); document.body.classList.add("moving-panel"); }
+    const over = document.elementFromPoint(moved.clientX, moved.clientY);
+    const slot = over && over.closest ? over.closest(".slot") : null;
+    const index = nodes.slots.indexOf(slot);
+    mark(index === from ? -1 : index);
+  };
+  const up = () => {
+    removeEventListener("pointermove", move);
+    removeEventListener("pointerup", up);
+    nodes.slots[from].classList.remove("lifted");
+    document.body.classList.remove("moving-panel");
+    const to = target;
+    mark(-1);
+    if (moving && swapPanels(studio.layout, from, to)) { saveLayout(); applyLayout(); }
+  };
+  addEventListener("pointermove", move);
+  addEventListener("pointerup", up);
+}
+
 function renderStudioBody() {
   const root = $("studioRoot");
   if (!root) return;
@@ -850,24 +1025,18 @@ function renderStudioBody() {
     h("button", { text: "Edit", disabled: true, title: "Editing (timeline, cuts, subtitles) is coming soon" }));
   const head = h("div", { class: "sthead" }, tabs, h("span", { class: "spacer" }));
   if (studio.tab === "record" && studio.setup) {
-    head.append(iconButton("undo", "Undo (⌘Z; ⇧⌘Z redoes)", () => undoEdit(false)),
+    head.append(iconButton("layout", "Reset the panel layout (drag a panel's title to move it, the gaps to resize)", resetLayout),
+      iconButton("undo", "Undo (⌘Z; ⇧⌘Z redoes)", () => undoEdit(false)),
       h("span", { class: "lbl", text: "Format" }), h("div", { class: "seg fmt" }, STUDIO_FORMATS.map(([value, label]) =>
         h("button", { class: currentCanvas() === value ? "on" : "", text: label, title: value === "source" ? "The screen as recorded, no composition" : "Layout for " + value, onclick: () => { studio.setup.canvas = value; edited(renderStudioBody); } }))));
   }
   root.append(head);
   if (studio.tab === "projects") { root.append(h("div", { id: "studioProjects" })); renderProjects(); return; }
   if (!studio.setup) { root.append(h("div", { class: "empty", text: "Loading the studio setup…" })); return; }
-  root.append(h("div", { class: "obs" },
-    h("div", { class: "preview" },
-      h("div", { class: "pvtop" }, h("div", { id: "permBanner" }), h("div", { class: "warns", id: "warnStrip" })),
-      h("div", { class: "stagebox", id: "stageBox" }, stageFrame()),
-      h("div", { class: "pvbar", id: "pvBar" })),
-    h("aside", { class: "inspector", id: "propsPane" }),
-    h("div", { class: "docks" },
-      h("section", { class: "dock", id: "scenesPane" }),
-      h("section", { class: "dock", id: "sourcesPane" }),
-      h("section", { class: "dock", id: "soundPane" })),
-    h("section", { class: "dock controls", id: "recBar" })));
+  root.append(layoutFrame(h("div", { class: "preview" },
+    h("div", { class: "pvtop" }, h("div", { id: "permBanner" }), h("div", { class: "warns", id: "warnStrip" })),
+    h("div", { class: "stagebox", id: "stageBox" }, stageFrame()),
+    h("div", { class: "pvbar", id: "pvBar" }))));
   watchStageSize();
   renderScenes();
   renderSources();
@@ -1324,7 +1493,8 @@ function renderRecBar() {
   box.textContent = "";
   box.append(h("header", {}, h("span", { text: "Controls" })),
     h("div", { class: "cbody" },
-      h("button", { class: "recbtn", id: "recButton", title: "Start / stop recording (R)", onclick: toggleRecord }, h("i"), h("span", { id: "recLabel", text: "Start recording" })),
+      h("button", { class: "recbtn", id: "recButton", title: "Start / stop recording (R)", onclick: () => toggleRecord() }, h("i"), h("span", { id: "recLabel", text: "Start recording" })),
+      h("button", { class: "pill audiobtn", id: "recAudio", title: "Record only the microphone, no screen or camera (A)", onclick: () => toggleRecord("audio") }, studioIcon("mic"), "Record audio only"),
       h("div", { class: "crow" }, h("span", { class: "recclock", id: "recClock", text: "00:00" }), h("span", { class: "recstate", id: "recState" })),
       h("div", { class: "crow" },
         h("button", { class: "pill", id: "recPause", title: "Pause / resume (P)", onclick: pauseRecord }, studioIcon("pause"), "Pause"),
@@ -1360,7 +1530,9 @@ function updateRecordControls() {
   pause.textContent = "";
   pause.append(studioIcon(s.paused ? "play" : "pause"), s.paused ? "Resume" : "Pause");
   $("recMark").disabled = !s.active || Boolean(studio.starting);
-  $("recState").textContent = studio.counting ? "Starting in " + studio.counting + "…" : studio.starting ? "Waking the microphone and camera…" : busy ? "Saving…" : s.phase === "interrupted" ? "A recorder stopped; press stop to save the rest" : s.phase === "unsaved" ? "Not saved; press stop to try again" : s.phase === "stuck" ? "A recorder hangs" : s.active ? (s.paused ? "Paused" : "Recording") : "Ready";
+  const audio = $("recAudio");
+  if (audio) audio.disabled = active || busy || Boolean(studio.counting);
+  $("recState").textContent = studio.counting ? "Starting in " + studio.counting + "…" : studio.starting ? "Waking the microphone and camera…" : busy ? "Saving…" : s.phase === "interrupted" ? "A recorder stopped; press stop to save the rest" : s.phase === "unsaved" ? "Not saved; press stop to try again" : s.phase === "stuck" ? "A recorder hangs" : s.active ? (s.paused ? "Paused" : s.mode === "audio" ? "Recording audio" : "Recording") : "Ready";
   const display = displayInfo();
   const free = s.free_bytes;
   $("recInfo").textContent = "";
@@ -1554,6 +1726,7 @@ function renderProps() {
 // ---- Record tab, OBS style: icons, menus, docks, inspector, live screen, undo ----
 // Icons are SVG strokes (24x24) drawn with currentColor, never emoji (they render in colour and differ per Mac).
 const STUDIO_ICON = {
+  layout: "M3 4h18v16H3zM3 14h18M15 4v10",
   eye: "M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
   eyeOff: "M3 3l18 18M10.6 5.1A10.8 10.8 0 0 1 12 5c7 0 11 7 11 7a18 18 0 0 1-3.2 4M6.6 6.6C3.4 8.7 1 12 1 12s4 7 11 7a10.6 10.6 0 0 0 5.4-1.5M9.9 9.9a3 3 0 0 0 4.2 4.2",
   lock: "M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4",

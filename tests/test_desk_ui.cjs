@@ -74,6 +74,7 @@ function harness() {
     globalThis.audit = {studio, state, arcade, toggleRecord, loadRecordStatus,
       leaveStudio, toggleCamera, toggleMeter, stopStream, start, sendGame, drawCell,
       applyShape, pinPlacement, placementPx, snapPlacement, moveFocus, resizePlacement, studioKey, studioPollDelay,
+      parseLayout, defaultLayout, resizeLayout, swapPanels, layoutFrame, LAYOUT_PANELS,
       countdownSteps, saveSetupSoon, permissionBanner, openSettings,
       renderStudio, renderStudioBody, renderSources, updateRecordControls, startPreview,
       startHistory, undoEdit, addScene, moveScene, removeScene, defaultPlacement, currentScene, edited, selectSource, placementOf, nudgeSelected, deleteSelected, sourceById, toggleVisible, moveSource, toggleInput, openRecordSettings, closeStudioMenu,
@@ -391,6 +392,51 @@ const tests = {
   a.studio.tab = 'projects';
   a.renderStudioBody();
   assert.ok(h.find('studioProjects'), 'the Projects tab renders');
+ },
+ async studio_layout_and_audio() {
+  // Panels are resized by the gaps and swapped by their titles; a damaged saved layout never breaks the page.
+  const h = treeHarness(), a = h.a;
+  const fresh = a.defaultLayout();
+  assert.deepEqual(a.parseLayout(null), fresh);
+  assert.deepEqual(a.parseLayout('{nope'), fresh, 'broken JSON gives the default');
+  const saved = {right: 420, bottom: 300, cols: [2, 1, 1], order: ['recBar', 'scenesPane', 'sourcesPane', 'soundPane', 'propsPane']};
+  assert.equal(JSON.stringify(a.parseLayout(JSON.stringify(saved))), JSON.stringify(saved), 'a good layout comes back as saved');
+  const odd = a.parseLayout(JSON.stringify({right: 5, bottom: 'x', cols: [1, -1, 1], order: ['recBar', 'recBar', 'scenesPane', 'sourcesPane', 'soundPane']}));
+  assert.deepEqual(odd, fresh, 'too small, wrong types, negative shares and duplicate panels fall back');
+  const layout = a.defaultLayout();
+  const box = {left: 0, top: 0, right: 1400, bottom: 900, width: 1400, height: 900};
+  a.resizeLayout(layout, 'right', 0, box, {x: 1000, y: 0});
+  assert.equal(layout.right, 396, 'the right column follows the pointer');
+  a.resizeLayout(layout, 'right', 0, box, {x: 100, y: 0});
+  assert.equal(layout.right, 980, 'the preview keeps at least 420 px');
+  a.resizeLayout(layout, 'bottom', 0, box, {x: 0, y: 890});
+  assert.equal(layout.bottom, 110, 'the docks keep at least 110 px');
+  a.resizeLayout(layout, 'col', 0, box, {x: 300, y: 0}, {left: 0, right: 600});
+  assert.equal(layout.cols.slice(0, 2).join(), '1.075,1.075', 'two neighbouring docks share their width');
+  a.resizeLayout(layout, 'col', 0, box, {x: 0, y: 0}, {left: 0, right: 600});
+  assert.ok(layout.cols[0] > 0.2, 'a dock never shrinks away');
+  assert.equal(a.swapPanels(layout, 0, 4), true);
+  assert.equal(layout.order.join(), 'recBar,scenesPane,sourcesPane,soundPane,propsPane', 'the inspector and the controls swap');
+  assert.equal(a.swapPanels(layout, 2, 2), false, 'dropping on itself changes nothing');
+  // The saved layout is read when the Record tab is built: each panel lands in its slot.
+  h.context.localStorage.getItem = (key) => key === 'studio-layout' ? JSON.stringify(saved) : null;
+  a.studio.layout = null;
+  a.layoutFrame(h.context.document.createElement('div'));
+  assert.equal(a.studio.layout.order.join(), saved.order.join());
+  const slots = a.studio.layoutNodes.slots;
+  assert.equal(slots[0].children[0].id, 'recBar', 'the controls sit top right');
+  assert.equal(slots[4].children[0].id, 'propsPane', 'the inspector bottom right');
+  // Audio only: the microphone alone, as its own recording.
+  a.state.view = 'studio';
+  a.studio.setup = sampleSetup();
+  a.studio.setup.countdown = 0;
+  const sent = [];
+  h.context.fetch = async (url, options) => { sent.push([url, options.body]); return response({active: true, mode: 'audio', phase: 'recording', elapsed: 0}); };
+  await a.toggleRecord('audio');
+  assert.equal(JSON.stringify(sent), JSON.stringify([['/api/studio/record', JSON.stringify({mode: 'audio'})]]));
+  assert.equal(a.studioKey('KeyA', {active: false}), 'audio');
+  assert.equal(a.studioKey('KeyA', {active: true}), 'stop', 'A also stops');
+  assert.equal(a.studioKey('KeyA', {active: false, typing: true}), null);
  },
  async studio_obs_editing() {
   // Scenes and sources are edited like in OBS: add, rename, order, hide, delete, nudge, and ⌘Z brings it back.
