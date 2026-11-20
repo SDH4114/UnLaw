@@ -4051,6 +4051,8 @@ document.addEventListener("keydown", (event) => {
   if (gameKey(event)) return;
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
   if (state.view === "canvas" && !typing && canvasKey(event)) return;
+  // Studio has its own ⌘Z, Esc, arrows and Delete, so it goes before the page-wide keys.
+  if (state.view === "studio" && studioKeydown(event)) return;
   if (event.key === "Escape") {
     $("help").classList.remove("on");
     closeViewer();
@@ -4060,7 +4062,6 @@ document.addEventListener("keydown", (event) => {
   }
   if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.key === "?") { $("help").classList.toggle("on"); return; }
-  if (studioKeydown(event)) return;
   if (state.view === "canvas") {
     if (event.key >= "1" && event.key <= "6") setView(VIEWS[Number(event.key) - 1]);
     return;

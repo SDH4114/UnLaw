@@ -76,6 +76,7 @@ function harness() {
       applyShape, pinPlacement, placementPx, snapPlacement, moveFocus, resizePlacement, studioKey, studioPollDelay,
       countdownSteps, saveSetupSoon, permissionBanner, openSettings,
       renderStudio, renderStudioBody, renderSources, updateRecordControls, startPreview,
+      startHistory, undoEdit, addScene, moveScene, removeScene, defaultPlacement, currentScene, edited, selectSource, placementOf, nudgeSelected, deleteSelected, sourceById, toggleVisible, moveSource, toggleInput, openRecordSettings, closeStudioMenu,
       projectClock, sceneAt, exportDefaults, exportHeightFor, renderExportDialog, startExport, pollExport, renderProjects, openProject, changePlacement, projectAction,
       cv, mulberry32, toScreen, toWorld, zoomAt, fitView, roughStrokes, hitElement, hitTest, edgeCurve, hitEdge,
       nearestSide, resizeBox, handleAt, applyBox, wrapText, adaptInk, nodeColor, noteName, makeLinear, makeFreedraw,
@@ -364,11 +365,13 @@ const tests = {
   assert.equal(stage.children.filter(n => /\bph\b/.test(n.className)).length, 2, 'screen and camera are drawn in the 16:9 screen-camera scene');
   const cam = stage.children.filter(n => /\bph\b/.test(n.className))[1];
   assert.deepEqual([cam.style.left, cam.style.top, cam.style.width], ['0%', '76%', '24%']);
-  assert.ok(stage.children.some(n => /\bfloat\b/.test(n.className)), 'the selected camera has its mini toolbar');
+  assert.equal(h.find('selBox').children.length, 8, 'the selected camera has eight handles (corners and edges)');
   assert.match(textOf(h.find('soundPane')), /Haos's Phone Microphone/);
   assert.match(textOf(h.find('soundPane')), /BlackHole 2ch \(virtual\)/);
   assert.match(textOf(h.find('propsPane')), /FaceTime HD Camera/);
-  assert.match(textOf(h.find('outputPane')), /FLAC lossless/);
+  a.openRecordSettings(h.find('recButton'));
+  assert.match(textOf(a.studio.menu), /FLAC lossless/, 'recording files are in the Settings menu');
+  a.closeStudioMenu();
   assert.match(textOf(h.find('recInfo')), /3024×1964 · 60 fps/);
   assert.match(textOf(h.find('recInfo')), /free 182 GB · ≈ 93 MB\/min/);
   // Format switch: 9:16 stacks the camera on top at 40 %.
@@ -388,6 +391,59 @@ const tests = {
   a.studio.tab = 'projects';
   a.renderStudioBody();
   assert.ok(h.find('studioProjects'), 'the Projects tab renders');
+ },
+ async studio_obs_editing() {
+  // Scenes and sources are edited like in OBS: add, rename, order, hide, delete, nudge, and ⌘Z brings it back.
+  const h = treeHarness(), a = h.a;
+  a.state.view = 'studio';
+  a.studio.info = {available: true, settings: {}};
+  a.studio.setup = sampleSetup();
+  a.startHistory(a.studio.setup);
+  a.studio.devices = {displays: [{number: 1, name: 'Color LCD', pixels: '3024 x 1964'}], cameras: [], microphones: [], ffmpeg: true};
+  a.studio.status = {active: false};
+  h.context.fetch = async () => response({});
+  a.renderStudio(h.main);
+  const rows = () => h.find('scenesPane').children[1].children;
+  a.addScene();
+  assert.equal(a.studio.setup.scenes.length, 5, 'a scene is added');
+  assert.equal(a.studio.setup.scene, a.studio.setup.scenes[1].id, 'right after the one it copies, and switched to');
+  assert.equal(rows().length, 5);
+  const added = a.studio.setup.scene;
+  a.moveScene(added, -1);
+  assert.equal(a.studio.setup.scenes[0].id, added, 'scenes move up');
+  a.removeScene(added);
+  assert.equal(a.studio.setup.scenes.length, 4);
+  a.undoEdit(false);
+  assert.equal(a.studio.setup.scenes.length, 5, '⌘Z brings the scene back');
+  a.undoEdit(true);
+  assert.equal(a.studio.setup.scenes.length, 4, '⇧⌘Z removes it again');
+  // A text source: shown in the current scene, selected, then deleted with Delete and restored.
+  a.studio.setup.sources.push({id: 'text-1', kind: 'text', enabled: true, asset: 'x.png', text: 'Hi', font: 'Georgia, serif', size: 64, color: '#ffffff', background: null});
+  for (const scenes of Object.values(a.studio.setup.layouts)) for (const [scene, layout] of Object.entries(scenes)) layout.placements['text-1'] = {...a.defaultPlacement({kind: 'text'}, '16:9', 2), visible: scene === a.currentScene()};
+  a.edited();
+  a.selectSource('text-1');
+  assert.match(textOf(h.find('propsPane')), /Transform/, 'the inspector shows the transform');
+  const before = a.placementOf('text-1').box[0];
+  a.nudgeSelected(10, 0);
+  assert.ok(Math.abs(a.placementOf('text-1').box[0] - (before + 10 / 1920)) < 1e-9, 'arrows nudge by pixels of the 1080p frame');
+  a.deleteSelected();
+  assert.equal(a.sourceById('text-1'), null, 'Delete removes an image or text');
+  a.undoEdit(false);
+  assert.ok(a.sourceById('text-1'), '⌘Z brings it back');
+  a.toggleVisible('text-1');
+  assert.equal(a.placementOf('text-1').visible, false, 'the eye hides it in this scene');
+  // The list shows the front first, and moving forward changes the z order.
+  a.moveSource('screen', 0, a.studio.setup.sources.length - 1);
+  assert.equal(a.studio.setup.sources[a.studio.setup.sources.length - 1].id, 'screen');
+  assert.match(textOf(h.find('sourcesPane').children[1].children[0]), /Screen/, 'the front source is listed first');
+  // Turning the microphone off closes the page's microphone at once.
+  const track = {stopped: false, stop() { this.stopped = true; }};
+  a.studio.micStream = {getTracks: () => [track]};
+  a.toggleInput('mic');
+  assert.equal(a.studio.setup.audio.mic.enabled, false);
+  assert.equal(track.stopped, true, 'the browser microphone is released');
+  assert.equal(a.studio.micStream, null);
+  assert.match(textOf(h.find('soundPane')), /off/);
  },
  async studio_first_preview_shows_the_screen() {
   // The stage starts with a placeholder; the first snapshot that loads must replace it (not only update

@@ -911,13 +911,13 @@ STUDIO_CSS = r""".studio { display: flex; flex-direction: column; gap: 10px; pad
 .pane { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 9px 10px 10px; margin-bottom: 10px; box-shadow: var(--shadow); }
 .pane h5 { margin: 0 0 7px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 650; display: flex; align-items: center; gap: 6px; }
 .pane h5 .add { margin-left: auto; border: none; background: transparent; padding: 0 2px; color: var(--accent-ink); text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 600; }
-.pane .prow { display: flex; align-items: center; gap: 7px; margin: 6px 0; font-size: 12.5px; }
-.pane .prow > .lbl { color: var(--muted); width: 74px; flex: none; font-size: 12px; }
-.pane .prow select, .pane .prow input[type=text], .pane .prow input[type=number] { flex: 1; min-width: 0; padding: 3px 7px; font-size: 12.5px; }
-.pane .prow input[type=range] { flex: 1; min-width: 0; }
-.pane .prow input[type=color] { width: 26px; height: 22px; padding: 0; border-radius: 5px; }
-.pane .prow .val { color: var(--muted); font: 11.5px var(--mono); min-width: 38px; text-align: right; }
-.pane .note { color: var(--muted); font-size: 11.5px; margin: 4px 0 0; }
+:is(.pane, .inspector, .stmenu) .prow { display: flex; align-items: center; gap: 7px; margin: 6px 0; font-size: 12.5px; }
+:is(.pane, .inspector, .stmenu) .prow > .lbl { color: var(--muted); width: 74px; flex: none; font-size: 12px; }
+:is(.pane, .inspector, .stmenu) .prow select, :is(.pane, .inspector, .stmenu) .prow input[type=text], :is(.pane, .inspector, .stmenu) .prow input[type=number] { flex: 1; min-width: 0; padding: 3px 7px; font-size: 12.5px; }
+:is(.pane, .inspector, .stmenu) .prow input[type=range] { flex: 1; min-width: 0; }
+:is(.pane, .inspector, .stmenu) .prow input[type=color] { width: 26px; height: 22px; padding: 0; border-radius: 5px; }
+:is(.pane, .inspector, .stmenu) .prow .val { color: var(--muted); font: 11.5px var(--mono); min-width: 38px; text-align: right; }
+:is(.pane, .inspector, .stmenu, .dock) .note { color: var(--muted); font-size: 11.5px; margin: 4px 0 0; }
 .scenes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .scn { position: relative; border-radius: 6px; border: 1px solid var(--line); background: var(--sunken); overflow: hidden; padding: 0; aspect-ratio: 16 / 10; text-align: left; }
 .scn.on { box-shadow: 0 0 0 2px var(--accent); border-color: var(--accent); }
@@ -945,10 +945,7 @@ STUDIO_CSS = r""".studio { display: flex; flex-direction: column; gap: 10px; pad
 .stage .bg { position: absolute; inset: -8%; width: 116%; height: 116%; object-fit: cover; filter: blur(18px) brightness(.8); }
 .stage .ph { position: absolute; overflow: hidden; cursor: grab; box-sizing: border-box; }
 .stage .ph > img, .stage .ph > video { width: 100%; height: 100%; display: block; pointer-events: none; }
-.stage .ph.sel { outline: 2px solid var(--accent); outline-offset: -1px; }
 .stage .ph .camph { width: 100%; height: 100%; display: grid; place-items: center; background: var(--column); color: var(--muted); font-size: 12px; text-align: center; }
-.stage .handle { position: absolute; width: 11px; height: 11px; background: var(--accent); border: 2px solid var(--on-accent); border-radius: 3px; z-index: 4; cursor: nwse-resize; }
-.stage .handle.top-right, .stage .handle.bottom-left { cursor: nesw-resize; }
 .stage .float { position: absolute; z-index: 5; display: flex; gap: 4px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 3px 5px; box-shadow: var(--lift); }
 .shapes { display: flex; gap: 3px; }
 .shapes button, .corners button { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border-radius: 5px; font-size: 12px; }
@@ -962,15 +959,8 @@ STUDIO_CSS = r""".studio { display: flex; flex-direction: column; gap: 10px; pad
 .stage .count { position: absolute; inset: 0; z-index: 7; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 55%, transparent); font: 700 96px var(--mono); color: var(--accent-ink); }
 .stage .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 12.5px; text-align: center; padding: 20px; }
 .sthint { color: var(--muted); font-size: 11.5px; text-align: center; margin: 5px 0 0; }
-.recbar { display: flex; align-items: center; gap: 10px; margin: 10px 0; flex-wrap: wrap; position: relative; }
-.recbtn { width: 46px; height: 46px; border-radius: 50%; border: 3px solid var(--text); background: var(--panel); display: grid; place-items: center; padding: 0; flex: none; }
-.recbtn i { width: 22px; height: 22px; border-radius: 50%; background: var(--danger); transition: border-radius .15s, width .15s, height .15s; }
-.recbtn.on i { width: 18px; height: 18px; border-radius: 4px; }
-.recbtn:hover { border-color: var(--danger); }
 .recclock { font: 600 21px var(--mono); letter-spacing: .02em; }
 .recclock.live { color: var(--danger); }
-.recbar .pill { display: inline-flex; gap: 6px; align-items: center; border-radius: 999px; padding: 4px 10px; font-size: 12.5px; }
-.recbar .info { margin-left: auto; text-align: right; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
 .recstate { color: var(--muted); font-size: 12px; }
 .warns { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .warns div { display: flex; align-items: center; gap: 8px; border-radius: var(--r-sm); padding: 5px 9px; font-size: 12.5px; background: color-mix(in srgb, var(--warn) 14%, var(--panel)); border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line)); }
@@ -1021,8 +1011,109 @@ STUDIO_CSS = r""".studio { display: flex; flex-direction: column; gap: 10px; pad
 #viewer .export { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 12px; }
 #viewer .export label { display: grid; gap: 3px; font-size: 12px; color: var(--muted); }
 #viewer .export label.check { display: flex; align-items: center; gap: 7px; color: var(--text); }
-@media (max-width: 1180px) { .recgrid { grid-template-columns: 210px minmax(0, 1fr); } .recgrid > .right { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; } }
-@media (max-width: 860px) { .recgrid, .projpage { grid-template-columns: 1fr; } .recgrid > .right { display: block; } }
+.studio.rec { height: 100%; padding: 8px 10px 10px; gap: 8px; box-sizing: border-box; }
+.obs { flex: 1; min-height: 600px; display: grid; grid-template-columns: minmax(0, 1fr) 300px; grid-template-rows: minmax(300px, 1fr) 238px; gap: 8px; }
+.obs .preview { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: #0f0f0f; border-radius: 10px; border: 1px solid var(--line); overflow: hidden; position: relative; }
+.obs .pvtop { position: absolute; left: 10px; right: 10px; top: 10px; z-index: 9; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
+.obs .pvtop > * > * { pointer-events: auto; }
+.obs .stagebox { flex: 1; min-height: 0; container-type: size; display: grid; place-items: center; padding: 14px; }
+.stagewrap { position: relative; margin: 0 auto; }
+.stagewrap > .stage { width: 100%; height: 100%; border-radius: 2px; box-shadow: 0 0 0 1px rgba(255, 255, 255, .14); }
+.stageui { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
+.stage .ph:hover { outline: 1px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: -1px; }
+.stage .ph.locked { cursor: default; }
+.selbox { position: absolute; box-sizing: border-box; outline: 2px solid var(--accent); pointer-events: none; }
+.selbox.locked { outline-style: dashed; }
+.selbox .handle { position: absolute; width: 10px; height: 10px; box-sizing: border-box; background: #fff; border: 2px solid var(--accent); border-radius: 2px; pointer-events: auto; touch-action: none; }
+.selbox .handle.hd-top-left { left: -6px; top: -6px; cursor: nwse-resize; }
+.selbox .handle.hd-top { left: calc(50% - 5px); top: -6px; cursor: ns-resize; }
+.selbox .handle.hd-top-right { right: -6px; top: -6px; cursor: nesw-resize; }
+.selbox .handle.hd-right { right: -6px; top: calc(50% - 5px); cursor: ew-resize; }
+.selbox .handle.hd-bottom-right { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.selbox .handle.hd-bottom { left: calc(50% - 5px); bottom: -6px; cursor: ns-resize; }
+.selbox .handle.hd-bottom-left { left: -6px; bottom: -6px; cursor: nesw-resize; }
+.selbox .handle.hd-left { left: -6px; top: calc(50% - 5px); cursor: ew-resize; }
+.obs .pvbar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-top: 1px solid #262626; background: #151515; min-height: 34px; }
+.obs .pvbar .sthint { margin: 0; color: #8f8f8f; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pvbar .live { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 3px 11px; font-size: 12px; background: #232323; color: #d8d8d8; border: 1px solid #343434; flex: none; }
+.pvbar .live i { width: 7px; height: 7px; border-radius: 50%; background: #6b6b6b; }
+.pvbar .live.on { color: #fff; border-color: #3b8a4a; }
+.pvbar .live.on i { background: #3fbf5a; box-shadow: 0 0 6px #3fbf5a; }
+.obs .inspector { grid-column: 2; grid-row: 1; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-height: 0; transition: box-shadow .3s; }
+.obs .inspector.flash { box-shadow: 0 0 0 2px var(--accent); }
+.inspector .ihead { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 1; }
+.inspector .ihead b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.inspector .hint, .dock header .hint { margin-left: auto; color: var(--muted); font-size: 10.5px; text-transform: none; letter-spacing: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inspector .pad { padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.inspector .prow .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.isec { border-bottom: 1px solid var(--line); padding: 0 12px 8px; }
+.isec > summary { cursor: pointer; list-style: none; padding: 8px 0 3px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 650; user-select: none; }
+.isec > summary::-webkit-details-marker { display: none; }
+.isec > summary::before { content: "▾"; display: inline-block; width: 14px; }
+.isec:not([open]) > summary::before { content: "▸"; }
+.xywh { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; margin: 6px 0; }
+.xywh label { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); }
+.xywh input { width: 100%; min-width: 0; padding: 3px 4px; font: 11.5px var(--mono); }
+.btnrow { display: flex; gap: 4px; flex-wrap: wrap; margin: 6px 0; }
+.btnrow button { padding: 3px 9px; font-size: 12px; }
+.obs .docks { grid-column: 1; grid-row: 2; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr) minmax(0, 1.35fr); gap: 8px; min-height: 0; }
+.dock { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+.dock > header { display: flex; align-items: center; gap: 6px; padding: 6px 10px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 650; border-bottom: 1px solid var(--line); background: var(--column); }
+.dock .dlist { flex: 1; overflow: auto; padding: 4px; min-height: 0; }
+.dock > footer { display: flex; align-items: center; gap: 1px; padding: 3px 6px; border-top: 1px solid var(--line); background: var(--column); }
+.dock > footer .spacer { flex: 1; }
+.drow { display: flex; align-items: center; gap: 7px; padding: 4px 6px; border-radius: 6px; font-size: 12.5px; cursor: default; user-select: none; outline: none; }
+.drow:hover { background: var(--column); }
+.drow:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+.drow.on { background: color-mix(in srgb, var(--accent) 24%, var(--panel)); }
+.drow .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drow.off .name { color: var(--muted); }
+.drow kbd { font-size: 10px; }
+.drow input.rename { flex: 1; min-width: 0; font-size: 12.5px; padding: 1px 5px; }
+.studio svg.ico { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.studio .drow > svg.ico { color: var(--muted); }
+.studio .ib, .stmenu .ib { border: none; background: transparent; padding: 4px; border-radius: 5px; color: var(--text); display: inline-grid; place-items: center; line-height: 0; box-shadow: none; }
+.studio .ib:hover:not(:disabled) { background: var(--sunken); }
+.studio .ib:disabled { opacity: .3; }
+.studio .ib.dim { color: var(--muted); opacity: .5; }
+.studio .ib.danger { color: var(--danger); }
+.drow .ib { padding: 2px; }
+.stmenu svg.ico { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; vertical-align: -2px; margin-right: 6px; }
+.stmenu hr { border: none; border-top: 1px solid var(--line); margin: 3px 2px; }
+.stmenu button:disabled { opacity: .4; }
+.stmenu .settingsbox { padding: 6px 8px; width: 300px; }
+.stmenu .settingsbox h5 { margin: 0 0 4px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.mixer { flex: 1; overflow: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.chan .chead { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.chan .chead b { font-weight: 600; flex: none; }
+.chan .chead select { flex: 1; min-width: 0; font-size: 12px; padding: 2px 5px; }
+.chan .chead .note { margin: 0; flex: 1; }
+.chan .db { font: 11px var(--mono); color: var(--muted); min-width: 46px; text-align: right; flex: none; }
+.chan .meter { display: block; height: 8px; margin: 6px 0 4px; background: repeating-linear-gradient(90deg, var(--sunken) 0 calc(10% - 1px), color-mix(in srgb, var(--line) 80%, transparent) calc(10% - 1px) 10%); }
+.chan .meter i { transition: none; }
+.chan .cctl { display: flex; align-items: center; gap: 6px; }
+.chan .cctl input[type=range] { flex: 1; min-width: 0; }
+.chan .cctl .val { font: 11px var(--mono); color: var(--muted); min-width: 36px; text-align: right; }
+.chan.muted .meter, .chan.muted input[type=range] { opacity: .35; }
+.chan .tiny { padding: 1px 7px; font-size: 11px; }
+.dock.controls { grid-column: 2; grid-row: 2; }
+.controls .cbody { flex: 1; padding: 9px 10px; display: flex; flex-direction: column; gap: 7px; overflow: auto; min-height: 0; }
+.controls .recbtn { width: 100%; min-height: 38px; border-radius: 8px; border: 1px solid var(--line); background: var(--sunken); display: flex; align-items: center; justify-content: center; gap: 9px; font-weight: 650; font-size: 13px; color: var(--text); }
+.controls .recbtn i { width: 13px; height: 13px; border-radius: 50%; background: var(--danger); flex: none; transition: border-radius .15s; }
+.controls .recbtn:hover { border-color: var(--danger); }
+.controls .recbtn.on { background: var(--danger); border-color: var(--danger); color: #fff; }
+.controls .recbtn.on i { background: #fff; border-radius: 2px; }
+.controls .crow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.controls .crow .recclock { font-size: 18px; }
+.controls .pill { display: inline-flex; gap: 5px; align-items: center; border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+.controls .info { color: var(--muted); font-size: 11px; line-height: 1.45; margin-top: auto; }
+@media (max-width: 1100px) {
+  .obs { grid-template-columns: 1fr; grid-template-rows: minmax(320px, 58vh) auto auto auto; }
+  .obs .preview, .obs .inspector, .obs .docks, .dock.controls { grid-column: 1; grid-row: auto; }
+  .obs .docks { grid-template-columns: 1fr 1fr; } .obs .docks > .dock { min-height: 200px; }
+  .obs .inspector { max-height: none; }
+}
+@media (max-width: 860px) { .projpage { grid-template-columns: 1fr; } .obs .docks { grid-template-columns: 1fr; } }
 """
 
 STUDIO_JS = r"""// ---- studio: Record (scenes, sources, live preview) and Projects, all through `ul capture` ----
@@ -1170,7 +1261,6 @@ function sourceName(source) {
   if (source.kind === "text") return "Text “" + source.text + "”";
   return source.asset;
 }
-const SOURCE_ICONS = { screen: "▣", camera: "◉", image: "▤", text: "T" };
 const CAMERA_MB = { max: 90, high: 45, light: 22 };
 const MIC_MB = { flac: 3, wav: 6, m4a: 2 };
 // screencapture has no bitrate option; ~25-70 MB per minute was measured, so the middle is shown.
@@ -1194,6 +1284,7 @@ async function loadSetup() {
   for (const warning of data.warnings || []) toast(warning);
   delete data.warnings;
   studio.setup = data;
+  startHistory(studio.project || data);
   if (!sourceById(studio.selected)) studio.selected = data.sources[0].id;
 }
 
@@ -1229,6 +1320,7 @@ async function flushSetup() {
 }
 
 function edited(...parts) {
+  rememberEdit();
   if (studio.project) saveProjectSoon();
   else saveSetupSoon();
   for (const part of parts) part();
@@ -1266,7 +1358,7 @@ async function loadRecordStatus() {
   drawRecording();
   if (state.view === "studio") {
     updateRecordControls();
-    if (Boolean(was.active) !== Boolean(data.active) || was.scene !== data.scene) { renderScenes(); drawStage(); renderProps(); }
+    if (Boolean(was.active) !== Boolean(data.active) || was.scene !== data.scene) { renderScenes(); renderSources(); drawStage(); renderProps(); renderSound(); }
   }
 }
 
@@ -1280,7 +1372,7 @@ function recordingSaved(done) {
 
 function recordElapsed() {
   const s = studio.status;
-  if (studio.starting) return (Date.now() - studio.starting) / 1000;
+  if (studio.starting) return 0;  // the clock starts once the microphone and camera deliver
   if (!s.active) return 0;
   const value = s.elapsed + (s.phase === "recording" ? (Date.now() - studio.statusAt) / 1000 : 0);
   // Polls arrive a little late; never let the clock step backwards while recording.
@@ -1302,7 +1394,7 @@ function drawRecording() {
   const badge = $("stageBadge");
   if (badge) {
     badge.className = "badge" + (active && !studio.saving ? " on" : "") + (s.paused ? " paused" : "");
-    badge.textContent = s.paused ? "❚❚ PAUSED " + clockText(recordElapsed()) : "● REC " + clockText(recordElapsed());
+    badge.textContent = studio.starting ? "● STARTING…" : s.paused ? "❚❚ PAUSED " + clockText(recordElapsed()) : "● REC " + clockText(recordElapsed());
   }
   drawMeter();
 }
@@ -1418,13 +1510,30 @@ async function selectScene(id) {
     else { studio.status = data; studio.statusAt = Date.now(); }
   }
   renderScenes();
+  renderSources();
   drawStage();
   renderProps();
 }
 
 function studioKeydown(event) {
-  if (state.view !== "studio" || studio.tab !== "record" || !studio.info || !studio.info.available || studio.project) return false;
+  if (state.view !== "studio" || !studio.info || !studio.info.available) return false;
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test((document.activeElement && document.activeElement.tagName) || "");
+  if (typing) return false;
+  if ((event.metaKey || event.ctrlKey) && event.code === "KeyZ" && (studio.project || (studio.tab === "record" && studio.setup))) {
+    event.preventDefault();
+    undoEdit(event.shiftKey);
+    return true;
+  }
+  if (studio.tab !== "record" || studio.project) return false;
+  if (event.key === "Escape" && studio.menu) { closeStudioMenu(); return true; }
+  if (event.metaKey || event.ctrlKey || event.altKey) return false;
+  if (studio.setup && studio.selected) {
+    const step = event.shiftKey ? 10 : 1;
+    const arrows = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+    if (arrows[event.key] && nudgeSelected(...arrows[event.key])) { event.preventDefault(); return true; }
+    if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); deleteSelected(); return true; }
+    if (event.key === "Escape") { selectSource(null); return true; }
+  }
   const action = studioKey(event.code, { active: Boolean(studio.status.active), typing, scenes: studio.setup ? studio.setup.scenes.map((item) => item.id) : [] });
   if (!action) return false;
   event.preventDefault();
@@ -1442,6 +1551,7 @@ function leaveStudio() {
   cancelCountdown();
   stopStream("camStream");
   stopStream("micStream");
+  stopStream("screenStream");
   closeStudioMenu();
   closeViewer();
   if (studio.projectTimer) flushProject();
@@ -1450,6 +1560,11 @@ function leaveStudio() {
 }
 
 function stopStream(key) {
+  if (key === "screenStream") {
+    if (studio.screenStream) { studio.screenStream.getTracks().forEach((track) => track.stop()); studio.screenStream = null; }
+    for (const video of [studio.screenVideo, studio.screenBgVideo]) if (video) video.srcObject = null;
+    return;
+  }
   const request = key === "camStream" ? "camRequest" : "micRequest";
   studio[request] = (studio[request] || 0) + 1;
   if (studio[key]) { studio[key].getTracks().forEach((track) => track.stop()); studio[key] = null; }
@@ -1457,6 +1572,7 @@ function stopStream(key) {
   if (key === "micStream") {
     clearInterval(studio.sampler);
     studio.analyser = null;
+    studio.levels = [];
     if (studio.audio) { studio.audio.close(); studio.audio = null; }
   }
 }
@@ -1490,9 +1606,10 @@ function ensureCamera() {
 
 async function toggleMeter() {
   if (studio.micStream) { stopStream("micStream"); renderSound(); return; }
-  if (state.view !== "studio") return;
+  const allowed = () => !studio.setup || studio.setup.audio.mic.enabled;
+  if (state.view !== "studio" || !allowed()) return;
   const request = studio.micRequest = (studio.micRequest || 0) + 1;
-  const current = () => request === studio.micRequest && state.view === "studio";
+  const current = () => request === studio.micRequest && state.view === "studio" && allowed();
   const wanted = studio.setup ? studio.setup.audio.mic.device : "default";
   try {
     const constraints = { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } };
@@ -1510,7 +1627,7 @@ async function toggleMeter() {
   } catch (error) { toast("The browser could not open the microphone: " + error.message); return; }
   studio.audio = new AudioContext();
   studio.analyser = studio.audio.createAnalyser();
-  studio.analyser.fftSize = 2048;
+  studio.analyser.fftSize = 1024;
   studio.audio.createMediaStreamSource(studio.micStream).connect(studio.analyser);
   const samples = new Float32Array(studio.analyser.fftSize);
   studio.sampler = setInterval(() => {
@@ -1518,9 +1635,10 @@ async function toggleMeter() {
     studio.analyser.getFloatTimeDomainData(samples);
     let peak = 0;
     for (const value of samples) peak = Math.max(peak, Math.abs(value));
-    studio.levels.push({ v: dbLevel(20 * Math.log10(Math.max(peak, 1e-5))), live: recordingNow() });
+    const db = 20 * Math.log10(Math.max(peak, 1e-5));
+    studio.levels.push({ v: dbLevel(db), db, live: recordingNow() });
     if (studio.levels.length > 600) studio.levels.splice(0, 300);
-  }, 50);
+  }, 30);
   renderSound();
   const stream = studio.micStream;
   const loop = () => { if (studio.micStream !== stream) return; drawMeter(); requestAnimationFrame(loop); };
@@ -1528,33 +1646,44 @@ async function toggleMeter() {
 }
 
 const dbLevel = (db) => Math.min(1, Math.max(0, (db + 60) / 60));
+// Fast up, slow down (like a hardware meter), so the bar follows the voice without flicker.
 function drawMeter() {
   const meter = $("micMeter");
   if (!meter) return;
-  const s = studio.status;
-  let level = 0;
-  if (s.active && typeof s.level_db === "number") level = dbLevel(s.level_db);
-  else if (studio.micStream && studio.levels.length) level = studio.levels[studio.levels.length - 1].v;
-  meter.firstChild.style.width = Math.round(level * 100) + "%";
+  const s = studio.status, on = Boolean(studio.setup && studio.setup.audio.mic.enabled);
+  let level = 0, db = null;
+  if (on && s.active && typeof s.level_db === "number") { level = dbLevel(s.level_db); db = s.level_db; }
+  else if (on && studio.micStream && studio.levels.length) { const last = studio.levels[studio.levels.length - 1]; level = last.v; db = last.db; }
+  const now = Date.now(), shown = studio.meterShown || 0;
+  const dt = Math.min(0.25, Math.max(0, (now - (studio.meterAt || now)) / 1000));
+  studio.meterAt = now;
+  studio.meterShown = level >= shown ? level : Math.max(level, shown - dt * 0.6);
+  meter.firstChild.style.width = Math.round(studio.meterShown * 100) + "%";
+  // The colours (green, yellow, red) sit at fixed dB, so the gradient spans the whole meter, not the bar.
+  if (meter.clientWidth) meter.firstChild.style.backgroundSize = meter.clientWidth + "px 100%";
+  const text = $("micDb");
+  if (text) text.textContent = !on ? "off" : db === null || db === undefined ? "" : db <= -59 ? "-∞ dB" : Math.round(db) + " dB";
 }
 
-// ---- screen preview: a snapshot every second (every 3 s while recording, so the recording stays smooth) ----
+// ---- screen preview: live through the browser (getDisplayMedia) once asked for, otherwise a snapshot
+// every 2 s (every 5 s while recording, so the recording stays smooth) ----
 function startPreview() {
   clearTimeout(studio.previewTimer);
   const screen = screenSource();
-  if (!screen || state.view !== "studio" || studio.tab !== "record") return;
+  if (!screen || state.view !== "studio" || studio.tab !== "record" || studio.screenStream) return;
   const again = (ms) => { studio.previewTimer = setTimeout(startPreview, ms); };
   if (document.hidden) { again(1000); return; }
   const url = media("/media/preview") + "&display=" + screen.display + "&_=" + Date.now();
   const image = new Image();
   image.onload = () => {
+    if (studio.screenStream) return;
     const first = !studio.screenUrl;
     studio.screenUrl = url;
     // The first snapshot (or one after a failure) replaces the placeholder, so the stage is redrawn;
     // later ones only swap the image source.
     if (first || studio.screenFailed) { studio.screenFailed = false; drawStage(); }
     else for (const node of document.querySelectorAll("img.screen")) node.src = url;
-    again(studio.status.active ? 3000 : 1000);
+    again(studio.status.active ? 5000 : 2000);
   };
   image.onerror = () => {
     if (!studio.screenFailed) { studio.screenFailed = true; loadDoctor(); drawStage(); }
@@ -1586,7 +1715,7 @@ function setStudioTab(tab) {
   if (tab === studio.tab && !studio.project) return;
   studio.tab = tab;
   localStorage.setItem("studio-tab", tab);
-  if (tab !== "record") { clearTimeout(studio.previewTimer); stopStream("camStream"); stopStream("micStream"); }
+  if (tab !== "record") { clearTimeout(studio.previewTimer); stopStream("camStream"); stopStream("micStream"); stopStream("screenStream"); closeStudioMenu(); }
   if (studio.projectTimer) flushProject();
   stopProjectPlayer();
   studio.project = null;
@@ -1597,39 +1726,44 @@ function renderStudioBody() {
   const root = $("studioRoot");
   if (!root) return;
   root.textContent = "";
+  root.className = "studio" + (studio.tab === "record" && studio.setup ? " rec" : "");
   const tabs = h("div", { class: "seg" },
     h("button", { class: studio.tab === "record" ? "on" : "", text: "Record", onclick: () => setStudioTab("record") }),
     h("button", { class: studio.tab === "projects" ? "on" : "", text: "Projects", onclick: () => setStudioTab("projects") }),
     h("button", { text: "Edit", disabled: true, title: "Editing (timeline, cuts, subtitles) is coming soon" }));
   const head = h("div", { class: "sthead" }, tabs, h("span", { class: "spacer" }));
   if (studio.tab === "record" && studio.setup) {
-    head.append(h("span", { class: "lbl", text: "Format" }), h("div", { class: "seg fmt" }, STUDIO_FORMATS.map(([value, label]) =>
-      h("button", { class: currentCanvas() === value ? "on" : "", text: label, title: value === "source" ? "The screen as recorded, no composition" : "Layout for " + value, onclick: () => { studio.setup.canvas = value; edited(renderStudioBody); } }))));
+    head.append(iconButton("undo", "Undo (⌘Z; ⇧⌘Z redoes)", () => undoEdit(false)),
+      h("span", { class: "lbl", text: "Format" }), h("div", { class: "seg fmt" }, STUDIO_FORMATS.map(([value, label]) =>
+        h("button", { class: currentCanvas() === value ? "on" : "", text: label, title: value === "source" ? "The screen as recorded, no composition" : "Layout for " + value, onclick: () => { studio.setup.canvas = value; edited(renderStudioBody); } }))));
   }
   root.append(head);
   if (studio.tab === "projects") { root.append(h("div", { id: "studioProjects" })); renderProjects(); return; }
   if (!studio.setup) { root.append(h("div", { class: "empty", text: "Loading the studio setup…" })); return; }
-  root.append(h("div", { class: "recgrid" },
-    h("div", { class: "left" }, h("div", { class: "pane", id: "scenesPane" }), h("div", { class: "pane srcs", id: "sourcesPane" })),
-    h("div", { class: "centre" },
-      h("div", { id: "permBanner" }),
-      h("div", { class: "stage", id: "stage" }),
-      h("div", { class: "sthint", id: "stageHint" }),
-      h("div", { class: "recbar", id: "recBar" }),
-      h("div", { class: "warns", id: "warnStrip" }),
-      h("div", { class: "pane", id: "soundPane" })),
-    h("div", { class: "right" }, h("div", { class: "pane", id: "propsPane" }), h("div", { class: "pane", id: "outputPane" }))));
+  root.append(h("div", { class: "obs" },
+    h("div", { class: "preview" },
+      h("div", { class: "pvtop" }, h("div", { id: "permBanner" }), h("div", { class: "warns", id: "warnStrip" })),
+      h("div", { class: "stagebox", id: "stageBox" }, stageFrame()),
+      h("div", { class: "pvbar", id: "pvBar" })),
+    h("aside", { class: "inspector", id: "propsPane" }),
+    h("div", { class: "docks" },
+      h("section", { class: "dock", id: "scenesPane" }),
+      h("section", { class: "dock", id: "sourcesPane" }),
+      h("section", { class: "dock", id: "soundPane" })),
+    h("section", { class: "dock controls", id: "recBar" })));
+  watchStageSize();
   renderScenes();
   renderSources();
   renderBanner();
   drawStage();
+  renderPreviewBar();
   renderRecBar();
   renderSound();
   renderProps();
-  renderOutput();
   updateRecordControls();
   startPreview();
   ensureCamera();
+  autoMeter();
 }
 
 function permissionBanner(doctor) {
@@ -1661,71 +1795,96 @@ function renderScenes() {
   const box = $("scenesPane");
   if (!box || !studio.setup) return;
   box.textContent = "";
-  const canvas = currentCanvas() === "source" ? "16:9" : currentCanvas();
-  const [rw, rh] = STUDIO_RATIOS[canvas];
-  box.append(h("h5", {}, "Scenes", h("button", { class: "add", text: "+ scene", title: "Add a scene (at most 9)", onclick: addScene })));
-  const grid = h("div", { class: "scenes" });
-  studio.setup.scenes.forEach((scene, index) => {
-    const layout = (studio.setup.layouts[canvas] || {})[scene.id];
-    const thumb = h("button", { class: "scn" + (scene.id === currentScene() ? " on" : ""), title: scene.name + " (" + (index + 1) + ") · double-click to rename", onclick: () => selectScene(scene.id), ondblclick: () => renameScene(scene.id) });
-    thumb.style.aspectRatio = rw + " / " + rh;
-    for (const source of studio.setup.sources) {
-      const item = layout && layout.placements[source.id];
-      if (!item || !item.visible) continue;
-      const mini = h("i", { class: "mini " + source.kind });
-      Object.assign(mini.style, { left: item.box[0] * 100 + "%", top: item.box[1] * 100 + "%", width: item.box[2] * 100 + "%", height: item.box[3] * 100 + "%" });
-      if (item.radius) mini.style.borderRadius = item.radius >= 0.5 ? "50%" : "3px";
-      thumb.append(mini);
-    }
-    thumb.append(h("kbd", { text: String(index + 1) }), h("span", { text: scene.name }));
-    grid.append(thumb);
+  const setup = studio.setup, current = currentScene(), recording = Boolean(studio.status.active);
+  box.append(h("header", {}, h("span", { text: "Scenes" })));
+  const list = h("div", { class: "dlist", role: "listbox" });
+  studio.sceneRows = {};
+  setup.scenes.forEach((scene, index) => {
+    const name = h("span", { class: "name", text: scene.name });
+    const row = h("div", { class: "drow" + (scene.id === current ? " on" : ""), role: "option", tabindex: "0", title: scene.name + " · key " + (index + 1) + " · double-click to rename · right-click for more",
+      onclick: () => selectScene(scene.id), ondblclick: () => renameScene(scene.id), oncontextmenu: (event) => sceneMenu(event, scene.id) },
+      studioIcon("scene"), name, h("kbd", { text: String(index + 1) }));
+    studio.sceneRows[scene.id] = name;
+    list.append(row);
   });
-  box.append(grid);
+  box.append(list);
+  const at = setup.scenes.findIndex((scene) => scene.id === current);
+  box.append(h("footer", {},
+    iconButton("plus", "Add a scene (a copy of this one)", () => addScene(current)),
+    iconButton("minus", "Remove this scene", () => removeScene(current), "", recording || setup.scenes.length < 2),
+    iconButton("pencil", "Rename this scene", () => renameScene(current)),
+    h("span", { class: "spacer" }),
+    iconButton("up", "Move up", () => moveScene(current, -1), "", at <= 0),
+    iconButton("down", "Move down", () => moveScene(current, 1), "", at < 0 || at >= setup.scenes.length - 1)));
 }
 
-function addScene() {
+function addScene(from, name) {
   const setup = studio.setup;
   if (setup.scenes.length >= 9) { toast("A studio has at most 9 scenes (keys 1-9)"); return; }
   let number = setup.scenes.length + 1;
   while (setup.scenes.some((item) => item.id === "scene-" + number)) number += 1;
-  const id = "scene-" + number, from = currentScene();
-  setup.scenes.push({ id, name: "Scene " + number });
+  const id = "scene-" + number;
+  const base = from || currentScene();
+  setup.scenes.splice(setup.scenes.findIndex((item) => item.id === base) + 1, 0, { id, name: (name || "Scene " + number).slice(0, 40) });
   for (const canvas of Object.keys(setup.layouts)) {
-    const source = setup.layouts[canvas][from];
+    const source = setup.layouts[canvas][base];
     if (source) setup.layouts[canvas][id] = studioClone(source);
   }
-  setup.scene = id;
-  edited(renderScenes, drawStage, renderProps);
+  edited();
+  selectScene(id);
+  renameScene(id);
 }
 
+// Rename in place: the name in the Scenes list becomes a field (Enter saves, Esc cancels).
 function renameScene(id) {
   const setup = studio.setup, scene = setup.scenes.find((item) => item.id === id);
-  if (!scene) return;
-  const name = prompt("Scene name (empty to delete the scene)", scene.name);
-  if (name === null) return;
-  if (!name.trim()) {
-    if (setup.scenes.length < 2 || studio.status.active) { toast(studio.status.active ? "Scenes cannot be deleted while recording" : "The last scene stays"); return; }
-    if (!confirm("Delete the scene “" + scene.name + "”?")) return;
-    setup.scenes = setup.scenes.filter((item) => item.id !== id);
-    for (const layouts of Object.values(setup.layouts)) delete layouts[id];
-    if (setup.scene === id) setup.scene = setup.scenes[0].id;
-  } else scene.name = name.trim().slice(0, 40);
-  edited(renderScenes, drawStage);
+  const name = studio.sceneRows && studio.sceneRows[id];
+  if (!scene || !name || !name.replaceWith) return;
+  const input = h("input", { type: "text", class: "rename", value: scene.name, maxlength: "40" });
+  let done = false;
+  const finish = (save) => {
+    if (done) return;
+    done = true;
+    const value = input.value.trim().slice(0, 40);
+    if (save && value && value !== scene.name) { scene.name = value; edited(renderScenes, renderProps); }
+    else renderScenes();
+  };
+  input.addEventListener("keydown", (event) => { event.stopPropagation(); if (event.key === "Enter") finish(true); else if (event.key === "Escape") finish(false); });
+  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("click", (event) => event.stopPropagation());
+  name.replaceWith(input);
+  input.focus();
+  input.select();
 }
 
 function renderSources() {
   const box = $("sourcesPane");
   if (!box || !studio.setup) return;
   box.textContent = "";
-  box.append(h("h5", {}, "Sources", h("button", { class: "add", text: "+ source", onclick: (event) => openSourceMenu(event.currentTarget) })));
-  for (const source of studio.setup.sources) {
+  box.append(h("header", {}, h("span", { text: "Sources" }), h("span", { class: "hint", text: sceneName(currentScene()) })));
+  const list = h("div", { class: "dlist", role: "listbox" });
+  // Like OBS: the top of the list is in front.
+  for (const source of [...studio.setup.sources].reverse()) {
     const item = placementOf(source.id);
-    const visible = Boolean(item && item.visible);
-    const eye = h("button", { class: "eye" + (visible ? "" : " hidden"), text: visible ? "👁" : "◌", title: visible ? "Hide in this scene" : "Show in this scene", onclick: (event) => { event.stopPropagation(); toggleVisible(source.id); } });
-    const off = (source.kind === "camera" && !source.enabled) || (source.kind !== "screen" && source.kind !== "camera" && !source.enabled);
-    box.append(h("div", { class: "src" + (source.id === studio.selected ? " on" : "") + (off ? " off" : ""), role: "button", tabindex: "0", onclick: () => selectSource(source.id) },
-      h("span", { class: "ico", text: SOURCE_ICONS[source.kind] }), h("span", { class: "name", text: sourceName(source) + (off ? " (off)" : "") }), eye));
+    const visible = Boolean(item && item.visible), locked = isLocked(source.id);
+    const off = source.kind !== "screen" && !source.enabled;
+    list.append(h("div", { class: "drow src" + (source.id === studio.selected ? " on" : "") + (off ? " off" : ""), role: "option", tabindex: "0",
+      title: "Click to select · double-click for its settings · right-click for more",
+      onclick: () => selectSource(source.id), ondblclick: () => focusInspector(), oncontextmenu: (event) => sourceMenu(event, source.id) },
+      studioIcon(SOURCE_ICON[source.kind]), h("span", { class: "name", text: sourceName(source) + (off ? " (off)" : "") }),
+      iconButton(visible ? "eye" : "eyeOff", visible ? "Hide in this scene" : "Show in this scene", (event) => { event.stopPropagation(); toggleVisible(source.id); }, visible ? "" : "dim"),
+      iconButton(locked ? "lock" : "unlock", locked ? "Locked: it cannot be moved on the preview (click to unlock)" : "Lock its position", (event) => { event.stopPropagation(); toggleLock(source.id); }, locked ? "" : "dim")));
   }
+  box.append(list);
+  const selected = sourceById(studio.selected);
+  const at = selected ? studio.setup.sources.indexOf(selected) : -1;
+  box.append(h("footer", {},
+    iconButton("plus", "Add a source (image or text)", (event) => openSourceMenu(event.currentTarget)),
+    iconButton("minus", "Remove the selected source (Delete)", deleteSelected, "", !selected),
+    iconButton("gear", "Settings of the selected source", focusInspector, "", !selected),
+    h("span", { class: "spacer" }),
+    iconButton("up", "Move forward", () => moveSource(studio.selected, 1), "", at < 0 || at >= studio.setup.sources.length - 1),
+    iconButton("down", "Move backward", () => moveSource(studio.selected, -1), "", at <= 0)));
 }
 
 function selectSource(id) {
@@ -1737,10 +1896,10 @@ function selectSource(id) {
 
 function toggleVisible(id) {
   const layout = currentLayout();
-  if (!layout) return;
+  if (!layout) { toast("“As recorded” has no layout; pick a format to show or hide sources"); return; }
   if (!layout.placements[id]) layout.placements[id] = defaultPlacement(sourceById(id), currentCanvas());
   else layout.placements[id].visible = !layout.placements[id].visible;
-  edited(renderSources, renderScenes, drawStage, renderProps);
+  edited(renderSources, drawStage, renderProps);
 }
 
 function defaultPlacement(source, canvas, aspect) {
@@ -1753,28 +1912,16 @@ function defaultPlacement(source, canvas, aspect) {
   return pinPlacement({ ...item, box: [0, 0, width, height] }, "top-right");
 }
 
-function closeStudioMenu() {
-  if (studio.menu) { studio.menu.remove(); studio.menu = null; }
-}
-
 function openStudioMenu(anchor, items) {
-  closeStudioMenu();
   const box = anchor.getBoundingClientRect();
-  const menu = h("div", { class: "stmenu" }, items);
-  Object.assign(menu.style, { position: "fixed", left: Math.round(box.left) + "px", top: Math.round(box.bottom + 4) + "px" });
-  document.body.append(menu);
-  studio.menu = menu;
-  setTimeout(() => document.addEventListener("pointerdown", function away(event) {
-    if (studio.menu === menu && !menu.contains(event.target)) closeStudioMenu();
-    document.removeEventListener("pointerdown", away);
-  }), 0);
+  showMenu(Math.round(box.left), Math.round(box.bottom + 4), items);
 }
 
 function openSourceMenu(anchor) {
   if (studio.setup.sources.length >= 12) { toast("A studio has at most 12 sources"); return; }
   openStudioMenu(anchor, [
-    h("button", { text: "Image…", onclick: () => { closeStudioMenu(); pickImage(); } }),
-    h("button", { text: "Text", onclick: () => { closeStudioMenu(); addTextSource(); } }),
+    h("button", { onclick: () => { closeStudioMenu(); pickImage(); } }, studioIcon("image"), "Image…"),
+    h("button", { onclick: () => { closeStudioMenu(); addTextSource(); } }, studioIcon("text"), "Text"),
   ]);
 }
 
@@ -1804,17 +1951,18 @@ function imageSize(url) {
   });
 }
 
+// A new source shows in the current scene, in every format, and is selected.
 function addSourceWithPlacement(source, aspect) {
   studio.setup.sources.push(source);
   for (const [canvas, scenes] of Object.entries(studio.setup.layouts)) {
     for (const [scene, layout] of Object.entries(scenes)) {
       const item = defaultPlacement(source, canvas, aspect);
-      item.visible = canvas === currentCanvas() && scene === currentScene();
+      item.visible = scene === currentScene();
       layout.placements[source.id] = item;
     }
   }
   studio.selected = source.id;
-  edited(renderSources, renderScenes, drawStage, renderProps);
+  edited(renderSources, drawStage, renderProps);
 }
 
 function pickImage() {
@@ -1878,8 +2026,9 @@ function removeSource(id) {
   if (!source || source.kind === "screen" || source.kind === "camera") return;
   studio.setup.sources = studio.setup.sources.filter((item) => item.id !== id);
   for (const scenes of Object.values(studio.setup.layouts)) for (const layout of Object.values(scenes)) delete layout.placements[id];
-  studio.selected = studio.setup.sources[0].id;
-  edited(renderSources, renderScenes, drawStage, renderProps);
+  studio.selected = null;
+  edited(renderSources, drawStage, renderProps);
+  toast("Removed " + sourceName(source) + " (⌘Z brings it back)");
 }
 
 function stageRatio() {
@@ -1903,13 +2052,16 @@ function displayInfo() {
 function drawStage() {
   const stage = $("stage");
   if (!stage || !studio.setup) return;
+  const frame = $("stageWrap") || stage, overlay = $("stageUi");
   const ratio = stageRatio();
-  stage.style.aspectRatio = String(ratio);
-  stage.style.width = "min(100%, calc(58vh * " + ratio.toFixed(4) + "))";
+  frame.style.aspectRatio = String(ratio);
+  frame.style.width = $("stageBox") ? "min(100cqw, calc(100cqh * " + ratio.toFixed(4) + "))" : "min(100%, calc(58vh * " + ratio.toFixed(4) + "))";
   stage.textContent = "";
+  if (overlay) overlay.textContent = "";
+  studio.stageNodes = {};
   const canvas = currentCanvas();
   const layout = currentLayout();
-  const width = stage.clientWidth || 640, height = width / ratio;
+  const width = frame.clientWidth || 640, height = width / ratio;
   const scale = Math.min(width, height) / 1080;
   const items = [];
   if (canvas === "source") {
@@ -1923,19 +2075,28 @@ function drawStage() {
   } else if (layout) {
     const background = layout.background;
     stage.style.background = background.kind === "color" ? background.color : "#000000";
-    if (background.kind === "blur" && studio.screenUrl) stage.append(h("img", { class: "bg screen", src: studio.screenUrl, alt: "" }));
+    if (background.kind === "blur") {
+      if (studio.screenStream) { const video = streamVideo("screenBgVideo", studio.screenStream); video.className = "bg"; stage.append(video); }
+      else if (studio.screenUrl) stage.append(h("img", { class: "bg screen", src: studio.screenUrl, alt: "" }));
+    }
     for (const source of studio.setup.sources) {
       const item = layout.placements[source.id];
       if (item && item.visible) items.push([source, item]);
     }
   }
-  if (!items.length) stage.append(h("div", { class: "empty", text: "Nothing is visible in this scene. Show a source with its eye on the left." }));
-  for (const [source, item] of items) stage.append(stageNode(source, item, width, height, scale, canvas !== "source"));
+  const editable = canvas !== "source";
+  if (!items.length) stage.append(h("div", { class: "empty", text: "Nothing is shown in this scene. Turn a source on with its eye in Sources." }));
+  for (const [source, item] of items) {
+    const node = stageNode(source, item, width, height, scale, editable);
+    studio.stageNodes[source.id] = node;
+    stage.append(node);
+  }
   stage.append(h("span", { class: "badge", id: "stageBadge" }));
+  stage.onpointerdown = (event) => { if (event.target === stage && studio.selected !== null) selectSource(null); };
   const selected = items.find(([source]) => source.id === studio.selected);
-  if (selected && selected[0].kind === "camera" && canvas !== "source") stage.append(cameraToolbar(selected[1]));
+  if (selected && editable) (overlay || stage).append(selectionBox(selected[0], selected[1]));
   const hint = $("stageHint");
-  if (hint) hint.textContent = canvas === "source" ? "As recorded: the screen exactly as captured, no layout." : "Drag to move (corners and edges snap) · drag the yellow corner to resize · ⌥-drag inside to pan · click the camera for shapes";
+  if (hint) hint.textContent = canvas === "source" ? "As recorded: the screen exactly as captured, no layout." : "Drag to move (snaps to edges and the centre) · handles resize (⇧ frees the shape) · ⌥-drag pans inside · arrows nudge · Delete removes";
   if (studio.project) { resumePlayer(); return; }
   drawCountdown();
   drawRecording();
@@ -1943,15 +2104,15 @@ function drawStage() {
 
 function stageNode(source, item, width, height, scale, editable) {
   const px = placementPx(item, width, height);
-  const node = h("div", { class: "ph" + (editable && source.id === studio.selected ? " sel" : "") });
-  Object.assign(node.style, { left: item.box[0] * 100 + "%", top: item.box[1] * 100 + "%", width: item.box[2] * 100 + "%", height: item.box[3] * 100 + "%" });
+  const node = h("div", { class: "ph" + (editable && source.id === studio.selected ? " sel" : "") + (editable && isLocked(source.id) ? " locked" : "") });
+  placeNode(node, item);
   node.style.borderRadius = Math.round(item.radius * Math.min(px.w, px.h)) + "px";
   if (item.border.width) node.style.border = Math.max(1, Math.round(item.border.width * scale)) + "px solid " + item.border.color;
   if (item.shadow) node.style.boxShadow = "0 " + Math.round(8 * scale) + "px " + Math.round(28 * scale) + "px rgba(0,0,0,.55)";
   const fitStyle = (child) => {
     child.style.objectFit = item.fit;
     child.style.objectPosition = item.focus[0] * 100 + "% " + item.focus[1] * 100 + "%";
-    // The camera's <video> is reused across redraws, so the transform is always set (or cleared).
+    // Videos are reused across redraws, so the transform is always set (or cleared).
     child.style.transform = item.mirror ? "scaleX(-1)" : "";
     return child;
   };
@@ -1961,58 +2122,57 @@ function stageNode(source, item, width, height, scale, editable) {
   } else if (player) {
     node.append(fitStyle(h("img", { src: projectMedia(studio.project.path, "assets/" + source.asset), alt: "" })));
   } else if (source.kind === "screen") {
-    if (studio.screenUrl && !studio.screenFailed) node.append(fitStyle(h("img", { class: "screen", src: studio.screenUrl, alt: "" })));
+    if (studio.screenStream) { const video = streamVideo("screenVideo", studio.screenStream); video.className = "screen live"; node.append(fitStyle(video)); }
+    else if (studio.screenUrl && !studio.screenFailed) node.append(fitStyle(h("img", { class: "screen", src: studio.screenUrl, alt: "" })));
     else node.append(h("div", { class: "camph", text: studio.screenFailed ? "No screen preview (see above)" : "Screen " + source.display }));
   } else if (source.kind === "camera") {
-    if (studio.camStream) {
-      if (!studio.camVideo) { studio.camVideo = h("video", { autoplay: true, playsinline: true }); studio.camVideo.muted = true; }
-      if (studio.camVideo.srcObject !== studio.camStream) studio.camVideo.srcObject = studio.camStream;
-      node.append(fitStyle(studio.camVideo));
-      const playing = studio.camVideo.play && studio.camVideo.play();
-      if (playing && playing.catch) playing.catch(() => {});
-    } else node.append(h("div", { class: "camph", text: source.enabled ? "Camera" : "Camera (off)" }));
+    if (studio.camStream) node.append(fitStyle(streamVideo("camVideo", studio.camStream)));
+    else node.append(h("div", { class: "camph", text: source.enabled ? "Camera" : "Camera (off)" }));
   } else {
     node.append(fitStyle(h("img", { src: media("/media/asset", source.asset), alt: "" })));
   }
   if (!editable) return node;
   node.addEventListener("pointerdown", (event) => startStageDrag(event, source.id, event.altKey ? "focus" : "move"));
-  if (source.id === studio.selected) {
-    const corner = item.anchor ? { "top-left": "bottom-right", "top-right": "bottom-left", "bottom-left": "top-right", "bottom-right": "top-left" }[item.anchor] : "bottom-right";
-    const handle = h("i", { class: "handle " + corner });
-    Object.assign(handle.style, { [corner.endsWith("right") ? "right" : "left"]: "-1px", [corner.startsWith("bottom") ? "bottom" : "top"]: "-1px" });
-    handle.addEventListener("pointerdown", (event) => { event.stopPropagation(); startStageDrag(event, source.id, "resize:" + corner); });
-    node.append(handle);
-  }
+  node.addEventListener("dblclick", focusInspector);
+  node.addEventListener("contextmenu", (event) => { if (studio.selected !== source.id) selectSource(source.id); sourceMenu(event, source.id); });
   return node;
 }
 
 function startStageDrag(event, id, mode) {
   if (event.button !== 0) return;
   event.preventDefault();
-  if (studio.selected !== id) { studio.selected = id; renderSources(); renderProps(); }
+  closeStudioMenu();
+  if (studio.selected !== id) selectSource(id);
+  if (isLocked(id)) return;
   const stage = $("stage"), layout = currentLayout();
   if (!stage || !layout || !layout.placements[id]) return;
   const start = studioClone(layout.placements[id]);
   const rect = stage.getBoundingClientRect();
-  const node = event.currentTarget.classList.contains("handle") ? event.currentTarget.parentNode : event.currentTarget;
   const source = sourceById(id);
+  let moved = false;
   const move = (e) => {
+    if (!moved && Math.abs(e.clientX - event.clientX) + Math.abs(e.clientY - event.clientY) < 3) return;
+    moved = true;
     const dx = (e.clientX - event.clientX) / rect.width, dy = (e.clientY - event.clientY) / rect.height;
     let next;
-    if (mode === "move") next = { ...studioClone(start), box: [start.box[0] + dx, start.box[1] + dy, start.box[2], start.box[3]], anchor: null };
+    if (mode === "move") next = clampBox({ ...studioClone(start), box: [start.box[0] + dx, start.box[1] + dy, start.box[2], start.box[3]], anchor: null });
     else if (mode === "focus") next = moveFocus(start, dx / start.box[2], dy / start.box[3]);
-    else next = resizePlacement(start, mode.slice(7), dx, dy, source.kind !== "screen");
+    else {
+      const where = mode.slice(7);
+      next = clampBox(where.includes("-") ? resizePlacement(start, where, dx, dy, (source.kind !== "screen") !== e.shiftKey) : resizeEdge(start, where, dx, dy));
+    }
     layout.placements[id] = next;
-    Object.assign(node.style, { left: next.box[0] * 100 + "%", top: next.box[1] * 100 + "%", width: next.box[2] * 100 + "%", height: next.box[3] * 100 + "%" });
-    const child = node.querySelector("img, video");
+    placeNode(studio.stageNodes[id], next);
+    placeNode($("selBox"), next);
+    const node = studio.stageNodes[id], child = node && node.querySelector && node.querySelector("img, video");
     if (child && mode === "focus") child.style.objectPosition = next.focus[0] * 100 + "% " + next.focus[1] * 100 + "%";
   };
   const up = () => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
+    if (!moved) return;
     if (mode === "move") layout.placements[id] = snapPlacement(layout.placements[id], currentCanvas());
-    const changed = JSON.stringify(start) !== JSON.stringify(layout.placements[id]);
-    if (changed) edited(drawStage, renderScenes, renderProps);
+    if (JSON.stringify(start) !== JSON.stringify(layout.placements[id])) edited(drawStage, renderProps);
     else drawStage();
   };
   window.addEventListener("pointermove", move);
@@ -2041,30 +2201,21 @@ function changePlacement(id, change) {
   edited(drawStage, renderScenes, renderProps);
 }
 
-function cameraToolbar(item) {
-  const id = studioDoc().sources.find((source) => source.kind === "camera").id;
-  const bar = h("div", { class: "float" },
-    shapeButtons(item, (shape) => changePlacement(id, (p) => applyShape(p, shape, currentCanvas()))),
-    cornerButtons(item, (anchor) => changePlacement(id, (p) => pinPlacement(p, anchor))));
-  bar.addEventListener("pointerdown", (event) => event.stopPropagation());
-  const right = item.box[0] + item.box[2];
-  if (right < 0.62) Object.assign(bar.style, { left: "calc(" + right * 100 + "% + 6px)", bottom: "8px" });
-  else Object.assign(bar.style, { right: "calc(" + (1 - item.box[0]) * 100 + "% + 6px)", bottom: "8px" });
-  return bar;
-}
-
 function renderRecBar() {
   const box = $("recBar");
   if (!box) return;
   box.textContent = "";
-  box.append(
-    h("button", { class: "recbtn", id: "recButton", title: "Start / stop recording (R)", onclick: toggleRecord }, h("i")),
-    h("span", { class: "recclock", id: "recClock", text: "00:00" }),
-    h("button", { class: "pill", id: "recPause", title: "Pause / resume (P)", onclick: pauseRecord }, "❚❚ Pause ", h("kbd", { text: "P" })),
-    h("button", { class: "pill", id: "recMark", title: "Add a mark at this moment (M)", onclick: addMark }, "⚑ Mark ", h("kbd", { text: "M" })),
-    h("button", { class: "pill", title: "Take a screenshot", onclick: (event) => openShotMenu(event.currentTarget) }, "Screenshot ▾"),
-    h("span", { class: "recstate", id: "recState" }),
-    h("span", { class: "info", id: "recInfo" }));
+  box.append(h("header", {}, h("span", { text: "Controls" })),
+    h("div", { class: "cbody" },
+      h("button", { class: "recbtn", id: "recButton", title: "Start / stop recording (R)", onclick: toggleRecord }, h("i"), h("span", { id: "recLabel", text: "Start recording" })),
+      h("div", { class: "crow" }, h("span", { class: "recclock", id: "recClock", text: "00:00" }), h("span", { class: "recstate", id: "recState" })),
+      h("div", { class: "crow" },
+        h("button", { class: "pill", id: "recPause", title: "Pause / resume (P)", onclick: pauseRecord }, h("span", { id: "recPauseLabel", text: "❚❚ Pause" })),
+        h("button", { class: "pill", id: "recMark", title: "Add a mark at this moment (M)", onclick: addMark }, "⚑ Mark")),
+      h("div", { class: "crow" },
+        h("button", { class: "pill", title: "Take a screenshot", onclick: (event) => openShotMenu(event.currentTarget) }, "Screenshot ▾"),
+        h("button", { class: "pill", title: "Recording files, countdown, menu-bar clock", onclick: (event) => openRecordSettings(event.currentTarget) }, studioIcon("gear"), "Settings")),
+      h("div", { class: "info", id: "recInfo" })));
 }
 
 function openShotMenu(anchor) {
@@ -2084,12 +2235,14 @@ function updateRecordControls() {
   const button = $("recButton");
   if (!button) return;
   const active = Boolean(s.active || studio.starting);
-  button.classList.toggle("on", active);
+  button.className = "recbtn" + (active ? " on" : "");
+  const busy = studio.saving || s.phase === "saving";
+  $("recLabel").textContent = studio.counting ? "Cancel (" + studio.counting + ")" : studio.starting ? "Starting…" : busy ? "Saving…" : s.active ? "Stop recording" : "Start recording";
   const pause = $("recPause");
-  pause.disabled = !s.active || studio.saving || s.phase === "saving" || Boolean(studio.starting);
-  pause.firstChild.textContent = s.paused ? "▶ Resume " : "❚❚ Pause ";
+  pause.disabled = !s.active || busy || Boolean(studio.starting);
+  $("recPauseLabel").textContent = s.paused ? "▶ Resume" : "❚❚ Pause";
   $("recMark").disabled = !s.active || Boolean(studio.starting);
-  $("recState").textContent = studio.counting ? "Starting in " + studio.counting + "…" : studio.starting ? "Starting…" : studio.saving || s.phase === "saving" ? "Saving…" : s.phase === "interrupted" ? "A recorder stopped; press stop to save the rest" : s.phase === "unsaved" ? "Not saved; press stop to try again" : s.phase === "stuck" ? "A recorder hangs" : s.active ? (s.paused ? "Paused" : "Recording") : "Ready";
+  $("recState").textContent = studio.counting ? "Starting in " + studio.counting + "…" : studio.starting ? "Waking the microphone and camera…" : busy ? "Saving…" : s.phase === "interrupted" ? "A recorder stopped; press stop to save the rest" : s.phase === "unsaved" ? "Not saved; press stop to try again" : s.phase === "stuck" ? "A recorder hangs" : s.active ? (s.paused ? "Paused" : "Recording") : "Ready";
   const display = displayInfo();
   const free = s.free_bytes;
   $("recInfo").textContent = "";
@@ -2132,55 +2285,77 @@ function studioRange(min, max, step, value, oninput, shown) {
   return [input, val];
 }
 
+// The audio mixer: one channel per input, OBS style. The button turns the input on or off for the next
+// recording (off = not recorded at all, and the page closes the microphone).
 function renderSound() {
   const box = $("soundPane");
   if (!box || !studio.setup) return;
   box.textContent = "";
-  const audio = studio.setup.audio, devices = studio.devices;
-  const mics = [["default", "Default microphone"], ...(devices ? devices.microphones.map((item) => [item.name, item.name + (item.virtual ? " (virtual)" : "")]) : []), ["", "No microphone"]];
-  if (audio.mic.enabled && !mics.some(([value]) => value === audio.mic.device)) mics.splice(1, 0, [audio.mic.device, audio.mic.device]);
-  box.append(h("h5", {}, "Sound"));
-  box.append(prow("Microphone", studioSelect(mics, audio.mic.enabled ? audio.mic.device : "", (value) => {
-    audio.mic.enabled = value !== "";
-    if (value) audio.mic.device = value;
+  const audio = studio.setup.audio, devices = studio.devices, recording = Boolean(studio.status.active || studio.starting);
+  box.append(h("header", {}, h("span", { text: "Audio mixer" })));
+  const body = h("div", { class: "mixer" });
+  const mics = [["default", "Default microphone"], ...(devices ? devices.microphones.map((item) => [item.name, item.name + (item.virtual ? " (virtual)" : "")]) : [])];
+  if (!mics.some(([value]) => value === audio.mic.device)) mics.splice(1, 0, [audio.mic.device, audio.mic.device]);
+  const device = studioSelect(mics, audio.mic.device, (value) => {
+    audio.mic.device = value;
     const chosen = devices && devices.microphones.find((item) => item.name === value);
     if (chosen && chosen.virtual) toast(value + " is virtual: it carries app audio, not your voice");
     if (studio.micStream) { stopStream("micStream"); toggleMeter(); }
-    edited(renderSound, updateRecordControls);
-  }), h("div", { class: "meter", id: "micMeter" }, h("i")),
-    studio.status.active ? null : h("button", { class: "ghost", text: studio.micStream ? "Stop test" : "Test", title: "Show the level in the browser (the recording uses ul capture)", onclick: toggleMeter })));
-  box.append(prow("Mic volume", ...studioRange(0, 200, 5, Math.round(audio.mic.volume * 100), (value, done) => { audio.mic.volume = value / 100; if (done) saveSetupSoon(); }, (v) => v + "%"),
-    studioCheck(audio.mic.muted, (value) => { audio.mic.muted = value; saveSetupSoon(); }, "mute")));
-  box.append(prow("Mac sound", studioCheck(audio.system.enabled, (value) => { audio.system.enabled = value; saveSetupSoon(); }, "record the sound of the Mac")));
-  box.append(prow("Mac volume", ...studioRange(0, 200, 5, Math.round(audio.system.volume * 100), (value, done) => { audio.system.volume = value / 100; if (done) saveSetupSoon(); }, (v) => v + "%"),
-    studioCheck(audio.system.muted, (value) => { audio.system.muted = value; saveSetupSoon(); }, "mute")));
-  box.append(h("p", { class: "note", text: "Volumes and mute apply when a project is exported." }));
+    edited(renderSound);
+  });
+  device.disabled = recording;
+  const micOn = audio.mic.enabled;
+  const level = micOn && !studio.micStream && !recording ? h("button", { class: "ghost tiny", text: "Show level", title: "Open the microphone in this page to show its level (the recording itself uses ul capture)", onclick: toggleMeter }) : null;
+  body.append(h("div", { class: "chan" + (micOn ? "" : " muted") },
+    h("div", { class: "chead" }, h("b", { text: "Mic" }), device, h("span", { class: "db", id: "micDb" })),
+    h("div", { class: "meter", id: "micMeter", title: "-60 dB … 0 dB" }, h("i")),
+    h("div", { class: "cctl" },
+      iconButton(micOn ? "mic" : "micOff", micOn ? "The microphone is on: click to turn it off" : "The microphone is off (not recorded): click to turn it on", () => toggleInput("mic"), micOn ? "" : "danger", recording),
+      ...studioRange(0, 200, 5, Math.round(audio.mic.volume * 100), (value, done) => { audio.mic.volume = value / 100; if (done) edited(); }, (v) => v + "%"), level)));
+  const macOn = audio.system.enabled;
+  body.append(h("div", { class: "chan" + (macOn ? "" : " muted") },
+    h("div", { class: "chead" }, h("b", { text: "Mac sound" }), h("span", { class: "note", text: macOn ? "what the Mac plays" : "off: not recorded" })),
+    h("div", { class: "cctl" },
+      iconButton(macOn ? "speaker" : "speakerOff", macOn ? "The Mac's sound is recorded: click to turn it off" : "The Mac's sound is off: click to turn it on", () => toggleInput("system"), macOn ? "" : "danger", recording),
+      ...studioRange(0, 200, 5, Math.round(audio.system.volume * 100), (value, done) => { audio.system.volume = value / 100; if (done) edited(); }, (v) => v + "%"))));
+  if (recording) body.append(h("p", { class: "note", text: "On/off and devices apply to the next recording; volumes apply at export." }));
+  box.append(body);
   drawMeter();
 }
 
+// The inspector's sections for one placement (DaVinci style): transform, shape, border and effects.
 function placementControls(source, item) {
   const id = source.id, canvas = currentCanvas();
-  const nodes = [prow("Visible", studioCheck(item.visible, (value) => changePlacement(id, (p) => ({ ...p, visible: value })), "in this scene"))];
-  nodes.push(prow("Fit", studioSelect([["cover", "Fill (crop)"], ["contain", "Whole picture"]], item.fit, (value) => changePlacement(id, (p) => ({ ...p, fit: value })))));
-  if (source.kind !== "screen") nodes.push(prow("Shape", shapeButtons(item, (shape) => changePlacement(id, (p) => applyShape(p, shape, canvas)))));
-  nodes.push(prow("Size", ...studioRange(4, 100, 1, Math.round(item.box[2] * 100), (value, done) => {
-    if (!done) return;
-    changePlacement(id, (p) => {
-      let width = value / 100, height = p.box[3] * (width / p.box[2]);
-      if (height > 1) { width /= height; height = 1; }
-      const next = { ...studioClone(p), box: [Math.min(p.box[0], 1 - width), Math.min(p.box[1], 1 - height), width, height] };
-      return next.anchor ? pinPlacement(next, next.anchor) : next;
-    });
-  }, (v) => v + "%")));
-  nodes.push(prow("Corner", cornerButtons(item, (anchor) => changePlacement(id, (p) => pinPlacement(p, anchor))),
-    item.anchor ? h("button", { class: "ghost", text: "free", title: "Unpin", onclick: () => changePlacement(id, (p) => pinPlacement(p, null)) }) : null));
+  const visible = prow("Visible", studioCheck(item.visible, (value) => changePlacement(id, (p) => ({ ...p, visible: value })), "in this scene"));
+  const transform = [visible, transformFields(id, item),
+    prow("Size", ...studioRange(4, 200, 1, Math.round(item.box[2] * 100), (value, done) => {
+      if (!done) return;
+      changePlacement(id, (p) => {
+        let width = value / 100, height = p.box[3] * (width / p.box[2]);
+        if (height > 2) { width = (width * 2) / height; height = 2; }
+        const next = { ...studioClone(p), box: [p.box[0], p.box[1], Math.min(width, 2), height] };
+        return next.anchor ? pinPlacement(next, next.anchor) : clampBox(next);
+      });
+    }, (v) => v + "%")),
+    h("div", { class: "btnrow" },
+      h("button", { text: "Fit", title: "The whole picture inside the frame", onclick: () => changePlacement(id, (p) => ({ ...p, box: [0, 0, 1, 1], fit: "contain", anchor: null })) }),
+      h("button", { text: "Fill", title: "Fill the frame (the edges are cropped)", onclick: () => changePlacement(id, (p) => ({ ...p, box: [0, 0, 1, 1], fit: "cover", anchor: null })) }),
+      h("button", { text: "Centre", title: "Centre in the frame", onclick: () => changePlacement(id, (p) => ({ ...p, box: [(1 - p.box[2]) / 2, (1 - p.box[3]) / 2, p.box[2], p.box[3]], anchor: null })) }),
+      h("button", { text: "Reset", title: "Back to the default place and look", onclick: () => changePlacement(id, (p) => ({ ...defaultPlacement(source, canvas), visible: p.visible })) })),
+    prow("Corner", cornerButtons(item, (anchor) => changePlacement(id, (p) => pinPlacement(p, anchor))),
+      item.anchor ? h("button", { class: "ghost", text: "free", title: "Unpin", onclick: () => changePlacement(id, (p) => pinPlacement(p, null)) }) : null)];
+  const shape = [];
+  if (source.kind !== "screen") shape.push(prow("Shape", shapeButtons(item, (value) => changePlacement(id, (p) => applyShape(p, value, canvas)))));
+  shape.push(prow("Fit", studioSelect([["cover", "Fill (crop)"], ["contain", "Whole picture"]], item.fit, (value) => changePlacement(id, (p) => ({ ...p, fit: value })))));
+  shape.push(prow("Radius", ...studioRange(0, 50, 1, Math.round(item.radius * 100), (value, done) => { if (done) changePlacement(id, (p) => ({ ...p, radius: value / 100 })); }, (v) => v + "%")));
+  if (item.fit === "cover") shape.push(h("p", { class: "note", text: "⌥-drag on the preview moves the picture inside the frame." }));
   const color = h("input", { type: "color", value: item.border.color });
   color.addEventListener("change", () => changePlacement(id, (p) => ({ ...p, border: { ...p.border, color: color.value } })));
-  nodes.push(prow("Border", color, ...studioRange(0, 40, 1, item.border.width, (value, done) => { if (done) changePlacement(id, (p) => ({ ...p, border: { ...p.border, width: value } })); }, (v) => v + " px")));
-  nodes.push(prow("Radius", ...studioRange(0, 50, 1, Math.round(item.radius * 100), (value, done) => { if (done) changePlacement(id, (p) => ({ ...p, radius: value / 100 })); }, (v) => v + "%")));
-  nodes.push(prow("Effects", studioCheck(item.shadow, (value) => changePlacement(id, (p) => ({ ...p, shadow: value })), "shadow"),
-    studioCheck(item.mirror, (value) => changePlacement(id, (p) => ({ ...p, mirror: value })), "mirror")));
-  return nodes;
+  const effects = [
+    prow("Border", color, ...studioRange(0, 40, 1, item.border.width, (value, done) => { if (done) changePlacement(id, (p) => ({ ...p, border: { ...p.border, width: value } })); }, (v) => v + " px")),
+    prow("Effects", studioCheck(item.shadow, (value) => changePlacement(id, (p) => ({ ...p, shadow: value })), "shadow"),
+      studioCheck(item.mirror, (value) => changePlacement(id, (p) => ({ ...p, mirror: value })), "mirror"))];
+  return [inspectorSection("Transform", transform), inspectorSection("Shape & crop", shape), inspectorSection("Border & effects", effects)];
 }
 
 function renderProps() {
@@ -2188,29 +2363,38 @@ function renderProps() {
   const box = $("propsPane");
   if (!box || !studio.setup) return;
   box.textContent = "";
-  const source = sourceById(studio.selected) || studio.setup.sources[0];
+  const source = sourceById(studio.selected);
+  if (!source) { renderSceneInspector(box); return; }
   const devices = studio.devices;
-  box.append(h("h5", { text: sourceName(source) }));
   const recording = Boolean(studio.status.active);
+  box.append(h("header", { class: "ihead" }, studioIcon(SOURCE_ICON[source.kind]), h("b", { text: sourceName(source) }), h("span", { class: "hint", text: "Inspector" })));
+  const item = placementOf(source.id);
+  if (currentCanvas() === "source") box.append(h("p", { class: "note pad", text: "“As recorded” has no layout; pick a format to place sources." }));
+  else if (item && item.visible) box.append(...placementControls(source, item));
+  else box.append(h("div", { class: "pad" }, h("p", { class: "note", text: "Hidden in this scene." }), h("button", { text: "Show in this scene", onclick: () => toggleVisible(source.id) })));
+  const settings = [];
   if (source.kind === "camera") {
-    box.append(prow("Record", studioCheck(source.enabled, (value) => { source.enabled = value; if (value) ensureCamera(); else stopStream("camStream"); edited(renderSources, drawStage, renderProps, updateRecordControls); }, "the camera")));
+    settings.push(prow("Record", studioCheck(source.enabled, (value) => { source.enabled = value; if (value) ensureCamera(); else stopStream("camStream"); edited(renderSources, drawStage, renderProps, updateRecordControls); }, "the camera")));
     const cams = [["default", "Default camera"], ...(devices ? devices.cameras.map((name) => [name, name]) : [])];
     if (!cams.some(([value]) => value === source.device)) cams.push([source.device, source.device]);
     const device = studioSelect(cams, source.device, (value) => { source.device = value; source.mode = "auto"; if (studio.camStream) { stopStream("camStream"); toggleCamera(); } edited(renderProps); });
     device.disabled = recording;
-    box.append(prow("Device", device));
+    settings.push(prow("Device", device));
     const name = source.device === "default" ? (devices && devices.cameras[0]) || "" : source.device;
     const modes = [["auto", "Best (auto)"], ...(studio.modes[name] || []).map((mode) => [mode.width + "x" + mode.height + "@" + mode.max_fps, mode.width + "×" + mode.height + " · " + Math.round(Number(mode.max_fps)) + " fps"])];
     if (!modes.some(([value]) => value === source.mode)) modes.push([source.mode, source.mode]);
     const mode = studioSelect(modes, source.mode, (value) => { source.mode = value; edited(); });
     mode.disabled = recording;
-    box.append(prow("Mode", mode, h("button", { class: "ghost", text: "↻", title: "Read the camera's modes (the camera light turns on for a moment)", disabled: recording || !name, onclick: () => loadCameraModes(name) })));
-    box.append(prow("Preview", studioCheck(localStorage.getItem("studio-campreview") !== "off", (value) => { localStorage.setItem("studio-campreview", value ? "on" : "off"); if (value) ensureCamera(); else { stopStream("camStream"); drawStage(); } }, "live camera in this page")));
+    settings.push(prow("Mode", mode, h("button", { class: "ghost", text: "↻", title: "Read the camera's modes (the camera light turns on for a moment)", disabled: recording || !name, onclick: () => loadCameraModes(name) })));
+    const quality = studioSelect([["max", "Max · 1080p · ~90 MB/min"], ["high", "High · 1080p · ~45 MB/min"], ["light", "Light · 720p · ~22 MB/min"]], source.quality, (value) => { source.quality = value; edited(updateRecordControls); });
+    quality.disabled = recording;
+    settings.push(prow("File", quality));
+    settings.push(prow("Preview", studioCheck(localStorage.getItem("studio-campreview") !== "off", (value) => { localStorage.setItem("studio-campreview", value ? "on" : "off"); if (value) ensureCamera(); else { stopStream("camStream"); drawStage(); } }, "live camera in this page")));
   } else if (source.kind === "screen") {
-    const displays = devices ? devices.displays.map((item) => [String(item.number), item.number + " · " + item.name + " " + item.pixels.replace(/\s*x\s*/, "×")]) : [[String(source.display), String(source.display)]];
+    const displays = devices ? devices.displays.map((entry) => [String(entry.number), entry.number + " · " + entry.name + " " + entry.pixels.replace(/\s*x\s*/, "×")]) : [[String(source.display), String(source.display)]];
     const display = studioSelect(displays, String(source.display), (value) => { source.display = Number(value); studio.screenUrl = ""; edited(drawStage, updateRecordControls, startPreview); });
     display.disabled = recording;
-    box.append(prow("Display", display));
+    settings.push(prow("Display", display));
     const area = h("input", { type: "text", value: source.area || "", placeholder: "Whole display, or X,Y,W,H in points" });
     area.disabled = recording;
     area.addEventListener("change", () => {
@@ -2219,8 +2403,9 @@ function renderProps() {
       source.area = value || null;
       edited();
     });
-    box.append(prow("Area", area));
-    box.append(prow("Show", studioCheck(source.clicks, (value) => { source.clicks = value; edited(); }, "clicks")));
+    settings.push(prow("Area", area));
+    settings.push(prow("Show", studioCheck(source.clicks, (value) => { source.clicks = value; edited(); }, "clicks")));
+    settings.push(prow("Preview", h("button", { text: studio.screenStream ? "Stop live screen" : "Live screen", onclick: toggleLiveScreen })));
   } else if (source.kind === "text") {
     const text = h("input", { type: "text", value: source.text, maxlength: "500" });
     const font = studioSelect(TEXT_FONTS.some(([value]) => value === source.font) ? TEXT_FONTS : [...TEXT_FONTS, [source.font, source.font]], source.font, () => {});
@@ -2228,8 +2413,8 @@ function renderProps() {
     const color = h("input", { type: "color", value: source.color });
     const back = h("input", { type: "color", value: source.background || "#000000" });
     const backOn = studioCheck(Boolean(source.background), () => {});
-    box.append(prow("Text", text), prow("Font", font), prow("Size", size), prow("Colours", color, backOn, back));
-    box.append(prow("", h("button", { text: "Apply", onclick: async () => {
+    settings.push(prow("Text", text), prow("Font", font), prow("Size", size), prow("Colours", color, backOn, back));
+    settings.push(prow("", h("button", { class: "primary", text: "Apply", onclick: async () => {
       const value = text.value.trim(), points = Number(size.value);
       if (!value) { toast("The text is empty"); return; }
       if (!Number.isInteger(points) || points < 8 || points > 400) { toast("Size is 8-400"); return; }
@@ -2240,15 +2425,417 @@ function renderProps() {
       edited(renderSources, drawStage, renderProps);
     } })));
   } else {
-    box.append(prow("File", h("span", { text: source.asset })));
+    settings.push(prow("File", h("span", { class: "name", text: source.asset })));
   }
   if (source.kind === "image" || source.kind === "text") {
-    box.append(prow("Use", studioCheck(source.enabled, (value) => { source.enabled = value; edited(renderSources, drawStage); }, "in recordings"), h("button", { class: "ghost", text: "Remove", onclick: () => removeSource(source.id) })));
+    settings.push(prow("Use", studioCheck(source.enabled, (value) => { source.enabled = value; edited(renderSources, drawStage); }, "in recordings"), h("button", { class: "ghost", text: "Remove", onclick: () => removeSource(source.id) })));
   }
+  box.append(inspectorSection(source.kind === "camera" ? "Camera" : source.kind === "screen" ? "Screen" : source.kind === "text" ? "Text" : "Image", settings));
+}
+
+// ---- Record tab, OBS style: icons, menus, docks, inspector, live screen, undo ----
+// Icons are SVG strokes (24x24) drawn with currentColor, never emoji (they render in colour and differ per Mac).
+const STUDIO_ICON = {
+  eye: "M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
+  eyeOff: "M3 3l18 18M10.6 5.1A10.8 10.8 0 0 1 12 5c7 0 11 7 11 7a18 18 0 0 1-3.2 4M6.6 6.6C3.4 8.7 1 12 1 12s4 7 11 7a10.6 10.6 0 0 0 5.4-1.5M9.9 9.9a3 3 0 0 0 4.2 4.2",
+  lock: "M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4",
+  unlock: "M5 11h14v10H5zM8 11V7a4 4 0 0 1 7.8-1.2",
+  plus: "M12 5v14M5 12h14",
+  minus: "M5 12h14",
+  up: "M12 19V5M5 12l7-7 7 7",
+  down: "M12 5v14M19 12l-7 7-7-7",
+  gear: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z",
+  pencil: "M17 3l4 4L8 20H4v-4z",
+  screen: "M3 4h18v12H3zM8 20h8M12 16v4",
+  camera: "M3 7h12v10H3zM15 10l6-3v10l-6-3",
+  image: "M3 4h18v16H3zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 20",
+  text: "M4 7V4h16v3M9 20h6M12 4v16",
+  mic: "M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v3",
+  micOff: "M3 3l18 18M9 9v3a3 3 0 0 0 5.1 2.1M15 9.3V5a3 3 0 0 0-5.9-.6M17 16.9A7 7 0 0 1 5 12v-2M19 10v2c0 .8-.1 1.5-.4 2.2M12 19v3",
+  speaker: "M11 5L6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14",
+  speakerOff: "M11 5L6 9H2v6h4l5 4zM23 9l-6 6M17 9l6 6",
+  scene: "M12 2l10 5-10 5L2 7zM2 17l10 5 10-5M2 12l10 5 10-5",
+  undo: "M9 14L4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3",
+};
+const SOURCE_ICON = { screen: "screen", camera: "camera", image: "image", text: "text" };
+const CANVAS_PIXELS = { "16:9": [1920, 1080], "9:16": [1080, 1920], "1:1": [1080, 1080], "4:5": [1080, 1350] };
+const STAGE_HANDLES = ["top-left", "top", "top-right", "right", "bottom-right", "bottom", "bottom-left", "left"];
+
+function studioIcon(name) {
+  const svg = svgIcon(STUDIO_ICON[name] || "");
+  svg.setAttribute("class", "ico");
+  svg.setAttribute("aria-hidden", "true");
+  return svg;
+}
+
+function iconButton(name, title, onclick, extra, disabled) {
+  return h("button", { class: "ib" + (extra ? " " + extra : ""), title, "aria-label": title, disabled: disabled || null, onclick }, studioIcon(name));
+}
+
+// ---- menus: one at a time, closed by Esc, a click outside or a choice ----
+function closeStudioMenu() {
+  if (studio.menu) { studio.menu.remove(); studio.menu = null; }
+}
+
+function showMenu(left, top, items) {
+  closeStudioMenu();
+  const menu = h("div", { class: "stmenu" }, items);
+  Object.assign(menu.style, { position: "fixed", left: left + "px", top: top + "px" });
+  document.body.append(menu);
+  studio.menu = menu;
+  if (menu.getBoundingClientRect && typeof window.innerWidth === "number") {
+    const box = menu.getBoundingClientRect();
+    if (box.right > window.innerWidth - 6) menu.style.left = Math.max(6, window.innerWidth - box.width - 6) + "px";
+    if (box.bottom > window.innerHeight - 6) menu.style.top = Math.max(6, window.innerHeight - box.height - 6) + "px";
+  }
+  setTimeout(() => {
+    const away = (event) => {
+      if (studio.menu !== menu) { document.removeEventListener("pointerdown", away); return; }
+      if (!menu.contains(event.target)) { closeStudioMenu(); document.removeEventListener("pointerdown", away); }
+    };
+    document.addEventListener("pointerdown", away);
+  }, 0);
+  return menu;
+}
+
+// items: [label, action, disabled] or "-" for a separator.
+function contextMenu(event, items) {
+  event.preventDefault();
+  event.stopPropagation();
+  showMenu(event.clientX, event.clientY, items.filter(Boolean).map((item) => item === "-" ? h("hr") :
+    h("button", { text: item[0], disabled: item[2] || null, onclick: () => { closeStudioMenu(); item[1](); } })));
+}
+
+// ---- scenes ----
+function moveScene(id, step) {
+  const scenes = studio.setup.scenes, at = scenes.findIndex((item) => item.id === id), to = at + step;
+  if (at < 0 || to < 0 || to >= scenes.length) return;
+  scenes.splice(to, 0, scenes.splice(at, 1)[0]);
+  edited(renderScenes);
+}
+
+function removeScene(id) {
+  const setup = studio.setup, scene = setup.scenes.find((item) => item.id === id);
+  if (!scene) return;
+  if (studio.status.active) { toast("Scenes cannot be removed while recording"); return; }
+  if (setup.scenes.length < 2) { toast("The last scene stays"); return; }
+  setup.scenes = setup.scenes.filter((item) => item.id !== id);
+  for (const layouts of Object.values(setup.layouts)) delete layouts[id];
+  if (setup.scene === id) setup.scene = setup.scenes[0].id;
+  edited(renderScenes, renderSources, drawStage, renderProps);
+  toast("Removed the scene “" + scene.name + "” (⌘Z brings it back)");
+}
+
+function sceneMenu(event, id) {
+  const setup = studio.setup, at = setup.scenes.findIndex((item) => item.id === id), scene = setup.scenes[at];
+  if (!scene) return;
+  contextMenu(event, [
+    ["Switch to this scene", () => selectScene(id), id === currentScene()],
+    ["Rename", () => { if (id !== currentScene()) selectScene(id); setTimeout(() => renameScene(id), 0); }],
+    ["Duplicate", () => addScene(id, scene.name + " copy"), setup.scenes.length >= 9],
+    "-",
+    ["Move up", () => moveScene(id, -1), at === 0],
+    ["Move down", () => moveScene(id, 1), at === setup.scenes.length - 1],
+    "-",
+    ["Remove", () => removeScene(id), setup.scenes.length < 2 || Boolean(studio.status.active)],
+  ]);
+}
+
+// ---- sources ----
+function lockedIds() {
+  try { return new Set(JSON.parse(localStorage.getItem("studio-locked") || "[]")); } catch (error) { return new Set(); }
+}
+function isLocked(id) { return lockedIds().has(id); }
+function toggleLock(id) {
+  const ids = lockedIds();
+  if (ids.has(id)) ids.delete(id); else ids.add(id);
+  localStorage.setItem("studio-locked", JSON.stringify([...ids]));
+  renderSources();
+  drawStage();
+}
+
+// The sources list is the z order (later = in front), in every scene, like the export.
+function moveSource(id, step, to) {
+  const sources = studio.setup.sources, at = sources.findIndex((item) => item.id === id);
+  const target = to === undefined ? at + step : to;
+  if (at < 0 || target < 0 || target >= sources.length || target === at) return;
+  sources.splice(target, 0, sources.splice(at, 1)[0]);
+  edited(renderSources, drawStage);
+}
+
+function deleteSelected() {
+  const source = sourceById(studio.selected);
+  if (!source) return;
+  if (source.kind === "image" || source.kind === "text") { removeSource(source.id); return; }
   const item = placementOf(source.id);
-  if (currentCanvas() === "source") box.append(h("p", { class: "note", text: "“As recorded” has no layout; pick a format to place sources." }));
-  else if (item) box.append(...placementControls(source, item));
-  else box.append(h("p", { class: "note", text: "Not in this scene. Use the eye on the left to show it." }));
+  if (item && item.visible) { toggleVisible(source.id); toast(sourceName(source) + " is hidden in this scene (the screen and the camera stay in the list)"); }
+}
+
+function sourceMenu(event, id) {
+  const source = sourceById(id);
+  if (!source) return;
+  const item = placementOf(id), last = studio.setup.sources.length - 1, at = studio.setup.sources.indexOf(source);
+  const place = (change) => () => changePlacement(id, change);
+  const removable = source.kind === "image" || source.kind === "text";
+  contextMenu(event, [
+    [item && item.visible ? "Hide in this scene" : "Show in this scene", () => toggleVisible(id), currentCanvas() === "source"],
+    [isLocked(id) ? "Unlock" : "Lock position", () => toggleLock(id)],
+    "-",
+    ["Bring to front", () => moveSource(id, 0, last), at === last],
+    ["Move forward", () => moveSource(id, 1), at === last],
+    ["Move backward", () => moveSource(id, -1), at === 0],
+    ["Send to back", () => moveSource(id, 0, 0), at === 0],
+    "-",
+    ["Fit to the frame", place((p) => ({ ...p, box: [0, 0, 1, 1], fit: "contain", anchor: null })), !item],
+    ["Fill the frame", place((p) => ({ ...p, box: [0, 0, 1, 1], fit: "cover", anchor: null })), !item],
+    ["Centre", place((p) => ({ ...p, box: [(1 - p.box[2]) / 2, (1 - p.box[3]) / 2, p.box[2], p.box[3]], anchor: null })), !item],
+    ["Reset transform", place((p) => ({ ...defaultPlacement(source, currentCanvas()), visible: p.visible })), !item],
+    "-",
+    source.kind === "camera" ? [source.enabled ? "Turn the camera off" : "Turn the camera on", () => { source.enabled = !source.enabled; if (source.enabled) ensureCamera(); else stopStream("camStream"); edited(renderSources, drawStage, renderProps, updateRecordControls); }, Boolean(studio.status.active)] : null,
+    removable ? ["Remove", () => removeSource(id)] : null,
+  ]);
+}
+
+function focusInspector() {
+  const box = $("propsPane");
+  if (!box) return;
+  if (box.scrollTo) box.scrollTo({ top: 0, behavior: "smooth" });
+  box.className = "inspector flash";
+  setTimeout(() => { if (box.className === "inspector flash") box.className = "inspector"; }, 600);
+}
+
+// ---- stage geometry ----
+function stageFrame() {
+  return h("div", { class: "stagewrap", id: "stageWrap" }, h("div", { class: "stage", id: "stage" }), h("div", { class: "stageui", id: "stageUi" }));
+}
+
+// The preview keeps its pixel numbers (border widths) right when the window changes size.
+function watchStageSize() {
+  const box = $("stageBox");
+  if (!box || typeof ResizeObserver === "undefined") return;
+  if (studio.stageObserver) studio.stageObserver.disconnect();
+  let last = 0, timer = 0;
+  studio.stageObserver = new ResizeObserver(() => {
+    const width = box.clientWidth;
+    if (Math.abs(width - last) < 2) return;
+    last = width;
+    clearTimeout(timer);
+    timer = setTimeout(() => { if ($("stageBox") === box) drawStage(); }, 80);
+  });
+  studio.stageObserver.observe(box);
+}
+
+function placeNode(node, item) {
+  if (!node) return;
+  Object.assign(node.style, { left: item.box[0] * 100 + "%", top: item.box[1] * 100 + "%", width: item.box[2] * 100 + "%", height: item.box[3] * 100 + "%" });
+}
+
+function selectionBox(source, item) {
+  const locked = isLocked(source.id);
+  const box = h("div", { class: "selbox" + (locked ? " locked" : ""), id: "selBox", title: locked ? "Locked (unlock it in Sources)" : "" });
+  placeNode(box, item);
+  if (!locked) {
+    for (const where of STAGE_HANDLES) {
+      const handle = h("i", { class: "handle hd-" + where });
+      handle.addEventListener("pointerdown", (event) => { event.stopPropagation(); startStageDrag(event, source.id, "resize:" + where); });
+      box.append(handle);
+    }
+  }
+  return box;
+}
+
+// Keep a box inside what the setup file allows ([-1, 1] corners, sizes up to 2) and partly on the canvas.
+function clampBox(item) {
+  const out = studioClone(item);
+  let [x, y, width, height] = out.box;
+  width = Math.min(2, Math.max(MIN_BOX, width));
+  height = Math.min(2, Math.max(MIN_BOX, height));
+  x = Math.min(Math.min(1, 1 - 0.02), Math.max(Math.max(-1, 0.02 - width), x));
+  y = Math.min(Math.min(1, 1 - 0.02), Math.max(Math.max(-1, 0.02 - height), y));
+  out.box = [x, y, width, height];
+  return out;
+}
+
+// Resize from an edge handle: only that side moves; a pinned corner is let go.
+function resizeEdge(item, edge, dx, dy) {
+  const out = studioClone(item);
+  let [x, y, width, height] = out.box;
+  if (edge === "right") width = Math.max(MIN_BOX, width + dx);
+  else if (edge === "left") { const next = Math.max(MIN_BOX, width - dx); x += width - next; width = next; }
+  else if (edge === "bottom") height = Math.max(MIN_BOX, height + dy);
+  else if (edge === "top") { const next = Math.max(MIN_BOX, height - dy); y += height - next; height = next; }
+  out.box = [x, y, width, height];
+  out.anchor = null;
+  return out;
+}
+
+function nudgeSelected(dx, dy) {
+  const layout = currentLayout(), id = studio.selected;
+  if (!layout || !layout.placements[id] || !layout.placements[id].visible || isLocked(id) || currentCanvas() === "source") return false;
+  const [width, height] = CANVAS_PIXELS[currentCanvas()];
+  const item = layout.placements[id];
+  layout.placements[id] = clampBox({ ...studioClone(item), box: [item.box[0] + dx / width, item.box[1] + dy / height, item.box[2], item.box[3]], anchor: null });
+  edited(drawStage, renderProps);
+  return true;
+}
+
+// ---- inspector ----
+function inspectorSection(title, nodes) {
+  const open = localStorage.getItem("studio-closed-" + title) !== "1";
+  const section = h("details", { class: "isec", open: open || null }, h("summary", { text: title }), ...nodes.filter(Boolean));
+  section.addEventListener("toggle", () => localStorage.setItem("studio-closed-" + title, section.open ? "0" : "1"));
+  return section;
+}
+
+// X, Y, W, H in pixels of a 1080p canvas, typed like in DaVinci's inspector.
+function transformFields(id, item) {
+  const [width, height] = CANVAS_PIXELS[currentCanvas()] || [1920, 1080];
+  const field = (label, value, apply) => {
+    const input = h("input", { type: "number", step: "1", value: String(Math.round(value)), title: label + " in pixels of a " + width + "×" + height + " frame" });
+    input.addEventListener("change", () => {
+      const number = Number(input.value);
+      if (!Number.isFinite(number)) return;
+      changePlacement(id, (p) => clampBox(apply(studioClone(p), number)));
+    });
+    input.addEventListener("keydown", (event) => { if (event.key === "Enter" && input.blur) input.blur(); });
+    return h("label", {}, h("span", { text: label }), input);
+  };
+  const sized = (p, box) => { const next = { ...p, box }; return next.anchor ? pinPlacement(next, next.anchor) : next; };
+  return h("div", { class: "xywh" },
+    field("X", item.box[0] * width, (p, v) => ({ ...p, box: [v / width, p.box[1], p.box[2], p.box[3]], anchor: null })),
+    field("Y", item.box[1] * height, (p, v) => ({ ...p, box: [p.box[0], v / height, p.box[2], p.box[3]], anchor: null })),
+    field("W", item.box[2] * width, (p, v) => sized(p, [p.box[0], p.box[1], Math.max(MIN_BOX, v / width), p.box[3]])),
+    field("H", item.box[3] * height, (p, v) => sized(p, [p.box[0], p.box[1], p.box[2], Math.max(MIN_BOX, v / height)])));
+}
+
+// Nothing selected: the scene itself (name, background) and how to start.
+function renderSceneInspector(box) {
+  const scene = studio.setup.scenes.find((item) => item.id === currentScene());
+  box.append(h("header", { class: "ihead" }, studioIcon("scene"), h("b", { text: scene ? scene.name : "Scene" }), h("span", { class: "hint", text: "Inspector" })));
+  const layout = currentLayout();
+  const nodes = [];
+  if (scene) {
+    const name = h("input", { type: "text", value: scene.name, maxlength: "40" });
+    name.addEventListener("change", () => { const value = name.value.trim().slice(0, 40); if (value) { scene.name = value; edited(renderScenes, renderProps); } else name.value = scene.name; });
+    nodes.push(prow("Name", name));
+  }
+  if (layout) {
+    const background = layout.background;
+    const kind = studioSelect([["color", "Colour"], ["blur", "Blurred screen"]], background.kind, (value) => {
+      layout.background = value === "blur" ? { kind: "blur" } : { kind: "color", color: background.color || "#000000" };
+      edited(drawStage, renderProps);
+    });
+    const color = background.kind === "color" ? h("input", { type: "color", value: background.color }) : null;
+    if (color) color.addEventListener("change", () => { layout.background = { kind: "color", color: color.value }; edited(drawStage); });
+    nodes.push(prow("Background", kind, color));
+    nodes.push(h("p", { class: "note", text: "The background fills what the sources leave free in " + currentCanvas() + "." }));
+  } else nodes.push(h("p", { class: "note", text: "“As recorded” is the screen as captured: nothing to lay out." }));
+  box.append(inspectorSection("Scene", nodes));
+  box.append(inspectorSection("Tips", [h("p", { class: "note", text: "Click a source on the preview or in Sources to edit it. Right-click for its menu. 1-9 switch scenes, R records, P pauses, M marks, ⌘Z undoes." })]));
+}
+
+function openRecordSettings(anchor) {
+  const box = h("div", { class: "settingsbox", id: "outputPane" });
+  openStudioMenu(anchor, [box]);
+  renderOutput(box);
+}
+
+// ---- audio inputs ----
+function toggleInput(kind) {
+  if (studio.status.active || studio.starting) { toast("This applies to the next recording; the running one keeps its inputs"); return; }
+  const input = studio.setup.audio[kind];
+  input.enabled = !input.enabled;
+  if (kind === "mic" && !input.enabled) stopStream("micStream");
+  edited(renderSound, updateRecordControls);
+  if (kind === "mic" && input.enabled) autoMeter();
+}
+
+// The level meter starts by itself once the browser may use the microphone; before that it waits for a click.
+async function autoMeter() {
+  if (studio.micStream || !studio.setup || !studio.setup.audio.mic.enabled || !navigator.permissions || !navigator.mediaDevices) return;
+  try {
+    const answer = await navigator.permissions.query({ name: "microphone" });
+    if (answer.state === "granted" && state.view === "studio" && studio.tab === "record" && !studio.micStream && studio.setup.audio.mic.enabled) toggleMeter();
+  } catch (error) { /* this browser cannot say; the "Show level" button stays */ }
+}
+
+// ---- live screen ----
+function streamVideo(key, stream) {
+  if (!studio[key]) { studio[key] = h("video", { autoplay: true, playsinline: true }); studio[key].muted = true; }
+  const video = studio[key];
+  if (video.srcObject !== stream) video.srcObject = stream;
+  const playing = video.play && video.play();
+  if (playing && playing.catch) playing.catch(() => {});
+  return video;
+}
+
+function renderPreviewBar() {
+  const box = $("pvBar");
+  if (!box) return;
+  box.textContent = "";
+  const live = Boolean(studio.screenStream);
+  box.append(h("button", { class: "live" + (live ? " on" : ""), id: "liveBtn", onclick: toggleLiveScreen,
+    title: live ? "Back to snapshots every 2 s" : "Show the screen live, 30 fps (the browser asks which screen; only this preview uses it, the recording does not)" },
+    h("i"), live ? "Live" : "Live screen"), h("span", { class: "sthint", id: "stageHint" }));
+}
+
+async function toggleLiveScreen() {
+  if (studio.screenStream) { stopStream("screenStream"); renderPreviewBar(); drawStage(); startPreview(); renderProps(); return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) { toast("This browser cannot show the screen live; snapshots are used"); return; }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30, max: 60 }, displaySurface: "monitor" }, audio: false });
+  } catch (error) {
+    if (error && error.name !== "NotAllowedError" && error.name !== "AbortError") toast("The browser could not share the screen: " + error.message);
+    return;
+  }
+  if (state.view !== "studio" || studio.tab !== "record") { stream.getTracks().forEach((track) => track.stop()); return; }
+  stopStream("screenStream");
+  studio.screenStream = stream;
+  clearTimeout(studio.previewTimer);
+  const track = stream.getVideoTracks()[0];
+  if (track) track.onended = () => { if (studio.screenStream !== stream) return; studio.screenStream = null; renderPreviewBar(); drawStage(); startPreview(); };
+  renderPreviewBar();
+  drawStage();
+  renderProps();
+}
+
+// ---- undo: snapshots of the setup (or the open project) before each edit ----
+function rememberEdit() {
+  const doc = studioDoc();
+  if (!doc) return;
+  const now = JSON.stringify(doc);
+  if (studio.historyDoc !== doc) { studio.historyDoc = doc; studio.undo = []; studio.redo = []; studio.historyLast = now; return; }
+  if (studio.historyLast && studio.historyLast !== now) {
+    studio.undo.push(studio.historyLast);
+    if (studio.undo.length > 100) studio.undo.shift();
+    studio.redo = [];
+  }
+  studio.historyLast = now;
+}
+
+// Called whenever a setup or project is loaded, so the first edit can be undone.
+function startHistory(doc) {
+  studio.historyDoc = doc;
+  studio.undo = [];
+  studio.redo = [];
+  studio.historyLast = doc ? JSON.stringify(doc) : "";
+}
+
+function undoEdit(redo) {
+  const doc = studioDoc();
+  if (!doc || studio.historyDoc !== doc) { toast(redo ? "Nothing to redo" : "Nothing to undo"); return; }
+  const from = redo ? studio.redo : studio.undo, to = redo ? studio.undo : studio.redo;
+  if (!from.length) { toast(redo ? "Nothing to redo" : "Nothing to undo"); return; }
+  to.push(JSON.stringify(doc));
+  const previous = JSON.parse(from.pop());
+  for (const key of Object.keys(doc)) delete doc[key];
+  Object.assign(doc, previous);
+  studio.historyLast = JSON.stringify(doc);
+  if (studio.selected && !sourceById(studio.selected)) studio.selected = null;
+  if (studio.project) { saveProjectSoon(); drawStage(); renderProps(); return; }
+  saveSetupSoon();
+  renderStudioBody();
 }
 
 async function loadCameraModes(name) {
@@ -2259,15 +2846,16 @@ async function loadCameraModes(name) {
   renderProps();
 }
 
-function renderOutput() {
-  const box = $("outputPane");
+function renderOutput(target) {
+  const box = target || $("outputPane");
   if (!box || !studio.setup) return;
   box.textContent = "";
   const camera = cameraSource(), mic = studio.setup.audio.mic;
-  box.append(h("h5", { text: "Recording files" }));
+  box.append(h("h5", { text: "Recording" }));
   if (camera) box.append(prow("Camera", studioSelect([["max", "Max · 1080p · ~90 MB/min"], ["high", "High · 1080p · ~45 MB/min"], ["light", "Light · 720p · ~22 MB/min"]], camera.quality, (value) => { camera.quality = value; edited(renderOutput, updateRecordControls); })));
   box.append(prow("Microphone", studioSelect([["flac", "FLAC lossless · ~3 MB/min"], ["wav", "WAV lossless · ~6 MB/min"], ["m4a", "M4A (AAC) · ~2 MB/min"]], mic.format, (value) => { mic.format = value; edited(renderOutput, updateRecordControls); })));
   box.append(prow("Countdown", studioSelect([["0", "None"], ["3", "3 seconds"], ["5", "5 seconds"], ["10", "10 seconds"]], String(studio.setup.countdown), (value) => { studio.setup.countdown = Number(value); edited(); })));
+  box.append(prow("Menu bar", studioCheck(studio.setup.menubar, (value) => { studio.setup.menubar = value; edited(); }, "clock while recording")));
   box.append(h("p", { class: "note", text: "This setup ≈ " + megabytesPerMinute(studio.setup) + " MB per minute (the screen alone is ~25-70 MB/min, depending on what moves). Export chooses the format, size and fps." }));
 }
 
@@ -2534,8 +3122,10 @@ async function openProject(path, withExport) {
   clearTimeout(studio.previewTimer);
   stopStream("camStream");
   stopStream("micStream");
+  stopStream("screenStream");
   delete data.warnings;
   studio.project = data;
+  startHistory(data);
   studio.projectCanvas = STUDIO_RATIOS[data.export.canvas] ? data.export.canvas : "16:9";
   const shown = projectPlacements(data, sceneAt(data, 0), studio.projectCanvas)[1];
   studio.selected = shown.length ? shown[shown.length - 1][0].id : data.sources[0].id;
@@ -2614,7 +3204,7 @@ function renderProjectPage(box) {
   }) : h("div", { class: "where", text: "Not exported yet." }));
   box.append(h("div", { class: "projpage" },
     h("div", { class: "centre" },
-      h("div", { class: "stage", id: "stage" }),
+      stageFrame(),
       h("div", { class: "player" }, h("button", { id: "projPlay", text: "▶", onclick: toggleProjectPlay }), seek, h("span", { class: "where", id: "projTime" })),
       h("div", { class: "sthint", id: "stageHint" })),
     h("div", { class: "right" },
@@ -6934,6 +7524,8 @@ document.addEventListener("keydown", (event) => {
   if (gameKey(event)) return;
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
   if (state.view === "canvas" && !typing && canvasKey(event)) return;
+  // Studio has its own ⌘Z, Esc, arrows and Delete, so it goes before the page-wide keys.
+  if (state.view === "studio" && studioKeydown(event)) return;
   if (event.key === "Escape") {
     $("help").classList.remove("on");
     closeViewer();
@@ -6943,7 +7535,6 @@ document.addEventListener("keydown", (event) => {
   }
   if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.key === "?") { $("help").classList.toggle("on"); return; }
-  if (studioKeydown(event)) return;
   if (state.view === "canvas") {
     if (event.key >= "1" && event.key <= "6") setView(VIEWS[Number(event.key) - 1]);
     return;
