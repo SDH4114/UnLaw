@@ -361,6 +361,65 @@ class ExportRunTests(ExportTestCase):
             (self.root / "home" / ".Trash" / folder.name / "project.json").is_file()
         )
 
+    def test_a_trash_that_fails_keeps_the_export(self) -> None:
+        folder = self.make_project()
+        with patch.object(capture_export, "_trash", side_effect=OSError("no Trash access")):
+            out = capture_export.export_project(folder, self.settings(folder, delete_sources=True))
+        self.assertTrue(out.is_file())
+        status = capture_export.read_export_status()
+        self.assertEqual(status["phase"], "done")
+        self.assertIn("no Trash access", status["warning"])
+        self.assertTrue(folder.exists(), "the project stays when it could not be moved")
+
+    def test_a_dead_export_is_not_reported_as_running(self) -> None:
+        capture_export.write_json_atomic(
+            capture_export.export_status_file(), {"project": "/p", "phase": "running", "pid": 2**22 + 12345}
+        )
+        self.assertEqual(capture_export.read_export_status()["phase"], "idle")
+        capture_export.write_json_atomic(
+            capture_export.export_status_file(), {"project": "/p", "phase": "running", "pid": os.getpid()}
+        )
+        self.assertEqual(capture_export.read_export_status()["phase"], "running")
+
+    def test_a_failed_copy_leaves_no_partial_target(self) -> None:
+        temporary = self.root / ".part"
+        temporary.write_bytes(b"x" * 10)
+        target = self.root / "out" / "video.mov"
+        target.parent.mkdir()
+
+        def broken_copy(source, out):
+            out.write(b"half")
+            raise OSError("disk full")
+
+        with (
+            patch.object(capture_export.os, "link", side_effect=OSError(18, "cross-device")),
+            patch.object(capture_export.shutil, "copyfileobj", side_effect=broken_copy),
+            self.assertRaises(OSError),
+        ):
+            capture_export._publish(temporary, target)
+        self.assertFalse(target.exists())
+
+    def test_the_failure_message_comes_from_this_run(self) -> None:
+        log = self.root / "logs" / "export.log"
+        log.parent.mkdir()
+        log.write_text("$ ffmpeg old\nOld error from yesterday\n")
+        self.tool("ffmpeg", "raise SystemExit(3)\n")
+        with self.assertRaises(capture_export.ExportError) as caught:
+            capture_export._run_ffmpeg(["ffmpeg", "-i", "x"], log, "joining")
+        self.assertNotIn("yesterday", str(caught.exception))
+        self.assertIn("exit 3", str(caught.exception))
+
+    def test_a_symlinked_cache_is_refused_and_nothing_behind_it_is_deleted(self) -> None:
+        folder = self.make_project()
+        outside = self.root / "elsewhere"
+        (outside / "render").mkdir(parents=True)
+        (outside / "render" / "keep.txt").write_text("mine")
+        shutil.rmtree(folder / "cache", ignore_errors=True)
+        (folder / "cache").symlink_to(outside)
+        with self.assertRaises(capture_export.ExportError):
+            capture_export.export_project(folder, self.settings(folder))
+        self.assertEqual((outside / "render" / "keep.txt").read_text(), "mine")
+
     def test_zero_length_segments_export(self) -> None:
         folder = self.make_project(segments=2)
         project = capture_project.read_project(folder)

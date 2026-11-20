@@ -161,6 +161,8 @@ body.resizing.row-resize, body.resizing.row-resize * { cursor: row-resize !impor
 .selbox .handle.hd-bottom { left: calc(50% - 5px); bottom: -6px; cursor: ns-resize; }
 .selbox .handle.hd-bottom-left { left: -6px; bottom: -6px; cursor: nesw-resize; }
 .selbox .handle.hd-left { left: -6px; top: calc(50% - 5px); cursor: ew-resize; }
+.obs .voice { position: absolute; left: 0; top: 0; width: 100%; height: calc(100% - 34px); display: none; z-index: 8; background: #1c1c1e; }
+.obs .voice.on { display: block; }
 .obs .pvbar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-top: 1px solid #262626; background: #151515; min-height: 34px; }
 .obs .pvbar .sthint { margin: 0; color: #8f8f8f; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pvbar .live { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 3px 11px; font-size: 12px; background: #232323; color: #d8d8d8; border: 1px solid #343434; flex: none; }
@@ -254,7 +256,7 @@ body.resizing.row-resize, body.resizing.row-resize * { cursor: row-resize !impor
 STUDIO_JS = r"""// ---- studio: Record (scenes, sources, live preview) and Projects, all through `ul capture` ----
 const studio = { info: null, setup: null, devices: null, modes: {}, doctor: null, status: { active: false }, statusAt: 0, shown: 0, starting: 0, saving: false,
   tab: localStorage.getItem("studio-tab") === "projects" ? "projects" : "record", selected: "camera", library: [], projects: [], filter: localStorage.getItem("studio-filter") || "projects",
-  camStream: null, camVideo: null, micStream: null, audio: null, analyser: null, sampler: 0, levels: [], screenUrl: "", screenFailed: false, previewTimer: 0,
+  camStream: null, camVideo: null, micStream: null, audio: null, analyser: null, sampler: 0, levels: [], wave: [], screenUrl: "", screenFailed: false, previewTimer: 0,
   drag: null, saveTimer: 0, counting: 0, countTimer: 0, countdownDone: null, menu: null, delay: 0, clipboard: false,
   item: null, trim: { from: null, to: null }, project: null, projectCanvas: "16:9", projectTimer: 0, player: null, projectsLoaded: false, libraryLoaded: false, exportJob: null, exportTimer: 0 };
 const media = (path, name) => path + "?t=" + encodeURIComponent(TOKEN) + (name ? "&name=" + encodeURIComponent(name) : "");
@@ -391,6 +393,7 @@ function currentLayout() {
 }
 function placementOf(id) { const layout = currentLayout(); return layout ? layout.placements[id] || null : null; }
 function recordingNow() { return Boolean(studio.starting || (studio.status.active && studio.status.phase === "recording")); }
+function recordingAudio() { return studio.starting ? studio.startingMode === "audio" : Boolean(studio.status.active && studio.status.mode === "audio"); }
 function sourceName(source) {
   if (source.kind === "screen") return "Screen";
   if (source.kind === "camera") return "Camera";
@@ -409,14 +412,16 @@ function gigabytes(bytes) { return bytes === null || bytes === undefined ? "" : 
 
 async function loadStudioInfo() {
   const { status, data } = await api("GET", "/api/studio");
-  if (status !== 200) return;
+  // A failed answer is kept and shown (with Retry); returning without it made renderStudio ask again at once, forever.
+  if (status !== 200) { studio.info = { available: false, error: (data && data.error) || "The desk did not answer (" + status + ")" }; return; }
   studio.info = data;
   if (data.available) { loadRecordStatus(); loadSetup(); scheduleStudioPoll(); }
 }
 
 async function loadSetup() {
   const { status, data } = await api("GET", "/api/studio/setup");
-  if (status !== 200) { toast(data.error || "Could not read the studio setup"); return; }
+  if (status !== 200) { studio.setupError = data.error || "Could not read the studio setup"; toast(studio.setupError); return; }
+  studio.setupError = "";
   for (const warning of data.warnings || []) toast(warning);
   delete data.warnings;
   studio.setup = data;
@@ -448,7 +453,11 @@ async function flushSetup() {
   clearTimeout(studio.saveTimer);
   studio.saveTimer = 0;
   if (!studio.setup) return;
-  const { status, data } = await api("POST", "/api/studio/setup", studio.setup);
+  const request = api("POST", "/api/studio/setup", studio.setup);
+  studio.savingSetup = request;  // a recording that starts now waits for this save too
+  let answer;
+  try { answer = await request; } finally { if (studio.savingSetup === request) studio.savingSetup = null; }
+  const { status, data } = answer;
   if (status === 200) return;
   toast(data.error || "Could not save the studio setup");
   await loadSetup();
@@ -491,6 +500,7 @@ async function loadRecordStatus() {
     else recordingSaved(data.saving_done);
   }
   if (!data.active) for (const item of studio.levels) item.live = false;
+  if (!data.active && !studio.starting) releaseWaveMic();
   drawRecording();
   if (state.view === "studio") {
     updateRecordControls();
@@ -517,7 +527,131 @@ function recordElapsed() {
   return studio.shown;
 }
 
+// ---- audio-only recording: a scrolling sound wave like Voice Memos (bars every WAVE_STEP s, newest at the centre line) ----
+const WAVE_STEP = 0.08;
+const WAVE_PX = 4;  // one bar per 4 px: 50 px a second
+
+/** Keep the loudest level of each WAVE_STEP slice; slices are indexed by recording time, so a pause leaves no gap. */
+function addWaveSample(wave, seconds, level) {
+  const index = Math.floor(Math.max(0, seconds) / WAVE_STEP);
+  const last = wave[wave.length - 1];
+  if (last && last.i === index) last.v = Math.max(last.v, level);
+  else if (!last || index > last.i) wave.push({ i: index, v: level });
+  return wave;
+}
+
+/** The loudest slice in each of `columns` equal parts of `span` slices, in one pass. */
+function wavePeaks(wave, span, columns) {
+  const peaks = new Array(Math.max(0, columns)).fill(0);
+  for (const item of wave) {
+    const column = Math.floor((item.i / span) * columns);
+    if (column >= 0 && column < columns) peaks[column] = Math.max(peaks[column], item.v);
+  }
+  return peaks;
+}
+
+/** 2.883 s -> "00:02,88" (minutes, seconds, hundredths), the Voice Memos clock. */
+function voiceClock(seconds) {
+  const total = Math.max(0, seconds);
+  const hundredths = Math.floor((total % 1) * 100);
+  return clockText(total) + "," + String(hundredths).padStart(2, "0");
+}
+
+/** The microphone opened only to draw the wave is closed once the recording is over. */
+function releaseWaveMic() {
+  if (!studio.waveMic) return;
+  studio.waveMic = false;
+  if (studio.micStream) { stopStream("micStream"); renderSound(); }
+}
+
+function drawVoice() {
+  const canvas = $("voiceWave");
+  const on = recordingAudio() || (studio.saving && studio.wave && studio.wave.length && studio.status.mode === "audio");
+  if (!canvas) return;
+  canvas.classList.toggle("on", Boolean(on));
+  if (!on || !canvas.getContext) { studio.voiceLoop = false; return; }
+  // A recording started from the terminal or the menu bar: open the page microphone for the wave too.
+  if (recordingAudio() && !studio.micStream && !studio.waveMic && state.view === "studio") { studio.waveMic = true; toggleMeter(); }
+  if (!studio.voiceLoop) {
+    studio.voiceLoop = true;
+    const loop = () => { if (!studio.voiceLoop) return; paintVoice(canvas); requestAnimationFrame(loop); };
+    requestAnimationFrame(loop);
+  }
+}
+
+function paintVoice(canvas) {
+  if (!canvas.isConnected) { studio.voiceLoop = false; return; }
+  const ratio = window.devicePixelRatio || 1;
+  const width = canvas.clientWidth, height = canvas.clientHeight;
+  if (!width || !height) return;
+  if (canvas.width !== Math.round(width * ratio)) canvas.width = Math.round(width * ratio);
+  if (canvas.height !== Math.round(height * ratio)) canvas.height = Math.round(height * ratio);
+  const g = canvas.getContext("2d");
+  g.setTransform(ratio, 0, 0, ratio, 0, 0);
+  g.fillStyle = "#1c1c1e";
+  g.fillRect(0, 0, width, height);
+  const wave = studio.wave || [];
+  const now = studio.starting ? 0 : recordElapsed();
+  const live = recordingNow() && !studio.starting;
+  // Title and the big clock.
+  g.textAlign = "center";
+  g.fillStyle = "#f2f2f7";
+  g.font = "600 17px -apple-system, system-ui, sans-serif";
+  g.fillText(studio.starting ? "Starting…" : studio.status.paused ? "Paused" : studio.saving ? "Saving…" : "New recording", width / 2, 34);
+  g.fillStyle = "#8e8e93";
+  g.font = "500 13px -apple-system, system-ui, sans-serif";
+  g.fillText(new Date().toLocaleDateString(), width / 2, 54);
+  g.textAlign = "right";
+  g.fillStyle = "#f2f2f7";
+  g.font = "600 34px ui-monospace, SFMono-Regular, Menlo, monospace";
+  g.fillText(voiceClock(now), width - 22, height - 22);
+  // The wave: newest slice at the centre line, older ones to the left.
+  const top = 76, bottom = Math.max(top + 60, height - 150), middle = (top + bottom) / 2, half = (bottom - top) / 2 - 6;
+  g.fillStyle = "#2c2c2e";
+  g.fillRect(0, top, width, bottom - top);
+  const centre = Math.round(width / 2);
+  const nowIndex = now / WAVE_STEP;
+  g.fillStyle = "#e5e5ea";
+  for (let k = wave.length - 1; k >= 0; k--) {
+    const x = centre - (nowIndex - wave[k].i) * WAVE_PX;
+    if (x < -WAVE_PX) break;
+    if (x > width) continue;
+    const bar = Math.max(1.5, wave[k].v * half);
+    g.fillRect(Math.round(x), Math.round(middle - bar), 2, Math.round(bar * 2));
+  }
+  // Seconds ruler under the wave.
+  g.fillStyle = "#636366";
+  g.font = "500 12px ui-monospace, SFMono-Regular, Menlo, monospace";
+  g.textAlign = "left";
+  const pxPerSecond = WAVE_PX / WAVE_STEP;
+  for (let second = Math.max(0, Math.floor(now - centre / pxPerSecond)); second <= now + (width - centre) / pxPerSecond; second++) {
+    const x = centre - (now - second) * pxPerSecond;
+    g.fillRect(Math.round(x), bottom, 1, 9);
+    g.fillRect(Math.round(x + pxPerSecond / 2), bottom, 1, 5);
+    g.fillText(clockText(second).replace(/^0/, ""), Math.round(x) + 3, bottom + 22);
+  }
+  // The centre line: red while recording, grey when paused.
+  g.fillStyle = live ? "#ff453a" : "#8e8e93";
+  g.fillRect(centre - 1, top - 6, 2, bottom - top + 12);
+  g.beginPath(); g.arc(centre, top - 6, 4, 0, Math.PI * 2); g.fill();
+  g.beginPath(); g.arc(centre, bottom + 6, 4, 0, Math.PI * 2); g.fill();
+  // The whole recording in one strip.
+  const stripTop = bottom + 40, stripHeight = 34, stripLeft = 22, stripWidth = Math.max(40, width - 260);
+  g.fillStyle = "#2c2c2e";
+  g.fillRect(stripLeft, stripTop, stripWidth, stripHeight);
+  if (wave.length && nowIndex > 0) {
+    g.fillStyle = "#aeaeb2";
+    const peaks = wavePeaks(wave, Math.max(nowIndex, 1), Math.floor(stripWidth / 3));
+    peaks.forEach((peak, column) => {
+      if (peak <= 0) return;
+      const bar = Math.max(1, peak * (stripHeight / 2 - 3));
+      g.fillRect(stripLeft + column * 3, stripTop + stripHeight / 2 - bar, 2, bar * 2);
+    });
+  }
+}
+
 function drawRecording() {
+  drawVoice();
   const s = studio.status, pill = $("recPill");
   const active = s.active || studio.saving || Boolean(studio.starting);
   pill.className = "rec-pill" + (active ? " on" : "") + (s.paused ? " paused" : "");
@@ -585,17 +719,27 @@ async function toggleRecord(mode) {
     scheduleStudioPoll(true);
     return;
   }
+  if (studio.recordBusy) return;  // a second press while the first one is still on its way
   const seconds = studio.setup ? studio.setup.countdown : 0;
   if (seconds > 0 && !(await runCountdown(seconds))) return;
-  if (studio.status.active || studio.starting || studio.saving) return;
-  // The recording copies the saved setup, so a pending edit is saved first.
+  if (studio.status.active || studio.starting || studio.saving || studio.recordBusy) return;
+  studio.recordBusy = true;
+  try { await startRecording(mode); } finally { studio.recordBusy = false; }
+}
+
+async function startRecording(mode) {
+  // The recording copies the saved setup, so a pending edit is saved first (and one already on its way).
   if (studio.saveTimer) await flushSetup();
+  if (studio.savingSetup) await studio.savingSetup;
   const body = mode === "audio" ? { mode: "audio" } : studio.setup ? { scene: studio.setup.scene, canvas: studio.setup.canvas } : {};
   // Show the recording at once; the server's clock replaces this one when it answers.
   studio.starting = Date.now();
+  studio.startingMode = mode === "audio" ? "audio" : "";
   studio.shown = 0;
   studio.levels = [];
+  studio.wave = [];
   updateRecordControls();
+  if (mode === "audio" && !studio.micStream) { studio.waveMic = true; toggleMeter(); }  // the wave is drawn from the page's own microphone
   const { status, data } = await api("POST", "/api/studio/record", body);
   studio.starting = 0;
   if (status !== 200) {
@@ -745,7 +889,7 @@ function ensureCamera() {
 
 async function toggleMeter() {
   if (studio.micStream) { stopStream("micStream"); renderSound(); return; }
-  const allowed = () => !studio.setup || studio.setup.audio.mic.enabled;
+  const allowed = () => !studio.setup || studio.setup.audio.mic.enabled || recordingAudio();
   if (state.view !== "studio" || !allowed()) return;
   const request = studio.micRequest = (studio.micRequest || 0) + 1;
   const current = () => request === studio.micRequest && state.view === "studio" && allowed();
@@ -776,6 +920,7 @@ async function toggleMeter() {
     for (const value of samples) peak = Math.max(peak, Math.abs(value));
     const db = 20 * Math.log10(Math.max(peak, 1e-5));
     studio.levels.push({ v: dbLevel(db), db, live: recordingNow() });
+    if (recordingAudio() && recordingNow() && !studio.starting) addWaveSample(studio.wave, recordElapsed(), dbLevel(db));
     if (studio.levels.length > 600) studio.levels.splice(0, 300);
   }, 30);
   renderSound();
@@ -837,7 +982,10 @@ function renderStudio(main) {
   if (!studio.info) { main.textContent = ""; main.append(h("div", { class: "page" }, h("div", { class: "empty", text: "Loading…" }))); loadStudioInfo().then(() => state.view === "studio" && render()); return; }
   if (!studio.info.available) {
     main.textContent = "";
-    main.append(h("div", { class: "page" }, h("h3", { text: "Studio" }), h("div", { class: "empty", text: "The capture command is not installed in this ul. Turn on the `capture` feature with: ul features" })));
+    const retry = h("button", { text: "Try again", onclick: () => { studio.info = null; render(); } });
+    main.append(h("div", { class: "page" }, h("h3", { text: "Studio" }), studio.info.error
+      ? h("div", { class: "empty" }, h("div", { text: "The Studio could not load: " + studio.info.error }), retry)
+      : h("div", { class: "empty", text: "The capture command is not installed in this ul. Turn on the `capture` feature with: ul features" })));
     return;
   }
   if (main.querySelector(".studio")) return;
@@ -855,10 +1003,12 @@ function setStudioTab(tab) {
   if (tab === studio.tab && !studio.project) return;
   studio.tab = tab;
   localStorage.setItem("studio-tab", tab);
+  if (tab !== "record" && studio.counting) cancelCountdown();
   if (tab !== "record") { clearTimeout(studio.previewTimer); stopStream("camStream"); stopStream("micStream"); stopStream("screenStream"); closeStudioMenu(); }
   if (studio.projectTimer) flushProject();
   stopProjectPlayer();
   studio.project = null;
+  if (studio.setup) startHistory(studio.setup);  // ⌘Z works for the first setup edit after a project
   renderStudioBody();
 }
 
@@ -949,15 +1099,21 @@ function startGutter(event, kind, index) {
   const box = obs.getBoundingClientRect();
   const pair = kind === "col" ? { left: slots[index + 1].getBoundingClientRect().left, right: slots[index + 2].getBoundingClientRect().right } : null;
   document.body.classList.add("resizing", kind === "bottom" ? "row-resize" : "col-resize");
-  const move = (moved) => { resizeLayout(studio.layout, kind, index, box, { x: moved.clientX, y: moved.clientY }, pair); applyLayout(); };
+  const move = (moved) => {
+    if (moved.buttons === 0) { up(); return; }  // the release happened outside the window
+    resizeLayout(studio.layout, kind, index, box, { x: moved.clientX, y: moved.clientY }, pair);
+    applyLayout();
+  };
   const up = () => {
     removeEventListener("pointermove", move);
     removeEventListener("pointerup", up);
+    removeEventListener("pointercancel", up);
     document.body.classList.remove("resizing", "row-resize", "col-resize");
     saveLayout();
   };
   addEventListener("pointermove", move);
   addEventListener("pointerup", up);
+  addEventListener("pointercancel", up);
 }
 
 function resetGutter(kind, index) {
@@ -994,6 +1150,7 @@ function startPanelMove(event) {
   let moving = false, target = -1;
   const mark = (index) => { if (target >= 0) nodes.slots[target].classList.remove("droptarget"); target = index; if (target >= 0) nodes.slots[target].classList.add("droptarget"); };
   const move = (moved) => {
+    if (moved.buttons === 0) { mark(-1); up(); return; }  // released outside the window: no swap
     if (!moving && Math.hypot(moved.clientX - start.x, moved.clientY - start.y) < 6) return;
     if (!moving) { moving = true; nodes.slots[from].classList.add("lifted"); document.body.classList.add("moving-panel"); }
     const over = document.elementFromPoint(moved.clientX, moved.clientY);
@@ -1004,6 +1161,7 @@ function startPanelMove(event) {
   const up = () => {
     removeEventListener("pointermove", move);
     removeEventListener("pointerup", up);
+    removeEventListener("pointercancel", up);
     nodes.slots[from].classList.remove("lifted");
     document.body.classList.remove("moving-panel");
     const to = target;
@@ -1012,6 +1170,7 @@ function startPanelMove(event) {
   };
   addEventListener("pointermove", move);
   addEventListener("pointerup", up);
+  addEventListener("pointercancel", up);
 }
 
 function renderStudioBody() {
@@ -1032,10 +1191,17 @@ function renderStudioBody() {
   }
   root.append(head);
   if (studio.tab === "projects") { root.append(h("div", { id: "studioProjects" })); renderProjects(); return; }
-  if (!studio.setup) { root.append(h("div", { class: "empty", text: "Loading the studio setup…" })); return; }
+  if (!studio.setup) {
+    root.append(studio.setupError
+      ? h("div", { class: "empty" }, h("div", { text: "The studio setup could not be read: " + studio.setupError }),
+          h("button", { text: "Try again", onclick: () => loadSetup().then(() => state.view === "studio" && renderStudioBody()) }))
+      : h("div", { class: "empty", text: "Loading the studio setup…" }));
+    return;
+  }
   root.append(layoutFrame(h("div", { class: "preview" },
     h("div", { class: "pvtop" }, h("div", { id: "permBanner" }), h("div", { class: "warns", id: "warnStrip" })),
     h("div", { class: "stagebox", id: "stageBox" }, stageFrame()),
+    h("canvas", { class: "voice", id: "voiceWave", "aria-label": "Sound wave of the audio recording" }),
     h("div", { class: "pvbar", id: "pvBar" }))));
   watchStageSize();
   renderScenes();
@@ -1300,9 +1466,11 @@ async function renderTextAsset(source) {
 }
 
 async function addTextSource() {
-  const source = { id: freeSourceId("text"), kind: "text", enabled: true, asset: "", text: "Subscribe", font: TEXT_FONTS[0][0], size: 64, color: "#ffffff", background: "#000000" };
+  const source = { id: "", kind: "text", enabled: true, asset: "", text: "Subscribe", font: TEXT_FONTS[0][0], size: 64, color: "#ffffff", background: "#000000" };
   const drawn = await renderTextAsset(source);
   if (!drawn) return;
+  if (studio.setup.sources.length >= 12) { toast("A studio has at most 12 sources"); return; }
+  source.id = freeSourceId("text");  // after the await: two quick additions must not share an id
   source.asset = drawn.asset;
   addSourceWithPlacement(source, drawn.aspect);
 }
@@ -1337,7 +1505,7 @@ function displayInfo() {
 // The preview draws every visible source with the box, fit, focus, radius, border, shadow and mirror the export uses.
 function drawStage() {
   const stage = $("stage");
-  if (!stage || !studio.setup) return;
+  if (!stage || !studioDoc()) return;  // the project page needs only the project
   const frame = $("stageWrap") || stage, overlay = $("stageUi");
   const ratio = stageRatio();
   frame.style.aspectRatio = String(ratio);
@@ -1456,6 +1624,7 @@ function startStageDrag(event, id, mode) {
   const up = () => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
     if (!moved) return;
     if (mode === "move") layout.placements[id] = snapPlacement(layout.placements[id], currentCanvas());
     if (JSON.stringify(start) !== JSON.stringify(layout.placements[id])) edited(drawStage, renderProps);
@@ -1463,6 +1632,7 @@ function startStageDrag(event, id, mode) {
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
 }
 
 function shapeButtons(item, onpick) {
@@ -2444,6 +2614,7 @@ async function closeProject() {
   stopProjectPlayer();
   studio.project = null;
   studio.projectsLoaded = false;
+  if (studio.setup) startHistory(studio.setup);
   renderStudioBody();
 }
 

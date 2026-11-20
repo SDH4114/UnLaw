@@ -43,6 +43,11 @@ RECORDING = {
 
 
 class FrameTests(unittest.TestCase):
+    def test_other_digit_characters_do_nothing(self) -> None:
+        # A superscript digit (the key left of 1 on AZERTY) used to crash the whole studio.
+        for key in ("²", "³", "¹", "٣"):
+            self.assertIsNone(capture_tui.tui_action(key, model()), key)
+
     def test_frame_shows_recording(self) -> None:
         frame = capture_tui.render_frame(model(status=RECORDING), 100, 30)
         text = "\n".join(frame)

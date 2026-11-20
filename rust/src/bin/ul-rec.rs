@@ -96,12 +96,19 @@ fn event(value: Value) {
 
 /// A track moves PENDING -> STARTED -> FINISHED, or to FAILED from either; each change is logged once.
 fn mark(track: usize, to: u8, error: Option<String>) {
+    // Callbacks come on several threads (SCStream's queue, completion handlers, the main run loop): only the
+    // thread whose compare-exchange wins logs the change, so a track is never both `failed` and `started`.
     let state = &STATE[track];
-    let from = state.load(Ordering::SeqCst);
-    if from == to || from == FINISHED || from == FAILED {
-        return;
+    let mut from = state.load(Ordering::SeqCst);
+    loop {
+        if from == to || from == FINISHED || from == FAILED {
+            return;
+        }
+        match state.compare_exchange(from, to, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => break,
+            Err(current) => from = current,
+        }
     }
-    state.store(to, Ordering::SeqCst);
     let name = TRACKS[track];
     match to {
         STARTED => event(json!({"track": name, "event": "started", "wall": wall()})),
@@ -137,7 +144,15 @@ define_class!(
         }
         #[unsafe(method(recordingOutputDidFinishRecording:))]
         fn sc_finished(&self, _output: &SCRecordingOutput) {
-            mark(self.ivars().track, FINISHED, None);
+            if STOP.load(Ordering::SeqCst) {
+                mark(self.ivars().track, FINISHED, None);
+            } else {
+                mark(
+                    self.ivars().track,
+                    FAILED,
+                    Some("it stopped by itself".into()),
+                );
+            }
         }
         #[unsafe(method(recordingOutput:didFailWithError:))]
         fn sc_failed(&self, _output: &SCRecordingOutput, error: &NSError) {
@@ -165,13 +180,16 @@ define_class!(
             _connections: &NSArray,
             error: Option<&NSError>,
         ) {
-            // AVFoundation reports a stop it was asked for as an "error" with the file still usable,
-            // so only a missing file counts as a failure.
+            // AVFoundation reports a stop it was asked for as an "error" with the file still usable, so after a
+            // stop only a missing file is a failure. Before a stop, an ending is the device going away (unplugged,
+            // disk full): a failure even though the file so far is kept.
             let track = self.ivars().track;
+            let stopping = STOP.load(Ordering::SeqCst);
             match error {
-                Some(error) if !self.file_written(track) => {
+                Some(error) if !stopping || !self.file_written(track) => {
                     mark(track, FAILED, Some(describe(error)))
                 }
+                None if !stopping => mark(track, FAILED, Some("it stopped by itself".into())),
                 _ => mark(track, FINISHED, None),
             }
         }
@@ -782,6 +800,7 @@ fn main() {
     let mut levels = levels.filter(|_| mic.is_some());
     let begun = Instant::now();
     let mut frame = 0u64;
+    let mut ended_alone = false;
     while !STOP.load(Ordering::SeqCst) {
         spin(0.1);
         if let (Some(file), Some(mic)) = (levels.as_mut(), mic.as_ref()) {
@@ -794,10 +813,11 @@ fn main() {
         }
         if wanted
             .iter()
-            .all(|&track| STATE[track].load(Ordering::SeqCst) == FAILED)
+            .all(|&track| matches!(STATE[track].load(Ordering::SeqCst), FAILED | FINISHED))
         {
-            event(json!({"event": "stopped"}));
-            std::process::exit(1);
+            // Every track ended by itself: finish the files like a stop, then exit 1 so capture.py shows it.
+            ended_alone = true;
+            break;
         }
     }
 
@@ -813,7 +833,8 @@ fn main() {
     }
     let finished =
         |track: &usize| matches!(STATE[*track].load(Ordering::SeqCst), FINISHED | FAILED);
-    wait_until(60.0, || wanted.iter().all(finished));
+    // Below capture.py's first grace (30 s), so a track that never reports is settled here, not left "stuck".
+    wait_until(25.0, || wanted.iter().all(finished));
     for &track in &wanted {
         if STATE[track].load(Ordering::SeqCst) == STARTED
             && paths[track]
@@ -830,4 +851,7 @@ fn main() {
         unsafe { mic.session.stopRunning() };
     }
     event(json!({"event": "stopped"}));
+    if ended_alone {
+        std::process::exit(1);
+    }
 }

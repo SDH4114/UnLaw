@@ -225,6 +225,30 @@ class ProjectTests(ProjectTestCase):
         # The camera flick is shorter than a frame; the two screen pieces join into one.
         self.assertEqual(got, [{"segment": 0, "start": 0.0, "length": 1.0, "scene": "screen"}])
 
+    def test_a_part_shorter_than_a_frame_gives_no_video(self) -> None:
+        # The export drops such parts from the sound, so the picture must drop them too (else it runs a frame late).
+        project = {"segments": [{"duration": 0.016}, {"duration": 0.012}, {"duration": 1.0}], "events": []}
+        got = capture_project.timeline_intervals(project, 30)
+        self.assertEqual([item["segment"] for item in got], [2])
+
+    def test_scene_events_count_in_time_order(self) -> None:
+        project = {"segments": [{"duration": 10.0}], "events": [{"t": 6.0, "scene": "screen"}, {"t": 2.0, "scene": "camera"}]}
+        got = capture_project.timeline_intervals(project, 30)
+        self.assertEqual([(item["start"], item["scene"]) for item in got], [(0.0, "camera"), (6.0, "screen")])
+
+    def test_project_names_and_segment_info_are_checked(self) -> None:
+        folder = self.make()
+        good = capture_project.read_project(folder)
+        for name in ("../../x", "a/b", ".hidden", "a\\b"):
+            project = dict(good, name=name)
+            with self.assertRaises(capture_project.ProjectError, msg=name):
+                capture_project.validate_project(project, folder)
+        segment = {"duration": 1.0, "files": {}, "starts": {}, "info": {"screen": {"width": "wide", "height": 1080, "audio": True}}}
+        with self.assertRaises(capture_project.ProjectError):
+            capture_project.validate_project(dict(good, segments=[segment]), folder)
+        segment["info"]["screen"] = {"width": 1920, "height": 1080, "audio": True}
+        capture_project.validate_project(dict(good, segments=[segment]), folder)
+
     def test_end_alignment(self) -> None:
         self.assertEqual(
             capture_project.segment_starts({"screen": 10.0, "camera": 9.69, "mic": 9.06}, "screen"),

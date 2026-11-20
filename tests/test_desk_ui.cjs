@@ -75,6 +75,8 @@ function harness() {
       leaveStudio, toggleCamera, toggleMeter, stopStream, start, sendGame, drawCell,
       applyShape, pinPlacement, placementPx, snapPlacement, moveFocus, resizePlacement, studioKey, studioPollDelay,
       parseLayout, defaultLayout, resizeLayout, swapPanels, layoutFrame, LAYOUT_PANELS,
+      addWaveSample, voiceClock, wavePeaks, recordingAudio, drawVoice, releaseWaveMic,
+      loadStudioInfo, loadSetup, setStudioTab, runCountdown, cancelCountdown, closeProject, rememberEdit,
       countdownSteps, saveSetupSoon, permissionBanner, openSettings,
       renderStudio, renderStudioBody, renderSources, updateRecordControls, startPreview,
       startHistory, undoEdit, addScene, moveScene, removeScene, defaultPlacement, currentScene, edited, selectSource, placementOf, nudgeSelected, deleteSelected, sourceById, toggleVisible, moveSource, toggleInput, openRecordSettings, closeStudioMenu,
@@ -437,6 +439,78 @@ const tests = {
   assert.equal(a.studioKey('KeyA', {active: false}), 'audio');
   assert.equal(a.studioKey('KeyA', {active: true}), 'stop', 'A also stops');
   assert.equal(a.studioKey('KeyA', {active: false, typing: true}), null);
+ },
+ async studio_failures_and_double_clicks() {
+  // A desk that does not answer is asked once, not in a loop.
+  const h = treeHarness(), a = h.a;
+  a.state.view = 'studio';
+  let calls = 0;
+  h.context.fetch = async () => { calls++; return {status: 403, json: async () => ({error: 'forbidden'})}; };
+  await a.loadStudioInfo();
+  assert.equal(a.studio.info.available, false);
+  assert.equal(a.studio.info.error, 'forbidden');
+  a.renderStudio(h.main);
+  assert.equal(calls, 1, 'the failed answer is shown, not asked for again');
+  assert.match(textOf(h.main), /forbidden/);
+  // A setup that cannot be read shows the reason and a way to try again.
+  a.studio.info = {available: true, settings: {}};
+  a.studio.setup = null;
+  await a.loadSetup();
+  assert.equal(a.studio.setupError, 'forbidden');
+  // Record pressed twice while the first request is on its way: one recording request.
+  const sent = [];
+  a.studio.setup = sampleSetup();
+  a.studio.setup.countdown = 0;
+  a.studio.status = {active: false};
+  let release;
+  h.context.fetch = async (url) => { sent.push(url); if (url === '/api/studio/record') await new Promise((done) => { release = done; }); return response({active: true, phase: 'recording', elapsed: 0}); };
+  a.studio.saveTimer = 1;
+  const first = a.toggleRecord();
+  const second = a.toggleRecord();
+  await new Promise((done) => setImmediate(done));
+  await new Promise((done) => setImmediate(done));
+  if (release) release();
+  await first; await second;
+  assert.equal(sent.filter((url) => url === '/api/studio/record').length, 1);
+  // A countdown never starts a recording behind the user's back on another tab.
+  a.studio.status = {active: false};
+  a.studio.counting = 3;
+  a.setStudioTab('projects');
+  assert.equal(a.studio.counting, 0, 'leaving the Record tab cancels the countdown');
+ },
+ async studio_voice_wave() {
+  // Audio only draws a Voice Memos wave: one bar per 0.08 s slice, its loudest level, never going back in time.
+  const h = treeHarness(), a = h.a;
+  const wave = [];
+  a.addWaveSample(wave, 0.01, 0.2);
+  a.addWaveSample(wave, 0.05, 0.6);
+  a.addWaveSample(wave, 0.03, 0.4);
+  a.addWaveSample(wave, 0.17, 0.3);
+  a.addWaveSample(wave, 0.09, 0.9);
+  assert.equal(JSON.stringify(wave), JSON.stringify([{i: 0, v: 0.6}, {i: 2, v: 0.3}]), 'loudest per slice; a late sample for an older slice is dropped');
+  assert.equal(a.voiceClock(2.883), '00:02,88');
+  assert.equal(a.voiceClock(61.5), '01:01,50');
+  assert.equal(a.voiceClock(-3), '00:00,00');
+  assert.equal(a.wavePeaks([{i: 0, v: 0.2}, {i: 1, v: 0.7}, {i: 3, v: 0.5}, {i: 9, v: 1}], 4, 2).join(), '0.7,0.5', 'whole recording squeezed into columns; slices past the span are left out');
+  assert.equal(a.wavePeaks([], 10, 0).length, 0);
+  // The wave shows while an audio recording runs (also one started from the terminal), and only then.
+  a.state.view = 'studio';
+  a.studio.setup = sampleSetup();
+  a.studio.status = {active: true, mode: 'audio', phase: 'recording', elapsed: 1};
+  assert.equal(a.recordingAudio(), true);
+  a.studio.status = {active: true, mode: 'screen', phase: 'recording', elapsed: 1};
+  assert.equal(a.recordingAudio(), false);
+  a.studio.starting = Date.now(); a.studio.startingMode = 'audio';
+  assert.equal(a.recordingAudio(), true, 'while starting, the requested mode counts');
+  a.studio.starting = 0;
+  // The microphone opened only for the wave is closed after the recording.
+  const track = {stopped: false, stop() { this.stopped = true; }};
+  a.studio.micStream = {getTracks: () => [track]};
+  a.studio.waveMic = true;
+  a.releaseWaveMic();
+  assert.equal(track.stopped, true);
+  assert.equal(a.studio.micStream, null);
+  a.releaseWaveMic();
  },
  async studio_obs_editing() {
   // Scenes and sources are edited like in OBS: add, rename, order, hide, delete, nudge, and ⌘Z brings it back.

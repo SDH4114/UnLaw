@@ -574,9 +574,28 @@ def export_status_file() -> Path:
 def read_export_status() -> dict:
     try:
         data = json.loads(export_status_file().read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {"phase": "idle"}
     except (OSError, ValueError):
         return {"phase": "idle"}
+    if not isinstance(data, dict):
+        return {"phase": "idle"}
+    if data.get("phase") in ("queued", "running") and not _process_alive(data.get("pid")):
+        return {"phase": "idle"}  # the exporting process was killed (terminal closed, power loss)
+    return data
+
+
+def _process_alive(pid: object) -> bool:
+    """An old status without a pid counts as alive, as before."""
+    if pid is None:
+        return True
+    if type(pid) is not int or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 class _Status:
@@ -591,6 +610,7 @@ class _Status:
             "output": None,
             "error": None,
             "started": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "pid": os.getpid(),
         }
         self.began = time.monotonic()
         self.written = 0.0
@@ -621,6 +641,7 @@ def _run_ffmpeg(
 ) -> None:
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("ab") as stream:
+        offset = stream.tell()  # the error message quotes this run only, not an older one in the same log
         stream.write(("$ " + " ".join(argv) + "\n").encode())
         stream.flush()
         with subprocess.Popen(
@@ -643,11 +664,10 @@ def _run_ffmpeg(
                 raise
             code = process.wait()
     if code != 0:
-        tail = [
-            line
-            for line in log.read_text(errors="replace").splitlines()
-            if line and not line.startswith("$ ")
-        ][-2:]
+        with log.open("rb") as stream:
+            stream.seek(offset)
+            text = stream.read().decode(errors="replace")
+        tail = [line for line in text.splitlines() if line and not line.startswith("$ ")][-2:]
         raise ExportError(f"{what} failed: {' '.join(tail) or f'exit {code}'}")
 
 
@@ -672,8 +692,17 @@ def _publish(temporary: Path, target: Path) -> Path:
         except FileExistsError:
             continue
         except OSError:
-            with target.open("xb") as out, temporary.open("rb") as source:
-                shutil.copyfileobj(source, out)
+            # No hard links here (exFAT, a network volume): copy, and never leave half a file behind.
+            try:
+                out = target.open("xb")
+            except FileExistsError:
+                continue
+            try:
+                with out, temporary.open("rb") as source:
+                    shutil.copyfileobj(source, out)
+            except BaseException:
+                target.unlink(missing_ok=True)
+                raise
         temporary.unlink(missing_ok=True)
         return target
 
@@ -701,8 +730,8 @@ def export_project(
     lock = storage_path("runtime", f"{EXPORT_LOCK}.lock")
     lock.parent.mkdir(parents=True, exist_ok=True)
     with lock.open("a") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
         try:
+            fcntl.flock(handle, fcntl.LOCK_EX)  # inside the try: Ctrl-C while queued is reported too
             status.write(force=True, phase="running")
             if hasattr(os, "nice"):
                 try:
@@ -724,6 +753,7 @@ def export_project(
             fcntl.flock(handle, fcntl.LOCK_UN)
     status.write(force=True, phase="done", percent=100, eta=0, output=str(result))
     return result
+
 
 
 def _export(
@@ -758,6 +788,9 @@ def _export(
         output if output is not None else storage_path("captures", "recordings") / name
     )
     target.parent.mkdir(parents=True, exist_ok=True)
+    # Never follow a symlinked cache or logs folder out of the project (rmtree would empty its target).
+    for relative in ("cache", "cache/render", "logs"):
+        inside(folder, relative, relative)
     work = folder / "cache" / "render"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
@@ -933,6 +966,10 @@ def _export(
     except (ProjectError, OSError):
         pass
     if settings["delete_sources"]:
-        _trash(folder)
+        try:
+            _trash(folder)
+        except OSError as error:
+            # The video is saved and listed; a Trash that refuses must not turn that into a failure.
+            status.write(force=True, warning=f"the project was not moved to the Trash: {error}")
     return result
 

@@ -84,6 +84,12 @@ class DeskUITests(unittest.TestCase):
     def test_studio_panels_move_resize_and_audio_records_alone(self) -> None:
         self.run_case("studio_layout_and_audio")
 
+    def test_studio_survives_failures_and_double_clicks(self) -> None:
+        self.run_case("studio_failures_and_double_clicks")
+
+    def test_studio_audio_recording_draws_a_voice_memos_wave(self) -> None:
+        self.run_case("studio_voice_wave")
+
     def test_studio_scenes_and_sources_edit_like_obs(self) -> None:
         self.run_case("studio_obs_editing")
 

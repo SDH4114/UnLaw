@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
 import signal
 import sys
 import tempfile
@@ -865,6 +866,35 @@ class CaptureTests(ToolTestCase):
         _, project = self.project(json.loads(self.ok("stop", "--json")))
         self.assertEqual(project["state"], "incomplete")
         self.assertIn("part 1: the camera recording stopped: the device was disconnected", project["problems"])
+
+    def test_a_failed_native_resume_leaves_no_files_and_the_retry_works(self) -> None:
+        self.native()
+        self.ok("record", "--camera")
+        self.ok("pause")
+        folder = Path(json.loads(self.ok("status", "--json"))["project"])
+        (folder / "logs" / "rec.log").write_text("ul-rec: an old error from part 1\n")
+        with patch.dict(os.environ, {"FAKE_REC_FAIL": "camera"}):
+            code, _, error = self.run_main(capture.main, ["resume"])
+        self.assertEqual(code, 1)
+        self.assertNotIn("old error", error)
+        self.assertEqual(sorted(path.name for path in (folder / "media").glob("*002*")), [], "the failed part leaves nothing")
+        self.ok("resume")
+        _, project = self.project(json.loads(self.ok("stop", "--json")))
+        self.assertEqual(len(project["segments"]), 2)
+
+    def test_a_reused_pid_is_not_taken_for_a_recorder(self) -> None:
+        def ps(command: str):
+            return patch.object(capture.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, command, ""))
+
+        with patch.object(capture.os, "kill"), patch.object(capture.os, "waitpid", side_effect=ChildProcessError):
+            with ps("/Users/x/.local/bin/ul-rec /p/logs/rec-001.json\n"):
+                self.assertTrue(capture._alive(4242, "ul-rec"))
+            with ps("/usr/bin/python3 /tmp/bin/ffmpeg -f avfoundation\n"):
+                self.assertTrue(capture._alive(4242, "ffmpeg"), "a script tool runs under its interpreter")
+            with ps("cargo build --bin ul-rec\n"):
+                self.assertFalse(capture._alive(4242, "ul-rec"), "a command that only mentions the name")
+            with ps("nvim rust/src/bin/ul-rec.rs\n"):
+                self.assertFalse(capture._alive(4242, "ul-rec"))
 
     def test_without_ffmpeg_the_native_microphone_stays_a_wav(self) -> None:
         self.native()

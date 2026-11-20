@@ -2098,7 +2098,8 @@ class Studio:
     @staticmethod
     def member(name: object) -> Path:
         """A file directly inside the capture folders; nothing else is ever served or changed."""
-        if not isinstance(name, str) or not name or "/" in name or name.startswith("."):
+        # Not starting with "-" either: the name is passed to `ul capture`, where it would read as an option.
+        if not isinstance(name, str) or not name or "/" in name or name.startswith((".", "-")):
             raise FileNotFoundError("unknown capture")
         for folder in ("screenshots", "recordings"):
             root = storage_path("captures", folder)

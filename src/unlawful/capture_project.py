@@ -607,6 +607,9 @@ def validate_project(data: object, folder: Path) -> dict:
     if project.get("format") != PROJECT_FORMAT or project.get("version") != 1:
         _fail("project", f"is not an {PROJECT_FORMAT} version 1 file")
     _text(project.get("name"), "project.name", 200)
+    name = project["name"]
+    if "/" in name or "\\" in name or name.startswith("."):
+        _fail("project.name", "must be a plain file name (it names the export)")
     _choice(project.get("mode"), "project.mode", ("screen", "camera", "audio"))
     _choice(project.get("state"), "project.state", PROJECT_STATES)
     problems = project.get("problems")
@@ -631,6 +634,15 @@ def validate_project(data: object, folder: Path) -> dict:
         for track, start in _dict(segment.get("starts"), f"{here}.starts").items():
             _choice(track, f"{here}.starts", TRACKS)
             _numeric(start, f"{here}.starts.{track}", -1e5, 1e5)
+        for track, info in _dict(segment.get("info", {}), f"{here}.info").items():
+            _choice(track, f"{here}.info", TRACKS)
+            info = _dict(info, f"{here}.info.{track}")
+            for key in ("width", "height"):
+                value = info.get(key)
+                if value is not None and (type(value) is not int or not 0 <= value <= 20000):
+                    _fail(f"{here}.info.{track}.{key}", "must be a whole number of pixels")
+            if type(info.get("audio", False)) is not bool:
+                _fail(f"{here}.info.{track}.audio", "must be true or false")
     validate_export(project.get("export"), "project.export")
     exports = project.get("exports")
     if not isinstance(exports, list) or not all(isinstance(item, dict) for item in exports):
@@ -722,7 +734,8 @@ def timeline_intervals(project: dict, fps: int) -> list[dict]:
     def snap(value: float) -> float:
         return round(value * fps) / fps
 
-    changes = [(snap(event["t"]), event["scene"]) for event in project["events"] if "scene" in event]
+    # Sorted by time (stable): two switches written close together may be stored out of order.
+    changes = sorted(((snap(event["t"]), event["scene"]) for event in project["events"] if "scene" in event), key=lambda change: change[0])
 
     def scene_at(moment: float) -> str:
         active = changes[0][1] if changes else "screen"
@@ -736,6 +749,8 @@ def timeline_intervals(project: dict, fps: int) -> list[dict]:
     for index, segment in enumerate(project["segments"]):
         begin, finish = snap(elapsed), snap(elapsed + segment["duration"])
         elapsed += segment["duration"]
+        if segment["duration"] < frame:
+            continue  # the export drops such a part from the sound too; its time still counts for scene events
         cuts = sorted({begin, finish, *(at for at, _ in changes if begin < at < finish)})
         for start, end in zip(cuts, cuts[1:]):
             if end - start < frame - 1e-9:

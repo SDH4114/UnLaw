@@ -696,6 +696,8 @@ def _start_native_segment(state: dict) -> None:
     logs.mkdir(parents=True, exist_ok=True)
     events_file = logs / f"rec-{number:03d}.jsonl"
     events_file.unlink(missing_ok=True)  # left by a start that failed
+    _remove_part_files(folder, files)
+    log_from = _log_size(folder, "rec")
     request = _backend().native_request(
         state["plan"], {track: folder / relative for track, relative in files.items()}, events_file, logs / LEVELS_FILE
     )
@@ -721,7 +723,7 @@ def _start_native_segment(state: dict) -> None:
                 raise CaptureError(_start_failure(track, failed[track]), 1)
         ready = any(item.get("event") == "ready" for item in events)
         if not ready or process.poll() is not None:
-            reason = _log_tail(folder, "rec", 0) or "ul-rec did not start"
+            reason = _log_tail(folder, "rec", log_from) or "ul-rec did not start"
             raise CaptureError(f"the recorder could not start: {reason}", 1)
         starts = _native_starts(events)
         state["segments"].append(files)
@@ -740,7 +742,14 @@ def _start_native_segment(state: dict) -> None:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
+        _remove_part_files(folder, files)  # the next try reuses the part number and these names
         raise
+
+
+def _remove_part_files(folder: Path, files: dict[str, str]) -> None:
+    """Files of a part that never became a segment (a failed start); AVFoundation refuses to record over a file."""
+    for relative in files.values():
+        (folder / relative).unlink(missing_ok=True)
 
 
 def _start_segment(state: dict) -> None:
@@ -822,8 +831,10 @@ def _alive(pid: int, program: str) -> bool:
         text=True,
         check=False,
     ).stdout
-    # A reused pid (after a reboot) must never be signalled: it has to be our tool.
-    return program in command
+    # A reused pid (after a reboot) must never be signalled: it has to be our tool, as the program itself
+    # (or the script an interpreter runs), not a command that only mentions it (`cargo build --bin ul-rec`).
+    words = command.split()
+    return any(Path(word).name == program for word in words[:2])
 
 
 def _default_signals() -> None:

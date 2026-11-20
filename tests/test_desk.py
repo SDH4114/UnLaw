@@ -1209,6 +1209,9 @@ class DeskStudioTests(unittest.TestCase):
         ):
             self.assertEqual(self.call(port, token, "/api/studio/action", bad)[0], 400, bad)
         self.assertEqual(self.call(port, token, "/api/studio/action", {"action": "delete", "name": "../TODO.md"})[0], 404)
+        # A file named like an option is never handed to `ul capture`.
+        (self.captures / "recordings" / "-x.mov").write_bytes(b"video")
+        self.assertEqual(self.call(port, token, "/api/studio/action", {"action": "delete", "name": "-x.mov"})[0], 404)
         result = self.call(port, token, "/api/studio/action", {"action": "delete", "name": image.name})
         self.assertEqual(result[0], 200, result)
         trashed = result[1]["trashed"]

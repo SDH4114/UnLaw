@@ -662,6 +662,9 @@ def validate_project(data: object, folder: Path) -> dict:
     if project.get("format") != PROJECT_FORMAT or project.get("version") != 1:
         _fail("project", f"is not an {PROJECT_FORMAT} version 1 file")
     _text(project.get("name"), "project.name", 200)
+    name = project["name"]
+    if "/" in name or "\\" in name or name.startswith("."):
+        _fail("project.name", "must be a plain file name (it names the export)")
     _choice(project.get("mode"), "project.mode", ("screen", "camera", "audio"))
     _choice(project.get("state"), "project.state", PROJECT_STATES)
     problems = project.get("problems")
@@ -686,6 +689,15 @@ def validate_project(data: object, folder: Path) -> dict:
         for track, start in _dict(segment.get("starts"), f"{here}.starts").items():
             _choice(track, f"{here}.starts", TRACKS)
             _numeric(start, f"{here}.starts.{track}", -1e5, 1e5)
+        for track, info in _dict(segment.get("info", {}), f"{here}.info").items():
+            _choice(track, f"{here}.info", TRACKS)
+            info = _dict(info, f"{here}.info.{track}")
+            for key in ("width", "height"):
+                value = info.get(key)
+                if value is not None and (type(value) is not int or not 0 <= value <= 20000):
+                    _fail(f"{here}.info.{track}.{key}", "must be a whole number of pixels")
+            if type(info.get("audio", False)) is not bool:
+                _fail(f"{here}.info.{track}.audio", "must be true or false")
     validate_export(project.get("export"), "project.export")
     exports = project.get("exports")
     if not isinstance(exports, list) or not all(isinstance(item, dict) for item in exports):
@@ -777,7 +789,8 @@ def timeline_intervals(project: dict, fps: int) -> list[dict]:
     def snap(value: float) -> float:
         return round(value * fps) / fps
 
-    changes = [(snap(event["t"]), event["scene"]) for event in project["events"] if "scene" in event]
+    # Sorted by time (stable): two switches written close together may be stored out of order.
+    changes = sorted(((snap(event["t"]), event["scene"]) for event in project["events"] if "scene" in event), key=lambda change: change[0])
 
     def scene_at(moment: float) -> str:
         active = changes[0][1] if changes else "screen"
@@ -791,6 +804,8 @@ def timeline_intervals(project: dict, fps: int) -> list[dict]:
     for index, segment in enumerate(project["segments"]):
         begin, finish = snap(elapsed), snap(elapsed + segment["duration"])
         elapsed += segment["duration"]
+        if segment["duration"] < frame:
+            continue  # the export drops such a part from the sound too; its time still counts for scene events
         cuts = sorted({begin, finish, *(at for at, _ in changes if begin < at < finish)})
         for start, end in zip(cuts, cuts[1:]):
             if end - start < frame - 1e-9:
@@ -2009,9 +2024,28 @@ def export_status_file() -> Path:
 def read_export_status() -> dict:
     try:
         data = json.loads(export_status_file().read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {"phase": "idle"}
     except (OSError, ValueError):
         return {"phase": "idle"}
+    if not isinstance(data, dict):
+        return {"phase": "idle"}
+    if data.get("phase") in ("queued", "running") and not _process_alive(data.get("pid")):
+        return {"phase": "idle"}  # the exporting process was killed (terminal closed, power loss)
+    return data
+
+
+def _process_alive(pid: object) -> bool:
+    """An old status without a pid counts as alive, as before."""
+    if pid is None:
+        return True
+    if type(pid) is not int or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 class _Status:
@@ -2026,6 +2060,7 @@ class _Status:
             "output": None,
             "error": None,
             "started": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "pid": os.getpid(),
         }
         self.began = time.monotonic()
         self.written = 0.0
@@ -2056,6 +2091,7 @@ def _run_ffmpeg(
 ) -> None:
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("ab") as stream:
+        offset = stream.tell()  # the error message quotes this run only, not an older one in the same log
         stream.write(("$ " + " ".join(argv) + "\n").encode())
         stream.flush()
         with subprocess.Popen(
@@ -2078,11 +2114,10 @@ def _run_ffmpeg(
                 raise
             code = process.wait()
     if code != 0:
-        tail = [
-            line
-            for line in log.read_text(errors="replace").splitlines()
-            if line and not line.startswith("$ ")
-        ][-2:]
+        with log.open("rb") as stream:
+            stream.seek(offset)
+            text = stream.read().decode(errors="replace")
+        tail = [line for line in text.splitlines() if line and not line.startswith("$ ")][-2:]
         raise ExportError(f"{what} failed: {' '.join(tail) or f'exit {code}'}")
 
 
@@ -2107,8 +2142,17 @@ def _publish(temporary: Path, target: Path) -> Path:
         except FileExistsError:
             continue
         except OSError:
-            with target.open("xb") as out, temporary.open("rb") as source:
-                shutil.copyfileobj(source, out)
+            # No hard links here (exFAT, a network volume): copy, and never leave half a file behind.
+            try:
+                out = target.open("xb")
+            except FileExistsError:
+                continue
+            try:
+                with out, temporary.open("rb") as source:
+                    shutil.copyfileobj(source, out)
+            except BaseException:
+                target.unlink(missing_ok=True)
+                raise
         temporary.unlink(missing_ok=True)
         return target
 
@@ -2136,8 +2180,8 @@ def export_project(
     lock = storage_path("runtime", f"{EXPORT_LOCK}.lock")
     lock.parent.mkdir(parents=True, exist_ok=True)
     with lock.open("a") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
         try:
+            fcntl.flock(handle, fcntl.LOCK_EX)  # inside the try: Ctrl-C while queued is reported too
             status.write(force=True, phase="running")
             if hasattr(os, "nice"):
                 try:
@@ -2159,6 +2203,7 @@ def export_project(
             fcntl.flock(handle, fcntl.LOCK_UN)
     status.write(force=True, phase="done", percent=100, eta=0, output=str(result))
     return result
+
 
 
 def _export(
@@ -2193,6 +2238,9 @@ def _export(
         output if output is not None else storage_path("captures", "recordings") / name
     )
     target.parent.mkdir(parents=True, exist_ok=True)
+    # Never follow a symlinked cache or logs folder out of the project (rmtree would empty its target).
+    for relative in ("cache", "cache/render", "logs"):
+        inside(folder, relative, relative)
     work = folder / "cache" / "render"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
@@ -2368,7 +2416,11 @@ def _export(
     except (ProjectError, OSError):
         pass
     if settings["delete_sources"]:
-        _trash(folder)
+        try:
+            _trash(folder)
+        except OSError as error:
+            # The video is saved and listed; a Trash that refuses must not turn that into a failure.
+            status.write(force=True, warning=f"the project was not moved to the Trash: {error}")
     return result
 
 """The terminal studio of `ul capture`: a full-screen curses view over the same recording engine.
@@ -2598,7 +2650,7 @@ def tui_action(key: str, model: dict) -> tuple | None:
         return ("quit",)
     if lower == "r":
         return ("stop",) if active else ("record",)
-    if key.isdigit() and key != "0":
+    if len(key) == 1 and key in "123456789":  # not isdigit(): "²" is a digit to Python, but int() refuses it
         number = int(key)
         return (
             ("scene", setup["scenes"][number - 1]["id"])
@@ -3452,6 +3504,8 @@ def _start_native_segment(state: dict) -> None:
     logs.mkdir(parents=True, exist_ok=True)
     events_file = logs / f"rec-{number:03d}.jsonl"
     events_file.unlink(missing_ok=True)  # left by a start that failed
+    _remove_part_files(folder, files)
+    log_from = _log_size(folder, "rec")
     request = _backend().native_request(
         state["plan"], {track: folder / relative for track, relative in files.items()}, events_file, logs / LEVELS_FILE
     )
@@ -3477,7 +3531,7 @@ def _start_native_segment(state: dict) -> None:
                 raise CaptureError(_start_failure(track, failed[track]), 1)
         ready = any(item.get("event") == "ready" for item in events)
         if not ready or process.poll() is not None:
-            reason = _log_tail(folder, "rec", 0) or "ul-rec did not start"
+            reason = _log_tail(folder, "rec", log_from) or "ul-rec did not start"
             raise CaptureError(f"the recorder could not start: {reason}", 1)
         starts = _native_starts(events)
         state["segments"].append(files)
@@ -3496,7 +3550,14 @@ def _start_native_segment(state: dict) -> None:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
+        _remove_part_files(folder, files)  # the next try reuses the part number and these names
         raise
+
+
+def _remove_part_files(folder: Path, files: dict[str, str]) -> None:
+    """Files of a part that never became a segment (a failed start); AVFoundation refuses to record over a file."""
+    for relative in files.values():
+        (folder / relative).unlink(missing_ok=True)
 
 
 def _start_segment(state: dict) -> None:
@@ -3578,8 +3639,10 @@ def _alive(pid: int, program: str) -> bool:
         text=True,
         check=False,
     ).stdout
-    # A reused pid (after a reboot) must never be signalled: it has to be our tool.
-    return program in command
+    # A reused pid (after a reboot) must never be signalled: it has to be our tool, as the program itself
+    # (or the script an interpreter runs), not a command that only mentions it (`cargo build --bin ul-rec`).
+    words = command.split()
+    return any(Path(word).name == program for word in words[:2])
 
 
 def _default_signals() -> None:

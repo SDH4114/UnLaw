@@ -227,7 +227,7 @@ def tui_action(key: str, model: dict) -> tuple | None:
         return ("quit",)
     if lower == "r":
         return ("stop",) if active else ("record",)
-    if key.isdigit() and key != "0":
+    if len(key) == 1 and key in "123456789":  # not isdigit(): "²" is a digit to Python, but int() refuses it
         number = int(key)
         return (
             ("scene", setup["scenes"][number - 1]["id"])
