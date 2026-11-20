@@ -62,6 +62,9 @@ function harness() {
     setInterval: (fn, ms) => { const id = ++seq; intervals.set(id, {fn, ms}); return id; },
     clearInterval: id => intervals.delete(id),
     requestAnimationFrame: fn => frames.push(fn),
+    cancelAnimationFrame() {},
+    performance: {now: () => Date.now()},
+    getComputedStyle: () => ({getPropertyValue: () => ''}),
     fetch: async () => { throw Error('unmocked fetch'); },
     AudioContext: class {
       createAnalyser() { return {fftSize: 2048, getFloatTimeDomainData() {}}; }
@@ -77,6 +80,7 @@ function harness() {
       parseLayout, defaultLayout, resizeLayout, swapPanels, layoutFrame, LAYOUT_PANELS,
       addWaveSample, voiceClock, wavePeaks, recordingAudio, drawVoice, releaseWaveMic,
       loadStudioInfo, loadSetup, setStudioTab, runCountdown, cancelCountdown, closeProject, rememberEdit,
+      ed, editOf, edClips, edLength, toRecording, toOutput, bladeAt, rippleDelete, deleteRange, subtractRanges, silences, snapTime, captionSpans, captionAt, splitCaption, mergeCaption, captionsFrom, captionAssetName, joinPeaks, soundFiles, audioOnly, renderEdit, editKeydown, edSeek, edEnter, edDelete, edBlade, edAddText, edRemoveSilences, edTranscribe, renderProjectPage,
       countdownSteps, saveSetupSoon, permissionBanner, openSettings,
       renderStudio, renderStudioBody, renderSources, updateRecordControls, startPreview,
       startHistory, undoEdit, addScene, moveScene, removeScene, defaultPlacement, currentScene, edited, selectSource, placementOf, nudgeSelected, deleteSelected, sourceById, toggleVisible, moveSource, toggleInput, openRecordSettings, closeStudioMenu,
@@ -439,6 +443,95 @@ const tests = {
   assert.equal(a.studioKey('KeyA', {active: false}), 'audio');
   assert.equal(a.studioKey('KeyA', {active: true}), 'stop', 'A also stops');
   assert.equal(a.studioKey('KeyA', {active: false, typing: true}), null);
+ },
+ async edit_model() {
+  const a = harness().a;
+  const edit = {version: 1, clips: [{id: 'c1', in: 0, out: 10}], captions: [], caption_style: {}, texts: [], audio: []};
+  assert.equal(a.bladeAt(edit, 4), true);
+  assert.equal(a.bladeAt(edit, 4.01), false, 'too close to a cut');
+  assert.equal(JSON.stringify(edit.clips), JSON.stringify([{id: 'c1', in: 0, out: 4}, {id: 'c2', in: 4, out: 10}]));
+  assert.equal(a.rippleDelete(edit, 0), true);
+  assert.equal(a.edLength(edit), 6);
+  assert.equal(a.toRecording(edit, 1).t, 5);
+  assert.equal(a.toOutput(edit, 5), 1);
+  assert.equal(a.toOutput(edit, 2), null, 'cut away');
+  assert.equal(a.rippleDelete(edit, 0), false, 'the last clip stays');
+  edit.clips = [{id: 'c1', in: 0, out: 10}];
+  assert.equal(a.deleteRange(edit, 2, 5), true);
+  assert.equal(JSON.stringify(edit.clips.map(clip => [clip.in, clip.out])), '[[0,2],[5,10]]');
+  assert.equal(a.subtractRanges(edit, [[1, 1.5], [6, 7]]), true);
+  assert.equal(JSON.stringify(edit.clips.map(clip => [clip.in, clip.out])), '[[0,1],[1.5,2],[5,6],[7,10]]');
+  assert.equal(new Set(edit.clips.map(clip => clip.id)).size, 4, 'ids stay unique');
+  assert.equal(a.subtractRanges(edit, [[0, 100]]), false, 'never cuts everything');
+  // Pauses: 25 bars a second, quiet between 1 s and 2 s.
+  const peaks = Array.from({length: 75}, (_, i) => i >= 25 && i < 50 ? 0.01 : 0.6);
+  assert.equal(JSON.stringify(a.silences(peaks, 25, 0.1, 0.6, 0.1)), '[[1.1,1.9]]');
+  assert.equal(a.silences(peaks, 25, 0.1, 1.5, 0.1).length, 0, 'shorter than the minimum');
+  assert.equal(a.snapTime(4.03, [4, 9], 0.05), 4);
+  assert.equal(a.snapTime(4.2, [4, 9], 0.05), 4.2);
+  // Captions live on the recording clock and follow the cuts.
+  edit.clips = [{id: 'c1', in: 0, out: 2}, {id: 'c2', in: 5, out: 7}];
+  edit.captions = a.captionsFrom([{in: 0.5, out: 1.5, text: 'one'}, {in: 1.5, out: 5.5, text: 'two words here'}, {in: 3, out: 4, text: 'gone'}, {in: 4, out: 4, text: 'empty'}]);
+  assert.equal(JSON.stringify(a.captionSpans(edit).map(span => [span.start, span.end, span.text])), '[[0.5,1.5,"one"],[1.5,2.5,"two words here"]]');
+  assert.equal(a.captionAt(edit, 2).text, 'two words here');
+  assert.equal(a.splitCaption(edit, 's2', 3.5), true);
+  assert.equal(JSON.stringify(edit.captions.map(line => line.text)), '["one","two words","here","gone"]');
+  assert.equal(a.mergeCaption(edit, 's2'), true);
+  assert.equal(edit.captions.find(line => line.id === 's2').text, 'two words gone', 'merges with the next line in time');
+  assert.equal(a.captionAssetName('hi', {size: 54}), a.captionAssetName('hi', {size: 54}));
+  assert.notEqual(a.captionAssetName('hi', {size: 54}), a.captionAssetName('hi', {size: 56}), 'a new style draws again');
+  assert.match(a.captionAssetName('hi', {}), /^cap-[0-9a-f]{16}\.png$/);
+  // Two parts of sound on one clock.
+  assert.equal(JSON.stringify(a.joinPeaks([{start: 0, duration: 1, peaks: [0.2, 0.4]}, {start: 1.5, duration: 0.5, peaks: [1]}], 2, 2)), '[0.2,0.4,0,1]');
+  const project = sampleProject();
+  assert.equal(JSON.stringify(a.soundFiles(project)), JSON.stringify([{file: 'media/mic-001.flac', start: 0.94, duration: 5}]));
+  assert.equal(a.audioOnly(project), false);
+  assert.equal(JSON.stringify(a.editOf(project).clips), '[{"id":"c1","in":0,"out":5}]');
+ },
+ async edit_tab_keys_and_page() {
+  const h = treeHarness(), a = h.a;
+  const ctx = new Proxy({}, {get: (target, key) => key in target ? target[key] : key === 'measureText' ? () => ({width: 10}) : () => {}, set: (target, key, value) => { target[key] = value; return true; }});
+  h.context.Node.prototype.getContext = () => ctx;
+  a.state.view = 'studio';
+  a.studio.info = {available: true};
+  const project = sampleProject();
+  project.segments[0].files = {mic: 'media/mic-001.flac'};
+  project.mode = 'audio';
+  const calls = [];
+  h.context.fetch = async (url, options) => { calls.push([url, options && options.body]); return response(url.includes('/wave') ? {peaks: [0.5, 0.5], duration: 5} : url.includes('transcribe') ? {captions: [{in: 1, out: 2, text: 'hello'}], language: 'en'} : {}); };
+  h.main.append(h.context.document.createElement('div'));
+  const root = new h.context.Node('div'); root.id = 'studioRoot'; h.main.append(root);
+  a.studio.project = project;
+  a.studio.player = null;
+  a.edEnter();
+  assert.equal(a.studio.tab, 'edit');
+  assert.ok(h.find('edTimeline'), 'the timeline is drawn');
+  assert.ok(h.find('edWave'), 'an audio project shows its sound, not a stage');
+  assert.equal(h.find('stage'), null);
+  const key = code => a.editKeydown({code, key: code, shiftKey: false, metaKey: false, ctrlKey: false, altKey: false});
+  a.edSeek(2);
+  assert.equal(key('KeyB'), true);
+  assert.equal(project.edit.clips.length, 2, 'B cuts at the playhead');
+  a.ed.sel = {kind: 'clip', id: project.edit.clips[0].id};
+  assert.equal(key('Delete'), true);
+  assert.equal(a.edLength(project.edit), 3, 'Delete closes the gap');
+  a.edSeek(0.5); key('KeyI'); a.edSeek(1.5); key('KeyO');
+  key('Delete');
+  assert.equal(a.edLength(project.edit), 2, 'I/O range removed');
+  a.undoEdit(false);
+  assert.equal(a.edLength(project.edit), 3, '⌘Z brings it back');
+  key('KeyT');
+  assert.equal(project.edit.texts.length, 1);
+  a.ed.language = 'en';
+  await a.edTranscribe();
+  assert.equal(project.edit.captions.length, 1);
+  assert.ok(calls.some(([url, body]) => url === '/api/studio/transcribe' && JSON.parse(body).language === 'en'));
+  // The Projects page of an audio project: no format buttons, its sound instead of a stage.
+  a.studio.tab = 'projects';
+  const box = new h.context.Node('div'); box.id = 'studioProjects'; h.main.append(box);
+  a.renderProjectPage(box);
+  assert.doesNotMatch(textOf(box), /16:9/);
+  assert.ok(h.find('audioWave'));
  },
  async studio_failures_and_double_clicks() {
   // A desk that does not answer is asked once, not in a loop.

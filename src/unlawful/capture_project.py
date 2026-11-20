@@ -644,6 +644,8 @@ def validate_project(data: object, folder: Path) -> dict:
             if type(info.get("audio", False)) is not bool:
                 _fail(f"{here}.info.{track}.audio", "must be true or false")
     validate_export(project.get("export"), "project.export")
+    if "edit" in project:
+        validate_edit(project["edit"], folder)
     exports = project.get("exports")
     if not isinstance(exports, list) or not all(isinstance(item, dict) for item in exports):
         _fail("project.exports", "must be a list")
@@ -803,3 +805,186 @@ def effective_placements(
     if scene != "screen" and (not chosen or (only_screen and dropped)) and "screen" in layouts:
         background, chosen, _ = pick("screen")
     return background, chosen
+
+
+# ---------------------------------------------------------------- the montage (Edit tab)
+#
+# project["edit"] (optional; without it a project exports as recorded):
+#   clips     ranges of the recording's own clock ({id, in, out}), played one after another (ripple, no gaps);
+#   captions  subtitle lines on the recording's clock ({id, in, out, text, asset}), so they follow every cut;
+#             `asset` is the line drawn to a PNG by the page ("" until drawn);
+#   texts     text on the output timeline ({id, start, end, text, asset, x, y, w}: centre and width as fractions);
+#   audio     music and voice-over on the output timeline ({id, asset, name, start, in, out, volume, fade_in, fade_out}).
+
+EDIT_VERSION = 1
+CAPTION_STYLE = {"font": "system-ui", "size": 54, "color": "#ffffff", "outline": "#000000", "box": False, "position": "bottom"}
+CAPTION_FONTS = ("system-ui", "serif", "monospace", "rounded")
+CAPTION_POSITIONS = ("bottom", "middle", "top")
+AUDIO_ASSETS = (".m4a", ".mp3", ".wav", ".flac", ".aac", ".aiff", ".caf")
+IMAGE_ASSETS = (".png", ".jpg", ".jpeg")
+EDIT_LIMITS = {"clips": 5000, "captions": 10000, "texts": 500, "audio": 200}
+_EDIT_KEYS = {"version", "clips", "captions", "caption_style", "texts", "audio"}
+
+
+def default_edit(project: dict) -> dict:
+    return {
+        "version": EDIT_VERSION,
+        "clips": [{"id": "c1", "in": 0.0, "out": float(project["duration"])}],
+        "captions": [],
+        "caption_style": dict(CAPTION_STYLE),
+        "texts": [],
+        "audio": [],
+    }
+
+
+def _edit_list(edit: dict, key: str) -> list:
+    value = edit.get(key)
+    if not isinstance(value, list) or len(value) > EDIT_LIMITS[key]:
+        _fail(f"edit.{key}", f"must be a list of at most {EDIT_LIMITS[key]} items")
+    ids: set[str] = set()
+    for index, item in enumerate(value):  # type: ignore[arg-type]
+        here = f"edit.{key}[{index}]"
+        _dict(item, here)
+        ident = _ident(item.get("id"), f"{here}.id")
+        if ident in ids:
+            _fail(f"{here}.id", "is used twice")
+        ids.add(ident)
+    return value  # type: ignore[return-value]
+
+
+def _span(item: dict, here: str, first: str, last: str) -> None:
+    low = _numeric(item.get(first), f"{here}.{first}", 0, 1e7)
+    if _numeric(item.get(last), f"{here}.{last}", 0, 1e7) <= low:
+        _fail(f"{here}.{last}", f"must be after {first}")
+
+
+def _edit_asset(folder: Path, value: object, where: str, suffixes: tuple, empty: bool = False) -> None:
+    if empty and value == "":
+        return
+    name = asset_name(value, where)
+    if Path(name).suffix.casefold() not in suffixes:
+        _fail(where, "must be a " + "/".join(suffix[1:] for suffix in suffixes) + " file")
+    inside(folder, f"assets/{name}", where)
+
+
+def validate_edit(value: object, folder: Path) -> dict:
+    edit = _dict(value, "edit")
+    if edit.get("version") != EDIT_VERSION:
+        _fail("edit.version", f"must be {EDIT_VERSION}")
+    unknown = set(edit) - _EDIT_KEYS
+    if unknown:
+        _fail("edit", "has unknown keys: " + ", ".join(sorted(unknown)))
+    for index, clip in enumerate(_edit_list(edit, "clips")):
+        _span(clip, f"edit.clips[{index}]", "in", "out")
+    for index, line in enumerate(_edit_list(edit, "captions")):
+        here = f"edit.captions[{index}]"
+        _span(line, here, "in", "out")
+        _text(line.get("text"), f"{here}.text", 500)
+        _edit_asset(folder, line.get("asset"), f"{here}.asset", (".png",), empty=True)
+    style = _dict(edit.get("caption_style"), "edit.caption_style")
+    if set(style) != set(CAPTION_STYLE):
+        _fail("edit.caption_style", "must have " + ", ".join(sorted(CAPTION_STYLE)))
+    _choice(style["font"], "edit.caption_style.font", CAPTION_FONTS)
+    _numeric(style["size"], "edit.caption_style.size", 12, 240)
+    _color(style["color"], "edit.caption_style.color")
+    if style["outline"] != "":
+        _color(style["outline"], "edit.caption_style.outline")
+    _bool(style["box"], "edit.caption_style.box")
+    _choice(style["position"], "edit.caption_style.position", CAPTION_POSITIONS)
+    for index, item in enumerate(_edit_list(edit, "texts")):
+        here = f"edit.texts[{index}]"
+        _span(item, here, "start", "end")
+        _text(item.get("text"), f"{here}.text", 500)
+        _edit_asset(folder, item.get("asset"), f"{here}.asset", (".png",), empty=True)
+        _numeric(item.get("x"), f"{here}.x", 0, 1)
+        _numeric(item.get("y"), f"{here}.y", 0, 1)
+        _numeric(item.get("w"), f"{here}.w", 0.01, 1)
+    for index, item in enumerate(_edit_list(edit, "audio")):
+        here = f"edit.audio[{index}]"
+        _edit_asset(folder, item.get("asset"), f"{here}.asset", AUDIO_ASSETS)
+        _text(item.get("name"), f"{here}.name", 200)
+        _numeric(item.get("start"), f"{here}.start", 0, 1e7)
+        _span(item, here, "in", "out")
+        _numeric(item.get("volume"), f"{here}.volume", 0, 4)
+        _numeric(item.get("fade_in"), f"{here}.fade_in", 0, 600)
+        _numeric(item.get("fade_out"), f"{here}.fade_out", 0, 600)
+    return edit
+
+
+def _snap(value: float, fps: int) -> float:
+    return round(value * fps) / fps
+
+
+def edit_clips(project: dict, fps: int) -> list[dict]:
+    """The clips on frame boundaries with their place on the output (`at`); pieces under a frame go."""
+    edit = project.get("edit")
+    raw = edit["clips"] if edit else [{"in": 0.0, "out": float(project["duration"])}]
+    clips, at = [], 0.0
+    for clip in raw:
+        begin, end = _snap(clip["in"], fps), _snap(clip["out"], fps)
+        if end - begin < 1 / fps - 1e-9:
+            continue
+        clips.append({"in": begin, "out": end, "at": round(at, 6)})
+        at += end - begin
+    return clips
+
+
+def edit_length(project: dict, fps: int) -> float:
+    return round(sum(clip["out"] - clip["in"] for clip in edit_clips(project, fps)), 6)
+
+
+def edit_pieces(project: dict, fps: int) -> list[dict]:
+    """timeline_intervals cut to the clips, in output order; each piece knows its place on the output (`at`)."""
+    frame = 1 / fps
+    intervals, begins, elapsed = timeline_intervals(project, fps), [], 0.0
+    for segment in project["segments"]:
+        begins.append(_snap(elapsed, fps))
+        elapsed += segment["duration"]
+    pieces = []
+    for clip in edit_clips(project, fps):
+        at = clip["at"]
+        for interval in intervals:
+            start = begins[interval["segment"]] + interval["start"]
+            low, high = max(start, clip["in"]), min(start + interval["length"], clip["out"])
+            if high - low < frame - 1e-9:
+                continue
+            pieces.append({
+                "segment": interval["segment"],
+                "start": round(low - begins[interval["segment"]], 6) + 0.0,
+                "length": round(high - low, 6),
+                "scene": interval["scene"],
+                "at": round(at + low - clip["in"], 6) + 0.0,
+            })
+    return pieces
+
+
+def caption_spans(project: dict, fps: int) -> list[dict]:
+    """Captions on the output: each line clipped to what the cuts keep (a line across a cut stays one line)."""
+    edit = project.get("edit") or {}
+    clips = edit_clips(project, fps)
+    spans = []
+    for line in sorted(edit.get("captions", []), key=lambda item: item["in"]):
+        parts = []
+        for clip in clips:
+            low, high = max(line["in"], clip["in"]), min(line["out"], clip["out"])
+            if high > low:
+                parts.append((clip["at"] + low - clip["in"], clip["at"] + high - clip["in"]))
+        if not parts:
+            continue
+        start, end = parts[0][0], parts[-1][1]
+        if end - start < 1 / fps:
+            continue
+        spans.append({"start": round(start, 3) + 0.0, "end": round(end, 3) + 0.0, "text": line["text"], "asset": line.get("asset", "")})
+    return spans
+
+
+def _srt_time(value: float) -> str:
+    millis = round(value * 1000)
+    return f"{millis // 3600000:02d}:{millis // 60000 % 60:02d}:{millis // 1000 % 60:02d},{millis % 1000:03d}"
+
+
+def srt_text(spans: list[dict]) -> str:
+    return "\n".join(
+        f"{number}\n{_srt_time(span['start'])} --> {_srt_time(span['end'])}\n{span['text']}\n"
+        for number, span in enumerate(spans, 1)
+    )

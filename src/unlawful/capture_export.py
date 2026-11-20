@@ -27,7 +27,12 @@ from .capture_project import (
     _even,
     ProjectError,
     canvas_size,
+    caption_spans,
+    edit_clips,
+    edit_length,
+    edit_pieces,
     effective_placements,
+    srt_text,
     inside,
     load_setup,
     read_project,
@@ -453,6 +458,7 @@ def interval_argv(
                 f"{current}[{frame_index}:v]overlay={left - pad}:{top - pad}:eof_action=pass[f{number}]"
             )
             current = f"[f{number}]"
+    current = _overlay_stills(interval.get("overlays", []), width, height, still_input, graph, current)
     graph.append(f"{current}format=yuv420p[vout]")
     return [
         *FFMPEG_BASE,
@@ -469,6 +475,138 @@ def interval_argv(
         "pipe:1",
         "-nostats",
         str(out),
+    ]
+
+
+def _overlay_stills(overlays: list[dict], width: int, height: int, still_input: Callable[[Path], int], graph: list[str], current: str) -> str:
+    """Captions and text drawn by the page (PNG), each shown only between its `start` and `end` in this chunk.
+
+    A caption PNG is drawn at twice the size for a 1080-line frame (sharp up to 4K) and scaled with the
+    canvas; it sits centred at the bottom,
+    middle or top. A text PNG is scaled to its width (`w` of the canvas) around its centre (`x`, `y`).
+    """
+    for number, item in enumerate(overlays):
+        index = still_input(item["path"])
+        when = f"enable='between(t,{item['start']:.3f},{item['end']:.3f})'"
+        if item["kind"] == "caption":
+            scale = min(width, height) / 2160
+            graph.append(f"[{index}:v]scale=iw*{scale:.5f}:ih*{scale:.5f}[t{number}]")
+            margin = round(min(width, height) * 0.07)
+            y = {"bottom": f"H-h-{margin}", "middle": "(H-h)/2", "top": str(margin)}[item["position"]]
+            graph.append(f"{current}[t{number}]overlay=(W-w)/2:{y}:{when}:eof_action=pass[x{number}]")
+        else:
+            box = max(2, round(item["w"] * width))
+            graph.append(f"[{index}:v]scale={box}:-1[t{number}]")
+            graph.append(
+                f"{current}[t{number}]overlay={item['x'] * width:.1f}-w/2:{item['y'] * height:.1f}-h/2:{when}:eof_action=pass[x{number}]"
+            )
+        current = f"[x{number}]"
+    return current
+
+
+def piece_overlays(folder: Path, project: dict, settings: dict, at: float, length: int | float) -> list[dict]:
+    """The captions and texts of the edit that show during [at, at + length) of the output, in chunk time."""
+    edit = project.get("edit") or {}
+    found = []
+    style = edit.get("caption_style", {})
+    items = [("caption", span) for span in caption_spans(project, settings["fps"])]
+    items += [("text", item) for item in edit.get("texts", [])]
+    for kind, item in items:
+        low, high = max(item["start"], at), min(item["end"], at + length)
+        if high <= low:
+            continue
+        if not item.get("asset"):
+            raise ExportError(f"the {kind} “{item['text'][:40]}” is not drawn yet: open the project in the Edit tab")
+        try:
+            path = inside(folder, f"assets/{item['asset']}", f"{kind} {item.get('id', item['text'][:20])}")
+        except ProjectError as error:
+            raise ExportError(str(error)) from error
+        if not path.is_file():
+            raise ExportError(f"the {kind} “{item['text'][:40]}” is not drawn yet: open the project in the Edit tab")
+        entry = {"kind": kind, "path": path, "start": round(low - at, 3), "end": round(high - at, 3)}
+        if kind == "caption":
+            entry["position"] = style.get("position", "bottom")
+        else:
+            entry.update(x=item["x"], y=item["y"], w=item["w"])
+        found.append(entry)
+    return found
+
+
+def source_piece_argv(folder: Path, project: dict, piece: dict, track: str, settings: dict, out: Path) -> list[str]:
+    """One piece of an edited "as recorded" export: the track itself, cut and re-encoded, with captions on top."""
+    segment = project["segments"][piece["segment"]]
+    info = _track_info(folder, segment, track)
+    width, height = _even(info["width"] or 1920), _even(info["height"] or 1080)
+    local = piece["start"] - segment["starts"].get(track, 0.0)
+    inputs = (["-ss", f"{local:.3f}"] if local > 0 else ["-itsoffset", f"{-local:.3f}"] if local < 0 else [])
+    inputs += ["-i", str(folder / segment["files"][track])]
+    count = 1
+
+    def still_input(path: Path) -> int:
+        nonlocal count
+        inputs.extend(["-loop", "1", "-t", f"{piece['length']:.3f}", "-i", str(path)])
+        count += 1
+        return count - 1
+
+    graph = [f"[0:v]scale={width}:{height},fps={settings['fps']},setsar=1[base]"]
+    current = _overlay_stills(piece.get("overlays", []), width, height, still_input, graph, "[base]")
+    graph.append(f"{current}format=yuv420p[vout]")
+    return [
+        *FFMPEG_BASE, *inputs, "-filter_complex", ";".join(graph), "-map", "[vout]", "-an",
+        *_encoder(settings, width, height), "-t", f"{piece['length']:.3f}", "-progress", "pipe:1", "-nostats", str(out),
+    ]
+
+
+def edited_sound_argv(folder: Path, project: dict, settings: dict, recording: Path | None, out: Path) -> list[str] | None:
+    """The recording's sound cut to the clips, with music and voice-over mixed in; None when nothing is audible."""
+    edit = project["edit"]
+    clips = edit_clips(project, settings["fps"])
+    total = sum(clip["out"] - clip["in"] for clip in clips)
+    inputs: list[str] = []
+    graph: list[str] = []
+    labels: list[str] = []
+    if recording is not None and clips:
+        inputs += ["-i", str(recording)]
+        for number, clip in enumerate(clips):
+            graph.append(f"[0:a]atrim=start={clip['in']:.6f}:end={clip['out']:.6f},asetpts=PTS-STARTPTS[c{number}]")
+        graph.append("".join(f"[c{number}]" for number in range(len(clips))) + f"concat=n={len(clips)}:v=0:a=1[main]")
+        labels.append("[main]")
+    for item in edit["audio"]:
+        if item["start"] >= total:
+            continue
+        try:
+            path = inside(folder, f"assets/{item['asset']}", f"audio {item['name']}")
+        except ProjectError as error:
+            raise ExportError(str(error)) from error
+        if not path.is_file():
+            raise ExportError(f"the sound file {item['asset']} is missing from the project")
+        index = len(inputs) // 2
+        inputs += ["-i", str(path)]
+        length = item["out"] - item["in"]
+        chain = (
+            f"[{index}:a]atrim=start={item['in']:.3f}:end={item['out']:.3f},asetpts=PTS-STARTPTS,"
+            f"aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume={item['volume']:g}"
+        )
+        if item["fade_in"] > 0:
+            chain += f",afade=t=in:d={min(item['fade_in'], length):.3f}"
+        if item["fade_out"] > 0:
+            fade = min(item["fade_out"], length)
+            chain += f",afade=t=out:st={length - fade:.3f}:d={fade:.3f}"
+        if item["start"] > 0:
+            chain += f",adelay={round(item['start'] * 1000)}:all=1"
+        graph.append(f"{chain}[m{index}]")
+        labels.append(f"[m{index}]")
+    if not labels:
+        return None
+    if len(labels) > 1:
+        graph.append(f"{''.join(labels)}amix=inputs={len(labels)}:normalize=0:duration=longest[mix]")
+        last = "[mix]"
+    else:
+        last = labels[0]
+    graph.append(f"{last}apad,atrim=0:{total:.6f}[aout]")
+    return [
+        *FFMPEG_BASE, *inputs, "-filter_complex", ";".join(graph), "-map", "[aout]",
+        "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", str(out),
     ]
 
 
@@ -756,6 +894,39 @@ def export_project(
 
 
 
+def _render_edit(folder: Path, project: dict, settings: dict, work: Path, video: Path, log: Path, report: Callable[[float], None]) -> None:
+    """The edited picture: one chunk per piece of a clip (cut at pauses and scene switches), joined."""
+    pieces = edit_pieces(project, settings["fps"])
+    if not pieces:
+        raise ExportError("the edit keeps less than one frame of picture")
+    source = settings["canvas"] == "source"
+    track = "screen" if any("screen" in segment["files"] for segment in project["segments"]) else "camera"
+    total = sum(piece["length"] for piece in pieces) or 1.0
+    done = 0.0
+    chunks = []
+    for number, piece in enumerate(pieces):
+        piece["overlays"] = piece_overlays(folder, project, settings, piece["at"], piece["length"])
+        chunk = work / f"chunk-{number:04d}.mp4"
+        if source:
+            if track not in project["segments"][piece["segment"]]["files"]:
+                raise ExportError(
+                    f"part {piece['segment'] + 1} has no {track} track (its recorder stopped early): "
+                    "export to a format such as 16:9 instead of source"
+                )
+            argv = source_piece_argv(folder, project, piece, track, settings, chunk)
+        else:
+            argv = interval_argv(folder, project, piece, settings, chunk, folder / "cache")
+        _run_ffmpeg(
+            argv,
+            log,
+            "rendering the video",
+            lambda seconds, done=done, length=piece["length"]: report(0.05 + 0.85 * (done + min(seconds, length)) / total),
+        )
+        done += piece["length"]
+        chunks.append(chunk)
+    _run_ffmpeg(_concat_argv(chunks, work / "video.txt", video), log, "joining the video")
+
+
 def _export(
     folder: Path,
     settings: dict,
@@ -811,9 +982,14 @@ def _export(
         ]
         if not kept:
             raise ExportError("the recording is shorter than one frame")
-        # Sound: one WAV per segment (silence where nothing is audible), joined.
+        edited = "edit" in project
+        if edited and edit_length(project, settings["fps"]) <= 0:
+            raise ExportError("the edit is empty: every clip was cut away")
+        # Sound: one WAV per segment (silence where nothing is audible), joined. An edit keeps every part with
+        # any length, so the joined sound runs on the recording's own clock, which the clips are written in.
         audio_parts = []
-        for index in kept:
+        sound_parts = [index for index, segment in enumerate(project["segments"]) if segment["duration"] > 0] if edited else kept
+        for index in sound_parts:
             segment = project["segments"][index]
             wav = work / f"audio-{index:03d}.wav"
             argv = audio_argv(folder, project, index, settings, wav)
@@ -823,10 +999,18 @@ def _export(
             audio_parts.append(wav)
         audible = any(
             audio_argv(folder, project, index, settings, Path(os.devnull))
-            for index in kept
+            for index in sound_parts
         )
         sound = work / "audio.wav"
-        if audible:
+        if edited:
+            recording = work / "recording.wav" if audible else None
+            if recording is not None:
+                _run_ffmpeg(_concat_argv(audio_parts, work / "audio.txt", recording), log, "joining the sound")
+            argv = edited_sound_argv(folder, project, settings, recording, sound)
+            audible = argv is not None
+            if argv is not None:
+                _run_ffmpeg(argv, log, "cutting the sound")
+        elif audible:
             _run_ffmpeg(
                 _concat_argv(audio_parts, work / "audio.txt", sound),
                 log,
@@ -855,7 +1039,9 @@ def _export(
             )
         else:
             video = work / "video.mp4"
-            if settings["canvas"] == "source":
+            if edited:
+                _render_edit(folder, project, settings, work, video, log, report)
+            elif settings["canvas"] == "source":
                 track = (
                     "screen"
                     if any(
@@ -942,6 +1128,13 @@ def _export(
                 ]
             _run_ffmpeg(mux, log, "saving the video")
         result = _publish(temporary, target)
+        if edited:
+            spans = caption_spans(project, settings["fps"])
+            if spans:
+                # The subtitles also go next to the video as a file, for YouTube and players.
+                srt = work / "captions.srt"
+                srt.write_text(srt_text(spans), encoding="utf-8")
+                _publish(srt, result.with_suffix(".srt"))
     finally:
         temporary.unlink(missing_ok=True)
         shutil.rmtree(work, ignore_errors=True)

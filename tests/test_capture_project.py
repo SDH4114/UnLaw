@@ -313,3 +313,78 @@ class ProjectTests(ProjectTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EditModelTests(ProjectTestCase):
+    """The montage (`project["edit"]`): cuts as recording ranges, captions in recording time, overlays on the output."""
+
+    def project(self, **edit: object) -> dict:
+        base = {
+            "segments": [{"duration": 10.0}, {"duration": 5.0}],
+            "events": [{"t": 0.0, "scene": "screen"}, {"t": 12.0, "scene": "camera"}],
+            "duration": 15.0,
+        }
+        if edit:
+            base["edit"] = {"version": 1, "clips": [], "captions": [], "texts": [], "audio": [],
+                            "caption_style": dict(capture_project.CAPTION_STYLE), **edit}
+        return base
+
+    def test_without_an_edit_the_whole_recording_plays(self) -> None:
+        project = self.project()
+        self.assertEqual(capture_project.edit_clips(project, 30), [{"in": 0.0, "out": 15.0, "at": 0.0}])
+        self.assertEqual(capture_project.default_edit(project)["clips"], [{"id": "c1", "in": 0.0, "out": 15.0}])
+
+    def test_clips_snap_to_frames_and_line_up_without_gaps(self) -> None:
+        project = self.project(clips=[{"id": "a", "in": 1.01, "out": 3.0}, {"id": "b", "in": 8.0, "out": 8.01}, {"id": "c", "in": 9.0, "out": 12.0}])
+        got = capture_project.edit_clips(project, 30)
+        self.assertEqual([(clip["in"], clip["out"], clip["at"]) for clip in got], [(1.0, 3.0, 0.0), (9.0, 12.0, 2.0)])
+        self.assertEqual(capture_project.edit_length(project, 30), 5.0)
+
+    def test_pieces_cut_the_recording_at_segments_scenes_and_clips(self) -> None:
+        project = self.project(clips=[{"id": "a", "in": 8.0, "out": 13.0}, {"id": "b", "in": 1.0, "out": 2.0}])
+        got = capture_project.edit_pieces(project, 30)
+        self.assertEqual(
+            [(piece["segment"], piece["start"], piece["length"], piece["scene"], piece["at"]) for piece in got],
+            [(0, 8.0, 2.0, "screen", 0.0), (1, 0.0, 2.0, "screen", 2.0), (1, 2.0, 1.0, "camera", 4.0), (0, 1.0, 1.0, "screen", 5.0)],
+        )
+
+    def test_captions_follow_the_cuts(self) -> None:
+        project = self.project(
+            clips=[{"id": "a", "in": 0.0, "out": 2.0}, {"id": "b", "in": 5.0, "out": 7.0}],
+            captions=[
+                {"id": "s1", "in": 0.5, "out": 1.5, "text": "kept", "asset": "a.png"},
+                {"id": "s2", "in": 1.5, "out": 5.5, "text": "across the cut", "asset": "b.png"},
+                {"id": "s3", "in": 3.0, "out": 4.0, "text": "cut away", "asset": "c.png"},
+            ],
+        )
+        got = capture_project.caption_spans(project, 30)
+        self.assertEqual([(span["start"], span["end"], span["text"]) for span in got], [(0.5, 1.5, "kept"), (1.5, 2.5, "across the cut")])
+
+    def test_srt_text(self) -> None:
+        spans = [{"start": 0.5, "end": 1.25, "text": "Привет"}, {"start": 61.0, "end": 3725.5, "text": "two"}]
+        self.assertEqual(
+            capture_project.srt_text(spans),
+            "1\n00:00:00,500 --> 00:00:01,250\nПривет\n\n2\n00:01:01,000 --> 01:02:05,500\ntwo\n",
+        )
+
+    def test_edits_are_validated(self) -> None:
+        folder = ProjectTests.make(self)
+        good = dict(capture_project.read_project(folder), duration=10.0)
+        edit = capture_project.default_edit(good)
+        capture_project.validate_project(dict(good, edit=edit), folder)
+        bad_edits = [
+            dict(edit, version=2),
+            dict(edit, clips=[{"id": "c1", "in": 2.0, "out": 1.0}]),
+            dict(edit, clips=[{"id": "c1", "in": 0.0, "out": 1.0}, {"id": "c1", "in": 1.0, "out": 2.0}]),
+            dict(edit, captions=[{"id": "s1", "in": 0.0, "out": 1.0, "text": "a\u0007", "asset": ""}]),
+            dict(edit, captions=[{"id": "s1", "in": 0.0, "out": 1.0, "text": "x", "asset": "../x.png"}]),
+            dict(edit, texts=[{"id": "t1", "start": 0.0, "end": 1.0, "text": "x", "asset": "t.png", "x": 2.0, "y": 0.5, "w": 0.5}]),
+            dict(edit, audio=[{"id": "m1", "asset": "song.exe", "name": "s", "start": 0.0, "in": 0.0, "out": 1.0, "volume": 1.0, "fade_in": 0.0, "fade_out": 0.0}]),
+            dict(edit, caption_style=dict(edit["caption_style"], position="left")),
+            dict(edit, extra=1),
+        ]
+        for bad in bad_edits:
+            with self.assertRaises(capture_project.ProjectError, msg=json.dumps(bad)[:200]):
+                capture_project.validate_project(dict(good, edit=bad), folder)
+        music = {"id": "m1", "asset": "song.m4a", "name": "Song", "start": 1.0, "in": 0.0, "out": 3.0, "volume": 0.5, "fade_in": 0.5, "fade_out": 1.0}
+        capture_project.validate_project(dict(good, edit=dict(edit, audio=[music])), folder)

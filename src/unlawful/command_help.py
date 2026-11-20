@@ -224,6 +224,8 @@ Projects and export (the export never changes the project):
                    Defaults: the project's last export, else the last one anywhere,
                    else 16:9 1440p 60 fps H.264 (vertical formats 1080).
   export --status  progress of the running export
+                   An edit made in the desk's Edit tab (project.json `edit`: cuts, subtitles,
+                   text, music) is applied; subtitles are burned in and saved as a .srt too.
   setup            the studio setup (sources, devices, scenes, layouts, export defaults)
                    as JSON; --set-json - saves it from stdin, --reset restores defaults
   doctor           Screen Recording permission, ffmpeg, and which app needs the
@@ -239,6 +241,8 @@ Library:
   devices          displays, cameras and microphones with their numbers
   devices --modes [--camera NAME]   the modes each camera offers (turns its light on briefly)
   wave X [--bars N] the loudness of a recording as bars (like Voice Memos)
+                    (--project P: X is a file of project P, up to 20000 bars)
+  transcribe P      subtitles for project P from `ul lm transcribe` (--language CODE --model NAME), JSON with --json
   thumb X / preview [--display N]   small JPEGs (used by `ul desk`)
 Add --json to any action for machine-readable output.
 Files: storage.root/captures/projects, /recordings (exports) and /screenshots; never

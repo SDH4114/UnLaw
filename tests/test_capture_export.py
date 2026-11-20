@@ -54,6 +54,9 @@ def decode_png(data: bytes) -> tuple[int, int, list[bytes]]:
     return width, height, rows
 
 
+PNG_1x1 = capture_export.png_rgba(1, 1, lambda x, y: (255, 255, 255, 255)) if hasattr(capture_export, "png_rgba") else b""
+
+
 class ExportTestCase(unittest.TestCase):
     def setUp(self) -> None:
         temp = tempfile.TemporaryDirectory()
@@ -420,6 +423,66 @@ class ExportRunTests(ExportTestCase):
             capture_export.export_project(folder, self.settings(folder))
         self.assertEqual((outside / "render" / "keep.txt").read_text(), "mine")
 
+    def edit(self, folder: Path, **changes: object) -> dict:
+        project = capture_project.read_project(folder)
+        project["edit"] = dict(capture_project.default_edit(project), **changes)
+        capture_project.write_project(folder, project)
+        return project
+
+    def test_an_edit_cuts_the_picture_and_the_sound(self) -> None:
+        folder = self.make_project(segments=2)
+        (folder / "assets" / "cap.png").write_bytes(PNG_1x1)
+        (folder / "assets" / "song.m4a").write_bytes(b"song")
+        self.edit(
+            folder,
+            clips=[{"id": "a", "in": 12.0, "out": 14.0}, {"id": "b", "in": 1.0, "out": 3.0}],
+            captions=[{"id": "s1", "in": 13.0, "out": 14.0, "text": "Привет", "asset": "cap.png"}],
+            audio=[{"id": "m1", "asset": "song.m4a", "name": "Song", "start": 0.5, "in": 0.0, "out": 2.0, "volume": 0.4, "fade_in": 0.5, "fade_out": 0.5}],
+        )
+        out = capture_export.export_project(folder, self.settings(folder))
+        calls = self.calls()
+        chunks = [call for call in calls if any(arg.endswith(".mp4") and "chunk-" in arg for arg in call[-1:])]
+        self.assertEqual(len(chunks), 2, "one chunk per clip")
+        first = chunks[0]
+        self.assertIn("2.000", first[first.index("-ss") + 1], "the first clip starts 2 s into part 2")
+        self.assertIn("enable='between(t,1.000,2.000)'", self.graph(first), "the caption shows in its second")
+        self.assertIn(str(folder / "assets" / "cap.png"), first)
+        self.assertNotIn("cap.png", " ".join(chunks[1]), "the second clip has no caption")
+        cut = next(call for call in calls if any("concat=n=2:v=0:a=1" in arg for arg in call))
+        graph = self.graph(cut)
+        self.assertIn("atrim=start=12.000000:end=14.000000", graph)
+        self.assertIn("afade=t=out:st=1.500:d=0.500", graph)
+        self.assertIn("adelay=500:all=1", graph)
+        srt = out.with_suffix(".srt")
+        self.assertEqual(srt.read_text(encoding="utf-8"), "1\n00:00:01,000 --> 00:00:02,000\nПривет\n")
+
+    def test_an_undrawn_caption_stops_the_export_with_a_reason(self) -> None:
+        folder = self.make_project()
+        self.edit(folder, captions=[{"id": "s1", "in": 1.0, "out": 2.0, "text": "hi", "asset": "gone.png"}])
+        with self.assertRaises(capture_export.ExportError) as caught:
+            capture_export.export_project(folder, self.settings(folder))
+        self.assertIn("Edit tab", str(caught.exception))
+        # A line transcribed but never drawn (exported before the page drew it) is not silently left out.
+        self.edit(folder, captions=[{"id": "s1", "in": 1.0, "out": 2.0, "text": "hi", "asset": ""}])
+        with self.assertRaises(capture_export.ExportError) as caught:
+            capture_export.export_project(folder, self.settings(folder))
+        self.assertIn("Edit tab", str(caught.exception))
+
+    def test_an_edited_audio_project_exports_only_sound(self) -> None:
+        folder = self.make_project(camera=False, mode="audio")
+        self.edit(folder, clips=[{"id": "a", "in": 2.0, "out": 4.0}, {"id": "b", "in": 6.0, "out": 7.0}])
+        out = capture_export.export_project(folder, self.settings(folder))
+        self.assertEqual(out.suffix, ".mp3")
+        self.assertTrue(any(any("concat=n=2:v=0:a=1" in arg for arg in call) for call in self.calls()))
+
+    def test_an_edit_as_recorded_reencodes_the_screen(self) -> None:
+        folder = self.make_project()
+        self.edit(folder, clips=[{"id": "a", "in": 1.0, "out": 2.0}])
+        capture_export.export_project(folder, self.settings(folder, canvas="source"))
+        chunk = next(call for call in self.calls() if "chunk-0000.mp4" in call[-1])
+        self.assertIn(str(folder / "media" / "screen-001.mp4"), chunk)
+        self.assertIn("scale=3600:2338", self.graph(chunk))
+
     def test_zero_length_segments_export(self) -> None:
         folder = self.make_project(segments=2)
         project = capture_project.read_project(folder)
@@ -633,3 +696,76 @@ class RealFfmpegTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(os.environ.get("UNLAW_REAL_MEDIA") == "1", "opt-in: real ffmpeg on synthetic sources")
+class RealEditTests(unittest.TestCase):
+    def test_real_edited_export_with_captions_music_and_srt(self) -> None:
+        ffmpeg = shutil.which("ffmpeg")
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        with patch.dict(os.environ, {"HOME": str(root), "XDG_CONFIG_HOME": str(root / "config")}):
+            ensure_layout()
+            folder = capture_project.create_project("screen", capture_project.default_setup({}), {})
+
+            def make(*args: str) -> None:
+                subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *args], check=True)
+
+            make("-f", "lavfi", "-i", "testsrc2=s=1280x720:r=30:d=4", "-f", "lavfi", "-i", "sine=f=440:d=4",
+                 "-c:v", "h264_videotoolbox", "-b:v", "4M", "-c:a", "aac", "-shortest", str(folder / "media" / "screen-001.mp4"))
+            make("-f", "lavfi", "-i", "sine=f=220:d=4", "-c:a", "flac", str(folder / "media" / "mic-001.flac"))
+            make("-f", "lavfi", "-i", "sine=f=660:d=3", "-c:a", "aac", str(folder / "assets" / "song.m4a"))
+            (folder / "assets" / "cap.png").write_bytes(capture_export.png_rgba(400, 60, lambda x, y: (255, 255, 255, 200)))
+            project = capture_project.read_project(folder)
+            project["segments"] = [{"duration": 4.0, "files": {"screen": "media/screen-001.mp4", "mic": "media/mic-001.flac"},
+                                    "starts": {"screen": 0.0, "mic": 0.0}}]
+            project["duration"] = 4.0
+            project["edit"] = dict(
+                capture_project.default_edit(project),
+                clips=[{"id": "a", "in": 0.5, "out": 1.5}, {"id": "b", "in": 2.5, "out": 3.5}],
+                captions=[{"id": "s1", "in": 1.0, "out": 3.0, "text": "hello", "asset": "cap.png"}],
+                texts=[{"id": "t1", "start": 0.0, "end": 1.0, "text": "title", "asset": "cap.png", "x": 0.5, "y": 0.2, "w": 0.4}],
+                audio=[{"id": "m1", "asset": "song.m4a", "name": "Song", "start": 0.2, "in": 0.0, "out": 1.5, "volume": 0.5, "fade_in": 0.3, "fade_out": 0.3}],
+            )
+            capture_project.write_project(folder, project)
+            for canvas in ("16:9", "source"):
+                settings = capture_export.export_settings(project, {}, {"canvas": canvas, "height": 1080, "fps": 30})
+                out = capture_export.export_project(folder, settings)
+                duration = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(out)],
+                                                capture_output=True, text=True, check=True).stdout)
+                self.assertAlmostEqual(duration, 2.0, delta=0.1, msg=canvas)
+                self.assertIn("00:00:00,500 --> 00:00:01,500", out.with_suffix(".srt").read_text())
+
+
+class TranscribeTests(ExportTestCase):
+    def test_lines_come_back_on_the_recording_clock(self) -> None:
+        from unlawful import capture
+
+        folder = self.make_project(segments=2)
+        log = self.tool("ul", """import json
+if "mic-002" in sys.argv[3]:
+    print(json.dumps({"language": "ru", "segments": [{"start": 1.0, "end": 2.5, "text": " Привет\\u0007 мир "}, {"start": 9.5, "end": 12.0, "text": "end"}]}))
+else:
+    print(json.dumps({"language": "ru", "segments": [{"start": 0.0, "end": 1.0, "text": "one"}, {"start": 3.0, "end": 3.0, "text": "empty"}]}))
+""")
+        with patch.dict(os.environ, {"UNLAW_BIN": str(self.bin / "ul")}):
+            data = capture.transcribe_project(folder, "ru", None)
+        self.assertEqual(data["language"], "ru")
+        # The microphone starts 0.94 s into each 10 s part; a line that starts past the part's end is dropped.
+        self.assertEqual(
+            [(line["in"], line["out"], line["text"]) for line in data["captions"]],
+            [(0.94, 1.94, "one"), (11.94, 13.44, "Привет мир")],
+        )
+        self.assertIn("-l|ru", log.read_text())
+
+    def test_a_failing_recogniser_reports_why(self) -> None:
+        from unlawful import capture
+
+        folder = self.make_project()
+        self.tool("ul", "print('no speech model: run ul lm pull ...', file=sys.stderr)\nraise SystemExit(1)\n")
+        with patch.dict(os.environ, {"UNLAW_BIN": str(self.bin / "ul")}), self.assertRaises(capture.CaptureError) as caught:
+            capture.transcribe_project(folder)
+        self.assertIn("no speech model", str(caught.exception))
+        with self.assertRaises(capture.CaptureError):
+            capture.transcribe_project(folder, "--rm")

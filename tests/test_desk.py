@@ -1058,6 +1058,42 @@ class DeskStudioTests(unittest.TestCase):
         self.assertEqual(Path(data["trashed"]).parent, self.root / "home" / ".Trash")
         self.assertFalse(Path(done["project"]).exists())
 
+    def test_edit_assets_waves_and_voice_over(self) -> None:
+        self.media()
+        port, token = self.start()
+        project = self.record_project(port, token)["project"]
+        folder = Path(project)
+        png = b"\x89PNG\r\n\x1a\n" + b"caption"
+
+        def upload(name: str, data: bytes):
+            return self.post_raw(port, f"/api/studio/project/asset?t={token}&path={quote(project)}&name={quote(name)}", data, token)
+
+        first = upload("cap-abc.png", png)
+        self.assertEqual(first[0], 200, first)
+        self.assertEqual(first[1]["asset"], "cap-abc.png")
+        self.assertEqual(upload("cap-abc.png", png)[1]["asset"], "cap-abc.png", "the same drawing is reused")
+        self.assertEqual(upload("cap-abc.png", png + b"2")[1]["asset"], "cap-abc 2.png", "never over a file")
+        wav = b"RIFF\x00\x00\x00\x00WAVEfmt " + b"\x00" * 32
+        self.assertEqual(upload("song.wav", wav)[1]["asset"], "song.wav")
+        self.assertEqual(upload("fake.mp3", b"#!/bin/sh\necho hi\n")[0], 400)
+        self.assertEqual(upload("run.sh", b"#!/bin/sh")[0], 400)
+        self.assertEqual(upload("../escape.png", png)[0], 200)
+        self.assertFalse((folder / "escape.png").exists())
+        self.assertTrue((folder / "assets" / "escape.png").exists())
+        # A voice-over from another (audio) project is copied, never linked.
+        other = self.record_project(port, token, {"mode": "audio"})["project"]
+        mic = next(name for name in json.loads((Path(other) / "project.json").read_text())["segments"][0]["files"].values())
+        status, data = self.call(port, token, "/api/studio/project/import", {"path": project, "from": other, "file": mic})
+        self.assertEqual(status, 200, data)
+        copied = folder / "assets" / data["asset"]
+        self.assertTrue(copied.is_file() and not copied.is_symlink())
+        self.assertEqual(self.call(port, token, "/api/studio/project/import", {"path": project, "from": other, "file": "project.json"})[0], 404)
+        status, data = self.call(port, token, f"/api/studio/project/wave?path={quote(project)}&file={quote('assets/' + copied.name)}&bars=50")
+        self.assertEqual(status, 200, data)
+        self.assertIn("peaks", data)
+        self.assertEqual(self.call(port, token, f"/api/studio/project/wave?path={quote(project)}&file=assets/song.wav&bars=99999")[0], 400)
+        self.assertEqual(self.call(port, token, "/api/studio/transcribe", {"path": project, "language": "--rm"})[0], 400)
+
     def test_project_media_refuses_escapes(self) -> None:  # Review Focus 5
         self.media()
         port, token = self.start()

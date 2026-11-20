@@ -1,6 +1,6 @@
 # Studio editor (part 2): design
 
-Status: draft for Haos, 2026-11-20. Part 1 (recording projects) is in
+Status: approved by Haos on 2026-11-20 ("делай сразу всё", in the desk, no React) and built on feat/studio-recording. Part 1 (recording projects) is in
 `2026-11-19-studio-recording-design.md`; this is the "Edit" tab it left disabled.
 
 ## 1. Intent
@@ -128,7 +128,15 @@ without `edit` exports exactly as now.
 3. Overlay text/images, music and voice-over tracks, volume per clip, fades,
    crossfade between v1 clips, remove silences.
 
-## 9. Left to the builder
+## 9. Calls made while building
+
+- Edit model as built: `clips` and `captions` on the recording clock, `texts` and `audio` on the output
+  clock (section 4's `tracks` list became these four lists: simpler to validate, same meaning).
+- No crossfade between clips and no unlinked sound yet: the recording's picture and sound always cut together.
+- The voice-over comes from an audio-only project recorded on the Record tab (copied into assets/).
+- Caption PNGs are drawn at 2x for a 1080-line frame, so 4K exports stay sharp.
+
+## 10. Left to the builder
 
 Peak/thumbnail sizes, exact keyboard map beyond §5, caching details, how the
 preview handles a gap (black), the test split (Python model + export, cjs page).

@@ -73,7 +73,7 @@ class LayoutTests(CoreTestCase):
         from unlawful import command_sources
 
         self.assertEqual(command_sources._COMMAND_FILES["capture"], ("capture_project.py", "capture_mac.py", "capture_export.py", "capture_tui.py", "capture.py"))
-        self.assertEqual(command_sources._COMMAND_FILES["desk"], ("kanban.py", "reminders.py", "canvas.py", "studio_ui.py", "desk_ui.py", "desk.py"))
+        self.assertEqual(command_sources._COMMAND_FILES["desk"], ("kanban.py", "reminders.py", "canvas.py", "studio_edit.py", "studio_ui.py", "desk_ui.py", "desk.py"))
         for name in ("capture", "desk"):
             source = command_source(name)
             compile(source, f"{name}/main.py", "exec")

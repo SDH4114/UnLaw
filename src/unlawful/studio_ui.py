@@ -7,6 +7,8 @@ the page only edits the shared setup (storage.root/studio/setup.json) and shows 
 
 from __future__ import annotations
 
+from .studio_edit import EDIT_CSS, EDIT_JS
+
 STUDIO_CSS = r""".studio { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px 18px; min-height: 100%; }
 .sthead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .sthead .seg { display: flex; gap: 2px; background: var(--column); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
@@ -87,6 +89,12 @@ STUDIO_CSS = r""".studio { display: flex; flex-direction: column; gap: 10px; pad
 .item .pic .len { position: absolute; right: 6px; bottom: 6px; background: var(--panel); color: var(--text); font: 11px var(--mono); padding: 1px 6px; border-radius: 5px; }
 .item .pic .state { position: absolute; left: 6px; top: 6px; background: var(--panel); color: var(--text); font-size: 10.5px; font-weight: 650; padding: 1px 6px; border-radius: 5px; }
 .item .pic .state.incomplete { color: var(--danger); }
+.item .pic .kind { position: absolute; left: 6px; bottom: 6px; background: var(--panel); color: var(--muted); font-size: 10px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 5px; }
+.item .pic .cardwave { position: absolute; inset: 14px 10px 26px; width: calc(100% - 20px); height: calc(100% - 40px); }
+.item .cap { position: relative; }
+.item .cap .quick { position: absolute; right: 8px; top: 6px; font-size: 11.5px; font-weight: 650; padding: 2px 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); opacity: 0; transition: opacity .12s; }
+.item:hover .cap .quick, .item:focus-within .cap .quick { opacity: 1; }
+.item .cap .quick:hover { border-color: var(--accent-ink); color: var(--accent-ink); }
 .item .pic svg { width: 34px; height: 34px; stroke: var(--muted); fill: none; stroke-width: 1.6; }
 .item .cap { padding: 7px 9px 8px; font-size: 12px; }
 .item .cap b { display: block; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -255,7 +263,7 @@ body.resizing.row-resize, body.resizing.row-resize * { cursor: row-resize !impor
 
 STUDIO_JS = r"""// ---- studio: Record (scenes, sources, live preview) and Projects, all through `ul capture` ----
 const studio = { info: null, setup: null, devices: null, modes: {}, doctor: null, status: { active: false }, statusAt: 0, shown: 0, starting: 0, saving: false,
-  tab: localStorage.getItem("studio-tab") === "projects" ? "projects" : "record", selected: "camera", library: [], projects: [], filter: localStorage.getItem("studio-filter") || "projects",
+  tab: ["projects", "edit"].includes(localStorage.getItem("studio-tab")) ? localStorage.getItem("studio-tab") : "record", selected: "camera", library: [], projects: [], filter: localStorage.getItem("studio-filter") || "projects",
   camStream: null, camVideo: null, micStream: null, audio: null, analyser: null, sampler: 0, levels: [], wave: [], screenUrl: "", screenFailed: false, previewTimer: 0,
   drag: null, saveTimer: 0, counting: 0, countTimer: 0, countdownDone: null, menu: null, delay: 0, clipboard: false,
   item: null, trim: { from: null, to: null }, project: null, projectCanvas: "16:9", projectTimer: 0, player: null, projectsLoaded: false, libraryLoaded: false, exportJob: null, exportTimer: 0 };
@@ -806,6 +814,7 @@ function studioKeydown(event) {
     undoEdit(event.shiftKey);
     return true;
   }
+  if (studio.tab === "edit") { const handled = editKeydown(event); if (handled) event.preventDefault(); return handled; }
   if (studio.tab !== "record" || studio.project) return false;
   if (event.key === "Escape" && studio.menu) { closeStudioMenu(); return true; }
   if (event.metaKey || event.ctrlKey || event.altKey) return false;
@@ -837,6 +846,7 @@ function leaveStudio() {
   stopStream("screenStream");
   closeStudioMenu();
   closeViewer();
+  edLeave();
   if (studio.projectTimer) flushProject();
   stopProjectPlayer();
   studio.project = null;
@@ -1000,6 +1010,17 @@ function renderStudio(main) {
 }
 
 function setStudioTab(tab) {
+  if (tab === "edit") {
+    if (studio.tab === "edit") return;
+    clearTimeout(studio.previewTimer); stopStream("camStream"); stopStream("micStream"); stopStream("screenStream"); closeStudioMenu();
+    if (studio.counting) cancelCountdown();
+    if (studio.project) { edEnter(); return; }
+    studio.tab = "edit";
+    localStorage.setItem("studio-tab", "edit");
+    renderStudioBody();
+    return;
+  }
+  if (studio.tab === "edit") edLeave();
   if (tab === studio.tab && !studio.project) return;
   studio.tab = tab;
   localStorage.setItem("studio-tab", tab);
@@ -1181,7 +1202,7 @@ function renderStudioBody() {
   const tabs = h("div", { class: "seg" },
     h("button", { class: studio.tab === "record" ? "on" : "", text: "Record", onclick: () => setStudioTab("record") }),
     h("button", { class: studio.tab === "projects" ? "on" : "", text: "Projects", onclick: () => setStudioTab("projects") }),
-    h("button", { text: "Edit", disabled: true, title: "Editing (timeline, cuts, subtitles) is coming soon" }));
+    h("button", { class: studio.tab === "edit" ? "on" : "", text: "Edit", title: "Cut, subtitles, text and music for a project", onclick: () => setStudioTab("edit") }));
   const head = h("div", { class: "sthead" }, tabs, h("span", { class: "spacer" }));
   if (studio.tab === "record" && studio.setup) {
     head.append(iconButton("layout", "Reset the panel layout (drag a panel's title to move it, the gaps to resize)", resetLayout),
@@ -1191,6 +1212,13 @@ function renderStudioBody() {
   }
   root.append(head);
   if (studio.tab === "projects") { root.append(h("div", { id: "studioProjects" })); renderProjects(); return; }
+  if (studio.tab === "edit") {
+    root.append(h("div", { id: "studioEdit" }));
+    const last = localStorage.getItem("studio-edit-path");
+    if (!studio.project && last && !studio.editTried) { studio.editTried = true; openEdit(last).catch(() => {}); }
+    renderEdit();
+    return;
+  }
   if (!studio.setup) {
     root.append(studio.setupError
       ? h("div", { class: "empty" }, h("div", { text: "The studio setup could not be read: " + studio.setupError }),
@@ -2306,6 +2334,7 @@ function undoEdit(redo) {
   Object.assign(doc, previous);
   studio.historyLast = JSON.stringify(doc);
   if (studio.selected && !sourceById(studio.selected)) studio.selected = null;
+  if (studio.project && studio.tab === "edit") { saveProjectSoon(); ed.sel = null; renderEdit(); return; }
   if (studio.project) { saveProjectSoon(); drawStage(); renderProps(); return; }
   saveSetupSoon();
   renderStudioBody();
@@ -2565,14 +2594,40 @@ function renderProjects() {
 
 function projectCard(item) {
   const pic = h("div", { class: "pic" });
-  if (item.tracks.includes("screen") || item.tracks.includes("camera")) pic.append(h("img", { src: media("/media/thumb") + "&path=" + encodeURIComponent(item.path), alt: "", loading: "lazy" }));
-  else pic.append(svgIcon(ICONS.audio));
+  const video = item.tracks.includes("screen") || item.tracks.includes("camera");
+  if (video) pic.append(h("img", { src: media("/media/thumb") + "&path=" + encodeURIComponent(item.path), alt: "", loading: "lazy" }));
+  else { const wave = h("canvas", { class: "cardwave", "aria-hidden": "true" }); pic.append(wave); cardWave(wave, item); }
+  pic.append(h("span", { class: "kind", text: item.tracks.includes("screen") ? "Screen" : item.tracks.includes("camera") ? "Camera" : "Audio" }));
   pic.append(h("span", { class: "len", text: clockText(item.duration) }));
   if (item.state !== "ready") pic.append(h("span", { class: "state " + item.state, text: item.state, title: (item.problems || []).join("\n") }));
   const formats = item.exports.map(exportLabel);
   const when = new Date(item.created).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const edit = h("span", { class: "quick", role: "button", tabindex: "0", title: "Open in the Edit tab", text: "Edit",
+    onclick: (event) => { event.stopPropagation(); openEdit(item.path); } });
   return h("button", { class: "item", title: item.path, onclick: () => openProject(item.path) }, pic,
-    h("div", { class: "cap" }, h("b", { text: item.name }), h("span", { text: when + " · " + sizeText(item.size) + " · " + (formats.length ? formats.join(", ") : "not exported") })));
+    h("div", { class: "cap" }, h("b", { text: item.name }), h("span", { text: when + " · " + sizeText(item.size) + " · " + (formats.length ? formats.join(", ") : "not exported") }), edit));
+}
+
+// A small sound wave for an audio project's card (read once per page, from the first part's sound).
+async function cardWave(canvas, item) {
+  studio.cardWaves = studio.cardWaves || {};
+  let peaks = studio.cardWaves[item.path];
+  if (!peaks) {
+    const project = await api("GET", "/api/studio/project?path=" + encodeURIComponent(item.path));
+    const files = project.status === 200 ? soundFiles(project.data) : [];
+    if (!files.length) return;
+    const wave = await api("GET", "/api/studio/project/wave?path=" + encodeURIComponent(item.path) + "&file=" + encodeURIComponent(files[0].file) + "&bars=90");
+    if (wave.status !== 200 || !Array.isArray(wave.data.peaks)) return;
+    peaks = studio.cardWaves[item.path] = wave.data.peaks;
+  }
+  const width = canvas.clientWidth || 200, height = canvas.clientHeight || 120, ratio = window.devicePixelRatio || 1;
+  canvas.width = Math.round(width * ratio);
+  canvas.height = Math.round(height * ratio);
+  const c = canvas.getContext("2d");
+  c.scale(ratio, ratio);
+  c.fillStyle = (getComputedStyle(document.body).getPropertyValue("--accent") || "#ffc933").trim() || "#ffc933";
+  const step = width / peaks.length;
+  peaks.forEach((value, i) => { const bar = Math.max(1, value * height * 0.36); c.fillRect(i * step, height / 2 - bar, Math.max(1, step - 1.2), bar * 2); });
 }
 
 async function openProjectDialog() {
@@ -2658,12 +2713,19 @@ function renderProjectPage(box) {
   box.append(h("div", { class: "projbar" },
     h("button", { class: "ghost back", onclick: closeProject }, studioIcon("back"), "Projects"),
     h("b", { text: project.name }), h("span", { class: "where", text: meta }), h("span", { class: "spacer" }),
-    h("div", { class: "seg fmt" }, STUDIO_FORMATS.map(([value, label]) =>
+    audioOnly(project) ? null : h("div", { class: "seg fmt" }, STUDIO_FORMATS.map(([value, label]) =>
       h("button", { class: studio.projectCanvas === value ? "on" : "", text: label, onclick: () => { studio.projectCanvas = value; renderProjectPage(box); } }))),
-    h("button", { class: "primary", text: "Export…", onclick: () => renderExportDialog(project) }),
+    h("button", { text: "Edit", title: "Cut, subtitles, text and music (Edit tab)", onclick: () => edEnter() }),
+    h("button", { class: "primary", text: "Export…", onclick: async () => {
+      // Subtitles and texts of an edit are drawn here (PNG) before the export can burn them in.
+      if (project.edit && !(await edEnsureAssets())) { toast("Some subtitles or texts could not be drawn; try again"); return; }
+      if (studio.projectTimer) await flushProject();
+      renderExportDialog(project);
+    } }),
     h("button", { text: "Show in Finder", onclick: () => projectAction("reveal") }),
     h("button", { class: "ghost", text: "Move to Trash", onclick: () => projectAction("delete") })));
   if (project.problems.length) box.append(h("div", { class: "warns" }, project.problems.map((problem) => h("div", {}, studioIcon("alert"), h("span", { text: problem })))));
+  if (audioOnly(project)) { renderAudioProjectPage(box); return; }
   const seek = h("input", { type: "range", id: "projSeek", min: "0", max: String(project.duration), step: "0.01", value: "0" });
   seek.addEventListener("input", () => seekProject(Number(seek.value)));
   const timeline = h("div", { class: "scenelist" });
@@ -2688,6 +2750,32 @@ function renderProjectPage(box) {
   drawStage();
   drawPlayerClock();
   renderProjectProps();
+}
+
+// An audio-only project: its sound like Voice Memos, marks, sound settings and exports (no formats, no layout).
+function renderAudioProjectPage(box) {
+  const project = studio.project;
+  const marks = h("div", { class: "scenelist" });
+  const marked = project.events.filter((event) => "mark" in event);
+  for (const event of marked)
+    marks.append(h("div", { role: "button", tabindex: "0", style: "cursor:pointer", onclick: () => { seekProject(event.t); drawAudioView(); } },
+      h("span", { class: "t", text: clockText(event.t) }), h("span", { class: "markname" }, studioIcon("flag"), event.mark || "mark")));
+  if (!marked.length) marks.append(h("div", { class: "where", text: "No marks. Press M while recording to add one." }));
+  const exports = h("div", { class: "scenelist" }, project.exports.length ? project.exports.map((item) => {
+    const name = String(item.path).split("/").pop();
+    return h("div", { role: "button", tabindex: "0", style: "cursor:pointer", title: "Show in Finder", onclick: () => revealExport(name) }, h("span", { text: name }));
+  }) : h("div", { class: "where", text: "Not exported yet." }));
+  const mic = project.audio.mic;
+  const volume = h("input", { type: "range", min: "0", max: "2", step: "0.05", value: String(mic.volume) });
+  volume.addEventListener("change", () => { mic.volume = Number(volume.value); rememberEdit(); saveProjectSoon(); });
+  const centre = h("div", { class: "centre" });
+  box.append(h("div", { class: "projpage" }, centre,
+    h("div", { class: "right" },
+      h("div", { class: "pane" }, h("h5", { text: "Marks" }), marks),
+      h("div", { class: "pane" }, h("h5", { text: "Sound" }), prow("Volume", volume), h("p", { class: "note", text: "Export makes " + (project.audio_format || "an audio file") + " with loudness evened out. Cut pauses and add subtitles in the Edit tab." })),
+      h("div", { class: "pane" }, h("h5", { text: "Exports" }), exports))));
+  renderAudioProject(centre);
+  drawPlayerClock();
 }
 
 function renderProjectProps() {
@@ -2945,3 +3033,6 @@ $("recPill").addEventListener("click", () => { if (state.view !== "studio") setV
 window.addEventListener("resize", () => { if (state.view === "studio" && studio.tab === "record") drawStage(); });
 
 """
+
+STUDIO_CSS += EDIT_CSS
+STUDIO_JS += EDIT_JS

@@ -1338,6 +1338,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.studio.run("projects", timeout=120))
             elif url.path == "/api/studio/project":
                 self._json(200, self.studio.project(urllib.parse.parse_qs(url.query).get("path", [""])[0]))
+            elif url.path == "/api/studio/project/wave":
+                query = urllib.parse.parse_qs(url.query)
+                self._json(200, self.studio.project_wave(query.get("path", [""])[0], query.get("file", [""])[0], query.get("bars", ["2000"])[0]))
             elif url.path == "/api/studio/export/status":
                 self._json(200, self.studio.run("export", "--status", timeout=30))
             elif url.path == "/api/studio/camera-modes":
@@ -1449,6 +1452,12 @@ class Handler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length") or -1)
                 self._json(200, self.desk.canvas_attach(query.get("path", [""])[0], query.get("name", [""])[0], self.rfile, length))
                 return
+            if path == "/api/studio/project/asset":
+                self.close_connection = True
+                length = int(self.headers.get("Content-Length") or -1)
+                query = urllib.parse.parse_qs(url.query)
+                self._json(200, self.studio.add_project_asset(query.get("path", [""])[0], query.get("name", [""])[0], self.rfile, length))
+                return
             if path == "/api/studio/asset":
                 # The body is the image itself; a refused upload may leave bytes unread, so the connection ends.
                 self.close_connection = True
@@ -1533,6 +1542,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.studio.mark(body))
             elif path == "/api/studio/project":
                 self._json(200, self.studio.save_project(body))
+            elif path == "/api/studio/transcribe":
+                self._json(200, self.studio.transcribe(body))
+            elif path == "/api/studio/project/import":
+                self._json(200, self.studio.import_sound(body))
             elif path == "/api/studio/export":
                 self._json(200, self.studio.export(body))
             elif path == "/api/studio/open-settings":
@@ -1636,6 +1649,9 @@ MEDIA_TYPES = {
     ".heic": "image/heic",
     ".tiff": "image/tiff",
     ".flac": "audio/flac",
+    ".aac": "audio/aac",
+    ".aiff": "audio/aiff",
+    ".caf": "audio/x-caf",
 }
 STUDIO_MODES = ("screen", "screen-camera", "camera", "audio")
 STUDIO_FORMATS = ("mov", "mp4", "m4a", "mp3", "wav")
@@ -1656,6 +1672,28 @@ MAX_STUDIO_BODY = 2 * 1024 * 1024
 # Images for image and text sources (the page renders text to PNG).
 MAX_ASSET = 50 * 1024 * 1024
 ASSET_MAGIC = {".png": b"\x89PNG\r\n\x1a\n", ".jpg": b"\xff\xd8\xff", ".jpeg": b"\xff\xd8\xff"}
+AUDIO_ASSETS = (".m4a", ".mp3", ".wav", ".flac", ".aac", ".aiff", ".caf")
+# Music and voice-over for the Edit tab (copied into the project's assets/).
+MAX_PROJECT_AUDIO = 1024 * 1024 * 1024
+
+
+def audio_looks_right(suffix: str, head: bytes) -> bool:
+    """The first bytes of a sound file match its extension (an upload named .mp3 must be one)."""
+    if suffix == ".wav":
+        return head[:4] == b"RIFF" and head[8:12] == b"WAVE"
+    if suffix == ".flac":
+        return head[:4] == b"fLaC"
+    if suffix == ".mp3":
+        return head[:3] == b"ID3" or (len(head) > 1 and head[0] == 0xFF and head[1] & 0xE0 == 0xE0)
+    if suffix == ".m4a":
+        return head[4:8] == b"ftyp"
+    if suffix == ".aac":
+        return len(head) > 1 and head[0] == 0xFF and head[1] & 0xF0 == 0xF0
+    if suffix == ".aiff":
+        return head[:4] == b"FORM"
+    if suffix == ".caf":
+        return head[:4] == b"caff"
+    return False
 CHOOSE_PROJECT_SCRIPT = (
     "on run argv",
     "activate",
@@ -1994,6 +2032,114 @@ class Studio:
             target.unlink(missing_ok=True)
             raise
         return {"asset": target.name}
+
+    def add_project_asset(self, raw: object, name: object, source, length: int) -> dict:
+        """A caption/text PNG or a sound file for the Edit tab, written into the project's assets/.
+
+        Never over a file: an existing file with the same bytes is reused (captions are named by their
+        content, so a redraw of an unchanged line costs nothing), anything else gets a free name.
+        """
+        folder = self.project_folder(raw)
+        clean = attachment_name(name)
+        stem, suffix = os.path.splitext(clean)
+        suffix = suffix.casefold()
+        image = suffix in ASSET_MAGIC
+        if not image and suffix not in AUDIO_ASSETS:
+            raise ValueError("only PNG/JPEG images and m4a, mp3, wav, flac, aac, aiff or caf sound can be added")
+        most = MAX_ASSET if image else MAX_PROJECT_AUDIO
+        if not 0 < length <= most:
+            raise ValueError(f"the file can be at most {most // (1024 * 1024)} MB")
+        head = source.read(min(length, 16))
+        if (image and not head.startswith(ASSET_MAGIC[suffix])) or (not image and not audio_looks_right(suffix, head)):
+            raise ValueError(f"this is not a {suffix[1:].upper()} file")
+        assets = folder / "assets"
+        if assets.is_symlink():
+            raise ValueError("the project's assets folder is a link")
+        assets.mkdir(exist_ok=True)
+        stem = stem[:100].rstrip() or "file"
+        body = None
+        if image:  # small: compare with a file of the same name
+            body = head + source.read(length - len(head))
+            if len(body) != length:
+                raise ValueError("the upload ended early")
+            same = assets / f"{stem}{suffix}"
+            if same.is_file() and not same.is_symlink() and same.read_bytes() == body:
+                return {"asset": same.name}
+        for number in range(1, 1000):
+            target = assets / (f"{stem}{suffix}" if number == 1 else f"{stem} {number}{suffix}")
+            try:
+                handle = target.open("xb")
+            except FileExistsError:
+                continue
+            break
+        else:
+            raise ValueError(f"no free name for {clean}")
+        try:
+            with handle:
+                if body is not None:
+                    handle.write(body)
+                else:
+                    handle.write(head)
+                    left = length - len(head)
+                    while left > 0:
+                        chunk = source.read(min(1 << 16, left))
+                        if not chunk:
+                            raise ValueError("the upload ended early")
+                        handle.write(chunk)
+                        left -= len(chunk)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+        return {"asset": target.name}
+
+    def import_sound(self, body: dict) -> dict:
+        """Copy the sound of another project (an audio-only recording) into this one as a voice-over."""
+        folder = self.project_folder(body.get("path"))
+        source = self.project_file(body.get("from"), body.get("file"))
+        suffix = source.suffix.casefold()
+        if suffix not in AUDIO_ASSETS:
+            raise ValueError("only a sound file can be imported")
+        assets = folder / "assets"
+        if assets.is_symlink():
+            raise ValueError("the project's assets folder is a link")
+        assets.mkdir(exist_ok=True)
+        stem = f"{Path(str(body.get('from'))).name} {source.stem.lstrip('.')}"[:100]
+        for number in range(1, 1000):
+            target = assets / (f"{stem}{suffix}" if number == 1 else f"{stem} {number}{suffix}")
+            try:
+                with target.open("xb") as out, source.open("rb") as stream:
+                    try:
+                        shutil.copyfileobj(stream, out)
+                    except BaseException:
+                        target.unlink(missing_ok=True)
+                        raise
+            except FileExistsError:
+                continue
+            return {"asset": target.name}
+        raise ValueError("no free name for the sound")
+
+    def project_wave(self, raw: object, file: object, bars: object) -> object:
+        folder = self.project_folder(raw)
+        self.project_file(raw, file)
+        if not isinstance(bars, str) or not bars.isdigit() or not 10 <= int(bars) <= 20000:
+            raise ValueError("bars must be 10-20000")
+        return self.run("wave", str(file), "--bars", bars, "--project", str(folder), timeout=600)
+
+    def transcribe(self, body: dict) -> object:
+        folder = self.project_folder(body.get("path"))
+        args = ["transcribe", str(folder)]
+        language = body.get("language")
+        if language not in (None, ""):
+            if not isinstance(language, str) or not re.fullmatch(r"[a-z]{2,3}(-[A-Za-z]{2,4})?", language):
+                raise ValueError("language must be a code such as en or ru")
+            args += ["--language", language]
+        model = body.get("model")
+        if model not in (None, ""):
+            if not isinstance(model, str) or len(model) > 200 or model.startswith("-") or not model.isprintable():
+                raise ValueError("model must be a model name")
+            args += ["--model", model]
+        # Speech recognition of a long recording takes minutes; the page waits for it.
+        return self.run(*args, timeout=3600)
 
     def open_project(self) -> dict:
         """Pick a project folder anywhere in the macOS folder dialog; capture remembers it.

@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import select
 import shlex
 import shutil
@@ -37,6 +38,7 @@ from .capture_project import (
     add_event,
     create_project,
     default_setup,
+    inside,
     load_setup,
     projects_dir,
     read_project,
@@ -53,7 +55,7 @@ USAGE = """Usage: ul capture                      (the studio in a terminal)
                          [--cam-quality max|high|light] [--mic-format flac|wav|m4a] [--display N] [--rect X,Y,W,H]
                          [--duration S] [--wait] [--countdown N] [--export] [--output PATH]
        ul capture pause|resume|status|scene N|mark [TEXT]|stop [--force] [--export]
-       ul capture projects|project X|export X [options]|setup|doctor|devices [--modes]
+       ul capture projects|project X|export X [options]|transcribe X [--language CODE]|setup|doctor|devices [--modes]
        ul capture list|last|open|reveal|copy|delete|trim|convert
 Run `ul capture --help` for details.
 """
@@ -1733,6 +1735,63 @@ def find_project(name: str) -> Path:
 _RECORDED_KEYS = ("format", "version", "name", "created", "mode", "state", "problems", "duration", "segments", "exports")
 
 
+_LANGUAGE = re.compile(r"[a-z]{2,3}(-[A-Za-z]{2,4})?")
+
+
+def transcribe_project(folder: Path, language: str | None = None, model: str | None = None) -> dict:
+    """Subtitles for a project from `ul lm transcribe` (local speech recognition), on the recording's clock.
+
+    Each part is transcribed from its microphone, else from the screen's sound; lines come back as
+    {in, out, text} so the Edit tab can lay them over its cuts.
+    """
+    if language is not None and not _LANGUAGE.fullmatch(language):
+        raise CaptureError("--language must be a code such as en or ru")
+    if model is not None and (not model.strip() or model.startswith("-") or not model.isprintable() or len(model) > 200):
+        raise CaptureError("--model must be a model name")
+    ul = os.environ.get("UNLAW_BIN") or shutil.which("ul")
+    if not ul:
+        raise CaptureError("ul was not found to run ul lm transcribe")
+    try:
+        project = read_project(folder)
+    except ProjectError as error:
+        raise CaptureError(str(error), 1) from error
+    captions: list[dict] = []
+    found_language = None
+    elapsed = 0.0
+    for segment in project["segments"]:
+        begin, elapsed = elapsed, elapsed + segment["duration"]
+        files = segment["files"]
+        track = "mic" if "mic" in files else "screen" if (segment.get("info", {}).get("screen", {}).get("audio", True) and "screen" in files) else None
+        if track is None or segment["duration"] <= 0:
+            continue
+        argv = [ul, "lm", "transcribe", str(folder / files[track]), "--json"]
+        if language:
+            argv += ["-l", language]
+        if model:
+            argv += ["-m", model]
+        result = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            lines = (result.stderr or result.stdout).strip().splitlines()
+            reason = _plain_text(lines[-1]) if lines else ""
+            raise CaptureError(f"ul lm transcribe failed: {reason or 'exit ' + str(result.returncode)}", 1)
+        try:
+            data = json.loads(result.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError) as error:
+            raise CaptureError("ul lm transcribe did not answer with JSON", 1) from error
+        found_language = found_language or data.get("language")
+        offset = begin + segment["starts"].get(track, 0.0)
+        for line in data.get("segments") or []:
+            text = " ".join(_plain_text(str(line.get("text", ""))).split())[:500]
+            try:
+                start, end = float(line["start"]) + offset, float(line["end"]) + offset
+            except (KeyError, TypeError, ValueError):
+                continue
+            start, end = max(begin, start), min(begin + segment["duration"], end)
+            if text and end > start:
+                captions.append({"in": round(start, 3), "out": round(end, 3), "text": text})
+    return {"captions": captions, "language": found_language}
+
+
 def update_project(folder: Path, data: object) -> dict:
     """Save edits (layouts, scenes, sources, sound, events, export choices) and keep what was recorded."""
     if not isinstance(data, dict):
@@ -2091,16 +2150,32 @@ WAVE_RATE = (
 )
 
 
-def waveform(name: str, bars: int = 400) -> dict:
+def project_media(folder: Path, relative: str) -> Path:
+    """A file of a project's media/ or assets/ folder (the Edit tab draws their sound)."""
+    parts = Path(relative).parts
+    if len(parts) < 2 or parts[0] not in {"media", "assets"}:
+        raise CaptureError("the file must be in the project's media or assets folder")
+    try:
+        path = inside(folder, relative, "file")
+    except ProjectError as error:
+        raise CaptureError(str(error)) from error
+    if not path.is_file():
+        raise CaptureError(f"no such file in the project: {relative}")
+    return path
+
+
+def waveform(name: str, bars: int = 400, project: Path | None = None) -> dict:
     """Loudness bars (0..1) of a recording's sound, cached in storage.root/runtime/waves.
 
-    ffmpeg decodes a small mono stream, so an hour of audio stays a few MB.
+    ffmpeg decodes a small mono stream, so an hour of audio stays a few MB. With `project`, `name` is a file
+    of that project and up to 20000 bars may be asked for (the Edit tab's timeline zooms in).
     """
-    path = find_capture(name)
-    if _kind(path) not in {"audio", "video"}:
+    path = project_media(project, name) if project is not None else find_capture(name)
+    if project is None and _kind(path) not in {"audio", "video"}:
         raise CaptureError("only recordings have sound")
-    if not 10 <= bars <= 2000:
-        raise CaptureError("--bars must be between 10 and 2000")
+    most = 20000 if project is not None else 2000
+    if not 10 <= bars <= most:
+        raise CaptureError(f"--bars must be between 10 and {most}")
     _need("ffmpeg", "for waveforms")
     info = path.stat()
     digest = hashlib.sha1(
@@ -2573,6 +2648,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             info["modes"] = {name: _backend().camera_modes(name, refresh=True) for name in names}
             _print(info, as_json, _modes_text(info["modes"]))
             return 0
+        if action == "transcribe":
+            language = _take(rest, "--language")
+            model = _take(rest, "--model")
+            if len(rest) != 1 or rest[0].startswith("-"):
+                raise CaptureError("usage: ul capture transcribe PROJECT [--language CODE] [--model NAME]")
+            data = transcribe_project(find_project(rest[0]), language, model)
+            _print(data, as_json, "\n".join(f"{line['in']:8.2f}  {line['text']}" for line in data["captions"]))
+            return 0
         if action == "projects":
             if rest:
                 raise CaptureError(f"unexpected argument: {rest[0]}")
@@ -2706,9 +2789,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return subprocess.run(command, check=False).returncode
         if action == "wave":
             bars = _number(_take(rest, "--bars"), "--bars", 400, 10)
+            project = _take(rest, "--project")
             if len(rest) != 1:
-                raise CaptureError("usage: ul capture wave <name|last|path> [--bars N]")
-            data = waveform(rest[0], bars)
+                raise CaptureError("usage: ul capture wave <name|last|path> [--bars N] [--project P]")
+            data = waveform(rest[0], bars, find_project(project) if project else None)
             line = "".join(
                 " ▁▂▃▄▅▆▇█"[min(8, int(value * 8.99))]
                 for value in data["peaks"][:: max(1, len(data["peaks"]) // 80)]

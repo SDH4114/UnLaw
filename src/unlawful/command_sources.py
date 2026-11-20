@@ -339,6 +339,9 @@ LEGACY_SOURCE_HASHES["capture"].add("0c5c45945d22daec5e2091384fbc2d97c8aca48856a
 LEGACY_SOURCE_HASHES["desk"].add("62327be27d6ce187efaf9c21b4174551a1b74f298e849da0c9c18ceab9bf9977")
 # 3.21.0 desk with movable panels and audio only (7b4d0db), before the voice wave.
 LEGACY_SOURCE_HASHES["desk"].add("b9d4da09f53b083b157ea0ee57d128df88299dff9cf89bad59166d73142da719")
+# 3.21.0 branch build with the voice wave and the audit fixes (a5d89fe), before the Edit tab.
+LEGACY_SOURCE_HASHES["desk"].add("9c536b6ed1891fb033308abddb0293dda2f07c269fbe7e4a46917b85d4d27009")
+LEGACY_SOURCE_HASHES["capture"].add("da4fc84c4b7fb09c6ed2ca48b86c13e8abfa3a1bda376efa76ec6c531ece1653")
 LEGACY_SOURCE_HASHES["desk"].add("9433489a4df8e7c6a0058d0bcb5618d4917a20fe30407e673b3bb37d2ac32a5f")
 LEGACY_SOURCE_HASHES["desk"].add("62a0f4e9541241c1840b93af0e73e0e1115fdccc2f9ce57cefd33aefc8a87adf")
 LEGACY_SOURCE_HASHES["tg"].add("59521bc6e03acb1f48903fd7c95f894b26b0e705d8168d28c5a2850a99342ba2")
@@ -784,7 +787,7 @@ _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "rust": ("project_templates.py", "built_in_commands/rust/main.py"),
     "steam": ("built_in_commands/steam/main.py",),
     "tg": ("telegram.py",),
-    "desk": ("kanban.py", "reminders.py", "canvas.py", "studio_ui.py", "desk_ui.py", "desk.py"),
+    "desk": ("kanban.py", "reminders.py", "canvas.py", "studio_edit.py", "studio_ui.py", "desk_ui.py", "desk.py"),
     "work": ("desktop/work.py",),
     "yt": ("desktop/youtube.py",),
     "zed": ("built_in_commands/zed/main.py",),
@@ -826,6 +829,7 @@ def _clean_fragment(source: str, *, command: str) -> str:
         "from .capture_export import ",
         "from .capture_tui import ",
         "from .studio_ui import ",
+        "from .studio_edit import ",
     )
     lines: list[str] = []
     skipping = False

@@ -670,6 +670,23 @@ files in Finder and move them to the Trash. A red REC badge in the header shows
 a running recording from any tab; recordings started in the terminal appear there
 too, and a recording keeps going when the page is closed.
 
+The **Edit** tab is the montage of one project, laid out like DaVinci Resolve:
+added media on the left, the viewer in the middle, the inspector on the right and
+a timeline below with text, subtitles, the recording (with its sound wave) and a
+row for music and voice-over. Cut at the playhead with B, delete a clip and close
+the gap with Delete, mark a range with I and O and delete it, drag a clip's edge
+to trim it, move and trim texts and sounds (they snap to the playhead, cuts and
+marks; N turns snapping off), zoom with ⌘= / ⌘- or a pinch, play with Space, J,
+K, L, step with the arrows. Remove silences cuts every pause longer than 0.6 s.
+Transcribe makes subtitles on this Mac with `ul lm transcribe` (any speech model
+from `ul lm`), and the lines follow your cuts; edit, split, merge and style them
+(font, size, colour, outline, box, position). Music and sound files, or a
+voice-over recorded with "Record audio only", go on the music row with volume and
+fades. Every change can be undone with ⌘Z and is saved in the project's
+`project.json` (`edit`); the recorded files are never changed. The export renders
+the edit in any format, burns the subtitles in and saves a `.srt` next to the
+video. An audio project shows its sound wave instead of a video stage.
+
 ## Screen, video and audio capture
 
 ```bash
@@ -687,6 +704,7 @@ ul capture pause                  # resume / stop / status
 ul capture stop                   # save the project
 ul capture export last --canvas 9:16   # render a vertical video from the last project
 ul capture projects               # recording projects with state, length and exports
+ul capture transcribe last --language en   # subtitles for a project (ul lm transcribe)
 ul capture doctor                 # permissions, ffmpeg, which app needs Screen Recording
 ul capture devices --modes        # cameras with the modes they offer
 ul capture trim last --from 0:05 --to 1:30
