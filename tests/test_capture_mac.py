@@ -136,6 +136,38 @@ class MacBackendTests(unittest.TestCase):
         with patch.dict(os.environ, {"UNLAW_CAPTURE_REC": str(rec)}):
             self.assertIsNone(self.backend.native_recorder(), "only an executable")
 
+    def test_devices_and_camera_modes_come_from_ul_rec_without_ffmpeg(self) -> None:
+        # AVFoundation lists formats without opening the camera: no camera light, no ffmpeg needed.
+        answer = {
+            "cameras": [{"name": "FaceTime HD Camera", "modes": [
+                {"width": 1920, "height": 1080, "min_fps": 1.0, "max_fps": 30.0},
+                {"width": 1280, "height": 720, "min_fps": 1.0, "max_fps": 60.0},
+                {"width": 1920, "height": 1080, "min_fps": 1.0, "max_fps": 30.0},
+            ]}],
+            "microphones": ["MacBook Pro Microphone", "BlackHole 2ch"],
+            "default_camera": "FaceTime HD Camera",
+        }
+        log = self.tool("ul-rec", f"import json\nprint(json.dumps({answer!r}))\n")
+        with patch.dict(os.environ, {"UNLAW_CAPTURE_REC": str(self.bin / "ul-rec")}):
+            self.assertEqual(
+                self.backend.list_avfoundation(), (["FaceTime HD Camera"], ["MacBook Pro Microphone", "BlackHole 2ch"])
+            )
+            modes = self.backend.camera_modes("FaceTime HD Camera")
+            self.assertEqual(self.backend.camera_modes("Nope"), [])
+            self.assertEqual(self.backend.camera_modes("default"), modes, "default is the system's camera")
+        self.assertEqual(modes, [
+            {"width": 1920, "height": 1080, "min_fps": "1.000000", "max_fps": "30.000000"},
+            {"width": 1280, "height": 720, "min_fps": "1.000000", "max_fps": "60.000000"},
+        ])
+        self.assertEqual(capture_mac.pick_mode(modes, "high"), {"width": 1920, "height": 1080, "fps": "30.000000"})
+        self.assertEqual(log.read_text().splitlines()[0], "--devices")
+
+    def test_a_broken_ul_rec_listing_falls_back_to_ffmpeg(self) -> None:
+        self.tool("ul-rec", "raise SystemExit(3)\n")
+        self.tool("ffmpeg", "sys.stderr.write('[x] AVFoundation video devices:\\n[x] [0] Cam\\n[x] AVFoundation audio devices:\\n[x] [0] Mic\\n')\nraise SystemExit(1)\n")
+        with patch.dict(os.environ, {"UNLAW_CAPTURE_REC": str(self.bin / "ul-rec")}):
+            self.assertEqual(self.backend.list_avfoundation(), (["Cam"], ["Mic"]))
+
     def test_ul_rec_request_carries_the_plan(self) -> None:
         plan = {
             "display": 2, "area": "0,0,800,600", "clicks": False, "system": True, "camera": "FaceTime HD Camera",

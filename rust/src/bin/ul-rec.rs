@@ -29,11 +29,14 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass};
 use objc2_av_foundation::{
-    AVCaptureAudioFileOutput, AVCaptureDevice, AVCaptureDeviceInput, AVCaptureFileOutput,
-    AVCaptureFileOutputRecordingDelegate, AVCaptureMovieFileOutput, AVCaptureSession,
-    AVFileTypeAppleM4A, AVFileTypeQuickTimeMovie, AVFileTypeWAVE, AVMediaTypeAudio,
-    AVMediaTypeVideo, AVVideoAverageBitRateKey, AVVideoCodecKey, AVVideoCodecTypeH264,
-    AVVideoCompressionPropertiesKey,
+    AVCaptureAudioFileOutput, AVCaptureDevice, AVCaptureDeviceDiscoverySession,
+    AVCaptureDeviceInput, AVCaptureDevicePosition, AVCaptureDeviceType,
+    AVCaptureDeviceTypeBuiltInWideAngleCamera, AVCaptureDeviceTypeContinuityCamera,
+    AVCaptureDeviceTypeDeskViewCamera, AVCaptureDeviceTypeExternal, AVCaptureDeviceTypeMicrophone,
+    AVCaptureFileOutput, AVCaptureFileOutputRecordingDelegate, AVCaptureMovieFileOutput,
+    AVCaptureSession, AVFileTypeAppleM4A, AVFileTypeQuickTimeMovie, AVFileTypeWAVE,
+    AVMediaTypeAudio, AVMediaTypeVideo, AVVideoAverageBitRateKey, AVVideoCodecKey,
+    AVVideoCodecTypeH264, AVVideoCompressionPropertiesKey,
 };
 use objc2_core_foundation::{kCFRunLoopDefaultMode, CFRunLoop, CGPoint, CGRect, CGSize};
 use objc2_core_media::{CMTime, CMVideoFormatDescriptionGetDimensions};
@@ -51,6 +54,7 @@ use serde_json::{json, Value};
 const HELP: &str = "ul-rec: the recording engine of `ul capture` (macOS 15 or later).
 
 Usage: ul-rec PLAN.json
+       ul-rec --devices   (cameras with their modes and microphones, as JSON)
 
 Records the screen with the Mac's sound (ScreenCaptureKit), the camera and the microphone
 (AVFoundation) in one process, each to its own file, and logs when each track started.
@@ -400,6 +404,45 @@ fn stop_screen(screen: &Screen) {
 
 // ---------------------------------------------------------------- camera and microphone
 
+/// Every camera or microphone, found the way Apple recommends (a discovery session listing the device
+/// types it wants); the old `devicesWithMediaType` misses Continuity Camera's Desk View.
+fn all_devices(video: bool) -> Vec<Retained<AVCaptureDevice>> {
+    let types: Vec<&AVCaptureDeviceType> = unsafe {
+        if video {
+            vec![
+                AVCaptureDeviceTypeBuiltInWideAngleCamera,
+                AVCaptureDeviceTypeExternal,
+                AVCaptureDeviceTypeContinuityCamera,
+                AVCaptureDeviceTypeDeskViewCamera,
+            ]
+        } else {
+            vec![AVCaptureDeviceTypeMicrophone, AVCaptureDeviceTypeExternal]
+        }
+    };
+    let media = if video {
+        unsafe { AVMediaTypeVideo }
+    } else {
+        unsafe { AVMediaTypeAudio }
+    };
+    let session = unsafe {
+        AVCaptureDeviceDiscoverySession::discoverySessionWithDeviceTypes_mediaType_position(
+            &NSArray::from_slice(&types),
+            media,
+            AVCaptureDevicePosition::Unspecified,
+        )
+    };
+    let mut seen = Vec::new();
+    let mut devices = Vec::new();
+    for device in unsafe { session.devices() }.iter() {
+        let id = unsafe { device.uniqueID() }.to_string();
+        if !seen.contains(&id) {
+            seen.push(id);
+            devices.push(device);
+        }
+    }
+    devices
+}
+
 fn find_device(kind: &str, name: &str) -> Option<Retained<AVCaptureDevice>> {
     let media = if kind == "video" {
         unsafe { AVMediaTypeVideo }
@@ -409,11 +452,41 @@ fn find_device(kind: &str, name: &str) -> Option<Retained<AVCaptureDevice>> {
     if name == "default" {
         return unsafe { AVCaptureDevice::defaultDeviceWithMediaType(media) };
     }
-    #[allow(deprecated)]
-    let devices = unsafe { AVCaptureDevice::devicesWithMediaType(media) };
-    devices
-        .iter()
+    all_devices(kind == "video")
+        .into_iter()
         .find(|device| unsafe { device.localizedName() }.to_string() == name)
+}
+
+/// `ul-rec --devices`: cameras with their modes and microphones, as JSON. AVFoundation reads the formats
+/// without opening the camera (ffmpeg had to open it to learn them).
+fn devices() -> Value {
+    let cameras: Vec<Value> = all_devices(true)
+        .iter()
+        .map(|device| {
+            let mut modes = Vec::new();
+            for format in unsafe { device.formats() }.iter() {
+                let size =
+                    unsafe { CMVideoFormatDescriptionGetDimensions(&format.formatDescription()) };
+                for range in unsafe { format.videoSupportedFrameRateRanges() }.iter() {
+                    modes.push(json!({
+                        "width": size.width,
+                        "height": size.height,
+                        "min_fps": unsafe { range.minFrameRate() },
+                        "max_fps": unsafe { range.maxFrameRate() },
+                    }));
+                }
+            }
+            json!({"name": unsafe { device.localizedName() }.to_string(), "modes": modes})
+        })
+        .collect();
+    let microphones: Vec<String> = all_devices(false)
+        .iter()
+        .map(|device| unsafe { device.localizedName() }.to_string())
+        .collect();
+    let default_camera = unsafe { AVMediaTypeVideo }
+        .and_then(|media| unsafe { AVCaptureDevice::defaultDeviceWithMediaType(media) })
+        .map(|device| unsafe { device.localizedName() }.to_string());
+    json!({"cameras": cameras, "microphones": microphones, "default_camera": default_camera})
 }
 
 /// The camera mode capture.py picked (WIDTHxHEIGHT at a framerate), when the device has it.
@@ -579,6 +652,10 @@ fn main() {
     };
     if plan_path == "--help" || plan_path == "-h" {
         print!("{HELP}");
+        return;
+    }
+    if plan_path == "--devices" {
+        println!("{}", devices());
         return;
     }
     let plan: Value = match std::fs::read_to_string(&plan_path)

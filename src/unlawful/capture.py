@@ -1010,7 +1010,7 @@ def start_recording(
     plain_mic = _plain(mic_value)
     has_ffmpeg = shutil.which("ffmpeg") is not None
     rec = _backend().native_recorder()
-    if not plain_mic or ((want_camera or mode == "audio") and rec is None):
+    if rec is None and (want_camera or mode == "audio" or not plain_mic):
         _need("ffmpeg", "for camera, microphone and audio recording")
     cam_value = str(
         options.get("cam") or (camera_source["device"] if camera_source else "default")

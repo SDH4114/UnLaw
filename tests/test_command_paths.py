@@ -209,6 +209,11 @@ open(out, "wb").write(data)
 """
 
 FAKE_UL_REC = """import json, os, signal, time
+if sys.argv[1] == "--devices":
+    mode = {"width": 1920, "height": 1080, "min_fps": 1.0, "max_fps": 30.0}
+    print(json.dumps({"cameras": [{"name": "Studio Cam", "modes": [mode]}],
+                      "microphones": ["Studio Mic"], "default_camera": "Studio Cam"}))
+    raise SystemExit(0)
 plan = json.load(open(sys.argv[1]))
 events = open(plan["events"], "a")
 def event(**item):
@@ -819,7 +824,7 @@ class CaptureTests(ToolTestCase):
         self.assertEqual({item["program"] for item in state["processes"]}, {"ul-rec"})
         self.assertEqual({item["track"] for item in state["processes"]}, {"screen", "camera", "mic"})
         self.assertEqual(len({item["pid"] for item in state["processes"]}), 1, "one process records everything")
-        request = json.loads(Path(self.lines(log)[0]).read_text())
+        request = json.loads(Path(next(line for line in self.lines(log) if line.endswith(".json"))).read_text())
         self.assertEqual(request["camera"]["device"], "default")
         self.assertEqual((request["camera"]["width"], request["camera"]["height"]), (1920, 1080))
         self.assertEqual(request["mic"]["format"], "wav", "flac is made from a WAV at stop")
@@ -868,6 +873,16 @@ class CaptureTests(ToolTestCase):
         _, project = self.project(json.loads(self.ok("stop", "--json")))
         self.assertEqual(project["segments"][0]["files"]["mic"], "media/mic-001.wav")
         self.assertEqual(project["segments"][0]["files"]["screen"], "media/screen-001.mov")
+
+    def test_the_native_recorder_picks_devices_by_name_without_ffmpeg(self) -> None:
+        log = self.native()
+        (self.bin / "ffmpeg").unlink()
+        self.ok("record", "--camera", "--cam", "studio cam", "--mic", "Studio Mic")
+        request = json.loads(Path(self.lines(log)[-1]).read_text())
+        self.assertEqual(request["camera"]["device"], "Studio Cam")
+        self.assertEqual(request["mic"]["device"], "Studio Mic")
+        self.assertEqual((request["camera"]["width"], request["camera"]["fps"]), (1920, "30.000000"))
+        self.ok("stop")
 
     def test_record_returns_once_the_microphone_and_camera_deliver(self) -> None:
         # The microphone and the camera need a second or two to wake up; "recording" is only

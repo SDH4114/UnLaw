@@ -1039,7 +1039,51 @@ def pick_mode(modes: list[dict], quality: str, wanted: str = "auto") -> dict | N
 class MacBackend:
     """macOS: screencapture for the screen and the Mac's sound, ffmpeg AVFoundation for camera and microphone."""
 
+    def native_devices(self) -> dict | None:
+        """Cameras with their modes and microphones from `ul-rec --devices` (AVFoundation reads the formats
+        without opening the camera); None without ul-rec or when it fails."""
+        rec = self.native_recorder()
+        if rec is None:
+            return None
+        try:
+            result = subprocess.run(
+                [rec, "--devices"], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15, check=False
+            )
+            data = json.loads(result.stdout) if result.returncode == 0 else None
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        cameras = []
+        for camera in data.get("cameras", []):
+            if not isinstance(camera, dict) or not isinstance(camera.get("name"), str):
+                continue
+            modes: list[dict] = []
+            for mode in camera.get("modes", []):
+                try:
+                    item = {
+                        "width": int(mode["width"]),
+                        "height": int(mode["height"]),
+                        "min_fps": f"{float(mode['min_fps']):.6f}",
+                        "max_fps": f"{float(mode['max_fps']):.6f}",
+                    }
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if item not in modes:
+                    modes.append(item)
+            cameras.append({"name": camera["name"], "modes": modes})
+        microphones = [name for name in data.get("microphones", []) if isinstance(name, str)]
+        default = data.get("default_camera")
+        return {
+            "cameras": cameras,
+            "microphones": microphones,
+            "default_camera": default if isinstance(default, str) else None,
+        }
+
     def list_avfoundation(self) -> tuple[list[str], list[str]]:
+        native = self.native_devices()
+        if native is not None:
+            return [camera["name"] for camera in native["cameras"]], native["microphones"]
         if shutil.which("ffmpeg") is None:
             return [], []
         result = subprocess.run(
@@ -1117,6 +1161,11 @@ class MacBackend:
 
     def camera_modes(self, name: str, *, refresh: bool = False) -> list[dict]:
         """Modes the camera offers; asking ffmpeg costs a moment of camera light, so answers are cached."""
+        native = self.native_devices()
+        if native is not None:
+            if name == "default":
+                name = native["default_camera"] or ""
+            return next((camera["modes"] for camera in native["cameras"] if camera["name"] == name), [])
         cache_path = storage_path("runtime", "camera-modes.json")
         try:
             cache = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -3717,7 +3766,7 @@ def start_recording(
     plain_mic = _plain(mic_value)
     has_ffmpeg = shutil.which("ffmpeg") is not None
     rec = _backend().native_recorder()
-    if not plain_mic or ((want_camera or mode == "audio") and rec is None):
+    if rec is None and (want_camera or mode == "audio" or not plain_mic):
         _need("ffmpeg", "for camera, microphone and audio recording")
     cam_value = str(
         options.get("cam") or (camera_source["device"] if camera_source else "default")
