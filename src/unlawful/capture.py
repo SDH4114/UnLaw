@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 from array import array
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -1826,6 +1826,87 @@ def transcribe_project(folder: Path, language: str | None = None, model: str | N
     return {"captions": captions, "language": found_language, "model": model}
 
 
+PROXY_HEIGHT = 1080
+
+
+def _video_encoder() -> list[str]:
+    """The Mac's hardware H.264 encoder when ffmpeg has it (fast, cool), else libx264."""
+    try:
+        listed = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30, check=False).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        listed = ""
+    if "h264_videotoolbox" in listed:
+        return ["-c:v", "h264_videotoolbox", "-b:v", "8M"]
+    return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
+
+
+def make_proxies(folder: Path) -> dict:
+    """Light copies of a project's media for the Edit tab, like Resolve's optimized media.
+
+    Video: at most 1080 lines of H.264 with a keyframe every second and no sound, so the page seeks at once
+    and decodes without falling behind (a 3600x2338 screen recording did). Sound: AAC that the page decodes
+    for Web Audio (the Mac sound comes out of the screen file). Kept in cache/proxy/, made again only when
+    the original is newer; the export always uses the originals.
+    """
+    if shutil.which("ffmpeg") is None:
+        raise CaptureError("ffmpeg is needed to prepare media for editing (brew install ffmpeg)")
+    try:
+        project = read_project(folder)
+        cache = inside(folder, "cache", "cache")
+        if cache.exists() and (cache.is_symlink() or not cache.is_dir()):
+            raise ProjectError("the project's cache folder is a link")
+        cache.mkdir(exist_ok=True)
+        proxy = inside(folder, "cache/proxy", "cache/proxy")
+        if proxy.is_symlink():
+            raise ProjectError("the project's cache/proxy folder is a link")
+        proxy.mkdir(exist_ok=True)
+    except ProjectError as error:
+        raise CaptureError(str(error), 1) from error
+    encoder: list[str] | None = None
+    files: dict[str, dict[str, str]] = {}
+
+    def made(source: Path, target: Path, argv: Callable[[], list[str]]) -> bool:
+        if target.is_file() and target.stat().st_size > 0 and target.stat().st_mtime >= source.stat().st_mtime:
+            return True
+        argv = argv()
+        part = target.with_name(target.name + ".part" + target.suffix)
+        result = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(source), *argv, str(part)],
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
+        if result.returncode != 0 or not part.is_file():
+            part.unlink(missing_ok=True)
+            return False
+        os.replace(part, target)
+        return True
+
+    for segment in project["segments"]:
+        for track, relative in segment["files"].items():
+            source = folder / relative
+            if not source.is_file() or relative in files:
+                continue
+            stem = Path(relative).stem
+            entry: dict[str, str] = {}
+            if track in ("screen", "camera"):
+                def video_argv() -> list[str]:
+                    nonlocal encoder
+                    encoder = encoder or _video_encoder()
+                    return ["-map", "0:v:0", "-an", "-vf", f"scale=-2:'min({PROXY_HEIGHT},ih)'", *encoder,
+                            "-force_key_frames", "expr:gte(t,n_forced*1)", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+
+                video = proxy / f"{stem}.mp4"
+                if made(source, video, video_argv):
+                    entry["video"] = f"cache/proxy/{video.name}"
+                has_sound = track == "screen" and segment.get("info", {}).get("screen", {}).get("audio", True) is not False
+            else:
+                has_sound = True
+            if has_sound:
+                name = f"{stem}-system.m4a" if track == "screen" else f"{stem}.m4a"
+                sound = proxy / name
+                if made(source, sound, lambda: ["-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]):
+                    entry["audio"] = f"cache/proxy/{name}"
+            files[relative] = entry
+    return {"files": files}
+
+
 def update_project(folder: Path, data: object) -> dict:
     """Save edits (layouts, scenes, sources, sound, events, export choices) and keep what was recorded."""
     if not isinstance(data, dict):
@@ -2695,6 +2776,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise CaptureError("usage: ul capture transcribe PROJECT [--language CODE] [--model NAME]")
             data = transcribe_project(find_project(rest[0]), language, model)
             _print(data, as_json, "\n".join(f"{line['in']:8.2f}  {line['text']}" for line in data["captions"]))
+            return 0
+        if action == "proxy":
+            if len(rest) != 1 or rest[0].startswith("-"):
+                raise CaptureError("usage: ul capture proxy PROJECT [--json]")
+            data = make_proxies(find_project(rest[0]))
+            _print(data, as_json, "\n".join(f"{source}: {', '.join(entry.values()) or 'no proxy'}" for source, entry in data["files"].items()))
             return 0
         if action == "projects":
             if rest:

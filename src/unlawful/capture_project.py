@@ -660,7 +660,10 @@ def read_project(folder: Path) -> dict:
         raise ProjectError(f"{folder} is not a Studio project (no project.json)") from error
     except (OSError, ValueError) as error:
         raise ProjectError(f"{path}: {error}") from error
-    return validate_project(data, folder)
+    project = validate_project(data, folder)
+    if "edit" in project and project["edit"].get("version") != EDIT_VERSION:
+        project["edit"] = upgrade_edit(project["edit"], project)
+    return project
 
 
 def write_project(folder: Path, data: dict) -> None:
@@ -809,38 +812,140 @@ def effective_placements(
 
 # ---------------------------------------------------------------- the montage (Edit tab)
 #
-# project["edit"] (optional; without it a project exports as recorded):
-#   clips     ranges of the recording's own clock ({id, in, out}), played one after another (ripple, no gaps);
-#   captions  subtitle lines on the recording's clock ({id, in, out, text, asset}), so they follow every cut;
-#             `asset` is the line drawn to a PNG by the page ("" until drawn);
-#   texts     text on the output timeline ({id, start, end, text, asset, x, y, w}: centre and width as fractions);
-#   audio     music and voice-over on the output timeline ({id, asset, name, start, in, out, volume, fade_in, fade_out}).
+# project["edit"] (optional; without it a project exports as recorded), version 2, like Resolve/Premiere:
+#   tracks  [{id, kind, name, hidden, muted, solo, locked, volume}] in display order: subtitle and text tracks
+#           on top, then video tracks (an upper one covers a lower one), then audio tracks;
+#   clips   [{id, track, source, start, in, out, link, ...}]: `start` on the output timeline, `in`/`out` in the
+#           source; gaps are black and silent. Sources by track kind:
+#             video     recording (the composed scenes, on the recording's clock);
+#             audio     mic | system (the recording's microphone / Mac sound) | asset (assets/<asset>), with
+#                       name, asset, volume, fade_in, fade_out;
+#             text      text, asset, x, y, w (centre and width as fractions), color, background;
+#             subtitle  caption: text, asset.
+#           `asset` of a text or caption is its PNG drawn by the page ("" until drawn). Clips with the same
+#           non-empty `link` move and cut together (a recording dropped on the timeline: picture and sounds).
+#   caption_style  the look of every subtitle.
+# Version 1 (cuts as recording ranges without gaps, captions on the recording clock) is upgraded on read.
 
-EDIT_VERSION = 1
+EDIT_VERSION = 2
 CAPTION_STYLE = {"font": "system-ui", "size": 54, "color": "#ffffff", "outline": "#000000", "box": False, "position": "bottom"}
 CAPTION_FONTS = ("system-ui", "serif", "monospace", "rounded")
 CAPTION_POSITIONS = ("bottom", "middle", "top")
 AUDIO_ASSETS = (".m4a", ".mp3", ".wav", ".flac", ".aac", ".aiff", ".caf")
 IMAGE_ASSETS = (".png", ".jpg", ".jpeg")
-EDIT_LIMITS = {"clips": 5000, "captions": 10000, "texts": 500, "audio": 200}
-_EDIT_KEYS = {"version", "clips", "captions", "caption_style", "texts", "audio"}
+TRACK_KINDS = ("video", "audio", "text", "subtitle")
+TRACK_SOURCES = {"video": ("recording",), "audio": ("mic", "system", "asset"), "text": ("text",), "subtitle": ("caption",)}
+EDIT_LIMITS = {"tracks": 40, "clips": 20000}
+_EDIT_KEYS = {"version", "tracks", "clips", "caption_style"}
+_TRACK_KEYS = {"id", "kind", "name", "hidden", "muted", "solo", "locked", "volume"}
+_CLIP_KEYS = {"id", "track", "source", "start", "in", "out", "link"}
+_KIND_KEYS = {
+    "video": set(),
+    "audio": {"name", "asset", "volume", "fade_in", "fade_out"},
+    "text": {"text", "asset", "x", "y", "w", "color", "background"},
+    "subtitle": {"text", "asset"},
+}
+_V1_KEYS = {"version", "clips", "captions", "caption_style", "texts", "audio"}
+_V1_LIMITS = {"clips": 5000, "captions": 10000, "texts": 500, "audio": 200}
+
+
+def _track(ident: str, kind: str, name: str) -> dict:
+    return {"id": ident, "kind": kind, "name": name, "hidden": False, "muted": False, "solo": False, "locked": False, "volume": 1.0}
+
+
+def _recording_sounds(project: dict) -> tuple[bool, bool]:
+    """Whether the recording has a microphone and Mac sound anywhere."""
+    mic = system = False
+    for segment in project["segments"]:
+        files = segment.get("files", {})
+        mic = mic or "mic" in files
+        if "screen" in files and segment.get("info", {}).get("screen", {}).get("audio", True) is not False:
+            system = True
+    return mic, system
+
+
+def _has_picture(project: dict) -> bool:
+    return any("screen" in segment.get("files", {}) or "camera" in segment.get("files", {}) for segment in project["segments"])
+
+
+def _duration(project: dict) -> float:
+    if isinstance(project.get("duration"), (int, float)):
+        return float(project["duration"])
+    return round(sum(segment["duration"] for segment in project["segments"]), 6)
+
+
+def _sound_clip(ident: str, track: str, source: str, start: float, begin: float, end: float, link: str, **more: object) -> dict:
+    clip = {"id": ident, "track": track, "source": source, "start": start, "in": begin, "out": end, "link": link,
+            "name": "", "asset": "", "volume": 1.0, "fade_in": 0.0, "fade_out": 0.0}
+    clip.update(more)
+    return clip
+
+
+def _recording_clips(project: dict, ranges: list[tuple[float, float, float]]) -> list[dict]:
+    """Linked picture + microphone + Mac-sound clips for ranges (start, in, out) of the recording."""
+    mic, system = _recording_sounds(project)
+    picture = _has_picture(project)
+    clips: list[dict] = []
+    for number, (start, begin, end) in enumerate(ranges, 1):
+        link = f"l{number}"
+        if picture:
+            clips.append({"id": f"v{number}", "track": "v1", "source": "recording", "start": start, "in": begin, "out": end, "link": link})
+        if mic:
+            clips.append(_sound_clip(f"m{number}", "a1", "mic", start, begin, end, link))
+        if system and picture:
+            clips.append(_sound_clip(f"s{number}", "a2", "system", start, begin, end, link))
+    return clips
+
+
+def default_tracks() -> list[dict]:
+    return [_track("s1", "subtitle", "Subtitles"), _track("t1", "text", "Text"), _track("v1", "video", "Video 1"),
+            _track("a1", "audio", "Mic"), _track("a2", "audio", "Mac sound"), _track("a3", "audio", "Music")]
 
 
 def default_edit(project: dict) -> dict:
-    return {
-        "version": EDIT_VERSION,
-        "clips": [{"id": "c1", "in": 0.0, "out": float(project["duration"])}],
-        "captions": [],
-        "caption_style": dict(CAPTION_STYLE),
-        "texts": [],
-        "audio": [],
-    }
+    duration = _duration(project)
+    ranges = [(0.0, 0.0, duration)] if duration > 0 else []
+    return {"version": EDIT_VERSION, "tracks": default_tracks(), "clips": _recording_clips(project, ranges), "caption_style": dict(CAPTION_STYLE)}
 
 
-def _edit_list(edit: dict, key: str) -> list:
+def _v1_clips(edit: dict) -> list[dict]:
+    clips, at = [], 0.0
+    for clip in edit["clips"]:
+        clips.append({"in": clip["in"], "out": clip["out"], "at": round(at, 6)})
+        at += clip["out"] - clip["in"]
+    return clips
+
+
+def upgrade_edit(edit: dict, project: dict) -> dict:
+    """A version 1 edit as tracks: its cuts become linked clips placed one after another, its captions are
+    mapped through the cuts, texts and music keep their place on the output."""
+    if edit.get("version") == EDIT_VERSION:
+        return edit
+    cuts = _v1_clips(edit)
+    upgraded = {"version": EDIT_VERSION, "tracks": default_tracks(), "caption_style": dict(edit.get("caption_style") or CAPTION_STYLE),
+                "clips": _recording_clips(project, [(clip["at"], clip["in"], clip["out"]) for clip in cuts])}
+    for number, line in enumerate(sorted(edit.get("captions", []), key=lambda item: item["in"]), 1):
+        parts = [(clip["at"] + max(line["in"], clip["in"]) - clip["in"], clip["at"] + min(line["out"], clip["out"]) - clip["in"])
+                 for clip in cuts if min(line["out"], clip["out"]) > max(line["in"], clip["in"])]
+        if parts:
+            start, end = round(parts[0][0], 3), round(parts[-1][1], 3)
+            upgraded["clips"].append({"id": f"w{number}", "track": "s1", "source": "caption", "start": start, "in": 0.0,
+                                      "out": round(end - start, 3), "link": "", "text": line["text"], "asset": line.get("asset", "")})
+    for number, item in enumerate(edit.get("texts", []), 1):
+        upgraded["clips"].append({"id": f"x{number}", "track": "t1", "source": "text", "start": item["start"], "in": 0.0,
+                                  "out": round(item["end"] - item["start"], 3), "link": "", "text": item["text"], "asset": item.get("asset", ""),
+                                  "x": item["x"], "y": item["y"], "w": item["w"], "color": item.get("color", "#ffffff"),
+                                  "background": item.get("background", "")})
+    for number, item in enumerate(edit.get("audio", []), 1):
+        upgraded["clips"].append(_sound_clip(f"y{number}", "a3", "asset", item["start"], item["in"], item["out"], "", name=item["name"],
+                                             asset=item["asset"], volume=item["volume"], fade_in=item["fade_in"], fade_out=item["fade_out"]))
+    return upgraded
+
+
+def _edit_list(edit: dict, key: str, limits: dict) -> list:
     value = edit.get(key)
-    if not isinstance(value, list) or len(value) > EDIT_LIMITS[key]:
-        _fail(f"edit.{key}", f"must be a list of at most {EDIT_LIMITS[key]} items")
+    if not isinstance(value, list) or len(value) > limits[key]:
+        _fail(f"edit.{key}", f"must be a list of at most {limits[key]} items")
     ids: set[str] = set()
     for index, item in enumerate(value):  # type: ignore[arg-type]
         here = f"edit.{key}[{index}]"
@@ -867,20 +972,7 @@ def _edit_asset(folder: Path, value: object, where: str, suffixes: tuple, empty:
     inside(folder, f"assets/{name}", where)
 
 
-def validate_edit(value: object, folder: Path) -> dict:
-    edit = _dict(value, "edit")
-    if edit.get("version") != EDIT_VERSION:
-        _fail("edit.version", f"must be {EDIT_VERSION}")
-    unknown = set(edit) - _EDIT_KEYS
-    if unknown:
-        _fail("edit", "has unknown keys: " + ", ".join(sorted(unknown)))
-    for index, clip in enumerate(_edit_list(edit, "clips")):
-        _span(clip, f"edit.clips[{index}]", "in", "out")
-    for index, line in enumerate(_edit_list(edit, "captions")):
-        here = f"edit.captions[{index}]"
-        _span(line, here, "in", "out")
-        _text(line.get("text"), f"{here}.text", 500)
-        _edit_asset(folder, line.get("asset"), f"{here}.asset", (".png",), empty=True)
+def _caption_style(edit: dict) -> None:
     style = _dict(edit.get("caption_style"), "edit.caption_style")
     if set(style) != set(CAPTION_STYLE):
         _fail("edit.caption_style", "must have " + ", ".join(sorted(CAPTION_STYLE)))
@@ -891,7 +983,21 @@ def validate_edit(value: object, folder: Path) -> dict:
         _color(style["outline"], "edit.caption_style.outline")
     _bool(style["box"], "edit.caption_style.box")
     _choice(style["position"], "edit.caption_style.position", CAPTION_POSITIONS)
-    for index, item in enumerate(_edit_list(edit, "texts")):
+
+
+def _validate_edit_v1(edit: dict, folder: Path) -> dict:
+    unknown = set(edit) - _V1_KEYS
+    if unknown:
+        _fail("edit", "has unknown keys: " + ", ".join(sorted(unknown)))
+    for index, clip in enumerate(_edit_list(edit, "clips", _V1_LIMITS)):
+        _span(clip, f"edit.clips[{index}]", "in", "out")
+    for index, line in enumerate(_edit_list(edit, "captions", _V1_LIMITS)):
+        here = f"edit.captions[{index}]"
+        _span(line, here, "in", "out")
+        _text(line.get("text"), f"{here}.text", 500)
+        _edit_asset(folder, line.get("asset"), f"{here}.asset", (".png",), empty=True)
+    _caption_style(edit)
+    for index, item in enumerate(_edit_list(edit, "texts", _V1_LIMITS)):
         here = f"edit.texts[{index}]"
         _span(item, here, "start", "end")
         _text(item.get("text"), f"{here}.text", 500)
@@ -899,7 +1005,7 @@ def validate_edit(value: object, folder: Path) -> dict:
         _numeric(item.get("x"), f"{here}.x", 0, 1)
         _numeric(item.get("y"), f"{here}.y", 0, 1)
         _numeric(item.get("w"), f"{here}.w", 0.01, 1)
-    for index, item in enumerate(_edit_list(edit, "audio")):
+    for index, item in enumerate(_edit_list(edit, "audio", _V1_LIMITS)):
         here = f"edit.audio[{index}]"
         _edit_asset(folder, item.get("asset"), f"{here}.asset", AUDIO_ASSETS)
         _text(item.get("name"), f"{here}.name", 200)
@@ -911,71 +1017,180 @@ def validate_edit(value: object, folder: Path) -> dict:
     return edit
 
 
+def validate_edit(value: object, folder: Path) -> dict:
+    edit = _dict(value, "edit")
+    if edit.get("version") == 1:
+        return _validate_edit_v1(edit, folder)
+    if edit.get("version") != EDIT_VERSION:
+        _fail("edit.version", f"must be {EDIT_VERSION}")
+    unknown = set(edit) - _EDIT_KEYS
+    if unknown:
+        _fail("edit", "has unknown keys: " + ", ".join(sorted(unknown)))
+    kinds: dict[str, str] = {}
+    for index, track in enumerate(_edit_list(edit, "tracks", EDIT_LIMITS)):
+        here = f"edit.tracks[{index}]"
+        if set(track) != _TRACK_KEYS:
+            _fail(here, "must have " + ", ".join(sorted(_TRACK_KEYS)))
+        kinds[track["id"]] = _choice(track["kind"], f"{here}.kind", TRACK_KINDS)  # type: ignore[assignment]
+        _text(track["name"], f"{here}.name", 60, empty=True)
+        for key in ("hidden", "muted", "solo", "locked"):
+            _bool(track[key], f"{here}.{key}")
+        _numeric(track["volume"], f"{here}.volume", 0, 4)
+    _caption_style(edit)
+    spans: dict[str, list[tuple[float, float, str]]] = {}
+    for index, clip in enumerate(_edit_list(edit, "clips", EDIT_LIMITS)):
+        here = f"edit.clips[{index}]"
+        kind = kinds.get(clip.get("track"))  # type: ignore[arg-type]
+        if kind is None:
+            _fail(f"{here}.track", "is not a track of the edit")
+        source = _choice(clip.get("source"), f"{here}.source", TRACK_SOURCES[kind])
+        if set(clip) != _CLIP_KEYS | _KIND_KEYS[kind]:
+            _fail(here, "must have " + ", ".join(sorted(_CLIP_KEYS | _KIND_KEYS[kind])))
+        start = _numeric(clip["start"], f"{here}.start", 0, 1e7)
+        _span(clip, here, "in", "out")
+        if clip["link"] != "":
+            _ident(clip["link"], f"{here}.link")
+        if kind == "audio":
+            _text(clip["name"], f"{here}.name", 200, empty=True)
+            _edit_asset(folder, clip["asset"], f"{here}.asset", AUDIO_ASSETS, empty=source != "asset")
+            if source != "asset" and clip["asset"] != "":
+                _fail(f"{here}.asset", "is only for an imported sound")
+            _numeric(clip["volume"], f"{here}.volume", 0, 4)
+            _numeric(clip["fade_in"], f"{here}.fade_in", 0, 600)
+            _numeric(clip["fade_out"], f"{here}.fade_out", 0, 600)
+        if kind in ("text", "subtitle"):
+            _text(clip["text"], f"{here}.text", 500)
+            _edit_asset(folder, clip["asset"], f"{here}.asset", (".png",), empty=True)
+        if kind == "text":
+            _numeric(clip["x"], f"{here}.x", 0, 1)
+            _numeric(clip["y"], f"{here}.y", 0, 1)
+            _numeric(clip["w"], f"{here}.w", 0.01, 1)
+            _color(clip["color"], f"{here}.color")
+            if clip["background"] != "":
+                _color(clip["background"], f"{here}.background")
+        spans.setdefault(clip["track"], []).append((start, start + clip["out"] - clip["in"], here))
+    for items in spans.values():
+        items.sort()
+        for (_, end, _), (start, _, here) in zip(items, items[1:]):
+            if start < end - 1e-3:
+                _fail(here, "overlaps another clip on its track")
+    return edit
+
+
 def _snap(value: float, fps: int) -> float:
     return round(value * fps) / fps
 
 
-def edit_clips(project: dict, fps: int) -> list[dict]:
-    """The clips on frame boundaries with their place on the output (`at`); pieces under a frame go."""
-    edit = project.get("edit")
-    raw = edit["clips"] if edit else [{"in": 0.0, "out": float(project["duration"])}]
-    clips, at = [], 0.0
-    for clip in raw:
-        begin, end = _snap(clip["in"], fps), _snap(clip["out"], fps)
-        if end - begin < 1 / fps - 1e-9:
-            continue
-        clips.append({"in": begin, "out": end, "at": round(at, 6)})
-        at += end - begin
-    return clips
+def _tracks(project: dict) -> dict[str, dict]:
+    return {track["id"]: track for track in project["edit"]["tracks"]}
+
+
+def _clips(project: dict, kind: str) -> list[tuple[int, dict, dict]]:
+    """(display row, track, clip) of every clip on a track of `kind`."""
+    order = {track["id"]: row for row, track in enumerate(project["edit"]["tracks"])}
+    tracks = _tracks(project)
+    return [(order[clip["track"]], tracks[clip["track"]], clip) for clip in project["edit"]["clips"] if tracks[clip["track"]]["kind"] == kind]
 
 
 def edit_length(project: dict, fps: int) -> float:
-    return round(sum(clip["out"] - clip["in"] for clip in edit_clips(project, fps)), 6)
+    """Where the timeline ends: the end of its last clip, on a frame."""
+    if "edit" not in project:
+        return _snap(_duration(project), fps)
+    ends = [clip["start"] + clip["out"] - clip["in"] for clip in project["edit"]["clips"]]
+    return round(_snap(max(ends, default=0.0), fps), 6)
 
 
-def edit_pieces(project: dict, fps: int) -> list[dict]:
-    """timeline_intervals cut to the clips, in output order; each piece knows its place on the output (`at`)."""
+def edit_video(project: dict, fps: int) -> list[dict]:
+    """The picture of the output in pieces: the top visible video clip at each moment, cut at the recording's
+    pauses and scene switches (timeline_intervals); `gap` pieces are black. Every piece knows `at` and `length`."""
     frame = 1 / fps
-    intervals, begins, elapsed = timeline_intervals(project, fps), [], 0.0
+    length = edit_length(project, fps)
+    clips = [(row, clip) for row, track, clip in _clips(project, "video") if not track["hidden"]]
+    cuts = {0.0, length}
+    for _, clip in clips:
+        cuts.add(_snap(clip["start"], fps))
+        cuts.add(_snap(clip["start"] + clip["out"] - clip["in"], fps))
+    edges = sorted(cut for cut in cuts if 0 <= cut <= length)
+    intervals = timeline_intervals(project, fps)
+    begins, elapsed = [], 0.0
     for segment in project["segments"]:
         begins.append(_snap(elapsed, fps))
         elapsed += segment["duration"]
-    pieces = []
-    for clip in edit_clips(project, fps):
-        at = clip["at"]
+    pieces: list[dict] = []
+
+    def add(piece: dict) -> None:
+        last = pieces[-1] if pieces else None
+        if last and last["kind"] == "gap" and piece["kind"] == "gap" and abs(last["at"] + last["length"] - piece["at"]) < 1e-6:
+            last["length"] = round(last["length"] + piece["length"], 6)
+            return
+        pieces.append(piece)
+
+    for low, high in zip(edges, edges[1:]):
+        if high - low < frame - 1e-9:
+            continue
+        middle = (low + high) / 2
+        covering = [(row, clip) for row, clip in clips if clip["start"] - 1e-9 <= middle < clip["start"] + clip["out"] - clip["in"]]
+        if not covering:
+            add({"kind": "gap", "at": round(low, 6) + 0.0, "length": round(high - low, 6)})
+            continue
+        _, clip = min(covering, key=lambda item: item[0])
+        a, b = _snap(clip["in"] + low - clip["start"], fps), _snap(clip["in"] + high - clip["start"], fps)
         for interval in intervals:
             start = begins[interval["segment"]] + interval["start"]
-            low, high = max(start, clip["in"]), min(start + interval["length"], clip["out"])
-            if high - low < frame - 1e-9:
+            x, y = max(start, a), min(start + interval["length"], b)
+            if y - x < frame - 1e-9:
                 continue
-            pieces.append({
-                "segment": interval["segment"],
-                "start": round(low - begins[interval["segment"]], 6) + 0.0,
-                "length": round(high - low, 6),
-                "scene": interval["scene"],
-                "at": round(at + low - clip["in"], 6) + 0.0,
-            })
+            add({"kind": "recording", "segment": interval["segment"], "start": round(x - begins[interval["segment"]], 6) + 0.0,
+                 "length": round(y - x, 6), "scene": interval["scene"], "at": round(low + x - a, 6) + 0.0})
+        covered = sum(piece["length"] for piece in pieces if piece["kind"] == "recording" and low - 1e-6 <= piece["at"] < high - 1e-6)
+        if covered < high - low - frame / 2:
+            # The clip reaches past the recording (or into a part shorter than a frame): black for the rest.
+            add({"kind": "gap", "at": round(low + covered, 6) + 0.0, "length": round(high - low - covered, 6)})
     return pieces
 
 
-def caption_spans(project: dict, fps: int) -> list[dict]:
-    """Captions on the output: each line clipped to what the cuts keep (a line across a cut stays one line)."""
-    edit = project.get("edit") or {}
-    clips = edit_clips(project, fps)
-    spans = []
-    for line in sorted(edit.get("captions", []), key=lambda item: item["in"]):
-        parts = []
-        for clip in clips:
-            low, high = max(line["in"], clip["in"]), min(line["out"], clip["out"])
-            if high > low:
-                parts.append((clip["at"] + low - clip["in"], clip["at"] + high - clip["in"]))
-        if not parts:
+def edit_sounds(project: dict) -> list[dict]:
+    """Every clip that is heard: on a track that is not muted (with a solo anywhere, only the solo tracks),
+    its volume multiplied by the track's."""
+    clips = _clips(project, "audio")
+    solo = any(track["solo"] for _, track, _ in clips) or any(track["solo"] for track in project["edit"]["tracks"] if track["kind"] == "audio")
+    sounds = []
+    for _, track, clip in clips:
+        if track["muted"] or (solo and not track["solo"]):
             continue
-        start, end = parts[0][0], parts[-1][1]
+        volume = round(clip["volume"] * track["volume"], 6)
+        if volume <= 0:
+            continue
+        sounds.append({"source": clip["source"], "asset": clip["asset"], "name": clip["name"], "start": clip["start"], "in": clip["in"],
+                       "out": clip["out"], "volume": volume, "fade_in": clip["fade_in"], "fade_out": clip["fade_out"]})
+    return sounds
+
+
+def caption_spans(project: dict, fps: int) -> list[dict]:
+    """The subtitles on visible subtitle tracks, in time order (the .srt and the burned-in lines)."""
+    edit = project.get("edit")
+    if not edit:
+        return []
+    spans = []
+    for _, track, clip in _clips(project, "subtitle"):
+        if track["hidden"]:
+            continue
+        start, end = clip["start"], clip["start"] + clip["out"] - clip["in"]
         if end - start < 1 / fps:
             continue
-        spans.append({"start": round(start, 3) + 0.0, "end": round(end, 3) + 0.0, "text": line["text"], "asset": line.get("asset", "")})
-    return spans
+        spans.append({"start": round(start, 3) + 0.0, "end": round(end, 3) + 0.0, "text": clip["text"], "asset": clip["asset"], "id": clip["id"]})
+    return sorted(spans, key=lambda span: span["start"])
+
+
+def edit_texts(project: dict) -> list[dict]:
+    """Texts on visible text tracks, lower tracks first (an upper track is drawn over them)."""
+    edit = project.get("edit")
+    if not edit:
+        return []
+    found = [(row, clip) for row, track, clip in _clips(project, "text") if not track["hidden"]]
+    found.sort(key=lambda item: (-item[0], item[1]["start"]))
+    return [{"id": clip["id"], "start": clip["start"], "end": round(clip["start"] + clip["out"] - clip["in"], 6), "text": clip["text"],
+             "asset": clip["asset"], "x": clip["x"], "y": clip["y"], "w": clip["w"]} for _, clip in found]
 
 
 def _srt_time(value: float) -> str:

@@ -140,3 +140,25 @@ without `edit` exports exactly as now.
 
 Peak/thumbnail sizes, exact keyboard map beyond §5, caching details, how the
 preview handles a gap (black), the test split (Python model + export, cjs page).
+
+## 11. Version 2: tracks like Resolve and Premiere (2026-11-20, after Haos tried version 1)
+
+Haos's verdict on version 1: picture and sound could not be told apart or cut separately, there were no
+layers of his own, the page lagged, and the voice stuttered while playing a screen recording. He asked for
+DaVinci Resolve's and Premiere Pro's way of working (OpenCut only as a source of ideas).
+
+- Model (`edit.version` 2): `tracks` [{id, kind video|audio|text|subtitle, name, hidden, muted, solo, locked,
+  volume}] in display order (upper video tracks cover lower ones), `clips` [{id, track, source, start, in, out,
+  link, ...}] on the output timeline with `in`/`out` in the source; sources: `recording` (the composed scenes,
+  video tracks), `mic` / `system` (the recording's two sounds, audio tracks), `asset` (an imported sound),
+  `text`, `caption`. Gaps are allowed (black and silence). A recording dropped on the timeline gives linked
+  video + mic + Mac-sound clips; linked selection, Alt-click for one, ⌘L to link or unlink. Version 1 edits
+  are upgraded when the project is read.
+- Editing: overwrite on drop and move, lift (⌫) and ripple delete (⇧⌫, ⌦, range extract), blade tool and
+  ⌘B/⌘K at the playhead, trims bound by the source and the neighbours, snapping, tracks added, renamed,
+  hidden, muted, soloed, locked. Ripple acts on every unlocked track.
+- Playback: Web Audio plays every sound clip sample-exact and is the clock; the video elements follow
+  (rate nudges, seeks only on a big lag or a cut). Proxies (`ul capture proxy`: 1080p H.264 with a keyframe
+  every second, AAC sound) are made on opening, like Resolve's optimized media; originals are exported.
+- Page: media pool, viewer, inspector and timeline with track headers, every border draggable and kept.
+  The timeline canvas is redrawn only when something changes; the playhead is its own element.

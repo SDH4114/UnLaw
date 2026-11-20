@@ -423,22 +423,39 @@ class ExportRunTests(ExportTestCase):
             capture_export.export_project(folder, self.settings(folder))
         self.assertEqual((outside / "render" / "keep.txt").read_text(), "mine")
 
-    def edit(self, folder: Path, **changes: object) -> dict:
+    def edit(self, folder: Path, clips: list, tracks: list | None = None) -> dict:
         project = capture_project.read_project(folder)
-        project["edit"] = dict(capture_project.default_edit(project), **changes)
+        edit = capture_project.default_edit(project)
+        if tracks is not None:
+            edit["tracks"] = tracks
+        edit["clips"] = clips
+        project["edit"] = edit
         capture_project.write_project(folder, project)
         return project
+
+    @staticmethod
+    def clip(ident: str, track: str, source: str, start: float, begin: float, end: float, link: str = "", **more: object) -> dict:
+        item = {"id": ident, "track": track, "source": source, "start": start, "in": begin, "out": end, "link": link}
+        if track.startswith("a"):
+            item.update(name="", asset="", volume=1.0, fade_in=0.0, fade_out=0.0)
+        item.update(more)
+        return item
+
+    def recording(self, number: int, start: float, begin: float, end: float) -> list[dict]:
+        link = f"l{number}"
+        return [self.clip(f"v{number}", "v1", "recording", start, begin, end, link),
+                self.clip(f"m{number}", "a1", "mic", start, begin, end, link),
+                self.clip(f"s{number}", "a2", "system", start, begin, end, link)]
 
     def test_an_edit_cuts_the_picture_and_the_sound(self) -> None:
         folder = self.make_project(segments=2)
         (folder / "assets" / "cap.png").write_bytes(PNG_1x1)
         (folder / "assets" / "song.m4a").write_bytes(b"song")
-        self.edit(
-            folder,
-            clips=[{"id": "a", "in": 12.0, "out": 14.0}, {"id": "b", "in": 1.0, "out": 3.0}],
-            captions=[{"id": "s1", "in": 13.0, "out": 14.0, "text": "Привет", "asset": "cap.png"}],
-            audio=[{"id": "m1", "asset": "song.m4a", "name": "Song", "start": 0.5, "in": 0.0, "out": 2.0, "volume": 0.4, "fade_in": 0.5, "fade_out": 0.5}],
-        )
+        self.edit(folder, [
+            *self.recording(1, 0.0, 12.0, 14.0), *self.recording(2, 2.0, 1.0, 3.0),
+            self.clip("w1", "s1", "caption", 1.0, 0.0, 1.0, text="Привет", asset="cap.png"),
+            self.clip("x1", "a3", "asset", 0.5, 0.0, 2.0, name="Song", asset="song.m4a", volume=0.4, fade_in=0.5, fade_out=0.5),
+        ])
         out = capture_export.export_project(folder, self.settings(folder))
         calls = self.calls()
         chunks = [call for call in calls if any(arg.endswith(".mp4") and "chunk-" in arg for arg in call[-1:])]
@@ -448,40 +465,82 @@ class ExportRunTests(ExportTestCase):
         self.assertIn("enable='between(t,1.000,2.000)'", self.graph(first), "the caption shows in its second")
         self.assertIn(str(folder / "assets" / "cap.png"), first)
         self.assertNotIn("cap.png", " ".join(chunks[1]), "the second clip has no caption")
-        cut = next(call for call in calls if any("concat=n=2:v=0:a=1" in arg for arg in call))
+        cut = next(call for call in calls if any("amix=inputs=5" in arg for arg in call))
         graph = self.graph(cut)
-        self.assertIn("atrim=start=12.000000:end=14.000000", graph)
+        self.assertEqual(graph.count("atrim=start=12.000000:end=14.000000"), 2, "the microphone and the Mac sound are cut alike")
+        self.assertIn("adelay=2000:all=1", graph, "the second clip plays 2 s into the output")
         self.assertIn("afade=t=out:st=1.500:d=0.500", graph)
         self.assertIn("adelay=500:all=1", graph)
+        self.assertIn("volume=0.4", graph)
+        # One input per clip: two branches of one input into amix stall ffmpeg (it waits forever).
+        self.assertEqual(cut.count(str(folder / "cache" / "render" / "mic.wav")), 2)
+        self.assertNotIn("[0:a]atrim", graph.split(";", 1)[1])
         srt = out.with_suffix(".srt")
         self.assertEqual(srt.read_text(encoding="utf-8"), "1\n00:00:01,000 --> 00:00:02,000\nПривет\n")
 
+    def test_the_microphone_and_the_mac_sound_are_separate_tracks(self) -> None:
+        folder = self.make_project()
+        project = self.edit(folder, self.recording(1, 0.0, 1.0, 3.0))
+        tracks = project["edit"]["tracks"]
+        tracks[4]["muted"] = True
+        self.edit(folder, self.recording(1, 0.0, 1.0, 3.0), tracks)
+        capture_export.export_project(folder, self.settings(folder))
+        calls = self.calls()
+        mixes = [call for call in calls if call[-1].endswith(("mic.wav", "system.wav"))]
+        self.assertEqual([Path(call[-1]).name for call in mixes], ["mic.wav"], "a muted Mac sound is not even prepared")
+        part = next(call for call in calls if call[-1].endswith("mic-000.wav"))
+        self.assertIn(str(folder / "media" / "mic-001.flac"), part)
+        self.assertNotIn(str(folder / "media" / "screen-001.mp4"), part, "the microphone file holds only the microphone")
+
+    def test_a_gap_on_the_timeline_is_black(self) -> None:
+        folder = self.make_project()
+        self.edit(folder, self.recording(1, 1.5, 0.0, 2.0))
+        capture_export.export_project(folder, self.settings(folder))
+        chunks = [call for call in self.calls() if "chunk-" in call[-1]]
+        self.assertEqual(len(chunks), 2)
+        gap = chunks[0]
+        self.assertTrue(any(arg.startswith("color=c=0x000000") for arg in gap))
+        self.assertEqual(gap[gap.index("-t") + 1], "1.500")
+        self.assertNotIn(str(folder / "media" / "screen-001.mp4"), gap)
+
     def test_an_undrawn_caption_stops_the_export_with_a_reason(self) -> None:
         folder = self.make_project()
-        self.edit(folder, captions=[{"id": "s1", "in": 1.0, "out": 2.0, "text": "hi", "asset": "gone.png"}])
+        self.edit(folder, [*self.recording(1, 0.0, 0.0, 3.0), self.clip("w1", "s1", "caption", 1.0, 0.0, 1.0, text="hi", asset="gone.png")])
         with self.assertRaises(capture_export.ExportError) as caught:
             capture_export.export_project(folder, self.settings(folder))
         self.assertIn("Edit tab", str(caught.exception))
         # A line transcribed but never drawn (exported before the page drew it) is not silently left out.
-        self.edit(folder, captions=[{"id": "s1", "in": 1.0, "out": 2.0, "text": "hi", "asset": ""}])
+        self.edit(folder, [*self.recording(1, 0.0, 0.0, 3.0), self.clip("w1", "s1", "caption", 1.0, 0.0, 1.0, text="hi", asset="")])
         with self.assertRaises(capture_export.ExportError) as caught:
             capture_export.export_project(folder, self.settings(folder))
         self.assertIn("Edit tab", str(caught.exception))
 
     def test_an_edited_audio_project_exports_only_sound(self) -> None:
         folder = self.make_project(camera=False, mode="audio")
-        self.edit(folder, clips=[{"id": "a", "in": 2.0, "out": 4.0}, {"id": "b", "in": 6.0, "out": 7.0}])
+        self.edit(folder, [self.clip("a", "a1", "mic", 0.0, 2.0, 4.0), self.clip("b", "a1", "mic", 2.0, 6.0, 7.0)])
         out = capture_export.export_project(folder, self.settings(folder))
         self.assertEqual(out.suffix, ".mp3")
-        self.assertTrue(any(any("concat=n=2:v=0:a=1" in arg for arg in call) for call in self.calls()))
+        mix = next(call for call in self.calls() if any("amix=inputs=2" in arg for arg in call))
+        self.assertIn("apad=whole_dur=3.000000,atrim=0:3.000000", self.graph(mix), "the output ends with its last clip")
+        for call in self.calls():
+            if "-filter_complex" in call:
+                self.assertNotRegex(self.graph(call), r"apad[,\[]", "a bare apad never ends and can hang ffmpeg")
+
+    def test_an_empty_edit_says_so(self) -> None:
+        folder = self.make_project()
+        self.edit(folder, [])
+        with self.assertRaises(capture_export.ExportError) as caught:
+            capture_export.export_project(folder, self.settings(folder))
+        self.assertIn("empty", str(caught.exception))
 
     def test_an_edit_as_recorded_reencodes_the_screen(self) -> None:
         folder = self.make_project()
-        self.edit(folder, clips=[{"id": "a", "in": 1.0, "out": 2.0}])
+        self.edit(folder, [*self.recording(1, 0.0, 1.0, 2.0), *self.recording(2, 2.0, 3.0, 4.0)])
         capture_export.export_project(folder, self.settings(folder, canvas="source"))
-        chunk = next(call for call in self.calls() if "chunk-0000.mp4" in call[-1])
-        self.assertIn(str(folder / "media" / "screen-001.mp4"), chunk)
-        self.assertIn("scale=3600:2338", self.graph(chunk))
+        chunks = [call for call in self.calls() if "chunk-" in call[-1]]
+        self.assertIn(str(folder / "media" / "screen-001.mp4"), chunks[0])
+        self.assertIn("scale=3600:2338", self.graph(chunks[0]))
+        self.assertTrue(any(arg.startswith("color=c=0x000000:s=3600x2338") for arg in chunks[1]), "a gap in a source export is black at the screen's size")
 
     def test_zero_length_segments_export(self) -> None:
         folder = self.make_project(segments=2)
@@ -721,13 +780,23 @@ class RealEditTests(unittest.TestCase):
             project["segments"] = [{"duration": 4.0, "files": {"screen": "media/screen-001.mp4", "mic": "media/mic-001.flac"},
                                     "starts": {"screen": 0.0, "mic": 0.0}}]
             project["duration"] = 4.0
-            project["edit"] = dict(
-                capture_project.default_edit(project),
-                clips=[{"id": "a", "in": 0.5, "out": 1.5}, {"id": "b", "in": 2.5, "out": 3.5}],
-                captions=[{"id": "s1", "in": 1.0, "out": 3.0, "text": "hello", "asset": "cap.png"}],
-                texts=[{"id": "t1", "start": 0.0, "end": 1.0, "text": "title", "asset": "cap.png", "x": 0.5, "y": 0.2, "w": 0.4}],
-                audio=[{"id": "m1", "asset": "song.m4a", "name": "Song", "start": 0.2, "in": 0.0, "out": 1.5, "volume": 0.5, "fade_in": 0.3, "fade_out": 0.3}],
-            )
+            edit = capture_project.default_edit(project)
+
+            def clip(ident: str, track: str, source: str, start: float, begin: float, end: float, link: str = "", **more: object) -> dict:
+                item = {"id": ident, "track": track, "source": source, "start": start, "in": begin, "out": end, "link": link}
+                if track.startswith("a"):
+                    item.update(name="", asset="", volume=1.0, fade_in=0.0, fade_out=0.0)
+                item.update(more)
+                return item
+
+            edit["clips"] = [
+                clip("v1", "v1", "recording", 0.0, 0.5, 1.5, "l1"), clip("m1", "a1", "mic", 0.0, 0.5, 1.5, "l1"), clip("s1", "a2", "system", 0.0, 0.5, 1.5, "l1"),
+                clip("v2", "v1", "recording", 1.0, 2.5, 3.5, "l2"), clip("m2", "a1", "mic", 1.0, 2.5, 3.5, "l2"),
+                clip("w1", "s1", "caption", 0.5, 0.0, 1.0, text="hello", asset="cap.png"),
+                clip("t1", "t1", "text", 0.0, 0.0, 1.0, text="title", asset="cap.png", x=0.5, y=0.2, w=0.4, color="#ffffff", background=""),
+                clip("x1", "a3", "asset", 0.2, 0.0, 1.5, name="Song", asset="song.m4a", volume=0.5, fade_in=0.3, fade_out=0.3),
+            ]
+            project["edit"] = edit
             capture_project.write_project(folder, project)
             for canvas in ("16:9", "source"):
                 settings = capture_export.export_settings(project, {}, {"canvas": canvas, "height": 1080, "fps": 30})
@@ -736,6 +805,58 @@ class RealEditTests(unittest.TestCase):
                                                 capture_output=True, text=True, check=True).stdout)
                 self.assertAlmostEqual(duration, 2.0, delta=0.1, msg=canvas)
                 self.assertIn("00:00:00,500 --> 00:00:01,500", out.with_suffix(".srt").read_text())
+
+
+class ProxyTests(ExportTestCase):
+    """Light copies for the Edit tab (Resolve's optimized media): 1080p H.264 with a keyframe a second, AAC sound."""
+
+    def test_proxies_are_made_once_per_file(self) -> None:
+        from unlawful import capture
+
+        folder = self.make_project()
+        files = capture.make_proxies(folder)["files"]
+        self.assertEqual(files, {
+            "media/screen-001.mp4": {"video": "cache/proxy/screen-001.mp4", "audio": "cache/proxy/screen-001-system.m4a"},
+            "media/camera-001.mp4": {"video": "cache/proxy/camera-001.mp4"},
+            "media/mic-001.flac": {"audio": "cache/proxy/mic-001.m4a"},
+        })
+        for entry in files.values():
+            for relative in entry.values():
+                self.assertTrue((folder / relative).is_file(), relative)
+        calls = [call for call in self.calls() if "-i" in call]
+        screen = next(call for call in calls if call[-1].endswith("screen-001.mp4.part.mp4"))
+        self.assertIn("-an", screen)
+        self.assertIn("h264_videotoolbox", screen)
+        self.assertIn("expr:gte(t,n_forced*1)", screen, "a keyframe every second: seeking is instant")
+        self.assertIn("scale=-2:'min(1080,ih)'", screen[screen.index("-vf") + 1])
+        sound = next(call for call in calls if call[-1].endswith("screen-001-system.m4a.part.m4a"))
+        self.assertIn("-vn", sound)
+        self.assertNotIn(str(folder / "media" / "mic-001.flac"), screen)
+        count = len(self.calls())
+        self.assertEqual(capture.make_proxies(folder)["files"], files)
+        self.assertEqual(len(self.calls()), count, "up-to-date proxies are not made again")
+
+    def test_a_screen_without_sound_has_no_sound_proxy(self) -> None:
+        from unlawful import capture
+
+        folder = self.make_project(camera=False)
+        project = capture_project.read_project(folder)
+        project["segments"][0]["info"]["screen"]["audio"] = False
+        capture_project.write_project(folder, project)
+        files = capture.make_proxies(folder)["files"]
+        self.assertEqual(files["media/screen-001.mp4"], {"video": "cache/proxy/screen-001.mp4"})
+
+    def test_a_symlinked_cache_is_refused(self) -> None:
+        from unlawful import capture
+
+        folder = self.make_project()
+        outside = self.root / "elsewhere"
+        outside.mkdir()
+        (folder / "cache").rename(self.root / "old-cache") if (folder / "cache").exists() else None
+        (folder / "cache").symlink_to(outside)
+        with self.assertRaises(capture.CaptureError):
+            capture.make_proxies(folder)
+        self.assertEqual(list(outside.iterdir()), [])
 
 
 class TranscribeTests(ExportTestCase):

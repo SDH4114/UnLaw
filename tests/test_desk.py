@@ -1096,6 +1096,22 @@ class DeskStudioTests(unittest.TestCase):
         # The speech models for the Edit tab's menu (none in this empty Hugging Face cache).
         status, data = self.call(port, token, "/api/studio/speech-models")
         self.assertEqual((status, data), (200, []))
+        # Proxies are made in the background and served from cache/proxy (only from there, not the whole cache).
+        self.assertEqual(self.call(port, token, f"/api/studio/project/proxy?path={quote(project)}")[1]["state"], "idle")
+        self.assertEqual(self.call(port, token, "/api/studio/project/proxy", {"path": project})[1]["state"], "running")
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            state = self.call(port, token, f"/api/studio/project/proxy?path={quote(project)}")[1]
+            if state["state"] != "running":
+                break
+            time.sleep(0.2)
+        self.assertEqual(state["state"], "done", state)
+        video = state["files"]["media/screen-001.mp4"]["video"]
+        self.assertEqual(video, "cache/proxy/screen-001.mp4")
+        self.assertEqual(self.raw(port, self.media_url(token, project, video))[0], 200)
+        (folder / "cache" / "note.txt").write_text("x")
+        self.assertEqual(self.raw(port, self.media_url(token, project, "cache/note.txt"))[0], 404)
+        self.assertEqual(self.call(port, token, "/api/studio/project/proxy", {"path": "/etc"})[0], 404)
 
     def test_project_media_refuses_escapes(self) -> None:  # Review Focus 5
         self.media()

@@ -28,9 +28,10 @@ from .capture_project import (
     ProjectError,
     canvas_size,
     caption_spans,
-    edit_clips,
     edit_length,
-    edit_pieces,
+    edit_sounds,
+    edit_texts,
+    edit_video,
     effective_placements,
     srt_text,
     inside,
@@ -510,7 +511,7 @@ def piece_overlays(folder: Path, project: dict, settings: dict, at: float, lengt
     found = []
     style = edit.get("caption_style", {})
     items = [("caption", span) for span in caption_spans(project, settings["fps"])]
-    items += [("text", item) for item in edit.get("texts", [])]
+    items += [("text", item) for item in edit_texts(project)]
     for kind, item in items:
         low, high = max(item["start"], at), min(item["end"], at + length)
         if high <= low:
@@ -557,34 +558,56 @@ def source_piece_argv(folder: Path, project: dict, piece: dict, track: str, sett
     ]
 
 
-def edited_sound_argv(folder: Path, project: dict, settings: dict, recording: Path | None, out: Path) -> list[str] | None:
-    """The recording's sound cut to the clips, with music and voice-over mixed in; None when nothing is audible."""
-    edit = project["edit"]
-    clips = edit_clips(project, settings["fps"])
-    total = sum(clip["out"] - clip["in"] for clip in clips)
+def gap_argv(piece: dict, settings: dict, size: tuple[int, int], out: Path) -> list[str]:
+    """A black stretch of the output (a gap between clips), with the captions and texts over it."""
+    width, height = size
+    inputs = ["-f", "lavfi", "-i", f"color=c=0x000000:s={width}x{height}:r={settings['fps']}"]
+    count = 1
+
+    def still_input(path: Path) -> int:
+        nonlocal count
+        inputs.extend(["-loop", "1", "-t", f"{piece['length']:.3f}", "-i", str(path)])
+        count += 1
+        return count - 1
+
+    graph: list[str] = []
+    current = _overlay_stills(piece.get("overlays", []), width, height, still_input, graph, "[0:v]")
+    graph.append(f"{current}format=yuv420p[vout]")
+    return [
+        *FFMPEG_BASE, *inputs, "-filter_complex", ";".join(graph), "-map", "[vout]", "-an",
+        *_encoder(settings, width, height), "-t", f"{piece['length']:.3f}", "-progress", "pipe:1", "-nostats", str(out),
+    ]
+
+
+def edited_sound_argv(folder: Path, project: dict, settings: dict, recorded: dict[str, Path], out: Path) -> list[str] | None:
+    """Every sound clip that is heard, cut, faded, put at its place and mixed; None when nothing is.
+
+    `recorded` holds the recording's microphone and Mac sound, each one WAV on the recording's clock.
+    """
+    total = edit_length(project, settings["fps"])
     inputs: list[str] = []
     graph: list[str] = []
     labels: list[str] = []
-    if recording is not None and clips:
-        inputs += ["-i", str(recording)]
-        for number, clip in enumerate(clips):
-            graph.append(f"[0:a]atrim=start={clip['in']:.6f}:end={clip['out']:.6f},asetpts=PTS-STARTPTS[c{number}]")
-        graph.append("".join(f"[c{number}]" for number in range(len(clips))) + f"concat=n={len(clips)}:v=0:a=1[main]")
-        labels.append("[main]")
-    for item in edit["audio"]:
+    for number, item in enumerate(edit_sounds(project)):
         if item["start"] >= total:
             continue
-        try:
-            path = inside(folder, f"assets/{item['asset']}", f"audio {item['name']}")
-        except ProjectError as error:
-            raise ExportError(str(error)) from error
-        if not path.is_file():
-            raise ExportError(f"the sound file {item['asset']} is missing from the project")
+        if item["source"] == "asset":
+            try:
+                path = inside(folder, f"assets/{item['asset']}", f"sound {item['name'] or item['asset']}")
+            except ProjectError as error:
+                raise ExportError(str(error)) from error
+            if not path.is_file():
+                raise ExportError(f"the sound file {item['asset']} is missing from the project")
+        else:
+            path = recorded.get(item["source"])
+            if path is None:
+                continue
+        # Every clip reads its own input: two branches of one input mixed back together stall ffmpeg.
         index = len(inputs) // 2
         inputs += ["-i", str(path)]
         length = item["out"] - item["in"]
         chain = (
-            f"[{index}:a]atrim=start={item['in']:.3f}:end={item['out']:.3f},asetpts=PTS-STARTPTS,"
+            f"[{index}:a]atrim=start={item['in']:.6f}:end={item['out']:.6f},asetpts=PTS-STARTPTS,"
             f"aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume={item['volume']:g}"
         )
         if item["fade_in"] > 0:
@@ -594,8 +617,8 @@ def edited_sound_argv(folder: Path, project: dict, settings: dict, recording: Pa
             chain += f",afade=t=out:st={length - fade:.3f}:d={fade:.3f}"
         if item["start"] > 0:
             chain += f",adelay={round(item['start'] * 1000)}:all=1"
-        graph.append(f"{chain}[m{index}]")
-        labels.append(f"[m{index}]")
+        graph.append(f"{chain}[c{number}]")
+        labels.append(f"[c{number}]")
     if not labels:
         return None
     if len(labels) > 1:
@@ -603,7 +626,9 @@ def edited_sound_argv(folder: Path, project: dict, settings: dict, recording: Pa
         last = "[mix]"
     else:
         last = labels[0]
-    graph.append(f"{last}apad,atrim=0:{total:.6f}[aout]")
+    # apad with whole_dur ends by itself: a bare apad is endless, and ffmpeg 8 sometimes spins forever on it
+    # even with an atrim after it (measured: one run in two of the same command hung).
+    graph.append(f"{last}apad=whole_dur={total:.6f},atrim=0:{total:.6f}[aout]")
     return [
         *FFMPEG_BASE, *inputs, "-filter_complex", ";".join(graph), "-map", "[aout]",
         "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", str(out),
@@ -611,23 +636,33 @@ def edited_sound_argv(folder: Path, project: dict, settings: dict, recording: Pa
 
 
 def audio_argv(
-    folder: Path, project: dict, segment: int, settings: dict, out: Path
+    folder: Path, project: dict, segment: int, settings: dict, out: Path, only: str | None = None
 ) -> list[str] | None:
     """System sound (from the screen file) and the microphone of one segment, each at its start offset,
-    mixed to stereo 48 kHz WAV of exactly the segment's length; None when nothing is audible."""
+    mixed to stereo 48 kHz WAV of exactly the segment's length; None when nothing is audible.
+
+    `only` ("mic" or "system") takes that one sound as recorded, for the Edit tab's separate tracks (their
+    mute and volume then live in the edit)."""
     part = project["segments"][segment]
     duration = part["duration"]
     audio = project["audio"]
     chosen = []
-    if (
-        "screen" in part["files"]
-        and audio["system"]["enabled"]
-        and not audio["system"]["muted"]
-    ):
-        if _track_info(folder, part, "screen").get("audio"):
-            chosen.append(("screen", audio["system"]["volume"]))
-    if "mic" in part["files"] and not audio["mic"]["muted"]:
-        chosen.append(("mic", audio["mic"]["volume"]))
+    if only == "system":
+        if "screen" in part["files"] and _track_info(folder, part, "screen").get("audio"):
+            chosen.append(("screen", 1.0))
+    elif only == "mic":
+        if "mic" in part["files"]:
+            chosen.append(("mic", 1.0))
+    else:
+        if (
+            "screen" in part["files"]
+            and audio["system"]["enabled"]
+            and not audio["system"]["muted"]
+        ):
+            if _track_info(folder, part, "screen").get("audio"):
+                chosen.append(("screen", audio["system"]["volume"]))
+        if "mic" in part["files"] and not audio["mic"]["muted"]:
+            chosen.append(("mic", audio["mic"]["volume"]))
     if not chosen:
         return None
     inputs: list[str] = []
@@ -650,7 +685,7 @@ def audio_argv(
         last = "[mix]"
     else:
         last = labels[0]
-    graph.append(f"{last}apad,atrim=0:{duration:.3f}[aout]")
+    graph.append(f"{last}apad=whole_dur={duration:.3f},atrim=0:{duration:.3f}[aout]")  # never a bare, endless apad
     return [
         *FFMPEG_BASE,
         *inputs,
@@ -895,19 +930,27 @@ def export_project(
 
 
 def _render_edit(folder: Path, project: dict, settings: dict, work: Path, video: Path, log: Path, report: Callable[[float], None]) -> None:
-    """The edited picture: one chunk per piece of a clip (cut at pauses and scene switches), joined."""
-    pieces = edit_pieces(project, settings["fps"])
+    """The edited picture: one chunk per piece of the timeline (a clip cut at pauses and scene switches, or a
+    black gap), joined."""
+    pieces = edit_video(project, settings["fps"])
     if not pieces:
         raise ExportError("the edit keeps less than one frame of picture")
     source = settings["canvas"] == "source"
     track = "screen" if any("screen" in segment["files"] for segment in project["segments"]) else "camera"
+    if source:
+        info = next((_track_info(folder, segment, track) for segment in project["segments"] if track in segment["files"]), {})
+        size = (_even(info.get("width") or 1920), _even(info.get("height") or 1080))
+    else:
+        size = canvas_size(settings["canvas"], settings["height"])
     total = sum(piece["length"] for piece in pieces) or 1.0
     done = 0.0
     chunks = []
     for number, piece in enumerate(pieces):
         piece["overlays"] = piece_overlays(folder, project, settings, piece["at"], piece["length"])
         chunk = work / f"chunk-{number:04d}.mp4"
-        if source:
+        if piece["kind"] == "gap":
+            argv = gap_argv(piece, settings, size, chunk)
+        elif source:
             if track not in project["segments"][piece["segment"]]["files"]:
                 raise ExportError(
                     f"part {piece['segment'] + 1} has no {track} track (its recorder stopped early): "
@@ -984,33 +1027,39 @@ def _export(
             raise ExportError("the recording is shorter than one frame")
         edited = "edit" in project
         if edited and edit_length(project, settings["fps"]) <= 0:
-            raise ExportError("the edit is empty: every clip was cut away")
-        # Sound: one WAV per segment (silence where nothing is audible), joined. An edit keeps every part with
-        # any length, so the joined sound runs on the recording's own clock, which the clips are written in.
-        audio_parts = []
-        sound_parts = [index for index, segment in enumerate(project["segments"]) if segment["duration"] > 0] if edited else kept
-        for index in sound_parts:
-            segment = project["segments"][index]
-            wav = work / f"audio-{index:03d}.wav"
-            argv = audio_argv(folder, project, index, settings, wav)
-            _run_ffmpeg(
-                argv or _silence_argv(segment["duration"], wav), log, "mixing the sound"
-            )
-            audio_parts.append(wav)
-        audible = any(
-            audio_argv(folder, project, index, settings, Path(os.devnull))
-            for index in sound_parts
-        )
+            raise ExportError("the edit is empty: put a clip on the timeline")
         sound = work / "audio.wav"
         if edited:
-            recording = work / "recording.wav" if audible else None
-            if recording is not None:
-                _run_ffmpeg(_concat_argv(audio_parts, work / "audio.txt", recording), log, "joining the sound")
-            argv = edited_sound_argv(folder, project, settings, recording, sound)
+            # The microphone and the Mac sound are separate tracks of the edit: each becomes one WAV on the
+            # recording's clock (every part with any length, silence where a part has none), only when heard.
+            heard = {item["source"] for item in edit_sounds(project)}
+            recorded: dict[str, Path] = {}
+            parts = [index for index, segment in enumerate(project["segments"]) if segment["duration"] > 0]
+            for name in ("mic", "system"):
+                if name not in heard or not any(audio_argv(folder, project, index, settings, Path(os.devnull), name) for index in parts):
+                    continue
+                files = []
+                for index in parts:
+                    wav = work / f"{name}-{index:03d}.wav"
+                    argv = audio_argv(folder, project, index, settings, wav, name)
+                    _run_ffmpeg(argv or _silence_argv(project["segments"][index]["duration"], wav), log, "preparing the sound")
+                    files.append(wav)
+                recorded[name] = work / f"{name}.wav"
+                _run_ffmpeg(_concat_argv(files, work / f"{name}.txt", recorded[name]), log, "joining the sound")
+            argv = edited_sound_argv(folder, project, settings, recorded, sound)
             audible = argv is not None
             if argv is not None:
-                _run_ffmpeg(argv, log, "cutting the sound")
-        elif audible:
+                _run_ffmpeg(argv, log, "mixing the sound")
+        else:
+            audio_parts = []
+            for index in kept:
+                segment = project["segments"][index]
+                wav = work / f"audio-{index:03d}.wav"
+                argv = audio_argv(folder, project, index, settings, wav)
+                _run_ffmpeg(argv or _silence_argv(segment["duration"], wav), log, "mixing the sound")
+                audio_parts.append(wav)
+            audible = any(audio_argv(folder, project, index, settings, Path(os.devnull)) for index in kept)
+        if not edited and audible:
             _run_ffmpeg(
                 _concat_argv(audio_parts, work / "audio.txt", sound),
                 log,

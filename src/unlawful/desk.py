@@ -1341,6 +1341,9 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == "/api/studio/project/wave":
                 query = urllib.parse.parse_qs(url.query)
                 self._json(200, self.studio.project_wave(query.get("path", [""])[0], query.get("file", [""])[0], query.get("bars", ["2000"])[0]))
+            elif url.path == "/api/studio/project/proxy":
+                query = urllib.parse.parse_qs(url.query)
+                self._json(200, self.studio.proxy(query.get("path", [""])[0], False))
             elif url.path == "/api/studio/speech-models":
                 self._json(200, self.studio.run("transcribe", "--models", timeout=90))
             elif url.path == "/api/studio/export/status":
@@ -1544,6 +1547,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.studio.mark(body))
             elif path == "/api/studio/project":
                 self._json(200, self.studio.save_project(body))
+            elif path == "/api/studio/project/proxy":
+                self._json(200, self.studio.proxy(body.get("path"), True))
             elif path == "/api/studio/transcribe":
                 self._json(200, self.studio.transcribe(body))
             elif path == "/api/studio/project/import":
@@ -1725,6 +1730,7 @@ class Studio:
         self._available: bool | None = None
         self._availability_lock = threading.Lock()
         self.choose_lock = threading.Lock()
+        self.proxies: dict[str, dict] = {}  # project folder -> {state, files, error}
 
     def available(self) -> bool:
         with self._availability_lock:
@@ -2120,6 +2126,29 @@ class Studio:
             return {"asset": target.name}
         raise ValueError("no free name for the sound")
 
+    def proxy(self, raw: object, start: bool) -> dict:
+        """Light copies for the Edit tab (`ul capture proxy`), made in the background: {state, files, error}.
+
+        `state` is idle, running, done or failed; a finished run is started again on request (it only makes
+        what is missing or older than its original)."""
+        folder = str(self.project_folder(raw))
+        with self.lock:
+            entry = self.proxies.get(folder) or {"state": "idle", "files": {}, "error": ""}
+            if start and entry["state"] != "running":
+                entry = {"state": "running", "files": entry["files"], "error": ""}
+
+                def work(entry: dict = entry) -> None:
+                    try:
+                        data = self.run("proxy", folder, timeout=3600)
+                        files = data.get("files", {}) if isinstance(data, dict) else {}
+                        entry.update(state="done", files=files)
+                    except (StudioError, OSError) as error:
+                        entry.update(state="failed", error=str(error))
+
+                threading.Thread(target=work, daemon=True).start()
+            self.proxies[folder] = entry
+            return dict(entry)
+
     def project_wave(self, raw: object, file: object, bars: object) -> object:
         folder = self.project_folder(raw)
         self.project_file(raw, file)
@@ -2209,7 +2238,8 @@ class Studio:
         if not isinstance(file, str) or not file or "\x00" in file or file.startswith("/") or os.path.normpath(file) != file:
             raise FileNotFoundError("unknown project file")
         parts = Path(file).parts
-        if len(parts) < 2 or parts[0] not in {"media", "assets"} or ".." in parts:
+        proxy = len(parts) == 3 and parts[:2] == ("cache", "proxy")  # the Edit tab's light copies
+        if (len(parts) < 2 or parts[0] not in {"media", "assets"} or ".." in parts) and not proxy:
             raise FileNotFoundError("unknown project file")
         target = folder
         for part in parts:
