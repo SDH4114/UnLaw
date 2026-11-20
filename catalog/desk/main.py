@@ -3423,10 +3423,29 @@ function selectSource(id) {
 
 function toggleVisible(id) {
   const layout = currentLayout();
+  const source = sourceById(id);
+  // The eye of a camera that is off turns it on: showing it while it records nothing looked like a broken camera.
+  if (source && source.kind === "camera" && !source.enabled) { setCamera(true); return; }
   if (!layout) { toast("“As recorded” has no layout; pick a format to show or hide sources"); return; }
-  if (!layout.placements[id]) layout.placements[id] = defaultPlacement(sourceById(id), currentCanvas());
+  if (!layout.placements[id]) layout.placements[id] = defaultPlacement(source, currentCanvas());
   else layout.placements[id].visible = !layout.placements[id].visible;
   edited(renderSources, drawStage, renderProps);
+}
+
+// The camera on or off for recording; turning it on also shows it in the current scene.
+function setCamera(on) {
+  const source = cameraSource();
+  if (!source || (studio.status && studio.status.active)) return;
+  source.enabled = on;
+  if (on) {
+    const layout = currentLayout();
+    if (layout) {
+      if (!layout.placements[source.id]) layout.placements[source.id] = defaultPlacement(source, currentCanvas());
+      layout.placements[source.id].visible = true;
+    }
+    ensureCamera();
+  } else stopStream("camStream");
+  edited(renderSources, drawStage, renderProps, updateRecordControls, renderRecBar);
 }
 
 function defaultPlacement(source, canvas, aspect) {
@@ -3740,6 +3759,8 @@ function renderRecBar() {
     h("div", { class: "cbody" },
       h("button", { class: "recbtn", id: "recButton", title: "Start / stop recording (R)", onclick: () => toggleRecord() }, h("i"), h("span", { id: "recLabel", text: "Start recording" })),
       h("button", { class: "pill audiobtn", id: "recAudio", title: "Record only the microphone, no screen or camera (A)", onclick: () => toggleRecord("audio") }, studioIcon("mic"), "Record audio only"),
+      cameraSource() ? h("button", { class: "pill" + (cameraSource().enabled ? " on" : ""), id: "recCamera", title: "Record the camera with the screen (it shows in the scenes that place it)",
+        disabled: Boolean(studio.status && studio.status.active) || null, onclick: () => setCamera(!cameraSource().enabled) }, studioIcon("camera"), cameraSource().enabled ? "Camera on" : "Camera off") : null,
       h("div", { class: "crow" }, h("span", { class: "recclock", id: "recClock", text: "00:00" }), h("span", { class: "recstate", id: "recState" })),
       h("div", { class: "crow" },
         h("button", { class: "pill", id: "recPause", title: "Pause / resume (P)", onclick: pauseRecord }, studioIcon("pause"), "Pause"),
@@ -4513,7 +4534,17 @@ function stopProjectPlayer() {
   studio.player = null;
 }
 
-function clockTrack(segment) { return PROJECT_TRACKS.find((track) => segment.files && segment.files[track]) || null; }
+// The microphone is the clock when there is one: a browser that cannot decode a big screen video in time
+// then only drops frames, while moving the voice to follow the video made it stutter.
+const CLOCK_ORDER = ["mic", "screen", "camera"];
+function clockTrack(segment) { return CLOCK_ORDER.find((track) => segment.files && segment.files[track]) || null; }
+// Keep a follower in time with the clock: a small lag is caught up by playing a little faster or slower,
+// only a big one moves it (a jump is heard and seen).
+function follow(node, wanted) {
+  const drift = wanted - node.currentTime;
+  if (Math.abs(drift) > 0.6) { node.currentTime = wanted; node.playbackRate = 1; return; }
+  node.playbackRate = Math.abs(drift) < 0.04 ? 1 : 1 + Math.max(-0.12, Math.min(0.12, drift * 0.5));
+}
 function playMedia(node) { const playing = node.play && node.play(); if (playing && playing.catch) playing.catch(() => {}); }
 function setMediaTime(node, value) {
   if (node.readyState >= 1) node.currentTime = value;
@@ -4574,7 +4605,7 @@ function syncPlayer() {
       if (track === clock || !part.files[track]) continue;
       const node = player[track], wanted = local - (starts[track] || 0);
       if (wanted < 0) { if (!node.paused) node.pause(); continue; }
-      if (Math.abs(node.currentTime - wanted) > 0.25) node.currentTime = wanted;
+      follow(node, wanted);
       if (node.paused && !node.ended) playMedia(node);
     }
     if (player[clock].ended || local >= part.duration - 0.03) {
@@ -10512,6 +10543,8 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == "/api/studio/project/wave":
                 query = urllib.parse.parse_qs(url.query)
                 self._json(200, self.studio.project_wave(query.get("path", [""])[0], query.get("file", [""])[0], query.get("bars", ["2000"])[0]))
+            elif url.path == "/api/studio/speech-models":
+                self._json(200, self.studio.run("transcribe", "--models", timeout=90))
             elif url.path == "/api/studio/export/status":
                 self._json(200, self.studio.run("export", "--status", timeout=30))
             elif url.path == "/api/studio/camera-modes":

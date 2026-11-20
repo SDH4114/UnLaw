@@ -1093,6 +1093,9 @@ class DeskStudioTests(unittest.TestCase):
         self.assertIn("peaks", data)
         self.assertEqual(self.call(port, token, f"/api/studio/project/wave?path={quote(project)}&file=assets/song.wav&bars=99999")[0], 400)
         self.assertEqual(self.call(port, token, "/api/studio/transcribe", {"path": project, "language": "--rm"})[0], 400)
+        # The speech models for the Edit tab's menu (none in this empty Hugging Face cache).
+        status, data = self.call(port, token, "/api/studio/speech-models")
+        self.assertEqual((status, data), (200, []))
 
     def test_project_media_refuses_escapes(self) -> None:  # Review Focus 5
         self.media()

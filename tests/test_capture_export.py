@@ -759,6 +759,50 @@ else:
         )
         self.assertIn("-l|ru", log.read_text())
 
+    def test_a_speech_model_is_picked_when_several_are_downloaded(self) -> None:
+        # ul lm refuses to guess between two speech models with no default; the Edit tab must still work.
+        from unlawful import capture
+
+        folder = self.make_project()
+        models = [
+            {"id": "big/chat", "type": "text", "format": "mlx", "default": True, "runnable": True},
+            {"id": "handy/whisper-gguf", "type": "stt", "format": "gguf", "default": False, "runnable": True},
+            {"id": "mlx-community/whisper-large-v3-turbo", "type": "stt", "format": "mlx", "default": False, "runnable": True},
+            {"id": "broken/stt", "type": "stt", "format": "mlx", "default": False, "runnable": False},
+        ]
+        log = self.tool("ul", f"""import json
+if sys.argv[1:3] == ["lm", "list"]:
+    print(json.dumps({models!r}))
+else:
+    print(json.dumps({{"language": "en", "segments": [{{"start": 0.0, "end": 1.0, "text": "hi"}}]}}))
+""")
+        with patch.dict(os.environ, {"UNLAW_BIN": str(self.bin / "ul")}):
+            listed = capture.speech_models()
+            data = capture.transcribe_project(folder)
+        self.assertEqual([item["id"] for item in listed], ["mlx-community/whisper-large-v3-turbo", "handy/whisper-gguf"])
+        self.assertEqual(data["model"], "mlx-community/whisper-large-v3-turbo")
+        self.assertIn("-m|mlx-community/whisper-large-v3-turbo", log.read_text())
+        # A default speech model wins; a model named by the user is passed as it is.
+        models[1]["default"] = True
+        self.tool("ul", f"""import json
+if sys.argv[1:3] == ["lm", "list"]:
+    print(json.dumps({models!r}))
+else:
+    print(json.dumps({{"segments": []}}))
+""")
+        with patch.dict(os.environ, {"UNLAW_BIN": str(self.bin / "ul")}):
+            self.assertEqual(capture.speech_models()[0]["id"], "handy/whisper-gguf")
+            self.assertEqual(capture.transcribe_project(folder, None, "my/model")["model"], "my/model")
+
+    def test_without_a_speech_model_the_error_says_how_to_get_one(self) -> None:
+        from unlawful import capture
+
+        folder = self.make_project()
+        self.tool("ul", "import json\nprint(json.dumps([{'id': 'a/chat', 'type': 'text', 'format': 'mlx', 'default': True, 'runnable': True}]))\n")
+        with patch.dict(os.environ, {"UNLAW_BIN": str(self.bin / "ul")}), self.assertRaises(capture.CaptureError) as caught:
+            capture.transcribe_project(folder)
+        self.assertIn("ul lm pull mlx-community/whisper-large-v3-turbo", str(caught.exception))
+
     def test_a_failing_recogniser_reports_why(self) -> None:
         from unlawful import capture
 

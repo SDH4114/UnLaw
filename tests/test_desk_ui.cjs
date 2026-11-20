@@ -84,7 +84,7 @@ function harness() {
       countdownSteps, saveSetupSoon, permissionBanner, openSettings,
       renderStudio, renderStudioBody, renderSources, updateRecordControls, startPreview,
       startHistory, undoEdit, addScene, moveScene, removeScene, defaultPlacement, currentScene, edited, selectSource, placementOf, nudgeSelected, deleteSelected, sourceById, toggleVisible, moveSource, toggleInput, openRecordSettings, closeStudioMenu,
-      projectClock, sceneAt, exportDefaults, exportHeightFor, renderExportDialog, startExport, pollExport, renderProjects, openProject, changePlacement, projectAction,
+      projectClock, sceneAt, syncPlayer, clockTrack, exportDefaults, exportHeightFor, renderExportDialog, startExport, pollExport, renderProjects, openProject, changePlacement, projectAction,
       cv, mulberry32, toScreen, toWorld, zoomAt, fitView, roughStrokes, hitElement, hitTest, edgeCurve, hitEdge,
       nearestSide, resizeBox, handleAt, applyBox, wrapText, adaptInk, nodeColor, noteName, makeLinear, makeFreedraw,
       snapAngle, applyStyle, containedIds, groupAround, moveItems, removeItems, copyItems, pasteItems, makeHistory,
@@ -106,6 +106,7 @@ function treeHarness() {
   Object.defineProperty(E.prototype, 'firstChild', {configurable: true, get() { return this.children.find(child => typeof child !== 'string') || null; }});
   E.prototype.setAttribute = function (key, value) { (this.attrs = this.attrs || {})[key] = value; if (key === 'id') this.id = value; };
   E.prototype.getBoundingClientRect = () => ({left: 0, top: 0, right: 640, bottom: 360, width: 640, height: 360});
+  E.prototype.addEventListener = function (type, fn) { (this.on = this.on || {})[type] = fn; };
   h.context.Image = class { set src(value) { this.url = value; } };
   const main = new E('main');
   const find = (id, node = main) => {
@@ -658,6 +659,33 @@ const tests = {
   assert.equal(a.studio.micStream, null);
   assert.match(textOf(h.find('soundPane')), /off/);
  },
+ async studio_camera_turns_on_from_the_eye_and_controls() {
+  // An "off" camera used to keep recording nothing while its eye showed it in the scene.
+  const h = treeHarness(), a = h.a;
+  a.state.view = 'studio';
+  a.studio.info = {available: true, settings: {}};
+  a.studio.setup = sampleSetup();
+  a.startHistory(a.studio.setup);
+  a.studio.devices = {displays: [{number: 1, name: 'Color LCD', pixels: '3024 x 1964'}], cameras: [{name: 'FaceTime HD Camera'}], microphones: [], ffmpeg: true};
+  a.studio.status = {active: false};
+  h.context.fetch = async () => response({});
+  a.renderStudio(h.main);
+  assert.equal(a.sourceById('camera').enabled, false, 'the default setup starts without the camera');
+  if (a.placementOf('camera')) a.placementOf('camera').visible = false;
+  a.toggleVisible('camera');
+  assert.equal(a.sourceById('camera').enabled, true, 'showing an off camera turns it on');
+  assert.equal(a.placementOf('camera').visible, true);
+  assert.doesNotMatch(textOf(h.find('sourcesPane')), /\(off\)/);
+  const button = h.find('recCamera');
+  assert.ok(button, 'Controls has a camera button');
+  assert.match(textOf(button), /Camera on/);
+  button.on.click();
+  assert.equal(a.sourceById('camera').enabled, false, 'the button turns it off');
+  assert.match(textOf(h.find('recCamera')), /Camera off/);
+  h.find('recCamera').on.click();
+  assert.equal(a.sourceById('camera').enabled, true);
+  assert.equal(a.placementOf('camera').visible, true, 'and on again, shown in this scene');
+ },
  async studio_first_preview_shows_the_screen() {
   // The stage starts with a placeholder; the first snapshot that loads must replace it (not only update
   // <img class=screen> nodes, of which there are none yet).
@@ -683,6 +711,35 @@ const tests = {
   assert.ok(images.length, 'a snapshot is requested');
   images[images.length - 1].onload();
   assert.equal(screens().length, 1, 'the first snapshot is drawn on the stage');
+ },
+ async project_player_follows_the_voice() {
+  // The voice is the clock: a screen video that cannot keep up is nudged or moved, never the microphone.
+  const h = harness(), a = h.a;
+  a.studio.project = sampleProject();
+  const media = (time) => ({currentTime: time, paused: false, ended: false, playbackRate: 1, seeks: 0, play() { this.paused = false; }, pause() { this.paused = true; }});
+  const player = {screen: media(2.5), camera: media(2.63), mic: media(2.0), segment: 0, t: 0, playing: true};
+  for (const node of [player.screen, player.camera, player.mic]) {
+   let value = node.currentTime;
+   Object.defineProperty(node, 'currentTime', {get: () => value, set: (next) => { value = next; node.seeks++; }});
+  }
+  a.studio.player = player;
+  assert.equal(a.clockTrack(a.studio.project.segments[0]), 'mic');
+  a.syncPlayer();
+  assert.equal(player.mic.seeks, 0, 'the microphone is never moved');
+  assert.ok(Math.abs(player.t - 2.94) < 1e-9, 'the clock is the voice: 2.0 s into a file that starts at 0.94 s');
+  assert.equal(player.screen.seeks, 0, 'a small lag is caught up by playing faster');
+  assert.ok(player.screen.playbackRate > 1);
+  assert.equal(player.camera.seeks, 0);
+  assert.equal(player.camera.playbackRate, 1, 'the camera is in time');
+  player.screen.currentTime = 1.0;
+  player.screen.seeks = 0;
+  a.syncPlayer();
+  assert.equal(player.screen.seeks, 1, 'a big lag moves the video');
+  assert.ok(Math.abs(player.screen.currentTime - 2.94) < 1e-9);
+  assert.equal(player.screen.playbackRate, 1);
+  // Without a microphone the screen is the clock, as before.
+  delete a.studio.project.segments[0].files.mic;
+  assert.equal(a.clockTrack(a.studio.project.segments[0]), 'screen');
  },
  async project_clock_maps_segments() {
   const h = harness();

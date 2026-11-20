@@ -242,7 +242,9 @@ Library:
   devices --modes [--camera NAME]   the modes each camera offers (turns its light on briefly)
   wave X [--bars N] the loudness of a recording as bars (like Voice Memos)
                     (--project P: X is a file of project P, up to 20000 bars)
-  transcribe P      subtitles for project P from `ul lm transcribe` (--language CODE --model NAME), JSON with --json
+  transcribe P      subtitles for project P from `ul lm transcribe` (--language CODE --model NAME), JSON with --json;
+                   without --model the default speech model is used, else an MLX one;
+                   `transcribe --models` lists the speech models
   thumb X / preview [--display N]   small JPEGs (used by `ul desk`)
 Add --json to any action for machine-readable output.
 Files: storage.root/captures/projects, /recordings (exports) and /screenshots; never

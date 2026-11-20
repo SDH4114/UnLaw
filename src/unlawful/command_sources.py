@@ -344,6 +344,9 @@ LEGACY_SOURCE_HASHES["desk"].add("9c536b6ed1891fb033308abddb0293dda2f07c269fbe7e
 LEGACY_SOURCE_HASHES["capture"].add("da4fc84c4b7fb09c6ed2ca48b86c13e8abfa3a1bda376efa76ec6c531ece1653")
 LEGACY_SOURCE_HASHES["desk"].add("9433489a4df8e7c6a0058d0bcb5618d4917a20fe30407e673b3bb37d2ac32a5f")
 LEGACY_SOURCE_HASHES["desk"].add("62a0f4e9541241c1840b93af0e73e0e1115fdccc2f9ce57cefd33aefc8a87adf")
+# 3.21.0 branch build with the first Edit tab (e8065b2), installed on the maintainer's Mac.
+LEGACY_SOURCE_HASHES["desk"].add("6bad29a879fecb5300c0c6072a2421bf514ed9b4a58a7eebebb691ce9e2b0ea3")
+LEGACY_SOURCE_HASHES["capture"].add("aefca2709c0b196a8beea625b0b5397e8f7acae61a98a0d9c0debf027d9ce1ba")
 LEGACY_SOURCE_HASHES["tg"].add("59521bc6e03acb1f48903fd7c95f894b26b0e705d8168d28c5a2850a99342ba2")
 LEGACY_SOURCE_HASHES["tg"].add("de149db5991eb8b148ca7df1723f48d1c87e14ae9292b18523b1ec0249de8e7d")
 LEGACY_NORMALIZED_HASHES.setdefault("agent", set()).add("5d2fd2cac79f3cea22717b9558f02f7fb89bc1b347a57a16b756b78cd175c2c3")

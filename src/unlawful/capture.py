@@ -1738,6 +1738,33 @@ _RECORDED_KEYS = ("format", "version", "name", "created", "mode", "state", "prob
 _LANGUAGE = re.compile(r"[a-z]{2,3}(-[A-Za-z]{2,4})?")
 
 
+SPEECH_MODEL_HINT = "ul lm pull mlx-community/whisper-large-v3-turbo"
+
+
+def speech_models(ul: str | None = None) -> list[dict] | None:
+    """Speech-to-text models `ul lm` can run, best first: the default one, then MLX, then the rest.
+
+    None when the list could not be read (an old ul, a failure): the caller then lets ul lm choose.
+    """
+    ul = ul or os.environ.get("UNLAW_BIN") or shutil.which("ul")
+    if not ul:
+        return None
+    try:
+        result = subprocess.run([ul, "lm", "list", "--json"], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60, check=False)
+        listed = json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    if not isinstance(listed, list):
+        return None
+    found = [
+        {"id": item["id"], "format": str(item.get("format", "")), "default": item.get("default") is True}
+        for item in listed
+        if isinstance(item, dict) and item.get("type") == "stt" and item.get("runnable") is not False
+        and isinstance(item.get("id"), str) and item["id"].isprintable() and not item["id"].startswith("-")
+    ]
+    return sorted(found, key=lambda item: (not item["default"], item["format"] != "mlx", item["id"].casefold()))
+
+
 def transcribe_project(folder: Path, language: str | None = None, model: str | None = None) -> dict:
     """Subtitles for a project from `ul lm transcribe` (local speech recognition), on the recording's clock.
 
@@ -1755,6 +1782,13 @@ def transcribe_project(folder: Path, language: str | None = None, model: str | N
         project = read_project(folder)
     except ProjectError as error:
         raise CaptureError(str(error), 1) from error
+    if model is None:
+        # ul lm will not guess between several downloaded speech models; pick the best one here.
+        models = speech_models(ul)
+        if models == []:
+            raise CaptureError(f"no speech-to-text model is downloaded: {SPEECH_MODEL_HINT}", 1)
+        if models:
+            model = models[0]["id"]
     captions: list[dict] = []
     found_language = None
     elapsed = 0.0
@@ -1789,7 +1823,7 @@ def transcribe_project(folder: Path, language: str | None = None, model: str | N
             start, end = max(begin, start), min(begin + segment["duration"], end)
             if text and end > start:
                 captions.append({"in": round(start, 3), "out": round(end, 3), "text": text})
-    return {"captions": captions, "language": found_language}
+    return {"captions": captions, "language": found_language, "model": model}
 
 
 def update_project(folder: Path, data: object) -> dict:
@@ -2649,6 +2683,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print(info, as_json, _modes_text(info["modes"]))
             return 0
         if action == "transcribe":
+            if rest == ["--models"]:
+                models = speech_models()
+                if models is None:
+                    raise CaptureError("could not read the models of ul lm (ul lm list --json)", 1)
+                _print(models, as_json, "\n".join(item["id"] + ("  (default)" if item["default"] else "") for item in models) or f"no speech model: {SPEECH_MODEL_HINT}")
+                return 0
             language = _take(rest, "--language")
             model = _take(rest, "--model")
             if len(rest) != 1 or rest[0].startswith("-"):

@@ -1341,6 +1341,8 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == "/api/studio/project/wave":
                 query = urllib.parse.parse_qs(url.query)
                 self._json(200, self.studio.project_wave(query.get("path", [""])[0], query.get("file", [""])[0], query.get("bars", ["2000"])[0]))
+            elif url.path == "/api/studio/speech-models":
+                self._json(200, self.studio.run("transcribe", "--models", timeout=90))
             elif url.path == "/api/studio/export/status":
                 self._json(200, self.studio.run("export", "--status", timeout=30))
             elif url.path == "/api/studio/camera-modes":

@@ -36,6 +36,12 @@ class DeskUITests(unittest.TestCase):
     def test_network_failure_does_not_disable_game_input(self) -> None:
         self.run_case("game_network")
 
+    def test_studio_camera_turns_on_from_the_eye_and_controls(self) -> None:
+        self.run_case("studio_camera_turns_on_from_the_eye_and_controls")
+
+    def test_project_player_follows_the_voice(self) -> None:
+        self.run_case("project_player_follows_the_voice")
+
     def test_camera_permission_cannot_outlive_studio(self) -> None:
         self.run_case("camera_leave")
 
