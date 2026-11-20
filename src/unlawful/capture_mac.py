@@ -342,9 +342,43 @@ class MacBackend:
             command.append("-g")  # only without ffmpeg: the default microphone inside the screen file
         return [*command, str(out)]
 
+    def camera_encoder(self) -> str:
+        """libx264 when this ffmpeg has it. screencapture keeps the Mac's video encoder busy at full
+        resolution: a camera on h264_videotoolbox then got 2-5 frames a second (measured on an M3 Pro),
+        on libx264 veryfast a steady 30 for about half a CPU core."""
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-encoders"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return "h264_videotoolbox"
+        found = re.search(r"^\s*V\S*\s+libx264\s", result.stdout, re.MULTILINE)
+        return "libx264" if found else "h264_videotoolbox"
+
     def camera_argv(self, plan: dict, out: Path, *, nv12: bool = True) -> list[str]:
         mode = plan["mode"]
         pixel = ["-pixel_format", "nv12"] if nv12 else []
+        bitrate = int(plan["bitrate"])
+        if plan.get("encoder") == "libx264":
+            codec = [
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-pix_fmt",
+                "yuv420p",
+                "-b:v",
+                str(bitrate),
+                "-maxrate",
+                str(bitrate * 3 // 2),
+                "-bufsize",
+                str(bitrate * 2),
+            ]
+        else:  # a 3.21.0 state has no encoder
+            codec = ["-c:v", "h264_videotoolbox", "-b:v", str(bitrate)]
         return [
             *FFMPEG_QUIET,
             "-f",
@@ -356,10 +390,7 @@ class MacBackend:
             f"{mode['width']}x{mode['height']}",
             "-i",
             f"{plan['camera']}:none",
-            "-c:v",
-            "h264_videotoolbox",
-            "-b:v",
-            str(plan["bitrate"]),
+            *codec,
             "-g",
             str(round(float(mode["fps"]))),
             "-movflags",

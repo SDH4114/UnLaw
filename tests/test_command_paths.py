@@ -154,6 +154,11 @@ if "-list_devices" in args:
         "[AVFoundation indev @ 0x1] [1] MacBook Pro Microphone\\n"
     )
     raise SystemExit(1)
+if "-encoders" in args:
+    if not os.environ.get("FAKE_NO_X264"):
+        print(" V....D libx264              libx264 H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10 (codec h264)")
+    print(" V....D h264_videotoolbox    VideoToolbox H.264 Encoder (codec h264)")
+    raise SystemExit(0)
 if "-framerate" in args and args[args.index("-framerate") + 1] == "1000":
     sys.stderr.write(""" + repr(FAKE_MODES) + """)
     raise SystemExit(1)
@@ -168,6 +173,7 @@ if "avfoundation" in args:
         raise SystemExit(1)
     stop = []
     signal.signal(signal.SIGINT, lambda *_: stop.append(1))
+    time.sleep(float(os.environ.get("FAKE_SLOW_START", "0")))  # a device that takes a while to wake up
     open(out, "wb").write(b"rec")
     levels = "-filter_complex" in args and "mic-levels.txt" in args[args.index("-filter_complex") + 1]
     level = "-80.0" if os.environ.get("FAKE_SILENT") else "-21.5"
@@ -736,6 +742,34 @@ class CaptureTests(ToolTestCase):
         cameras = [line for line in self.lines(logs["ffmpeg"]) if ":none" in line and "-video_size" in line]
         self.assertEqual(["-pixel_format" in line for line in cameras[-2:]], [True, False])
         self.assertEqual(json.loads(self.ok("status", "--json"))["phase"], "recording")
+
+    def test_the_camera_is_encoded_with_libx264_when_ffmpeg_has_it(self) -> None:
+        # screencapture keeps the Mac's video encoder busy at full resolution: a camera on
+        # h264_videotoolbox then got 2-5 frames a second, so it is encoded on the CPU.
+        logs = self.media_tools()
+        self.ok("record", "--camera")
+        self.ok("stop")
+        cameras = [line for line in self.lines(logs["ffmpeg"]) if ":none" in line and "-video_size" in line]
+        self.assertIn("|-c:v|libx264|", "|" + cameras[-1] + "|")
+        with patch.dict(os.environ, {"FAKE_NO_X264": "1"}):
+            self.ok("record", "--camera")
+            self.ok("stop")
+        cameras = [line for line in self.lines(logs["ffmpeg"]) if ":none" in line and "-video_size" in line]
+        self.assertIn("|-c:v|h264_videotoolbox|", "|" + cameras[-1] + "|")
+
+    def test_record_returns_once_the_microphone_and_camera_deliver(self) -> None:
+        # The microphone and the camera need a second or two to wake up; "recording" is only
+        # reported once they deliver, so the first words are not lost.
+        self.media_tools()
+        with patch.dict(os.environ, {"FAKE_SLOW_START": "1.5"}):
+            started = time.monotonic()
+            answer = json.loads(self.ok("record", "--camera", "--json"))
+            waited = time.monotonic() - started
+        folder = Path(answer["project"])
+        self.assertGreater(waited, 1.5)
+        self.assertTrue((folder / "logs" / "mic-levels.txt").read_text().strip(), "the microphone already delivers")
+        self.assertGreater((folder / "media" / ".camera-001.mp4").stat().st_size, 0, "the camera already delivers")
+        self.ok("stop")
 
     def test_status_warns_about_a_silent_microphone(self) -> None:
         self.media_tools()

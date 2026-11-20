@@ -119,6 +119,18 @@ class MacBackendTests(unittest.TestCase):
         self.backend.camera_modes("FaceTime HD Camera", refresh=True)
         self.assertEqual(len(log.read_text().splitlines()), 2)
 
+    def test_camera_on_libx264_keeps_bitrate_and_420(self) -> None:
+        camera = self.backend.camera_argv({**PLAN, "encoder": "libx264"}, Path("c.mp4"))
+        self.assertEqual(camera[camera.index("-c:v") + 1], "libx264")
+        self.assertEqual(camera[camera.index("-preset") + 1], "veryfast")
+        self.assertEqual(camera[camera.index("-pix_fmt") + 1], "yuv420p")
+        self.assertEqual(camera[camera.index("-b:v") + 1], "6000000")
+        self.assertEqual(camera[camera.index("-maxrate") + 1], "9000000")
+        self.assertEqual(camera[camera.index("-g") + 1], "30")
+        self.assertEqual(camera[-1], "c.mp4")
+        old = self.backend.camera_argv(PLAN, Path("c.mp4"))
+        self.assertEqual(old[old.index("-c:v") + 1], "h264_videotoolbox", "a state from 3.21.0 has no encoder")
+
     def test_device_names_stay_one_argument(self) -> None:
         camera = self.backend.camera_argv(PLAN, Path("c.mp4"))
         self.assertIn("Haos's Phone Camera:none", camera)

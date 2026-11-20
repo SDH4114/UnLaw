@@ -328,6 +328,11 @@ LEGACY_SOURCE_HASHES["desk"].add("ca302c69961b2c794a72b0f8b85b36bb7fc0ac0483760e
 LEGACY_SOURCE_HASHES["todo"].add("be9d9c1235678e85d4a91821c5f359d2cc7eac99345ba56cce2a5dec24bc865c")
 LEGACY_SOURCE_HASHES["capture"].add("d69e6501cbd293b129ac274070485ac8e8b7007f35221dd80c573f1f82cb96c9")
 LEGACY_SOURCE_HASHES["capture"].add("cf00f560c82b49ed0bf074303d6f8d24dc06ac8c68710e7dd0c1f2b2c5337d4a")
+# 3.21.0 Studio seeds before the live-preview and camera fixes (the branch build and a dev build installed on the maintainer machine).
+LEGACY_SOURCE_HASHES["capture"].add("8b49d65073d19063bc28e0fb36bf4b27d02ac61fb03d7724d194cb1bc3cf763d")
+LEGACY_SOURCE_HASHES["capture"].add("b127ff6da58c064a579e81dc9a45070b28ab10de6cb8c0d56f92c5b7257c994c")
+LEGACY_SOURCE_HASHES["desk"].add("9433489a4df8e7c6a0058d0bcb5618d4917a20fe30407e673b3bb37d2ac32a5f")
+LEGACY_SOURCE_HASHES["desk"].add("62a0f4e9541241c1840b93af0e73e0e1115fdccc2f9ce57cefd33aefc8a87adf")
 LEGACY_SOURCE_HASHES["tg"].add("59521bc6e03acb1f48903fd7c95f894b26b0e705d8168d28c5a2850a99342ba2")
 LEGACY_SOURCE_HASHES["tg"].add("de149db5991eb8b148ca7df1723f48d1c87e14ae9292b18523b1ec0249de8e7d")
 LEGACY_NORMALIZED_HASHES.setdefault("agent", set()).add("5d2fd2cac79f3cea22717b9558f02f7fb89bc1b347a57a16b756b78cd175c2c3")

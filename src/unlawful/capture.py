@@ -304,6 +304,7 @@ def shot(
 
 STATE_VERSION = 2
 START_CHECK = 0.7
+READY_WAIT = 6.0  # the microphone and camera wake up in 1-2 s (measured on an M3 Pro)
 STOP_GRACE = 30.0
 TERM_GRACE = 10.0
 KILL_GRACE = 2.0
@@ -359,6 +360,8 @@ def _valid_plan(plan: object) -> bool:
     ):
         return False
     if any(key not in plan for key in ("area", "camera", "mic", "mode")):
+        return False
+    if plan.get("encoder", "h264_videotoolbox") not in ("libx264", "h264_videotoolbox"):
         return False
     mode = plan["mode"]
     if mode is not None and not (
@@ -609,10 +612,34 @@ def _start_failure(track: str, reason: str) -> str:
     return f"the {track} recorder could not start: {reason or 'it stopped right away'}. {_permission_hint(what)}"
 
 
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _wait_until_live(folder: Path, files: dict[str, str], started: list, levels_from: int) -> None:
+    """Return once the microphone delivers sound and the camera its first frames (or after READY_WAIT),
+    so `recording` is reported when speaking is recorded, not 1-2 s earlier."""
+    deadline = time.monotonic() + READY_WAIT
+    levels = folder / "logs" / LEVELS_FILE
+    while time.monotonic() < deadline:
+        if any(process.poll() is not None for _, _, process in started):
+            return  # a recorder that stopped shows up as the interrupted phase
+        waiting = ("mic" in files and _file_size(levels) <= levels_from) or (
+            "camera" in files and _file_size(folder / files["camera"]) == 0
+        )
+        if not waiting:
+            return
+        time.sleep(0.05)
+
+
 def _start_segment(state: dict) -> None:
     folder = Path(state["project"])
     files = _track_files(state, len(state["segments"]))
     offsets = {track: _log_size(folder, track) for track in files}
+    levels_from = _file_size(folder / "logs" / LEVELS_FILE)
     started: list[tuple[str, str, subprocess.Popen]] = []
     # The clock starts when the recorders start, not after the start check below.
     spawned = time.time()
@@ -642,6 +669,7 @@ def _start_segment(state: dict) -> None:
                     continue
                 raise CaptureError(_start_failure(track, reason), 1)
             time.sleep(0.1)
+        _wait_until_live(folder, files, started, levels_from)
         state["segments"].append(files)
         state["processes"] = [
             {"pid": process.pid, "program": program, "track": track}
@@ -1003,6 +1031,7 @@ def start_recording(
                 "camera": camera_name,
                 "mode": camera_mode,
                 "bitrate": CAMERA_QUALITY[quality][1],
+                "encoder": _backend().camera_encoder() if camera_name else "h264_videotoolbox",
                 "nv12": True,
                 "mic": None if mic_in_screen else mic_name,
                 "mic_format": mic_format,
