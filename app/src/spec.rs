@@ -546,6 +546,38 @@ pub fn defaults(panel: &Panel) -> BTreeMap<String, Value> {
     panel.fields.iter().map(|field| (field.id.clone(), field.default.clone())).collect()
 }
 
+/// Longest text a panel field may send.
+pub const MAX_VALUE: usize = 4000;
+
+/// The values a panel page sent, checked against the panel: unknown fields are
+/// ignored, a missing one keeps its default, a toggle takes only true/false.
+pub fn values_from(json: &Json, spec: &Spec) -> Result<BTreeMap<String, Value>, String> {
+    let panel = spec.panel.as_ref().ok_or("this command has no panel")?;
+    let mut values = defaults(panel);
+    let given = json.as_object().ok_or("values must be an object")?;
+    for field in &panel.fields {
+        let Some(value) = given.get(&field.id) else { continue };
+        let value = match (field.kind, value) {
+            (FieldKind::Toggle, Json::Bool(on)) => Value::Bool(*on),
+            (FieldKind::Toggle, _) => return Err(format!("{}: must be on or off", field.label)),
+            (_, Json::String(text)) if text.chars().count() > MAX_VALUE => {
+                return Err(format!("{}: longer than {MAX_VALUE} characters", field.label))
+            }
+            (_, Json::String(text)) if text.chars().any(char::is_control) => {
+                return Err(format!("{}: contains control characters", field.label))
+            }
+            (FieldKind::Choice, Json::String(text)) if !field.options.contains(text) => {
+                return Err(format!("{}: {text:?} is not one of its options", field.label))
+            }
+            (_, Json::String(text)) => Value::Text(text.trim().to_string()),
+            (_, Json::Number(number)) => Value::Text(number.to_string()),
+            _ => return Err(format!("{}: not a value this field takes", field.label)),
+        };
+        values.insert(field.id.clone(), value);
+    }
+    Ok(values)
+}
+
 fn action_json(action: &Action) -> Json {
     json!({"id": action.id, "label": action.label, "confirm": action.confirm})
 }
@@ -688,6 +720,28 @@ otherwise = "off"
         let (spec, problem) = for_record(&user);
         assert_eq!((spec.origin, spec.summary.as_str(), problem), (Origin::Plain, "Hi", None));
         fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn panel_values_are_checked() {
+        let spec = parse("awake", AWAKE).unwrap();
+        let values = values_from(&serde_json::json!({"dur": "30m", "lid": true, "other": "x"}), &spec).unwrap();
+        let panel = spec.panel.as_ref().unwrap();
+        assert_eq!(args::expand(&panel.buttons[0].args, &values).unwrap(), vec!["30m", "--lid"]);
+        let defaults = values_from(&serde_json::json!({}), &spec).unwrap();
+        assert_eq!(args::expand(&panel.buttons[0].args, &defaults).unwrap(), vec!["1h"]);
+        for (bad, message) in [
+            (serde_json::json!({"dur": "99h"}), "not one of its options"),
+            (serde_json::json!({"lid": "yes"}), "on or off"),
+            (serde_json::json!({"dur": "a\nb"}), "control"),
+            (serde_json::json!({"dur": ["1h"]}), "not a value"),
+            (serde_json::json!("x"), "an object"),
+        ] {
+            assert!(values_from(&bad, &spec).unwrap_err().contains(message), "{bad}");
+        }
+        let long = serde_json::json!({"dur": "x".repeat(MAX_VALUE + 1)});
+        assert!(values_from(&long, &spec).unwrap_err().contains("longer"));
+        assert!(values_from(&serde_json::json!({}), &plain("x", "")).is_err());
     }
 
     #[test]

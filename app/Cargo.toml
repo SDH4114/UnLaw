@@ -24,3 +24,9 @@ wry = "0.57"
 tray-icon = "0.26"
 global-hotkey = "0.10"
 window-vibrancy = "0.8"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Menu bar symbols (SF Symbols) on the status items tray-icon creates.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSGeometry"] }
+objc2-app-kit = { version = "0.3", features = ["NSImage", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSControl", "NSView", "NSResponder", "NSCell"] }
