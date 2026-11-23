@@ -33,6 +33,44 @@ class SkillsTests(CoreTestCase):
         self.assertEqual(link.resolve(), skill.resolve())
         self.assertIn("ul desk add", (skill / "reference" / "desk.md").read_text(encoding="utf-8"))
 
+    def test_install_links_every_agent_found(self) -> None:
+        self.ok("skills", "install")
+        self.assertFalse((self.home / ".claude").exists(), "no agent folder, no link")
+        (self.home / ".claude").mkdir()
+        (self.home / ".kimi").mkdir()
+        result = self.ok("skills", "install")
+        claude = self.home / ".claude" / "skills" / "unlaw"
+        self.assertTrue(claude.is_symlink())
+        self.assertEqual(os.readlink(claude), "../../.agents/skills/unlaw")
+        self.assertIn("Linked for Claude Code", result.stdout)
+        # The old Kimi CLI reads ~/.claude/skills too: a second copy would show twice.
+        self.assertFalse((self.home / ".kimi" / "skills" / "unlaw").exists())
+        self.ok("skills", "remove")
+        self.assertFalse(claude.exists() or claude.is_symlink())
+
+    def test_kimi_gets_a_link_without_claude(self) -> None:
+        (self.home / ".kimi").mkdir()
+        self.ok("skills", "install")
+        kimi = self.home / ".kimi" / "skills" / "unlaw"
+        self.assertTrue(kimi.is_symlink())
+        self.assertEqual(kimi.resolve(), self.skill().resolve())
+
+    def test_foreign_agent_folder_is_kept(self) -> None:
+        foreign = self.home / ".claude" / "skills" / "unlaw"
+        foreign.mkdir(parents=True)
+        result = self.ul("skills", "install")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("was not replaced", result.stderr)
+        self.assertTrue(foreign.is_dir() and not foreign.is_symlink())
+        self.assertTrue((self.skill() / "SKILL.md").is_file(), "the main copy is still written")
+
+    def test_app_integration_page_is_shipped(self) -> None:
+        self.ok("skills", "install")
+        page = self.skill() / "reference" / "app-integration.md"
+        self.assertIn("[panel]", page.read_text(encoding="utf-8"))
+        self.assertIn("app-integration", (self.skill() / "SKILL.md").read_text(encoding="utf-8"))
+        self.assertIn("{lid?--lid}", self.ok("skills", "show", "app-integration").stdout)
+
     def test_new_and_removed_commands_refresh_the_snapshot(self) -> None:
         self.ok("skills", "install")
         reference = self.skill() / "reference"

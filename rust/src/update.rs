@@ -276,7 +276,18 @@ fn install(source: &Source, rev: Option<&str>) -> i32 {
         .unwrap_or_else(|| "Unlaw (unknown version)".into());
     println!("Updated to {version} in {}.", root.join("bin").display());
     println!("Unchanged default commands are upgraded on the next run; edited ones are kept.");
+    after_install(&installed);
     0
+}
+
+/// Steps the new binary runs after every install: the agent skill (written for
+/// every AI agent found on this Mac), so agents learn the new release at once.
+/// A failure here never fails the update; the binary itself is already in place.
+fn after_install(installed: &Path) {
+    match Command::new(installed).args(["skills", "install"]).status() {
+        Ok(status) if status.success() => {}
+        _ => eprintln!("unlaw update: the agent skill was not refreshed; run `ul skills install`."),
+    }
 }
 
 /// `ul reinstall`: the newest commit of main, built again.

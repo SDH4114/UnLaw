@@ -246,6 +246,11 @@ echo "Setting up the shell (~/.zshrc)..."
 if ! "$root/bin/ul" doctor --fix; then
     echo "Unlaw installer: some checks above need attention (ul doctor shows them again)." >&2
 fi
+# Teach every AI agent on this Mac (Claude Code, Codex, OpenCode, Gemini, Kimi...)
+# how to use ul and write commands; `ul update` refreshes it.
+if ! "$root/bin/ul" skills install; then
+    echo "Unlaw installer: the agent skill was not installed (run: ul skills install)." >&2
+fi
 echo "Installed Unlaw into $root/bin. Change features later: ul features."
 ready=no
 saved_ifs=$IFS

@@ -257,18 +257,24 @@ Usage:
   ul skills show [command]            Print SKILL.md or one command's reference page
   ul skills remove [--project|--path <dir>|--all]
 Options:
-  (default)        ~/.agents/skills/unlaw, read by Codex and other agents
+  (default)        ~/.agents/skills/unlaw, read by Codex, OpenCode, Gemini CLI,
+                   Kimi Code and Copilot CLI; linked for every other agent found:
+                   ~/.claude/skills/unlaw when ~/.claude exists (Claude Code, also
+                   read by Cursor), ~/.kimi/skills/unlaw for the old Kimi CLI
   --project        ./.agents/skills/unlaw in the current directory
   --path <dir>     <dir>/unlaw
-  --claude         Also link it where Claude Code looks (~/.claude/skills/unlaw,
-                   or ./.claude/skills/unlaw with --project)
+  --claude         Also link it where Claude Code looks (always made for the
+                   default place; ./.claude/skills/unlaw with --project)
+install.sh and `ul update` run `ul skills install` after every install.
+`ul skills show authoring` is the guide for writing commands and
+`ul skills show app-integration` the app.toml format for Unlaw.app.
 SKILL.md tells agents to discover commands live (`ul commands --describe`,
 `ul <command> --help`), so new commands work without reinstalling. The
 reference/ snapshot is regenerated automatically after `ul update`, new or
 changed commands. Only files the skill created are ever removed; existing
 folders it did not create are never overwritten.
 Examples:
-  ul skills install --claude
+  ul skills install
   ul skills install --project
   ul skills show desk
 ",

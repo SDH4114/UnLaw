@@ -25,6 +25,15 @@ const SKILL: &str = "unlaw";
 /// Name of the authoring guide (`reference/authoring.md`); commands cannot take it.
 pub const AUTHORING: &str = "authoring";
 const AUTHORING_GUIDE: &str = include_str!("../assets/authoring.md");
+/// `reference/app-integration.md`: how a command shows up in Unlaw.app.
+const APP_GUIDE_PAGE: &str = "app-integration";
+const APP_GUIDE: &str = include_str!("../assets/app_integration.md");
+/// Agents that do not read `~/.agents/skills` get a link in their own folder,
+/// when that agent's home folder exists: (home folder, skills folder). Codex,
+/// OpenCode, Gemini CLI, Kimi Code and Copilot CLI read `~/.agents/skills`.
+/// Cursor and the old Kimi CLI also read `~/.claude/skills`, so the Kimi link
+/// is only made when Claude Code is not there.
+const AGENT_LINKS: [(&str, &str); 2] = [(".claude", ".claude/skills"), (".kimi", ".kimi/skills")];
 /// Present in every folder `ul skills install` wrote; nothing else is touched.
 const MARKER: &str = ".unlaw-skill";
 const USAGE: &str = "Usage: ul skills install|remove [--project|--path <dir>] [--claude]
@@ -207,6 +216,7 @@ Read `reference/authoring.md` (or run `ul skills show authoring`) before you wri
 - Keep a command's settings in `config.toml` inside its folder and its data in `$UNLAW_STORAGE/<name>/`.
 - Ask the owner before installing third-party dependencies.
 - Verify with `ul commands check <name>`, `ul commands --describe` and `ul doctor`.
+- To make a command look good in the menu bar app (Unlaw.app: palette, panel with fields, live status, pin to the menu bar), add `app.toml` next to its entry file. Read `reference/app-integration.md` (or `ul skills show app-integration`); the app never needs core changes.
 
 ## Commands
 
@@ -239,7 +249,7 @@ Read `reference/authoring.md` (or run `ul skills show authoring`) before you wri
 fn render(config: &Config) -> Vec<(PathBuf, String)> {
     let records = records(config, true);
     let mut files = vec![(PathBuf::from("SKILL.md"), skill_markdown(&records))];
-    for record in records.iter().filter(|record| record.name != AUTHORING) {
+    for record in records.iter().filter(|record| record.name != AUTHORING && record.name != APP_GUIDE_PAGE) {
         files.push((
             Path::new("reference").join(format!("{}.md", record.name)),
             reference(record),
@@ -248,6 +258,10 @@ fn render(config: &Config) -> Vec<(PathBuf, String)> {
     files.push((
         Path::new("reference").join(format!("{AUTHORING}.md")),
         AUTHORING_GUIDE.to_string(),
+    ));
+    files.push((
+        Path::new("reference").join(format!("{APP_GUIDE_PAGE}.md")),
+        APP_GUIDE.to_string(),
     ));
     files
 }
@@ -392,6 +406,25 @@ fn link_claude(link: &Path, target: &Path, place: &Place) -> Result<(), String> 
         .map_err(|error| format!("Could not link {}: {error}", link.display()))
 }
 
+/// Links for the agents installed on this Mac (see `AGENT_LINKS`).
+fn agent_links() -> Vec<PathBuf> {
+    let home = home();
+    let claude = home.join(".claude").is_dir();
+    AGENT_LINKS
+        .iter()
+        .filter(|(folder, _)| home.join(folder).is_dir() && (*folder == ".claude" || !claude))
+        .map(|(_, skills)| home.join(skills).join(SKILL))
+        .collect()
+}
+
+fn agent_name(link: &Path) -> &'static str {
+    if link.components().any(|part| part.as_os_str() == ".kimi") {
+        "Kimi CLI"
+    } else {
+        "Claude Code"
+    }
+}
+
 fn install(args: &[String], config: &Config) -> i32 {
     let options = match parse(args, false) {
         Ok(options) => options,
@@ -419,10 +452,21 @@ fn install(args: &[String], config: &Config) -> i32 {
         .map(|install| install.links.clone())
         .unwrap_or_default();
     let mut code = 0;
+    let mut wanted: Vec<PathBuf> = Vec::new();
     if options.claude {
+        wanted.push(link);
+    }
+    if matches!(options.place, Place::Home) {
+        for link in agent_links() {
+            if !wanted.contains(&link) {
+                wanted.push(link);
+            }
+        }
+    }
+    for link in wanted {
         match link_claude(&link, &target, &options.place) {
             Ok(()) => {
-                println!("Linked for Claude Code: {}", link.display());
+                println!("Linked for {}: {}", agent_name(&link), link.display());
                 if !links.contains(&link) {
                     links.push(link);
                 }
