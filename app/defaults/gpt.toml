@@ -1,0 +1,7 @@
+title = "ChatGPT"
+icon = "chat"
+
+[[action]]
+id = "open"
+label = "Open"
+args = []

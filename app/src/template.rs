@@ -1,0 +1,224 @@
+//! Status text for a pinned command: `{path|filter}` over the JSON a command
+//! prints (`ul awake status --json`), or the command's own text.
+
+use serde_json::Value;
+
+use crate::spec::Status;
+
+/// At most this many characters reach the menu bar.
+pub const MAX_STATUS: usize = 40;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StatusText {
+    pub text: String,
+    /// `on`, `off` or `warn`, when the command or `when` says so.
+    pub state: Option<String>,
+}
+
+fn lookup<'a>(json: &'a Value, path: &str) -> Option<&'a Value> {
+    path.split('.').try_fold(json, |value, key| match value {
+        Value::Array(items) => key.parse::<usize>().ok().and_then(|index| items.get(index)),
+        Value::Object(map) => map.get(key),
+        _ => None,
+    })
+}
+
+fn number_text(number: f64) -> String {
+    if number.fract() == 0.0 && number.abs() < 1e15 {
+        format!("{}", number as i64)
+    } else {
+        let text = format!("{number:.2}");
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
+fn plain(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::Bool(on) => on.to_string(),
+        Value::Number(number) => number.as_f64().map(number_text).unwrap_or_default(),
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Seconds as `m:ss` under an hour, `h:mm` from an hour on.
+pub fn clock(seconds: f64) -> String {
+    let seconds = seconds.max(0.0).round() as u64;
+    if seconds >= 3600 {
+        format!("{}:{:02}", seconds / 3600, seconds % 3600 / 60)
+    } else {
+        format!("{}:{:02}", seconds / 60, seconds % 60)
+    }
+}
+
+fn filtered(value: &Value, filter: &str) -> Result<String, String> {
+    if filter.is_empty() {
+        return Ok(plain(value));
+    }
+    if !["int", "pct", "clock", "gb"].contains(&filter) {
+        return Err(format!("unknown filter |{filter} (int, pct, clock, gb)"));
+    }
+    let Some(number) = value.as_f64().or_else(|| value.as_str().and_then(|text| text.trim().parse().ok())) else {
+        return Ok(if value.is_null() { "–".into() } else { plain(value) });
+    };
+    Ok(match filter {
+        "pct" => format!("{}%", number.round() as i64),
+        "clock" => clock(number),
+        "gb" => format!("{:.1} GB", number / 1e9),
+        _ => format!("{}", number.round() as i64),
+    })
+}
+
+/// Fill `text` from `json`. A missing value shows as `–`.
+pub fn render(text: &str, json: &Value) -> Result<String, String> {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(index) = rest.find(['{', '}']) {
+        out.push_str(&rest[..index]);
+        let tail = &rest[index..];
+        if tail.starts_with("{{") || tail.starts_with("}}") {
+            out.push_str(&tail[..1]);
+            rest = &tail[2..];
+            continue;
+        }
+        if tail.starts_with('}') {
+            return Err("unmatched } (write }} for a brace)".into());
+        }
+        let Some(end) = tail.find('}') else {
+            return Err("unclosed { (write {{ for a brace)".into());
+        };
+        let inner = &tail[1..end];
+        let (path, filter) = inner.split_once('|').unwrap_or((inner, ""));
+        let (path, filter) = (path.trim(), filter.trim());
+        if path.is_empty() || path.contains('{') {
+            return Err(format!("bad placeholder {{{inner}}}"));
+        }
+        match lookup(json, path) {
+            Some(value) => out.push_str(&filtered(value, filter)?),
+            None => {
+                filtered(&Value::Null, filter)?;
+                out.push('–');
+            }
+        }
+        rest = &tail[end + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+/// Control characters out, whitespace runs folded, at most `MAX_STATUS` characters.
+pub fn clean(text: &str) -> String {
+    let folded = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let printable: String = folded.chars().filter(|c| !c.is_control()).collect();
+    if printable.chars().count() > MAX_STATUS {
+        printable.chars().take(MAX_STATUS - 1).chain(std::iter::once('…')).collect()
+    } else {
+        printable
+    }
+}
+
+fn truthy(value: Option<&Value>) -> bool {
+    match value {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(on)) => *on,
+        Some(Value::Number(number)) => number.as_f64().is_some_and(|n| n != 0.0),
+        Some(Value::String(text)) => !text.is_empty(),
+        Some(Value::Array(items)) => !items.is_empty(),
+        Some(Value::Object(map)) => !map.is_empty(),
+    }
+}
+
+/// What a pinned item shows after its status command printed `stdout`.
+pub fn status_text(status: &Status, stdout: &str) -> StatusText {
+    let json: Option<Value> = serde_json::from_str(stdout.trim()).ok().filter(Value::is_object);
+    let Some(json) = json else {
+        let line = stdout.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("");
+        return StatusText { text: clean(line), state: None };
+    };
+    let state = json.get("state").and_then(Value::as_str).filter(|state| ["on", "off", "warn"].contains(state));
+    if let Some(when) = &status.when {
+        if !truthy(lookup(&json, when)) {
+            let text = status.otherwise.clone().unwrap_or_default();
+            return StatusText { text: clean(&text), state: Some(state.unwrap_or("off").to_string()) };
+        }
+    }
+    let text = match &status.text {
+        Some(template) => render(template, &json).unwrap_or_else(|error| format!("error: {error}")),
+        None => json.get("text").map(plain).unwrap_or_default(),
+    };
+    let default_state = status.when.as_ref().map(|_| "on");
+    StatusText { text: clean(&text), state: state.or(default_state).map(str::to_string) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn status(text: Option<&str>, when: Option<&str>, otherwise: Option<&str>) -> Status {
+        Status {
+            args: vec![],
+            every: 15,
+            text: text.map(Into::into),
+            when: when.map(Into::into),
+            otherwise: otherwise.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn awake_shows_time_left_or_off() {
+        let s = status(Some("{remaining_seconds|clock}"), Some("active"), Some("off"));
+        let on = status_text(&s, r#"{"active": true, "remaining_seconds": 5040}"#);
+        assert_eq!(on, StatusText { text: "1:24".into(), state: Some("on".into()) });
+        let short = status_text(&s, r#"{"active": true, "remaining_seconds": 125}"#);
+        assert_eq!(short.text, "2:05");
+        let forever = status_text(&s, r#"{"active": true, "remaining_seconds": null}"#);
+        assert_eq!(forever.text, "–");
+        let off = status_text(&s, r#"{"active": false, "remaining_seconds": null}"#);
+        assert_eq!(off, StatusText { text: "off".into(), state: Some("off".into()) });
+    }
+
+    #[test]
+    fn sys_numbers_and_filters() {
+        let json =
+            json!({"cpu": {"usage_percent": 14.6}, "memory": {"used_bytes": 14657470464u64}, "list": [{"n": 2.5}]});
+        assert_eq!(
+            render("CPU {cpu.usage_percent|int}% · {memory.used_bytes|gb}", &json).unwrap(),
+            "CPU 15% · 14.7 GB"
+        );
+        assert_eq!(render("{cpu.usage_percent|pct} {list.0.n} {nope} {{x}}", &json).unwrap(), "15% 2.5 – {x}");
+        assert!(render("{cpu.usage_percent|weird}", &json).unwrap_err().contains("unknown filter"));
+        assert!(render("{nope|weird}", &json).is_err(), "a bad filter is an error even without a value");
+        assert!(render("{open", &json).is_err());
+    }
+
+    #[test]
+    fn plain_text_and_text_key() {
+        let s = status(None, None, None);
+        assert_eq!(status_text(&s, "\n  42 cards \u{1b}[31m\nmore").text, "42 cards [31m");
+        assert_eq!(
+            status_text(&s, r#"{"text": "hi", "state": "warn"}"#),
+            StatusText { text: "hi".into(), state: Some("warn".into()) }
+        );
+        assert_eq!(status_text(&s, r#"{"text": "x", "state": "evil"}"#).state, None);
+        assert_eq!(status_text(&s, "").text, "");
+    }
+
+    #[test]
+    fn long_text_is_cut() {
+        let s = status(None, None, None);
+        let text = status_text(&s, &"x".repeat(100)).text;
+        assert_eq!(text.chars().count(), MAX_STATUS);
+        assert!(text.ends_with('…'));
+    }
+
+    #[test]
+    fn clock_formats() {
+        assert_eq!(clock(0.0), "0:00");
+        assert_eq!(clock(59.6), "1:00");
+        assert_eq!(clock(3600.0), "1:00");
+        assert_eq!(clock(-5.0), "0:00");
+        assert_eq!(clock(86400.0 * 7.0), "168:00");
+    }
+}

@@ -1,0 +1,13 @@
+title = "Open app"
+icon = "app"
+
+[panel]
+[[panel.field]]
+id = "name"
+type = "text"
+label = "Application"
+placeholder = "Safari"
+
+[[panel.button]]
+label = "Open"
+args = ["{name}"]

@@ -1,0 +1,7 @@
+title = "Lofi"
+icon = "music"
+
+[[action]]
+id = "open"
+label = "Open"
+args = []

@@ -1,0 +1,65 @@
+title = "Awake"
+icon = "cup"
+
+[[action]]
+id = "1h"
+label = "Keep awake 1 h"
+args = ["1h"]
+
+[[action]]
+id = "2h"
+label = "Keep awake 2 h"
+args = ["2h"]
+
+[[action]]
+id = "on"
+label = "Keep awake until stopped"
+args = ["on"]
+
+[[action]]
+id = "off"
+label = "Let the Mac sleep"
+args = ["off"]
+
+[panel]
+[[panel.field]]
+id = "dur"
+type = "choice"
+label = "For"
+options = ["30m", "1h", "2h", "4h", "8h", "on"]
+default = "1h"
+
+[[panel.field]]
+id = "until"
+type = "time"
+label = "Or until"
+
+[[panel.field]]
+id = "display"
+type = "toggle"
+label = "Screen stays on"
+default = true
+
+[[panel.field]]
+id = "lid"
+type = "toggle"
+label = "Also with the lid closed"
+
+[[panel.button]]
+label = "Start"
+args = ["{dur}", "{display?:--no-display}", "{lid?--lid}"]
+
+[[panel.button]]
+label = "Until that time"
+args = ["until", "{until}", "{display?:--no-display}", "{lid?--lid}"]
+
+[[panel.button]]
+label = "Stop"
+args = ["off"]
+
+[status]
+args = ["status", "--json"]
+every = 10
+text = "{remaining_seconds|clock}"
+when = "active"
+otherwise = "off"

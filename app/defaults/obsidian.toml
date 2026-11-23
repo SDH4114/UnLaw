@@ -1,0 +1,7 @@
+title = "Obsidian"
+icon = "folder"
+
+[[action]]
+id = "open"
+label = "Open"
+args = []

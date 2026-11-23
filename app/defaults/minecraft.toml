@@ -1,0 +1,7 @@
+title = "Minecraft"
+icon = "game"
+
+[[action]]
+id = "open"
+label = "Open"
+args = []

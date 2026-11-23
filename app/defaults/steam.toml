@@ -1,0 +1,7 @@
+title = "Steam"
+icon = "game"
+
+[[action]]
+id = "open"
+label = "Open"
+args = []

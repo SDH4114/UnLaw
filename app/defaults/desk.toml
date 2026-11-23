@@ -1,0 +1,16 @@
+title = "Desk"
+icon = "board"
+
+[open]
+args = ["--no-open"]
+
+[panel]
+[[panel.field]]
+id = "text"
+type = "text"
+label = "New card"
+placeholder = "Call the bank @tomorrow"
+
+[[panel.button]]
+label = "Add to the board"
+args = ["add", "--", "{text}"]

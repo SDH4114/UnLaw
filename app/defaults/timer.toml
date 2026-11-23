@@ -1,0 +1,30 @@
+title = "Timer"
+icon = "clock"
+
+[[action]]
+id = "list"
+label = "Running timers"
+args = ["list"]
+
+[[action]]
+id = "cancel-all"
+label = "Cancel every timer"
+args = ["cancel", "--all"]
+confirm = "Cancel every running timer?"
+
+[panel]
+[[panel.field]]
+id = "dur"
+type = "duration"
+label = "In"
+default = "25m"
+
+[[panel.field]]
+id = "label"
+type = "text"
+label = "Label"
+placeholder = "Tea"
+
+[[panel.button]]
+label = "Start"
+args = ["{dur}", "{label}"]

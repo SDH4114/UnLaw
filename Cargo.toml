@@ -10,7 +10,7 @@ build = "rust/build.rs"
 publish = false
 
 [workspace]
-members = ["ule"]
+members = ["ule", "app"]
 
 [lib]
 path = "rust/src/lib.rs"

@@ -1,0 +1,22 @@
+title = "System"
+icon = "cpu"
+
+[[action]]
+id = "top"
+label = "Top processes"
+args = ["top"]
+
+[[action]]
+id = "battery"
+label = "Battery"
+args = ["battery"]
+
+[[action]]
+id = "disk"
+label = "Disks"
+args = ["disk"]
+
+[status]
+args = ["--json"]
+every = 5
+text = "CPU {cpu.usage_percent|int}% · {memory.used_bytes|gb}"

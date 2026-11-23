@@ -1,0 +1,34 @@
+title = "Capture"
+icon = "camera"
+
+[[action]]
+id = "shot"
+label = "Screenshot"
+args = ["shot"]
+
+[[action]]
+id = "area"
+label = "Screenshot of an area"
+args = ["shot", "area"]
+
+[[action]]
+id = "record"
+label = "Record the screen"
+args = ["record"]
+
+[[action]]
+id = "audio"
+label = "Record audio only"
+args = ["record", "audio"]
+
+[[action]]
+id = "stop"
+label = "Stop recording"
+args = ["stop"]
+
+[status]
+args = ["status", "--json"]
+every = 3
+text = "REC {elapsed|clock}"
+when = "active"
+otherwise = ""

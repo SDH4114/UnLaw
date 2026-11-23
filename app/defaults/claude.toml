@@ -1,0 +1,7 @@
+title = "Claude"
+icon = "spark"
+
+[[action]]
+id = "open"
+label = "Open"
+args = []

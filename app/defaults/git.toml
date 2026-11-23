@@ -1,0 +1,4 @@
+title = "Git"
+icon = "git"
+# Prompts, a terminal UI or a folder of its own: it runs in your terminal.
+terminal = true

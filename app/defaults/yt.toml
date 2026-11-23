@@ -1,0 +1,38 @@
+title = "YouTube"
+icon = "play"
+
+[[action]]
+id = "open"
+label = "Open YouTube"
+args = []
+
+[panel]
+[[panel.field]]
+id = "url"
+type = "text"
+label = "Video link"
+placeholder = "https://www.youtube.com/watch?v=..."
+
+[[panel.button]]
+label = "Download video"
+args = ["download", "{url}"]
+
+[[panel.button]]
+label = "Download MP3"
+args = ["download", "{url}", "--audio"]
+
+[[panel.button]]
+label = "Podcast MP3"
+args = ["download", "{url}", "--podcast"]
+
+[[panel.button]]
+label = "Subtitles"
+args = ["download", "{url}", "--sub"]
+
+[[panel.button]]
+label = "Video, MP3 and subtitles"
+args = ["download", "{url}", "--full"]
+
+[[panel.button]]
+label = "Search"
+args = ["{url}"]

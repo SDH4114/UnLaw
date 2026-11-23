@@ -1,0 +1,26 @@
+[package]
+name = "unlaw-app"
+version = "3.22.0"
+edition = "2021"
+description = "Unlaw.app: menu bar items, global hotkeys and a command palette for ul"
+license = "MIT"
+authors = ["Haos"]
+publish = false
+
+[[bin]]
+name = "ul-app"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+libc = "0.2"
+serde_json = "1"
+toml_edit = { version = "0.22", default-features = false, features = ["parse", "display"] }
+# The window shell; only this package links them (ul and ule never do).
+tao = "0.37"
+wry = "0.57"
+tray-icon = "0.26"
+global-hotkey = "0.10"
+window-vibrancy = "0.8"

@@ -1,0 +1,7 @@
+title = "Work"
+icon = "bolt"
+
+[[action]]
+id = "open"
+label = "Open"
+args = []

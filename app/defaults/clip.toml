@@ -1,0 +1,32 @@
+title = "Clipboard"
+icon = "clipboard"
+
+[[action]]
+id = "list"
+label = "Recent copies"
+args = ["list", "10"]
+
+[[action]]
+id = "pause"
+label = "Pause the history"
+args = ["pause"]
+
+[[action]]
+id = "resume"
+label = "Resume the history"
+args = ["resume"]
+
+[panel]
+[[panel.field]]
+id = "n"
+type = "number"
+label = "Copy item number"
+default = "1"
+
+[[panel.button]]
+label = "Copy again"
+args = ["copy", "{n}"]
+
+[[panel.button]]
+label = "Show"
+args = ["show", "{n}"]

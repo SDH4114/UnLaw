@@ -1,0 +1,7 @@
+title = "Browser"
+icon = "globe"
+
+[[action]]
+id = "open"
+label = "Open"
+args = []
