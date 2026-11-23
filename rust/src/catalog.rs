@@ -56,7 +56,8 @@ pub fn parse_index(text: &str) -> Result<Vec<Item>, String> {
         .iter()
         .filter_map(|entry| {
             let field = |key: &str| entry.get(key).and_then(Json::as_str).map(str::to_string);
-            let item = Item { name: field("name")?, summary: field("summary").unwrap_or_default(), sha256: field("sha256")? };
+            // Lowercase: sha256_hex is, and an uppercase digest could never match.
+            let item = Item { name: field("name")?, summary: field("summary").unwrap_or_default(), sha256: field("sha256")?.to_ascii_lowercase() };
             let reserved = crate::help::is_system(&item.name) || crate::builtin::is_builtin(&item.name);
             let hex = item.sha256.len() == 64 && item.sha256.chars().all(|c| c.is_ascii_hexdigit());
             (workspace::valid_name(&item.name) && !reserved && hex).then_some(item)

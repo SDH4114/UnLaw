@@ -4,12 +4,12 @@
   {
    "name": "agent",
    "summary": "Your local AI agent: files, TODO board and schedule, in the console or Telegram.",
-   "sha256": "e565fe372736318df391de1cd6d97f344267ce1a9b432bd710ecad71d4a7e1a5"
+   "sha256": "2f362d7699f4e5b275abdd00e1ab05cbd7d04b38d57fe1dc08fecb8d1821312e"
   },
   {
    "name": "awake",
    "summary": "Keep the Mac from sleeping for a while, until a time or while something runs; lid closed too.",
-   "sha256": "5107cbd5fcdfd4e95b1102bfc0b8829cd905d4413b9fb90a8fe3d8e0c529bbb3"
+   "sha256": "e2cd3e7eb414232e5d31afe4498023692978720f1df9dbac7c0d8cf853a622b4"
   },
   {
    "name": "capture",
@@ -34,12 +34,12 @@
   {
    "name": "desk",
    "summary": "Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser.",
-   "sha256": "4a130eb32703c31e71ca644cf9d8487c76fbc41c2089940bfa08120f605d0a03"
+   "sha256": "0dfa925a99da2e3161ce258a86d0154d1ae8eedcbd5a0e7604da5c962eae97b8"
   },
   {
    "name": "git",
    "summary": "Stage, commit and push the current Git project, or run a Git action.",
-   "sha256": "a4e96c942da41a514e8cc6afac36c714d7b153985f6464aaed779d660c4da6e7"
+   "sha256": "a7e210d9982de07ac28f2549041091a4d2a37198c547aafdca169b87465ea47c"
   },
   {
    "name": "gpt",
@@ -99,7 +99,7 @@
   {
    "name": "tg",
    "summary": "Open Telegram, or send and download messages/files through your bot.",
-   "sha256": "74702cd5d8ebcda0c11da6a5d7ce70f02aa924520e4df050bedfe57e28ebf768"
+   "sha256": "217c6d28d8a0ceec66ce6de1f302d7c242e33156d54378c555cca7ee1f32e40d"
   },
   {
    "name": "timer",
@@ -119,7 +119,7 @@
   {
    "name": "yt",
    "summary": "Open YouTube, search, or download one YouTube video.",
-   "sha256": "48806e51089bd2b852d2252b6a077497a0cec26a6854efcd5411100458464b3f"
+   "sha256": "08ba96f10a644fda477573e0498b3bbd81e7e122c505e022a75a860274dbae96"
   },
   {
    "name": "zed",

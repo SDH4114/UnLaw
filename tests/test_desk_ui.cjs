@@ -80,7 +80,7 @@ function harness() {
       parseLayout, defaultLayout, resizeLayout, swapPanels, layoutFrame, LAYOUT_PANELS,
       addWaveSample, voiceClock, wavePeaks, recordingAudio, drawVoice, releaseWaveMic,
       loadStudioInfo, loadSetup, setStudioTab, runCountdown, cancelCountdown, closeProject, rememberEdit,
-      ed, editOf, defaultEdit, edLength, bladeAt, rippleDelete, liftClips, extractRange, moveClips, trimClip, linkedIds, toggleLink, addTrack, insertMedia, videoAt, audibleClips, captionsToClips, captionAt, mergeCaption, removeSilences, soundParts, silences, snapTime, captionAssetName, joinPeaks, soundFiles, audioOnly, renderEdit, renderEditSide, editKeydown, edSeek, edEnter, edTranscribe, edLoadModels, edToggleTrack, renderProjectPage,
+      ed, editOf, defaultEdit, edLength, bladeAt, rippleDelete, liftClips, liftRange, extractRange, moveClips, trimClip, linkedIds, toggleLink, addTrack, insertMedia, videoAt, audibleClips, captionsToClips, captionAt, mergeCaption, removeSilences, soundParts, silences, snapTime, captionAssetName, joinPeaks, soundFiles, audioOnly, renderEdit, renderEditSide, editKeydown, edSeek, edEnter, edTranscribe, edLoadModels, edToggleTrack, renderProjectPage,
       countdownSteps, saveSetupSoon, permissionBanner, openSettings,
       renderStudio, renderStudioBody, renderSources, updateRecordControls, startPreview,
       startHistory, undoEdit, addScene, moveScene, removeScene, defaultPlacement, currentScene, edited, selectSource, placementOf, nudgeSelected, deleteSelected, sourceById, toggleVisible, moveSource, toggleInput, openRecordSettings, closeStudioMenu,
@@ -93,7 +93,12 @@ function harness() {
       fillable, fillTarget, applyFill, setBackground, cvBackground, canvasKey, cvStyle, cvNew, cvRename, cvChoose, CV_BY_KEY,
       floodRegion, growMask, traceMask, paintFromMask, paintContains, cutElement, eraseAt, cvBucket, cvToolClick,
       widthToSlider, sliderToWidth, cvStepWidth, cvBuildBar, cvTypedWidth,
-      cvCork, setLook, pinPoint, threadCurve, edgeCurveFor, nodeTilt, fileCardSize, fileExtension, mixColor, cvAddFiles, cvToggleCork, cvImageFor, bezierPoint, loadBoards, applyTheme, newBoard, openOtherBoard, renderBoard, deleteBoard};
+      cvCork, setLook, pinPoint, threadCurve, edgeCurveFor, nodeTilt, fileCardSize, fileExtension, mixColor, cvAddFiles, cvToggleCork, cvImageFor, bezierPoint, loadBoards, applyTheme, newBoard, openOtherBoard, renderBoard, deleteBoard,
+      renderToday, VIEWS, savedView, anchorPoint, fracAt, edgeAnchor, layerRows, cvToggleHidden, cvReorderLayer, docNodes, cvRenderLayers, cvToggleGallery, cvDropFiles, cvDeleteCanvas, cvRenderGallery,
+      parseSTL, parseOBJ, parseGLTF, cvFileKind, cvView, cvCloseView, cvPasteText, cvMediaUrl, mat4LookAt, mat4Perspective, mat4Multiply,
+      cvToggleFold, cvFoldAll, cleanShelf, shelfFavorite, shelfMove, shelfAddGroup, shelfRenameGroup, shelfRemoveGroup, gallerySections, galleryMatch,
+      canvasLinkPath, canvasLinkFile, urlCardText, textToLink, cvClickCard, cvCardDouble, cvMediaState, cvTogglePlay, cvStopMedia, cvPeaks,
+      cvAddCanvasLink, cvFollowLink, cvGoBack, cvOpenInline, cvCloseInline, cvSaveShelf, cvLoad, cvPictureBox};
   `, context);
   return {context, a: context.audit, listeners, timers, intervals, frames, ids,
     run: code => vm.runInContext(code, context)};
@@ -491,6 +496,20 @@ const tests = {
   assert.deepEqual(plain(fresh.clips.map(clip => [clip.start, clip.in])), [[1, 1], [1, 1], [1, 1]], 'linked clips trim together');
   a.trimClip(fresh, v.id, 'start', -3, project, false);
   assert.deepEqual(plain([v.start, v.in]), [0, 0], 'not before the start of the recording');
+  // A text clip trimmed to the left grows from its start; `in` stays 0 (a negative one made the save fail).
+  const titled = a.defaultEdit(project);
+  const textTrack = a.addTrack(titled, 'text');
+  titled.clips.push({id: 'tx', track: textTrack.id, source: 'text', start: 2, in: 0, out: 2, link: '', text: 'hi', asset: ''});
+  a.trimClip(titled, 'tx', 'start', 1, project, false);
+  assert.deepEqual(plain(titled.clips.find(clip => clip.id === 'tx')).start, 1);
+  assert.deepEqual(plain(['in', 'out'].map(key => titled.clips.find(clip => clip.id === 'tx')[key])), [0, 3]);
+  // Cutting a range out of the middle leaves the right parts linked to each other, not to the left parts.
+  const middle = a.defaultEdit(project);
+  a.liftRange(middle, 1, 2);
+  const lefts = middle.clips.filter(clip => clip.start === 0), rights = middle.clips.filter(clip => clip.start === 2);
+  assert.equal(lefts.length, 3); assert.equal(rights.length, 3);
+  assert.equal(new Set(rights.map(clip => clip.link)).size, 1, 'right parts share one link');
+  assert.notEqual(rights[0].link, lefts[0].link, 'a new group');
   // Locked tracks are left alone by a range extract.
   const locked = a.defaultEdit(project);
   locked.tracks.find(track => track.id === 'a2').locked = true;
@@ -1963,6 +1982,450 @@ const tests = {
   assert.equal(a.cvCork(a.cv.doc), false);
   assert.equal(a.cvImageFor(a.cv.doc.nodes[1]), null, 'notes are never fetched as pictures');
   assert.equal(a.cvImageFor({file: 'attachments/a.txt'}), null, 'plain text stays a paper sheet');
+ },
+ async today_shows_tasks_and_focus_stats() {
+  const h = treeHarness(), a = h.a;
+  assert.deepEqual([...a.VIEWS], ['board', 'today', 'games', 'studio', 'canvas'], 'no separate Stats tab');
+  assert.equal(a.savedView('stats'), 'today', 'an old saved Stats view opens Today');
+  let asked = 0;
+  h.context.fetch = async () => { asked++; return response({}); };
+  a.state.board = {today: '2026-11-22', done_column: 'Done', columns: [{name: 'To do', cards: [{title: 'Late', text: 'Late', line: 3, due: '2026-11-20', tags: [], details: []}]}]};
+  a.state.stats = {today: {pomodoros: 2, minutes: 50, done: 3}, streak: 4, total_pomodoros: 9,
+    week: Array.from({length: 7}, (_, i) => ({date: '2026-11-1' + (6 + i), pomodoros: i, minutes: i * 25, done: 1})),
+    cards: [{card: 'Write', minutes: 50}]};
+  a.state.view = 'today';
+  h.run('todayStatsAt = Date.now();');
+  a.renderToday(h.main);
+  const text = textOf(h.main);
+  for (const needle of ['focus min today', '50', 'done today', 'day streak', 'Overdue', 'Late', 'Most focused cards', 'Write'])
+    assert.ok(text.includes(needle), needle + ' is on Today');
+  assert.equal(asked, 0, 'fresh stats are not fetched again on every render');
+ },
+ async canvas_threads_new_cards_and_layers() {
+  const h = harness(), a = h.a;
+  const ctx = new Proxy({font: '', measureText: text => ({width: String(text).length * 7})}, {
+   get: (target, prop) => (prop in target ? target[prop] : () => {}),
+   set: (target, prop, value) => { target[prop] = value; return true; },
+  });
+  const fake = tag => {
+   const node = new h.context.Node();
+   node.tagName = tag.toUpperCase();
+   node.getBoundingClientRect = () => ({left: 0, top: 0, width: 800, height: 600});
+   node.getContext = () => ctx;
+   node.focus = () => {}; node.select = () => {}; node.setPointerCapture = () => {};
+   return node;
+  };
+  h.context.document.createElement = fake;
+  h.context.getComputedStyle = () => ({getPropertyValue: () => '#336699'});
+  const shape = sampleShape();
+  h.context.fetch = async path => {
+   if (path === '/api/canvases') return response({dir: '/c', current: '/c/a.canvas', items: [{path: '/c/a.canvas', name: 'a'}]});
+   if (path.startsWith('/api/canvas')) return response(shape);
+   return response({});
+  };
+  a.state.view = 'canvas';
+  a.renderCanvas(fake('main'));
+  for (let i = 0; i < 3; i++) await new Promise(resolve => setImmediate(resolve));
+  a.cv.view = {x: 0, y: 0, z: 1};
+  const at = (x, y, extra = {}) => ({button: 0, clientX: x, clientY: y, pointerId: 1, shiftKey: false, preventDefault() {}, ...extra});
+  const click = (x, y) => { a.cvDown(at(x, y)); a.cvUp(at(x, y)); };
+  const n1 = a.cv.doc.nodes.find(n => n.id === 'n1');
+
+  // Thread tool: from a spot on one card to a spot on another.
+  a.canvasKey({key: 'k', code: 'KeyK', preventDefault() {}});
+  assert.equal(a.cv.tool, 'thread', 'K picks the thread tool');
+  click(50, 80);
+  assert.deepEqual(plain(a.cv.thread), {node: 'n1', frac: [0.25, 0.8]}, 'the first click pins the start where it was');
+  a.cvMove(at(500, 20));
+  click(580, 90);
+  const thread = a.cv.doc.edges.at(-1);
+  assert.equal(thread.toNode, 'n2');
+  assert.deepEqual(plain(thread.unlawFrom), [0.25, 0.8]);
+  assert.deepEqual(plain(thread.unlawTo), [0.9, 0.9]);
+  assert.equal(thread.fromSide, 'bottom', 'Obsidian still gets the nearest side');
+  assert.equal(a.cv.thread, null);
+  const curve = a.edgeCurveFor(new Map(a.docNodes(a.cv.doc).map(n => [n.id, n])), thread, false);
+  assert.deepEqual(plain(curve.p0), {x: 50, y: 80}, 'the line starts at that spot');
+  const cork = a.edgeCurveFor(new Map(a.docNodes(a.cv.doc).map(n => [n.id, n])), thread, true);
+  assert.deepEqual(plain(cork.p0), plain(a.anchorPoint(n1, [0.25, 0.8], true)), 'on cork the pin turns with the card');
+  const back = a.fracAt(n1, cork.p0, true);
+  assert.ok(Math.abs(back[0] - 0.25) < 1e-3 && Math.abs(back[1] - 0.8) < 1e-3, 'fracAt undoes anchorPoint');
+  assert.equal(a.edgeAnchor({unlawTo: [2, 0]}, 'to'), null, 'a bad spot is ignored');
+
+  // Escape drops a started thread; a thread ending on empty canvas makes a card there.
+  click(100, 50);
+  assert.ok(a.cv.thread);
+  a.canvasKey({key: 'Escape', code: 'Escape', preventDefault() {}});
+  assert.equal(a.cv.thread, null, 'Esc drops the started thread');
+  assert.equal(a.cv.tool, 'thread', 'and keeps the tool');
+  const edges = a.cv.doc.edges.length, nodes = a.cv.doc.nodes.length;
+  click(100, 50); click(300, 500);
+  assert.equal(a.cv.doc.nodes.length, nodes + 1, 'a new card where the thread ended');
+  const made = a.cv.doc.nodes.at(-1);
+  assert.deepEqual([made.x, made.y, made.type], [170, 440, 'text']);
+  assert.equal(a.cv.doc.edges.at(-1).toNode, made.id);
+  assert.equal(a.cv.doc.edges.length, edges + 1);
+  assert.ok(a.cv.editing, 'the new card opens for typing');
+  a.cv.ui.editor.value = 'suspect';
+  a.cvEndEdit();
+
+  // Dragging from a side dot onto empty canvas makes a connected card too.
+  a.cvSetTool('select');
+  a.cvMove(at(100, 50));
+  a.cvDown(at(200, 50)); a.cvMove(at(300, 600)); a.cvUp(at(300, 600));
+  const linked = a.cv.doc.nodes.at(-1), connect = a.cv.doc.edges.at(-1);
+  assert.equal(a.cv.doc.nodes.length, nodes + 2);
+  assert.deepEqual([linked.x, linked.y], [170, 540]);
+  assert.deepEqual([connect.fromNode, connect.fromSide, connect.toNode], ['n1', 'right', linked.id]);
+  assert.ok(a.cv.editing && a.cv.editing.key === 'n:' + linked.id);
+  a.cvEndEdit();
+  assert.equal('unlawFrom' in connect, false, 'off the detective board an edge keeps Obsidian sides only');
+
+  // On the detective board the thread starts at the dot it was pulled from, not at the pin on top.
+  a.setLook(a.cv.doc, true);
+  a.cvMove(at(100, 50));
+  a.cvDown(at(200, 50));
+  assert.equal(a.cv.drag.mode, 'connect');
+  a.cvMove(at(300, 700)); a.cvUp(at(300, 700));
+  const pulled = a.cv.doc.edges.at(-1);
+  assert.deepEqual(plain(pulled.unlawFrom), [1, 0.5], 'tied at the right side it was pulled from');
+  assert.deepEqual(plain(pulled.unlawTo), plain({top: [0.5, 0], right: [1, 0.5], bottom: [0.5, 1], left: [0, 0.5]}[pulled.toSide]), 'and at the side of the new card facing it');
+  a.cvEndEdit();
+  a.setLook(a.cv.doc, false);
+
+  // The end of a selected edge drags to another spot of its card.
+  a.cvSelect(['e:' + thread.id]);
+  a.cvDown(at(50, 80));
+  assert.equal(a.cv.drag.mode, 'anchor');
+  a.cvMove(at(150, 10)); a.cvUp(at(150, 10));
+  assert.deepEqual(plain(thread.unlawFrom), [0.75, 0.1]);
+  assert.equal(thread.fromSide, 'top');
+  a.cvUndo();
+  assert.deepEqual(plain(a.cv.doc.edges.find(e => e.id === thread.id).unlawFrom), [0.25, 0.8], 'moving an end is undoable');
+
+  // Layers: topmost first; the eye hides a group with what is inside and brings it back.
+  const rows = a.layerRows(a.cv.doc).map(row => row.key);
+  assert.equal(rows[0], 'sec:drawings', 'drawings come first, under their own heading');
+  assert.equal(rows[1], 'x:' + a.cv.doc.unlaw.elements.at(-1).id, 'drawings are on top');
+  assert.ok(rows.indexOf('n:g1') < rows.indexOf('n:n1'), 'a card is listed under its group');
+  a.cvToggleHidden('n:g1');
+  const doc = a.cv.doc;
+  assert.equal(doc.nodes.find(n => n.id === 'n1').unlawHidden, true, 'the group hides its cards');
+  assert.ok(!a.docNodes(doc).some(n => n.id === 'n1' || n.id === 'g1'), 'hidden things are not drawn');
+  assert.notEqual(a.hitTest(doc, 50, 50, 1), 'n:n1', 'nor picked');
+  assert.equal(a.layerRows(doc).length, rows.length, 'but stay in the list');
+  a.cvToggleHidden('n:g1');
+  assert.equal('unlawHidden' in a.cv.doc.nodes.find(n => n.id === 'n1'), false, 'showing removes the key');
+  a.cvToggleHidden('n:g1');
+  a.cvUndo();
+  assert.ok(!a.cv.doc.nodes.some(n => n.unlawHidden), 'hiding is undoable');
+  const order = a.cv.doc.unlaw.elements.map(el => el.id);
+  a.cvReorderLayer('x:' + order[0], 'x:' + order.at(-1));
+  assert.equal(a.cv.doc.unlaw.elements.at(-1).id, order[0], 'dropping a row on the top one brings it to the front');
+  a.cvReorderLayer('x:' + order[0], 'n:n1');
+  assert.equal(a.cv.doc.unlaw.elements.at(-1).id, order[0], 'cards and drawings keep their own order');
+  // Folding like Photoshop: a folded group or heading is one row with its name and a count.
+  const shut = a.layerRows(a.cv.doc, new Set(['n:g1', 'sec:drawings']));
+  const groupRow = shut.find(row => row.key === 'n:g1');
+  assert.equal(groupRow.folded, true);
+  assert.ok(groupRow.count >= 1, 'the folded group counts what is inside');
+  assert.ok(!shut.some(row => row.key === 'n:n1'), 'its cards are not listed');
+  assert.ok(!shut.some(row => row.key[0] === 'x'), 'a folded heading hides its drawings');
+  assert.equal(shut.find(row => row.key === 'sec:drawings').count, a.cv.doc.unlaw.elements.length);
+  a.cv.path = '/c/fold.canvas';
+  a.cv.folded = null;
+  const store = new Map();
+  h.context.localStorage.getItem = key => (store.has(key) ? store.get(key) : null);
+  h.context.localStorage.setItem = (key, value) => store.set(key, String(value));
+  a.cvFoldAll(true);
+  assert.deepEqual(JSON.parse(h.context.localStorage.getItem('desk-canvas-folded'))['/c/fold.canvas'].sort(), ['n:g1', 'sec:cards', 'sec:drawings'], 'folding is remembered per canvas');
+  a.cvToggleFold('n:g1');
+  assert.deepEqual(JSON.parse(h.context.localStorage.getItem('desk-canvas-folded'))['/c/fold.canvas'].sort(), ['sec:cards', 'sec:drawings']);
+  a.cvFoldAll(false);
+  assert.equal(JSON.parse(h.context.localStorage.getItem('desk-canvas-folded'))['/c/fold.canvas'], undefined);
+  a.canvasKey({key: 'F7', code: 'F7', preventDefault() {}});
+  assert.equal(a.cv.layers, true, 'F7 opens Layers');
+  a.cvRenderLayers();
+ },
+ async canvas_gallery_import_and_delete() {
+  const h = harness(), a = h.a;
+  const ctx = new Proxy({font: '', measureText: text => ({width: String(text).length * 7})}, {
+   get: (target, prop) => (prop in target ? target[prop] : () => {}),
+   set: (target, prop, value) => { target[prop] = value; return true; },
+  });
+  const fake = tag => {
+   const node = new h.context.Node();
+   node.tagName = tag.toUpperCase();
+   node.getBoundingClientRect = () => ({left: 0, top: 0, width: 800, height: 600});
+   node.getContext = () => ctx;
+   node.focus = () => {}; node.select = () => {}; node.setPointerCapture = () => {};
+   return node;
+  };
+  h.context.document.createElement = fake;
+  h.context.getComputedStyle = () => ({getPropertyValue: () => '#336699'});
+  const calls = [];
+  let items = [{path: '/c/a.canvas', name: 'a', modified: 1}, {path: '/c/b.canvas', name: 'b', modified: 2}];
+  h.context.fetch = async (path, init = {}) => {
+   const body = init.body ? JSON.parse(init.body) : null;
+   calls.push([path, body]);
+   if (path === '/api/canvases' && !body) return response({dir: '/c', current: '/c/a.canvas', items});
+   if (path === '/api/canvas/import') return response({...sampleShape(), path: '/c/Case.canvas', name: 'Case'});
+   if (path === '/api/canvas/delete') { items = items.filter(i => i.path !== body.path); return response({dir: '/c', current: '/c/b.canvas', items}); }
+   if (path === '/api/canvases') return response({...sampleShape(), path: body.path, name: body.path.slice(3, -7)});
+   if (path.startsWith('/api/canvas')) return response(sampleShape());
+   return response({});
+  };
+  a.state.view = 'canvas';
+  a.renderCanvas(fake('main'));
+  for (let i = 0; i < 3; i++) await new Promise(resolve => setImmediate(resolve));
+  a.cvToggleGallery(true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(a.cv.gallery, true);
+  assert.ok(calls.some(([path]) => path.startsWith('/api/canvas/peek?path=')), 'tiles read their canvas without switching to it');
+  assert.ok(!calls.some(([path, body]) => path === '/api/canvases' && body), 'opening the gallery opens nothing');
+
+  // A dropped .canvas is imported and opened; other files go onto the canvas as before.
+  const file = {name: 'Case.canvas', size: 10, text: async () => JSON.stringify({nodes: [], edges: []})};
+  await a.cvDropFiles([file]);
+  const sent = calls.find(([path]) => path === '/api/canvas/import');
+  assert.deepEqual(sent[1], {name: 'Case.canvas', canvas: {nodes: [], edges: []}});
+  assert.equal(a.cv.path, '/c/Case.canvas', 'the imported canvas opens');
+  assert.equal(a.cv.gallery, false);
+  await a.cvDropFiles([{name: 'broken.canvas', size: 3, text: async () => '{no'}]);
+  assert.equal(calls.filter(([path]) => path === '/api/canvas/import').length, 1, 'a file that is not JSON is never sent');
+
+  // Deleting asks first; deleting the open canvas opens the next one.
+  h.context.confirm = () => false;
+  await a.cvDeleteCanvas({path: '/c/Case.canvas', name: 'Case'});
+  assert.ok(!calls.some(([path]) => path === '/api/canvas/delete'), 'cancel keeps it');
+  h.context.confirm = () => true;
+  a.cv.path = '/c/a.canvas';
+  await a.cvDeleteCanvas({path: '/c/a.canvas', name: 'a'});
+  assert.deepEqual(calls.find(([path]) => path === '/api/canvas/delete')[1], {path: '/c/a.canvas'});
+  assert.equal(a.cv.path, '/c/b.canvas', 'the next canvas opens');
+  assert.deepEqual(a.cv.items.map(i => i.name), ['b']);
+ },
+ async canvas_viewer_3d_and_links() {
+  const h = harness(), a = h.a;
+  h.context.TextEncoder = TextEncoder;
+  h.context.atob = atob;
+  // STL, binary: one triangle.
+  const stl = new ArrayBuffer(84 + 50), view = new DataView(stl);
+  view.setUint32(80, 1, true);
+  [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0].forEach((v, i) => view.setFloat32(84 + i * 4, v, true));
+  let mesh = a.parseSTL(stl);
+  assert.equal(mesh.count, 1);
+  assert.deepEqual([...mesh.positions], [0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  assert.deepEqual([...mesh.normals.slice(0, 3)], [0, 0, 1], 'flat normals from the winding');
+  mesh = a.parseSTL(new TextEncoder().encode('solid x\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 2 0 0\nvertex 0 2 0\nendloop\nendfacet\nendsolid').buffer);
+  assert.deepEqual(plain(mesh.max), [2, 2, 0], 'ASCII STL too');
+  // OBJ: a quad (with v/vt/vn and a negative index) becomes two triangles.
+  mesh = a.parseOBJ('v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1/1/1 2/2/1 3/3/1 -1/4/1\n');
+  assert.equal(mesh.count, 2);
+  assert.throws(() => a.parseOBJ('v 0 0 0\n'), /no triangles/);
+  // glTF with an embedded buffer, a translated node and a base color.
+  const positions = Buffer.from(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]).buffer);
+  const gltf = {asset: {version: '2.0'}, scene: 0, scenes: [{nodes: [0]}], nodes: [{mesh: 0, translation: [10, 0, 0]}],
+    meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}], materials: [{pbrMetallicRoughness: {baseColorFactor: [1, 0, 0, 1]}}],
+    buffers: [{byteLength: 36, uri: 'data:application/octet-stream;base64,' + positions.toString('base64')}],
+    bufferViews: [{buffer: 0, byteOffset: 0, byteLength: 36}], accessors: [{bufferView: 0, componentType: 5126, count: 3, type: 'VEC3'}]};
+  mesh = await a.parseGLTF(new TextEncoder().encode(JSON.stringify(gltf)).buffer, async () => { throw Error('no external buffers here'); });
+  assert.deepEqual([...mesh.positions.slice(0, 3)], [10, 0, 0], 'node translation applied');
+  assert.deepEqual([...mesh.colors.slice(0, 3)], [1, 0, 0], 'base color kept');
+  // GLB: the same JSON in a binary container with the buffer as the BIN chunk.
+  const json = Buffer.from(JSON.stringify({...gltf, buffers: [{byteLength: 36}]}).padEnd(Math.ceil(JSON.stringify({...gltf, buffers: [{byteLength: 36}]}).length / 4) * 4, ' '));
+  const glb = Buffer.alloc(12 + 8 + json.length + 8 + 36);
+  glb.writeUInt32LE(0x46546c67, 0); glb.writeUInt32LE(2, 4); glb.writeUInt32LE(glb.length, 8);
+  glb.writeUInt32LE(json.length, 12); glb.writeUInt32LE(0x4e4f534a, 16); json.copy(glb, 20);
+  glb.writeUInt32LE(36, 20 + json.length); glb.writeUInt32LE(0x004e4942, 24 + json.length); positions.copy(glb, 28 + json.length);
+  mesh = await a.parseGLTF(glb.buffer.slice(glb.byteOffset, glb.byteOffset + glb.length), async () => null);
+  assert.equal(mesh.count, 1, 'GLB reads its BIN chunk');
+  // Camera math: looking down -z from z=5 puts the origin in front.
+  const m = a.mat4Multiply(a.mat4Perspective(0.8, 1, 0.1, 100), a.mat4LookAt([0, 0, 5], [0, 0, 0], [0, 1, 0]));
+  const w = m[3] * 0 + m[7] * 0 + m[11] * 0 + m[15];
+  assert.ok(w > 0 && Math.abs(m[12] / w) < 1e-9, 'the target projects to the middle');
+
+  // Kinds and the viewer.
+  for (const [file, kind] of [['a.PNG', 'image'], ['b.mov', 'video'], ['c.m4a', 'audio'], ['d.pdf', 'pdf'], ['e.docx', 'doc'], ['f.glb', 'model'], ['g.md', 'text'], ['h.py', 'text'], ['i.pages', 'other']])
+   assert.equal(a.cvFileKind(file), kind, file);
+  const tree = treeHarness(), b = tree.a;
+  b.cv.doc = {nodes: [
+    {id: 'v', type: 'file', file: 'attachments/clip.mov', x: 0, y: 0, width: 200, height: 200},
+    {id: 'd', type: 'file', file: 'attachments/report.docx', x: 0, y: 0, width: 200, height: 200},
+    {id: 'l', type: 'link', url: 'https://example.com/a', x: 0, y: 0, width: 200, height: 200, unlawPreview: {title: 'Example', site: 'example.com'}},
+    {id: 'j', type: 'link', url: 'javascript:alert(1)', x: 0, y: 0, width: 200, height: 200},
+  ], edges: []};
+  b.cv.path = '/c/a.canvas';
+  b.cv.ui.view = new tree.context.Node('view');
+  const find = (node, tag) => node.tagName === tag ? node : (node.children || []).map(child => typeof child === 'string' ? null : find(child, tag)).find(Boolean) || null;
+  tree.context.document.createElement = tag => { const node = new tree.context.Node(); node.tagName = tag.toUpperCase(); return node; };
+  assert.equal(b.cvView('n:v'), true);
+  const video = find(b.cv.ui.view, 'VIDEO');
+  assert.ok(video && video.attrs.src.includes('raw=1') && video.attrs.src.includes('file=attachments%2Fclip.mov'), 'a video plays in the page');
+  let paused = false;
+  b.cv.ui.view.querySelectorAll = () => [{pause() { paused = true; }}];
+  b.cvCloseView();
+  assert.ok(paused, 'closing stops the sound');
+  b.cv.ui.view.querySelectorAll = () => [];
+  b.cvView('n:d');
+  const doc = find(b.cv.ui.view, 'IFRAME');
+  assert.equal(doc.attrs.sandbox, '', 'documents never run script');
+  assert.ok(doc.attrs.src.includes('doc=1'));
+  b.cvView('n:l');
+  const page = find(b.cv.ui.view, 'IFRAME');
+  assert.equal(page.attrs.src, 'https://example.com/a');
+  assert.ok(!page.attrs.sandbox.includes('allow-top-navigation'), 'a page cannot take the tab');
+  let asked = 0;
+  tree.context.fetch = async () => { asked++; return response({}); };
+  b.cvView('n:j');
+  assert.equal(find(b.cv.ui.view, 'IFRAME'), null, 'only http(s) addresses are shown');
+  assert.equal(asked, 0);
+
+  // A pasted link becomes a link card and asks for its preview.
+  const calls = [];
+  tree.context.fetch = async (path, init) => { calls.push([path, JSON.parse(init.body || 'null')]); return response({title: 'Hello', description: 'D', site: 'example.org', image: null}); };
+  b.cv.view = {x: 0, y: 0, z: 1}; b.cv.w = 800; b.cv.h = 600;
+  b.cv.hist = {undo: [], redo: [], cur: '{}'};
+  tree.run('cvCommit = () => {};');
+  assert.equal(b.cvPasteText('not a link'), false);
+  assert.equal(b.cvPasteText('  https://example.org/x  '), true);
+  const card = b.cv.doc.nodes.at(-1);
+  assert.deepEqual([card.type, card.url], ['link', 'https://example.org/x']);
+  for (let i = 0; i < 3; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls[0], ['/api/canvas/link-preview', {path: '/c/a.canvas', url: 'https://example.org/x'}]);
+  assert.equal(card.unlawPreview.title, 'Hello');
+  assert.equal('unlawPreviewing' in card, false, 'no working flag is saved');
+ },
+ async canvas_gallery_shelf_links_and_cards_that_play() {
+  const h = harness(), a = h.a;
+  // Links between canvases: relative to the canvas's folder, absolute for one elsewhere.
+  assert.equal(a.canvasLinkPath('/c/a.canvas', 'b.canvas'), '/c/b.canvas');
+  assert.equal(a.canvasLinkPath('/c/a.canvas', './sub/../x/../b.canvas'), '/c/b.canvas');
+  assert.equal(a.canvasLinkPath('/c/a.canvas', '../d/e.canvas'), '/d/e.canvas');
+  assert.equal(a.canvasLinkPath('/c/a.canvas', '/z/f.canvas'), '/z/f.canvas');
+  assert.equal(a.canvasLinkFile('/c/a.canvas', '/c/sub/b.canvas'), 'sub/b.canvas');
+  assert.equal(a.canvasLinkFile('/c/a.canvas', '/cc/b.canvas'), '/cc/b.canvas', 'a folder with the same start is elsewhere');
+  assert.equal(a.cvFileKind('x/Plan.CANVAS'), 'canvas');
+
+  // A text card that is only a link (or a title over a link) becomes a link card.
+  assert.deepEqual(plain(a.urlCardText(' https://amikolabs.com/ ')), {url: 'https://amikolabs.com/', title: ''});
+  assert.deepEqual(plain(a.urlCardText('Amiko Labs\nhttps://amikolabs.com/')), {url: 'https://amikolabs.com/', title: 'Amiko Labs'});
+  for (const text of ['hello', 'a\nb\nhttps://x.org', 'https://x.org\nmore words', 'javascript:alert(1)', 'https://a.org\nhttps://b.org'])
+   assert.equal(a.urlCardText(text), null, text);
+  const card = {id: 't', type: 'text', text: 'Site\nhttps://x.org', x: 0, y: 0, width: 10, height: 10};
+  assert.equal(a.textToLink(card), true);
+  assert.deepEqual([card.type, card.url, 'text' in card, card.unlawPreview.title], ['link', 'https://x.org', false, 'Site']);
+  assert.equal(a.textToLink({id: 'n', type: 'text', text: 'note'}), false);
+
+  // Favorites and groups only list paths; a canvas is in one group at most; search keeps names with every word.
+  const items = [{path: '/c/plan.canvas', name: 'Plan'}, {path: '/c/case.canvas', name: 'Case notes'}, {path: '/c/x.canvas', name: 'Trip'}];
+  let shelf = a.cleanShelf({favorites: ['/c/x.canvas', 5], groups: [{name: 'Work', paths: ['/c/plan.canvas']}, {name: 7}]});
+  assert.deepEqual(plain(shelf), {favorites: ['/c/x.canvas'], groups: [{name: 'Work', paths: ['/c/plan.canvas']}]});
+  assert.equal(a.shelfAddGroup(shelf, ' work '), null, 'names are unique, case ignored');
+  shelf = a.shelfAddGroup(shelf, '  Old   cases ');
+  assert.equal(shelf.groups[1].name, 'Old cases');
+  shelf = a.shelfMove(shelf, '/c/plan.canvas', 'Old cases');
+  assert.deepEqual(plain(shelf.groups.map(g => g.paths)), [[], ['/c/plan.canvas']], 'moving takes it out of the other group');
+  shelf = a.shelfFavorite(a.shelfFavorite(shelf, '/c/case.canvas'), '/c/x.canvas');
+  assert.deepEqual(plain(shelf.favorites), ['/c/case.canvas']);
+  let sections = a.gallerySections(items, shelf);
+  assert.deepEqual(plain(sections.map(s => [s.kind, s.name, s.items.map(i => i.name)])),
+   [['favorites', 'Favorites', ['Case notes']], ['group', 'Work', []], ['group', 'Old cases', ['Plan']], ['other', 'Not in a group', ['Case notes', 'Trip']]]);
+  sections = a.gallerySections(items, shelf, '  NOTES case ');
+  assert.deepEqual(plain(sections.map(s => [s.kind, s.items.map(i => i.name)])), [['favorites', ['Case notes']], ['other', ['Case notes']]], 'search drops empty sections');
+  assert.deepEqual(plain(a.gallerySections(items, shelf, 'zzz')), []);
+  shelf = a.shelfRenameGroup(shelf, 'Old cases', 'Archive');
+  assert.equal(a.shelfRenameGroup(shelf, 'Archive', 'WORK'), null);
+  assert.deepEqual(plain(a.shelfRemoveGroup(shelf, 'Archive').groups.map(g => g.name)), ['Work']);
+  const calls = [];
+  h.context.fetch = async (url, init = {}) => {
+   const body = init.body ? JSON.parse(init.body) : null;
+   calls.push([url, body]);
+   if (url === '/api/canvas/shelf') return response({items, shelf: body.shelf});
+   if (url === '/api/canvases' && body) return response({...sampleShape(), path: body.path, name: 'x'});
+   return response({items, shelf: {}});
+  };
+  a.cv.ui = {};
+  assert.equal(await a.cvSaveShelf(shelf), true);
+  assert.deepEqual(calls.at(-1), ['/api/canvas/shelf', {shelf: plain(shelf)}]);
+
+  // Following a canvas card opens that canvas; Back returns.
+  a.cvLoad(sampleShape());
+  a.cv.doc.nodes.push({id: 'k', type: 'file', file: 'sub/b.canvas', x: 0, y: 0, width: 300, height: 220});
+  await a.cvFollowLink(a.cv.doc.nodes.at(-1));
+  assert.equal(a.cv.path, '/c/sub/b.canvas');
+  assert.deepEqual(plain(a.cv.back), ['/c/a.canvas']);
+  await a.cvGoBack();
+  assert.equal(a.cv.path, '/c/a.canvas');
+  assert.deepEqual(plain(a.cv.back), []);
+  a.cv.view = {x: 0, y: 0, z: 1}; a.cv.w = 800; a.cv.h = 600;
+  a.cvAddCanvasLink({path: '/c/sub/b.canvas', name: 'b'});
+  assert.equal(a.cv.doc.nodes.at(-1).file, 'sub/b.canvas', 'the gallery puts a relative link on the open canvas');
+
+  // One click works the card (after a short wait, so a double click never does both); two open it whole.
+  const tree = treeHarness(), b = tree.a;
+  const made = [];
+  tree.context.document.createElement = tag => {
+   const node = new tree.context.Node();
+   node.tagName = tag.toUpperCase();
+   if (tag === 'video' || tag === 'audio') {
+    Object.assign(node, {paused: true, ended: false, duration: 10, currentTime: 0, readyState: 4,
+     play() { this.paused = false; return Promise.resolve(); }, pause() { this.paused = true; }, load() {}, removeAttribute(key) { this.src = ''; }});
+    made.push(node);
+   }
+   return node;
+  };
+  const opened = [];
+  tree.context.window.open = (...args) => opened.push(args[0]);
+  tree.context.fetch = async () => response({});
+  b.cv.doc = {nodes: [
+   {id: 'v', type: 'file', file: 'attachments/clip.mov', x: 0, y: 0, width: 200, height: 200},
+   {id: 'p', type: 'file', file: 'attachments/doc.pdf', x: 300, y: 0, width: 200, height: 260},
+   {id: 'l', type: 'link', url: 'https://example.com/', x: 0, y: 300, width: 200, height: 200, unlawPreview: {title: 'E', icon: null, frameable: true}},
+   {id: 'g', type: 'link', url: 'https://github.com/', x: 300, y: 300, width: 200, height: 200, unlawPreview: {title: 'G', icon: null, frameable: false}},
+  ], edges: []};
+  b.cv.path = '/c/a.canvas';
+  b.cv.view = {x: 0, y: 0, z: 1};
+  b.cv.ui.view = new tree.context.Node('view');
+  b.cv.ui.inline = new tree.context.Node('inline');
+  b.cv.ui.players = new tree.context.Node('players');
+  const fire = () => { const all = [...tree.timers.values()]; tree.timers.clear(); for (const t of all) t.fn(); };
+  tree.timers.clear();
+  b.cvClickCard('n:v', {x: 100, y: 50});
+  assert.equal(b.cv.playing, null, 'nothing happens before the double-click wait');
+  fire();
+  assert.equal(b.cv.playing.id, 'v');
+  const video = made[0];
+  assert.ok(video.src.includes('raw=1') && !video.paused, 'the video plays in its card');
+  assert.equal(b.cvMediaState(b.cv.doc.nodes[0]).playing, true);
+  const box = b.cvPictureBox(b.cv.doc.nodes[0], false);
+  b.cvClickCard('n:v', {x: box.x + box.width / 2, y: box.y + box.height - 8}); fire();
+  assert.equal(video.currentTime, 5, 'a click on the bar seeks');
+  assert.equal(video.paused, false);
+  b.cvClickCard('n:v', {x: 100, y: 50}); fire();
+  assert.equal(video.paused, true, 'a click elsewhere on it pauses');
+  b.cvClickCard('n:v', {x: 100, y: 50});
+  b.cvCardDouble('n:v');
+  assert.equal(tree.timers.size, 0, 'the double click cancels the single one');
+  assert.equal(b.cv.playing, null, 'and stops the card');
+  assert.equal(b.cv.viewing.key, 'n:v', 'the viewer opens');
+  b.cvCloseView();
+  b.cvClickCard('n:p', {x: 400, y: 50}); fire();
+  assert.equal(b.cv.inline.id, 'p', 'a PDF opens in its card');
+  assert.equal(b.cv.ui.inline.children[0].tagName, 'IFRAME');
+  b.cvCloseInline();
+  assert.equal(b.cv.inline, null);
+  b.cvClickCard('n:l', {x: 50, y: 350}); fire();
+  assert.equal(b.cv.viewing.key, 'n:l', 'a site opens inside the desk');
+  b.cvCloseView();
+  b.cvClickCard('n:g', {x: 350, y: 350}); fire();
+  assert.deepEqual(opened, ['https://github.com/'], 'a site that refuses frames opens in a tab instead');
+  b.cvCardDouble('n:l');
+  assert.deepEqual(opened, ['https://github.com/', 'https://example.com/'], 'two clicks open a site in a tab');
+  assert.equal(b.cv.viewing, null);
+
+  // Peaks for a sound's wave: loudest = 1.
+  assert.deepEqual(plain(a.cvPeaks(new Float32Array([0, 0.5, 0, -0.25]), 2)), [1, 0.5]);
  },
  async favicon_follows_the_page_theme() {
   const h = harness();

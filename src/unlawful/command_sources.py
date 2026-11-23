@@ -333,6 +333,13 @@ LEGACY_SOURCE_HASHES["capture"].add("8b49d65073d19063bc28e0fb36bf4b27d02ac61fb03
 LEGACY_SOURCE_HASHES["capture"].add("b127ff6da58c064a579e81dc9a45070b28ab10de6cb8c0d56f92c5b7257c994c")
 # 3.21.0 capture on screencapture + ffmpeg only, before ul-rec (branch commits 1768d74..407fb73).
 LEGACY_SOURCE_HASHES["capture"].add("d40c1cc6b1b4732dd8a659fa8514eefae2e61e051c17eca2cf3782f3fbac8a43")
+# Release 3.21.0 (commit 6df5f59), before the canvas layers/threads/viewers and awake display default.
+LEGACY_SOURCE_HASHES.setdefault("agent", set()).add("e565fe372736318df391de1cd6d97f344267ce1a9b432bd710ecad71d4a7e1a5")
+LEGACY_SOURCE_HASHES.setdefault("yt", set()).add("48806e51089bd2b852d2252b6a077497a0cec26a6854efcd5411100458464b3f")
+LEGACY_SOURCE_HASHES.setdefault("git", set()).add("a4e96c942da41a514e8cc6afac36c714d7b153985f6464aaed779d660c4da6e7")
+LEGACY_SOURCE_HASHES.setdefault("tg", set()).add("74702cd5d8ebcda0c11da6a5d7ce70f02aa924520e4df050bedfe57e28ebf768")
+LEGACY_SOURCE_HASHES.setdefault("awake", set()).add("5107cbd5fcdfd4e95b1102bfc0b8829cd905d4413b9fb90a8fe3d8e0c529bbb3")
+LEGACY_SOURCE_HASHES["desk"].add("4a130eb32703c31e71ca644cf9d8487c76fbc41c2089940bfa08120f605d0a03")
 # 3.21.0 branch builds with ul-rec (9290176, c41400c), before movable panels and audio only.
 LEGACY_SOURCE_HASHES["capture"].add("5d2af51d1d081914b397719053bc3a8d3c6a8a65a97a3f7a45fa0c1646ddde65")
 LEGACY_SOURCE_HASHES["capture"].add("0c5c45945d22daec5e2091384fbc2d97c8aca48856a965575ca6af526a2491db")
@@ -706,7 +713,8 @@ def _toml_value(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
+        # json.dumps leaves DEL (U+007F) raw, and TOML refuses it: escape it, or config.toml could not be read again.
+        return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return str(value)
     if isinstance(value, list):
@@ -922,3 +930,6 @@ LEGACY_SOURCE_HASHES.setdefault("capture", set()).add("d8d409d637af098272a0fd4d4
 LEGACY_NORMALIZED_HASHES.setdefault("capture", set()).add("c1ea9e4981abfa3f855623b645481fc5333dac6666c8aa4aebf7bd8b270ed724")
 LEGACY_SOURCE_HASHES.setdefault("desk", set()).update({"400c2e8d650b8ebba28a73d52c13578ecbb8e9180b709d99cb2e55231183356e", "940143d0f2ba8d0a0965a1084bf3ebc84d9e752d1c126cdc5f254b803df08fad"})
 LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).update({"e58689072e857554e461826458443b87b723c5406600acfba362a42fd135c255", "4fd95f0a86c9832cfadb887d8f8444d0cef1b7009c02e2dcf4f148785531b817"})
+# desk from a 3.22.0 development build installed on the maintainer's Mac (2026-11-23), so it is upgraded, not kept as edited.
+LEGACY_SOURCE_HASHES["desk"].add("86c5b40d6ce503d115848dde616aba9b9ee6022a9c7fa00df5d10eea326f0931")
+LEGACY_NORMALIZED_HASHES["desk"].add("8406cb6e2b08195a0931cff21ff7cd6f39156ed119f61f14e6d45a280aba9719")

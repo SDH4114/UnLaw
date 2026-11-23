@@ -54,9 +54,11 @@ fn read_line(reader: &mut impl BufRead, budget: &mut usize) -> Result<String, Re
 
 fn read_chunked(reader: &mut impl BufRead) -> Result<Vec<u8>, ReadError> {
     let mut body = Vec::new();
+    // Trailers share one budget; each chunk-size line gets its own, so a big body of many small chunks is
+    // not refused as "headers too large".
     let mut budget = MAX_HEAD;
     loop {
-        let line = read_line(reader, &mut budget)?;
+        let line = read_line(reader, &mut { MAX_HEAD })?;
         let size = usize::from_str_radix(line.split(';').next().unwrap_or("").trim(), 16)
             .map_err(|_| ReadError::Bad(400, "invalid chunk size".into()))?;
         if size == 0 {
@@ -70,7 +72,7 @@ fn read_chunked(reader: &mut impl BufRead) -> Result<Vec<u8>, ReadError> {
         let start = body.len();
         body.resize(start + size, 0);
         reader.read_exact(&mut body[start..])?;
-        read_line(reader, &mut budget)?;
+        read_line(reader, &mut { MAX_HEAD })?;
     }
 }
 
@@ -207,6 +209,17 @@ pub fn respond(stream: &mut impl Write, status: u16, content_type: &str, body: &
     stream.flush()
 }
 
+/// The answer to HEAD: the headers GET would send, without the body (a body would be read as the next response).
+pub fn respond_head(stream: &mut impl Write, status: u16, content_type: &str, length: usize) -> io::Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 {status} {}\r\nContent-Type: {content_type}\r\nContent-Length: {length}\r\n{}\r\n",
+        reason(status),
+        common_headers()
+    )?;
+    stream.flush()
+}
+
 pub fn respond_json(stream: &mut impl Write, status: u16, value: &serde_json::Value) -> io::Result<()> {
     respond(stream, status, "application/json", value.to_string().as_bytes())
 }
@@ -300,6 +313,25 @@ mod tests {
         assert_eq!((calls, request.body.as_slice()), (1, &b"hi"[..]));
         let raw = b"POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nffffffffffffffff\r\n";
         assert!(matches!(read_request(&mut Cursor::new(&raw[..])), Err(ReadError::Bad(413, _))));
+    }
+
+    #[test]
+    fn many_small_chunks_are_not_header_bytes() {
+        // 20000 one-byte chunks: their size lines once used up the 64 KB header budget (431).
+        let mut raw = b"POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+        for _ in 0..20000 {
+            raw.extend_from_slice(b"1\r\na\r\n");
+        }
+        raw.extend_from_slice(b"0\r\n\r\n");
+        assert_eq!(read_request(&mut Cursor::new(&raw[..])).unwrap().body.len(), 20000);
+    }
+
+    #[test]
+    fn head_sends_no_body() {
+        let mut out = Vec::new();
+        respond_head(&mut out, 200, "text/plain", 25).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("Content-Length: 25\r\n") && text.ends_with("\r\n\r\n"));
     }
 
     #[test]

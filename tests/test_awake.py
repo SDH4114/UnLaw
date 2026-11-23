@@ -282,7 +282,7 @@ class AwakeTests(AwakeBase):
             for needle in (
                 "until",
                 "--lid",
-                "--display",
+                "--no-display",
                 "--pid",
                 "lid setup",
                 "Example",
@@ -314,7 +314,7 @@ class AwakeTests(AwakeBase):
             self.assertEqual(self.seconds_of(call), seconds, text)
             self.assertIn("-i", call)
             self.assertIn("-s", call)
-            self.assertNotIn("-d", call)
+            self.assertIn("-d", call)  # the screen stays on by default since 3.22.0
             self.assertEqual(self.state()["kind"], "duration")
             self.ok("awake", "off")
 
@@ -344,6 +344,25 @@ class AwakeTests(AwakeBase):
         self.start("10m", "--display")
         self.assertIn("-d", self.caffeinate_args())
         self.assertTrue(self.state()["display"])
+
+    def test_no_display_lets_the_screen_sleep(self) -> None:
+        result = self.start("10m", "--no-display")
+        self.assertNotIn("-d", self.caffeinate_args())
+        self.assertFalse(self.state()["display"])
+        self.assertIn("display may sleep", result.stdout)
+
+    def test_display_and_no_display_together_are_refused(self) -> None:
+        result = self.ul("awake", "10m", "--display", "--no-display")
+        self.assertEqual(result.returncode, 2)
+        self.assertIsNone(self.state())
+
+    def test_on_battery_without_lid_says_the_lid_still_sleeps(self) -> None:
+        (self.fake / "on_battery").write_text("")
+        result = self.start("10m")
+        self.assertIn("closing the lid", result.stderr)
+        self.ok("awake", "off")
+        (self.fake / "on_battery").unlink()
+        self.assertNotIn("closing the lid", self.start("10m").stderr)
 
     def test_bad_durations_are_refused_and_start_nothing(self) -> None:
         for text in ("0", "0m", "abc", "-5", "169h", "10000000", "1x", "1.5h", "", "1 30", "2 h"):

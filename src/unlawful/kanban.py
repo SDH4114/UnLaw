@@ -45,7 +45,7 @@ class KanbanBoard:
         lines = re.split(r"\r?\n", text)
         first_heading = next((i for i, line in enumerate(lines) if HEADING.match(line)), None)
         if first_heading is None:
-            raise ValueError("TODO.md has no '##' Kanban columns")
+            raise ValueError("the board has no '##' Kanban columns")
         # The footer starts at Obsidian's `***` archive separator or at the settings block, whichever comes first.
         footer_at = next(
             (
@@ -62,7 +62,7 @@ class KanbanBoard:
             if (match := HEADING.match(line))
         ]
         if not heading_positions:
-            raise ValueError("TODO.md has no '##' Kanban columns")
+            raise ValueError("the board has no '##' Kanban columns")
         prefix = body[: heading_positions[0][0]]
         sections: list[Section] = []
         for position, (start, name) in enumerate(heading_positions):
@@ -82,6 +82,7 @@ class KanbanBoard:
                 task_end = (
                     starts[index + 1] if index + 1 < len(starts) else len(content)
                 )
+                # Everything up to the next card belongs to this card, so the file keeps its order on save.
                 tasks.append(_trim_blank(content[task_start:task_end]))
             sections.append(Section(name=name, preamble=preamble, tasks=tasks))
         return cls(
@@ -201,8 +202,13 @@ def _trim_blank_right(lines: list[str]) -> list[str]:
     return lines[:end]
 
 
-def write_board(path: Path, board: KanbanBoard) -> None:
-    """Replace the board file atomically (a temporary file next to it, then rename)."""
+class BoardChanged(ValueError):
+    """The file changed between reading and writing it (the page, Obsidian or another `ul desk`)."""
+
+
+def write_board(path: Path, board: KanbanBoard, expected: str | None = None) -> None:
+    """Replace the board file atomically (a temporary file next to it, then rename). With `expected` (the
+    version that was read), a file that changed meanwhile is left alone and BoardChanged is raised."""
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -223,6 +229,8 @@ def write_board(path: Path, board: KanbanBoard) -> None:
             os.chmod(temporary, path.stat().st_mode & 0o7777)
         except FileNotFoundError:
             pass
+        if expected is not None and version_of(path.read_bytes()) != expected:
+            raise BoardChanged(f"{path.name} changed while it was being edited")
         os.replace(temporary, path)
     finally:
         if temporary is not None and temporary.exists():

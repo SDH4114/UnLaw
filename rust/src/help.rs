@@ -209,7 +209,8 @@ Options:
 Shows what happens and asks first. Deletes the build cache
 ~/Library/Caches/unlaw/cargo-target (unless CARGO_TARGET_DIR is set), installs
 the newest main from GitHub like `ul update --force`, then resets config.toml
-and ule.toml to the defaults (core.features and storage.root are kept) and
+and ule.toml to the defaults (core.features, storage.root and the desk
+boards_dir/canvas_dir are kept) and
 installs fresh copies of the default commands. The old settings and edited
 default commands go to <config>/backups/reinstall-<time>/.
 Never touched: commands you wrote, templates, storage (downloads, captures,

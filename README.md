@@ -585,9 +585,13 @@ drag a column by its heading to reorder columns (file boards; Reminders keeps
 its own list order), double-click to edit, check them off (they move to `todo.completed_column`), and
 filter by `#tag` or search. Cards understand Obsidian Kanban markup: `#tags`,
 due dates `@{2026-11-01}` (quick add: `@today`, `@tomorrow`, `@завтра`, `@+3`)
-and `[[note]]` links that open in Obsidian. The Today view lists overdue cards,
-cards due today, cards in a Doing column and the next seven days; Stats shows
-focus sessions, finished tasks, the day streak and the cards you focused on most.
+and `[[note]]` links that open in Obsidian. The Today view starts with today's
+focus minutes, finished tasks, the day streak and the last seven days, then lists
+overdue cards, cards due today, cards in a Doing column and the next seven days,
+and ends with the cards you focused on most (Stats was folded into it in 3.22.0).
+`ul desk` without a board reopens the board the page showed last, and the canvas
+too; a desk started after `ul update` takes the port over from the outdated one
+still running, so the page keeps its settings (they belong to the port).
 "New board…" in the board menu opens the macOS save dialog in `desk.boards_dir`
 (a name without `.md` gets it), "Open another board…" the open dialog; without
 `osascript` the page asks for a name or path instead. "Delete this board…" moves
@@ -595,7 +599,7 @@ the open board to the macOS Trash (`ul desk rm <board>` does the same from the
 terminal); the default board (`todo.file`) is never deleted.
 
 ```bash
-ul desk                                  # the default board: boards/board.md, created on first use
+ul desk                                  # the board shown last; first time boards/board.md
 ul desk Work                             # <desk.boards_dir>/Work.md
 ul desk ~/notes/Project.md --no-open     # any Kanban .md file
 ul desk --reminders                      # Apple Reminders: lists are columns
@@ -649,12 +653,42 @@ Cmd+0 fit.
 Drop files on the canvas (or use **Add** at the right of the toolbar) to pin
 pictures, PDFs, documents or anything else: they are copied into `attachments/`
 next to the `.canvas` file (never over an existing file) and shown as pictures,
-documents through their Quick Look preview. Clicking a selected file card opens
-it in its app (a Markdown note in Obsidian; scripts and programs are only
-shown in Finder, never run). The pin button turns a canvas into a
-detective board: cork, sticky notes, pinned photos and red thread from pin to
-pin. The look is saved in the canvas (`unlaw.look`), the file stays a normal
-JSON Canvas.
+documents through their Quick Look preview, 3D models (glb, gltf, obj, stl) as
+the model itself. One click works a card in place: a video or a sound plays in
+its card (a click on the bar under it seeks, a sound shows its wave), a PDF
+opens in the card and scrolls there. A double click opens the card whole in the
+page: photos, video and sound, PDFs and Word-like documents (docx, doc, rtf,
+odt) as pages, text and code as text, 3D models turn with the mouse. **Open in
+app** in the viewer opens it outside (a Markdown note in Obsidian; scripts and
+programs are only shown in Finder, never run). A pasted web link (or a text card
+holding only a link, with or without a title line above it) becomes a link card
+with the site's logo, the page's title and the address (fetched once, public
+sites only). One click opens the site inside the desk, a double click in a new
+browser tab; a site that refuses to be shown inside other pages opens in a tab
+on one click too.
+
+The pin button turns a canvas into a detective board: cork, sticky notes,
+pinned photos and red thread. The thread tool (`k`) ties thread to any spot of
+a card: click where it starts, then where it ends (on empty canvas a new card
+appears there); drag an end of a selected thread to move it. Dragging a card's
+side dot onto empty canvas also makes a new connected card. **Layers** (F7)
+lists every card, group and drawing, topmost first, under the headings Drawings
+and Cards and inside their groups: the arrow folds a group or heading to one
+row with its name (remembered per canvas in the browser), the eye hides one (a
+group with what is inside), dragging a row changes the order. The look and hidden
+items are saved in the canvas (`unlaw.look`, `unlawHidden`); the file stays a
+normal JSON Canvas (Obsidian still shows hidden items).
+
+**Canvases** in the toolbar shows every canvas as a thumbnail: search by name,
+click to open, the star adds it to Favorites (shown first), **New group** makes
+a group and dragging a thumbnail onto it puts the canvas there (groups and
+favorites are only a list in `storage.root/desk/canvases.json`; no file or
+folder moves). The link button puts a card on the open canvas that opens the
+other canvas on a click (**Back** in the toolbar returns); the trash button
+moves one to the macOS Trash. Drop a `.canvas` file on the
+page to open it (it is copied into `desk.canvas_dir`, since a browser never
+tells the page where a dropped file lives; files it links are not copied).
+The open dialog starts in the folder you picked from last time.
 
 **Games** plays the `ul game` arcade (Tetris, Snake, Minesweeper, Space Invaders,
 Chomp, Dash, Ping Pong, Chess) in the page with keyboard and mouse. The desk runs `ul game --stream`, so
@@ -774,12 +808,15 @@ ul awake 2h                       # also 30m, 1h30m, 90 (minutes); at most 7 day
 ul awake until 18:30              # tomorrow if it has passed; also: until 2026-12-01 09:00
 ul awake on                       # no end; `ul awake off` stops it
 ul awake --pid 1234               # while that process lives
-ul awake --display -- make build  # screen on too; runs the command, exits with its code
+ul awake -- make build           # runs the command, exits with its code
+ul awake 2h --no-display          # let the screen sleep on its usual timer
 ul awake                          # status (also: status --json)
 ```
 
-`ul awake` runs macOS `caffeinate` (`-i -s`, plus `-d` with `--display`) in a
-detached supervisor. A new session replaces the running one (not a
+`ul awake` runs macOS `caffeinate` (`-i -s -d`; `--no-display` drops `-d`) in a
+detached supervisor. The screen stays on by default (before 3.22.0 it needed
+`--display`, which is still accepted). `-s` only works on AC power, and no
+`caffeinate` flag stops lid sleep: on battery without `--lid` the start says so. A new session replaces the running one (not a
 `-- command` session, which lives in its terminal; stop that command instead).
 State is `storage.root/runtime/awake.json`.
 
@@ -808,7 +845,7 @@ other NOPASSWD rule).
 
 ```bash
 ul awake schedule add 23:00-06:00                       # every night; may cross midnight
-ul awake schedule add 09:00-17:30 --days weekdays --display
+ul awake schedule add 09:00-17:30 --days weekdays --no-display
 ul awake schedule add 14:00-16:00 --date 2026-12-01 --name "backup"   # once
 ul awake schedule list [--json]                         # id, window, days, flags, name, next start
 ul awake schedule rm 2                                  # or --all

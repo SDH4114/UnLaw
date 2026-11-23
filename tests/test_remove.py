@@ -87,6 +87,20 @@ class RemoveTests(CoreTestCase):
         self.assertFalse(job.exists())
         self.assertTrue(self.calls(self.launchctl)[0][1].endswith("/com.unlaw.clip"))
 
+    def test_removing_the_agent_boots_out_its_server_job(self) -> None:
+        # launchd restarted `ul agent server` every 30 s after the command was gone.
+        job = self.home / "Library" / "LaunchAgents" / "com.unlaw.agent.plist"
+        job.parent.mkdir(parents=True, exist_ok=True)
+        job.write_text("<plist/>")
+        self.ok("features", "remove", "agent", "--no-build")
+        self.assertFalse(job.exists(), "features remove takes the job out")
+        self.assertTrue(self.calls(self.launchctl)[0][1].endswith("/com.unlaw.agent"))
+        self.ok("features", "add", "agent", "--no-build")
+        job.write_text("<plist/>")
+        result = self.ok("remove", "agent", "--yes")
+        self.assertFalse(job.exists(), "and so does removing the command")
+        self.assertIn("agent's background job", result.stdout)
+
     def test_removing_another_command_leaves_the_clip_watcher(self) -> None:
         job = self.clip_job()
         self.ok("remove", "music", "--yes")
@@ -255,6 +269,7 @@ class ReinstallTests(CoreTestCase):
         self.ok("config", "set", "games.difficulty", "hard")
         self.ok("config", "set", "core.features", '["yt", "desk"]')
         self.ok("config", "set", "storage.root", "elsewhere")
+        self.ok("config", "set", "desk.canvas_dir", "~/Canvases")
         (self.unlaw / "ule.toml").write_text("tab_width = 8\n")
         desk = self.unlaw / "commands" / "desk" / "main.py"
         desk.write_text(desk.read_text() + "# mine\n")
@@ -266,6 +281,8 @@ class ReinstallTests(CoreTestCase):
         self.assertEqual(self.ok("config", "get", "games.difficulty").stdout.strip(), "normal")
         self.assertEqual(json.loads(self.ok("config", "get", "core.features").stdout), ["yt", "desk"])
         self.assertEqual(self.ok("config", "get", "storage.root").stdout.strip(), "elsewhere")
+        self.assertEqual(self.ok("config", "get", "desk.canvas_dir").stdout.strip(), "~/Canvases")
+        self.assertEqual(self.ok("config", "get", "desk.boards_dir").stdout.strip(), "boards")
         self.assertFalse((self.unlaw / "ule.toml").exists())
         self.assertEqual(desk.read_text(), command_source("desk"))
         self.assertTrue((self.unlaw / "commands" / "yt" / "main.py").is_file())

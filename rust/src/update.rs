@@ -249,7 +249,8 @@ fn install(source: &Source, rev: Option<&str>) -> i32 {
         if let Some(python) = &python {
             process.env("UNLAW_PYTHON", python);
         }
-        let status = match process.status() {
+        // Shielded: Ctrl-C stops cargo, while ul stays to say what state the install was left in.
+        let status = match crate::commands::status_shielded(&mut process) {
             Ok(status) => status,
             Err(error) => {
                 eprintln!("unlaw update: Could not run cargo: {error}");

@@ -3,7 +3,7 @@
 //! connection has its own thread; a failing request answers with a JSON error
 //! and never stops the server.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
@@ -69,6 +69,8 @@ fn clock() -> String {
     format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
 }
 
+const ROOT_TEXT: &[u8] = b"Ollama is running (ul lm)";
+
 fn route(service: &Arc<Service>, request: &Request, stream: &mut TcpStream) -> io::Result<()> {
     if !http::local_host(request) {
         return http::respond_json(stream, 403, &json!({"error": {"message": "Only localhost may use this server", "type": "forbidden"}}));
@@ -80,7 +82,8 @@ fn route(service: &Arc<Service>, request: &Request, stream: &mut TcpStream) -> i
     let path = if path.is_empty() { "/" } else { path };
     match (request.method.as_str(), path) {
         ("OPTIONS", _) => http::respond(stream, 204, "text/plain", b""),
-        ("GET" | "HEAD", "/") => http::respond(stream, 200, "text/plain", b"Ollama is running (ul lm)"),
+        ("GET", "/") => http::respond(stream, 200, "text/plain", ROOT_TEXT),
+        ("HEAD", "/") => http::respond_head(stream, 200, "text/plain", ROOT_TEXT.len()),
         ("GET", "/v1/models") => openai::models(service, stream),
         ("POST", "/v1/chat/completions") => openai::chat(service, request, stream, false),
         ("POST", "/v1/completions") => openai::chat(service, request, stream, true),
@@ -164,6 +167,7 @@ fn handle(service: &Arc<Service>, mut stream: TcpStream) {
         Err(ReadError::Bad(status, message)) => {
             let kind = if status == 403 { "forbidden" } else { "invalid_request" };
             let _ = http::respond_json(&mut stream, status, &json!({"error": {"message": message, "type": kind}}));
+            drain_and_close(stream);
             return;
         }
         Err(ReadError::Io(_)) => return,
@@ -176,6 +180,22 @@ fn handle(service: &Arc<Service>, mut stream: TcpStream) {
         let _ = send_error(&mut stream, &Failure::new("internal_error", "Internal error; the server keeps running"));
     }
     let _ = stream.shutdown(Shutdown::Both);
+}
+
+/// Closing a socket with unread bytes makes the kernel send RST, and the client may lose the answer it was
+/// just sent (seen as "connection reset" instead of the 403). Send FIN, then read what is left for a moment,
+/// bounded so a refused upload is still never read whole.
+fn drain_and_close(mut stream: TcpStream) {
+    let _ = stream.shutdown(Shutdown::Write);
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    let (mut buffer, mut left) = ([0u8; 16384], 1usize << 20);
+    while left > 0 && std::time::Instant::now() < deadline {
+        match stream.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => left = left.saturating_sub(read),
+        }
+    }
 }
 
 /// Connections served at once; more get 503 at once instead of a thread each.

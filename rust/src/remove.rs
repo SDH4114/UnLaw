@@ -51,12 +51,39 @@ fn exists(path: &Path) -> bool {
     path.exists() || path.is_symlink()
 }
 
-fn awake_job_path() -> std::path::PathBuf {
-    home().join("Library").join("LaunchAgents").join(format!("{AWAKE_LABEL}.plist"))
+/// launchd jobs that run a command: (command, label, what it is). Removing the command removes its job too,
+/// otherwise launchd keeps starting a command that is gone (the agent's job even restarts every 30 s).
+const COMMAND_JOBS: [(&str, &str, &str); 3] = [
+    ("agent", AGENT_LABEL, "the agent's background job"),
+    ("awake", AWAKE_LABEL, "the awake schedules' background job"),
+    ("clip", CLIP_LABEL, "the clipboard history's background watcher"),
+];
+
+fn job_plist(label: &str) -> std::path::PathBuf {
+    home().join("Library").join("LaunchAgents").join(format!("{label}.plist"))
 }
 
-fn clip_job_path() -> std::path::PathBuf {
-    home().join("Library").join("LaunchAgents").join(format!("{CLIP_LABEL}.plist"))
+/// Boots out and deletes the launchd jobs of the commands in `names`, saying what was removed;
+/// false when one could not be removed (the message starts with `prefix`).
+pub fn remove_command_jobs(names: &[&str], prefix: &str) -> bool {
+    let mut ok = true;
+    for (command, label, what) in COMMAND_JOBS {
+        if !names.contains(&command) {
+            continue;
+        }
+        match remove_launchd_job(&job_plist(label), label) {
+            Ok(true) => println!("Removed {what}"),
+            Ok(false) => {}
+            Err(error) => {
+                eprintln!("{prefix}: Could not remove {what}: {error}");
+                ok = false;
+            }
+        }
+        if command == "awake" {
+            note_lid_rule();
+        }
+    }
+    ok
 }
 
 /// The lid rule of `ul awake lid setup` (awake.py `SUDOERS_FILE`); UNLAW_AWAKE_SUDOERS replaces the path in tests.
@@ -74,16 +101,6 @@ pub fn note_lid_rule() {
             file.display()
         );
     }
-}
-
-/// Boots the `ul awake schedule` job out of launchd and deletes its plist; false when there was none.
-pub fn remove_awake_job() -> io::Result<bool> {
-    remove_launchd_job(&awake_job_path(), AWAKE_LABEL)
-}
-
-/// Boots the `ul clip on` watcher out of launchd and deletes its plist; false when there was none.
-pub fn remove_clip_job() -> io::Result<bool> {
-    remove_launchd_job(&clip_job_path(), CLIP_LABEL)
 }
 
 fn remove_launchd_job(plist: &Path, label: &str) -> io::Result<bool> {
@@ -104,11 +121,14 @@ fn home_relative(path: &Path) -> String {
 
 // --- ul reinstall -------------------------------------------------------------
 
-/// `storage.root` as written in config.toml, even when the file is invalid.
-fn configured_storage() -> Option<String> {
+/// A string setting as written in config.toml, even when the file is invalid.
+fn configured_text(section: &str, key: &str) -> Option<String> {
     let document = config::read_document().ok()?;
-    document.get("storage")?.get("root")?.as_str().map(str::to_string)
+    document.get(section)?.get(key)?.as_str().map(str::to_string)
 }
+
+/// Where the user's boards and canvases live: kept by a reinstall, or the desk would open empty folders.
+const KEPT_FOLDERS: [(&str, &str, &str); 2] = [("desk", "boards_dir", "boards"), ("desk", "canvas_dir", "canvas")];
 
 /// Move config.toml and ule.toml into `backup`, write the defaults back
 /// with the old `core.features` and `storage.root`, and take the default
@@ -116,7 +136,13 @@ fn configured_storage() -> Option<String> {
 fn reset_settings(backup: &Path) -> Result<Vec<&'static str>, String> {
     let fail = |error: io::Error| error.to_string();
     let selection = config::load().ok().map(|config| features::selected(&config));
-    let storage = configured_storage();
+    let storage = configured_text("storage", "root");
+    let folders: Vec<_> = KEPT_FOLDERS
+        .iter()
+        .filter_map(|(section, key, default)| {
+            configured_text(section, key).filter(|value| value != default).map(|value| (format!("{section}.{key}"), value))
+        })
+        .collect();
     fs::create_dir_all(backup).map_err(fail)?;
     for file in [config_file(), config_dir().join("ule.toml")] {
         if file.is_file() {
@@ -129,6 +155,9 @@ fn reset_settings(backup: &Path) -> Result<Vec<&'static str>, String> {
     }
     if let Some(storage) = storage.filter(|storage| storage != "data") {
         config::set("storage.root", toml_edit::Item::Value(storage.into())).map_err(|error| error.0)?;
+    }
+    for (key, value) in folders {
+        config::set(&key, toml_edit::Item::Value(value.into())).map_err(|error| error.0)?;
     }
     layout::reset_seeds(backup).map_err(fail)
 }
@@ -154,7 +183,7 @@ pub fn reinstall(args: &[String]) -> i32 {
     if own_cache {
         println!("  - delete the build cache {} first", home_relative(&cache));
     }
-    println!("  - reset config.toml and ule.toml to the defaults (core.features and storage.root stay)");
+    println!("  - reset config.toml and ule.toml to the defaults (core.features, storage.root, desk.boards_dir and desk.canvas_dir stay)");
     println!("  - install the default commands again; edited copies are saved to the backup");
     println!("Kept: commands you wrote, templates, {} (downloads, captures, models, agent sessions), the Telegram token.", home_relative(&storage));
     if !yes && !confirm("Continue?") {
@@ -249,7 +278,6 @@ fn remove_everything(yes: bool) -> i32 {
     let configuration = config_dir();
     let storage = config::load().map(|config| config.storage_root()).unwrap_or_else(|_| config::configured_storage_root());
     let cache = home().join("Library").join("Caches").join("unlaw");
-    let plist = home().join("Library").join("LaunchAgents").join(format!("{AGENT_LABEL}.plist"));
     let zshrc = home().join(".zshrc");
     let shell_block = fs::read_to_string(&zshrc).ok().and_then(|text| without_shell_block(&text));
     let skill_installs = skills::installed();
@@ -267,14 +295,10 @@ fn remove_everything(yes: bool) -> i32 {
     if exists(&cache) {
         println!("  - the build cache {}", home_relative(&cache));
     }
-    if exists(&plist) {
-        println!("  - the agent's background job ({AGENT_LABEL})");
-    }
-    if exists(&awake_job_path()) {
-        println!("  - the awake schedules' background job ({AWAKE_LABEL})");
-    }
-    if exists(&clip_job_path()) {
-        println!("  - the clipboard history's background watcher ({CLIP_LABEL})");
+    for (_, label, what) in COMMAND_JOBS {
+        if exists(&job_plist(label)) {
+            println!("  - {what} ({label})");
+        }
     }
     if shell_block.is_some() {
         println!("  - the shell integration block in ~/.zshrc");
@@ -305,16 +329,10 @@ fn remove_everything(yes: bool) -> i32 {
             code = 1;
         }
     };
-    if exists(&plist) {
-        let domain = format!("gui/{}/{AGENT_LABEL}", unsafe { libc::getuid() });
-        let _ = Command::new("launchctl").args(["bootout", &domain]).stdout(Stdio::null()).stderr(Stdio::null()).status();
-        report("the agent's background job".into(), remove_tree(&plist));
-    }
-    if exists(&awake_job_path()) {
-        report("the awake schedules' background job".into(), remove_awake_job().map(|_| ()));
-    }
-    if exists(&clip_job_path()) {
-        report("the clipboard history's background watcher".into(), remove_clip_job().map(|_| ()));
+    for (_, label, what) in COMMAND_JOBS {
+        if exists(&job_plist(label)) {
+            report(what.into(), remove_launchd_job(&job_plist(label), label).map(|_| ()));
+        }
     }
     if !skill_installs.is_empty() {
         report("the agent skill".into(), skills::remove_all());
@@ -418,28 +436,8 @@ fn remove_commands(names: &[&str], yes: bool) -> i32 {
             }
         }
     }
-    // The schedules of `ul awake` live in a launchd job that would keep calling the deleted command.
-    if unique.contains(&"awake") {
-        match remove_awake_job() {
-            Ok(true) => println!("Removed the awake schedules' background job"),
-            Ok(false) => {}
-            Err(error) => {
-                eprintln!("unlaw remove: Could not remove the awake schedules' background job: {error}");
-                code = 1;
-            }
-        }
-        note_lid_rule();
-    }
-    // The watcher of `ul clip on` would keep calling the deleted command.
-    if unique.contains(&"clip") {
-        match remove_clip_job() {
-            Ok(true) => println!("Removed the clipboard history's background watcher"),
-            Ok(false) => {}
-            Err(error) => {
-                eprintln!("unlaw remove: Could not remove the clipboard history's background watcher: {error}");
-                code = 1;
-            }
-        }
+    if !remove_command_jobs(&unique, "unlaw remove") {
+        code = 1;
     }
     // A default command that stays in core.features would be seeded again on the next run.
     let seeds: Vec<&str> = unique.iter().copied().filter(|name| features::find(name).is_some_and(|feature| feature.seed)).collect();

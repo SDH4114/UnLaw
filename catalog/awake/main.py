@@ -2,7 +2,7 @@
 """Keep the Mac from sleeping for a while, until a time or while something runs; lid closed too."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Keep the Mac from sleeping for a while, until a time or while something runs; lid closed too.\nUsage: ul awake [status [--json]]\n       ul awake <duration> | until [YYYY-MM-DD] HH:MM | on | off\n       ul awake --pid PID | -- <command...>\n       ul awake lid setup|remove|status\n       ul awake schedule add HH:MM-HH:MM [--days D | --date YYYY-MM-DD] [--name TEXT] | list [--json] | rm ID|--all\n  <duration>     30m, 2h, 1h30m, 45s or bare minutes (90); at most 7 days\n  until HH:MM    Until that local time (tomorrow if it has passed)\n  on / off       No end, until `off` / stop the session and restore the lid setting\n  --pid PID      While that process lives\n  -- <command>   Run it in the foreground, awake while it runs; exits with its code\nOptions:\n  --display      The screen stays on too (caffeinate -d)\n  --lid          Keep a MacBook awake with the lid closed (needs lid setup, see below)\nA new session replaces the running one, except a `-- command` session (stop that command).\nSchedules: a window (may cross midnight) every day (--days daily|weekdays|weekends|mon,tue,..)\n  or once (--date), with --display/--lid (lid setup first). A launchd job (com.unlaw.awake)\n  starts it, never cutting short a longer manual session; `off` skips the rest of that\n  window. A sleeping Mac is not woken at the start: it begins once awake and inside the window.\nLid: caffeinate cannot do this, `pmset -a disablesleep 1` can but needs root. `ul awake lid\n  setup` installs a sudoers rule (/etc/sudoers.d/unlaw-awake) that allows exactly\n  `pmset -a disablesleep 0|1` without a password; `lid remove` deletes it (--yes skips the\n  question). The setting is restored when the session ends, after a crash or reboot at the\n  next login or any `ul awake` call; if that fails, `status` says so and `off` retries.\n  On battery, a closed MacBook in a bag gets hot and drains.\nSettings: storage.root (state in runtime/awake.json).\nExamples: ul awake 2h --display\n          ul awake --lid -- make build\n          ul awake schedule add 23:00-06:00 --days weekdays\n'
+COMMAND_HELP = 'Keep the Mac from sleeping for a while, until a time or while something runs; lid closed too.\nUsage: ul awake [status [--json]]\n       ul awake <duration> | until [YYYY-MM-DD] HH:MM | on | off [--no-display] [--lid]\n       ul awake --pid PID | -- <command...>\n       ul awake lid setup|remove|status\n       ul awake schedule add HH:MM-HH:MM [--days D | --date YYYY-MM-DD] [--name TEXT] | list [--json] | rm ID|--all\n  <duration>     30m, 2h, 1h30m, 45s or bare minutes (90); at most 7 days\n  until HH:MM    Until that local time (tomorrow if it has passed)\n  on / off       No end, until `off` / stop the session and restore the lid setting\n  --pid PID      While that process lives\n  -- <command>   Run it in the foreground, awake while it runs; exits with its code\nOptions:\n  --no-display   Let the screen sleep on its usual timer (by default it stays on: caffeinate -d)\n  --lid          Keep a MacBook awake with the lid closed (needs lid setup, see below)\nA new session replaces the running one, except a `-- command` session (stop that command).\nSchedules: a window (may cross midnight) every day (--days daily|weekdays|weekends|mon,tue,..)\n  or once (--date), with --no-display/--lid (lid setup first). A launchd job (com.unlaw.awake)\n  starts it, never cutting short a longer manual session; `off` skips the rest of that\n  window. A sleeping Mac is not woken at the start: it begins once awake and inside the window.\nLid: caffeinate cannot do this, `pmset -a disablesleep 1` can but needs root. `ul awake lid\n  setup` installs a sudoers rule (/etc/sudoers.d/unlaw-awake) that allows exactly\n  `pmset -a disablesleep 0|1` without a password; `lid remove` deletes it (--yes skips the\n  question). The setting is restored when the session ends, after a crash or reboot at the\n  next login or any `ul awake` call; if that fails, `status` says so and `off` retries.\n  Without --lid closing the lid sleeps the Mac. A closed MacBook in a bag gets hot and drains.\nSettings: storage.root (state in runtime/awake.json).\nExamples: ul awake 2h --no-display\n          ul awake --lid -- make build\n          ul awake schedule add 23:00-06:00 --days weekdays\n'
 
 import copy
 import os
@@ -101,10 +101,10 @@ from pathlib import Path
 # session. A pid is never signalled unless `ps` confirms the process is ours.
 
 USAGE = """Usage: ul awake [status [--json]]
-       ul awake <duration> | until [YYYY-MM-DD] HH:MM | on | off [--display] [--lid]
+       ul awake <duration> | until [YYYY-MM-DD] HH:MM | on | off [--no-display] [--lid]
        ul awake --pid PID | -- <command...>
        ul awake lid setup|remove|status
-       ul awake schedule add HH:MM-HH:MM [--days D | --date YYYY-MM-DD] [--display] [--lid] [--name TEXT]
+       ul awake schedule add HH:MM-HH:MM [--days D | --date YYYY-MM-DD] [--no-display] [--lid] [--name TEXT]
        ul awake schedule list [--json] | rm ID|--all
 Run `ul awake --help` for details.
 """
@@ -167,7 +167,7 @@ class Plan:
     ends: float | None = None
     watch_pid: int | None = None
     command: list[str] | None = None
-    display: bool = False
+    display: bool = True
     lid: bool = False
     source: str = "manual"
 
@@ -1600,7 +1600,7 @@ def _reject_options(args: list[str]) -> None:
 
 
 def schedule_add(args: list[str]) -> int:
-    display, lid = _flag(args, "--display"), _flag(args, "--lid")
+    display, lid = _display_flag(args), _flag(args, "--lid")
     days_text, date_text = _take(args, "--days"), _take(args, "--date")
     name_text = _take(args, "--name")
     _reject_options(args)
@@ -1841,6 +1841,14 @@ def run_scheduled(args: list[str]) -> int:
 # ---------------------------------------------------------------- CLI
 
 
+def _display_flag(args: list[str]) -> bool:
+    """The screen stays on unless --no-display; --display is still accepted (it was the opt-in before 3.22.0)."""
+    on, off = _flag(args, "--display"), _flag(args, "--no-display")
+    if on and off:
+        raise AwakeError("--display and --no-display cannot be used together")
+    return not off
+
+
 def _flag(args: list[str], name: str) -> bool:
     found = name in args
     args[:] = [arg for arg in args if arg != name]
@@ -1877,10 +1885,16 @@ def _announce(plan: Plan, replaced: str | None) -> None:
     if replaced:
         print(f"Replaced: {replaced}")
     state = _base_state(plan, None)
-    extras = (", display stays on" if plan.display else "") + (
+    extras = (", display stays on" if plan.display else ", display may sleep") + (
         ", lid closed too" if plan.lid else ""
     )
     print(f"Awake {describe(state)}{extras}.")
+    if not plan.lid and _on_battery():
+        # caffeinate cannot stop lid sleep, and its -s (system sleep) only works on AC power.
+        print(
+            "unlaw awake: on battery; closing the lid still puts the Mac to sleep (use --lid after `ul awake lid setup`)",
+            file=sys.stderr,
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1917,13 +1931,14 @@ def _dispatch(args: list[str], command: list[str] | None) -> int:
             raise AwakeError("schedule does not take `-- command`")
         return schedule_main(args[1:])
     as_json, yes = _flag(args, "--json"), _flag(args, "--yes")
-    display, lid = _flag(args, "--display"), _flag(args, "--lid")
+    display_given = "--display" in args or "--no-display" in args
+    display, lid = _display_flag(args), _flag(args, "--lid")
     pid_text = _take(args, "--pid")
     unknown = next((arg for arg in args if arg.startswith("-") and len(arg) > 1), None)
     if unknown is not None:
         raise AwakeError(f"unknown option: {unknown}")
     words = args
-    options = display or lid
+    options = display_given or lid
     if words[:1] == ["lid"]:
         if (
             len(words) != 2
@@ -1958,7 +1973,7 @@ def _dispatch(args: list[str], command: list[str] | None) -> int:
     elif not words or words == ["status"]:
         if options:
             raise AwakeError(
-                "--display and --lid need a duration, until, on, --pid or -- command"
+                "--display/--no-display and --lid need a duration, until, on, --pid or -- command"
             )
         info = status_info()
         print(json.dumps(info, indent=2) if as_json else _status_text(info))

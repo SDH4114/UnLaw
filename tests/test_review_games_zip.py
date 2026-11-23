@@ -71,6 +71,21 @@ class ReviewGameZipTests(CoreTestCase):
         self.ok("zip", "x", str(archive), "-o", str(self.root / "out"))
         self.assertEqual((self.root / "out" / "hello.txt").read_text(), "hello")
 
+    def test_option_misuse_is_a_usage_error_and_a_file_named_like_an_action_is_zipped(self) -> None:
+        source = self.root / "notes.txt"
+        source.write_text("hello")
+        for args in (("zip", str(source), "--here"), ("zip", "-l", "12", str(source)), ("zip", "ls", str(source), "-9")):
+            with self.subTest(args=args):
+                result = self.ul(*args)
+                self.assertEqual(result.returncode, 2, result.stderr)
+        named = self.root / "ls"
+        named.write_text("hello")
+        self.tool("zip", f"#!{sys.executable}\nimport pathlib, sys\npathlib.Path(sys.argv[6]).write_bytes(b'zip')\n")
+        result = self.ul("zip", "ls", cwd=self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("Usage", result.stdout + result.stderr)
+        self.assertNotIn("Usage", self.ul("zip", "--", "-h", cwd=self.root).stdout, "-h after -- is a file, not help")
+
     def test_dash_prefixed_inputs_remain_files_for_native_tools(self) -> None:
         source = self.root / "-notes"
         source.write_text("hello")

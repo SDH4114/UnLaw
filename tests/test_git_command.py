@@ -780,7 +780,7 @@ class MirrorTests(GitCommandCase):
 
 class OutputTests(unittest.TestCase):
     def test_server_text_loses_control_characters(self) -> None:
-        self.assertEqual(cmd._git_clean("bad \x1b[2J\x1b]0;t\x07 end\nnext"), "bad [2J]0;t end\nnext")
+        self.assertEqual(cmd._hosts_clean("bad \x1b[2J\x1b]0;t\x07 end\nnext"), "bad [2J]0;t end\nnext")
 
 
 class TokenTests(GitCommandCase):

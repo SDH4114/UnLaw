@@ -7,9 +7,11 @@ import http.client
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.parse
 from pathlib import Path
@@ -145,6 +147,24 @@ class ValidationTests(unittest.TestCase):
     def test_lists_must_be_lists(self) -> None:
         self.rejects({"nodes": {}}, "nodes")
         self.rejects({"edges": 3}, "edges")
+
+    def test_hidden_flags_and_thread_spots(self) -> None:
+        data = sample()
+        data["nodes"][0]["unlawHidden"] = True
+        data["edges"][0]["unlawFrom"] = [0.25, 1]
+        data["edges"][0]["unlawTo"] = [0, 0.5]
+        data["unlaw"] = {"version": 1, "elements": [
+            {"id": "x", "type": "rectangle", "x": 0, "y": 0, "width": 1, "height": 1, "unlawHidden": False}]}
+        self.assertEqual(canvas.validate_canvas(copy.deepcopy(data)), data)
+        for spot in ([0.5], [0.5, 1.5], [-0.1, 0], ["0", 0], [True, 0], "0,0"):
+            bad = sample()
+            bad["edges"][0]["unlawTo"] = spot
+            self.rejects(bad, "unlawTo")
+        bad = sample()
+        bad["nodes"][1]["unlawHidden"] = "yes"
+        self.rejects(bad, "unlawHidden")
+        bad["nodes"][1]["unlawHidden"] = 1
+        self.rejects(bad, "unlawHidden")
 
     def test_node_rules(self) -> None:
         good = sample()["nodes"][0]
@@ -430,7 +450,8 @@ class ServerTests(unittest.TestCase):
         status, data = self.request("GET", "/api/canvases")
         self.assertEqual(status, 200)
         self.assertEqual(
-            data, {"dir": str(self.canvas_dir), "current": None, "items": []}
+            data,
+            {"dir": str(self.canvas_dir), "current": None, "items": [], "shelf": {"version": 1, "favorites": [], "groups": []}},
         )
 
     def test_get_without_current_is_404(self) -> None:
@@ -447,7 +468,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(data["version"], canvas.version_of(target.read_bytes()))
         _, overview = self.request("GET", "/api/canvases")
         self.assertEqual(overview["current"], str(target))
-        self.assertEqual(overview["items"], [{"path": str(target), "name": "Plan"}])
+        self.assertEqual(overview["items"], [{"path": str(target), "name": "Plan", "modified": target.stat().st_mtime}])
 
     def test_create_never_overwrites(self) -> None:
         first = self.create("Plan")
@@ -519,6 +540,22 @@ class ServerTests(unittest.TestCase):
             item["name"] for item in self.request("GET", "/api/canvases")[1]["items"]
         ]
         self.assertEqual(names, ["A", "b"])
+
+    def test_a_restarted_server_reopens_the_last_canvas(self) -> None:
+        self.create("first")
+        second = self.create("second")
+        again = Desk(self.root / "TODO.md", {"desk": {"canvas_dir": str(self.canvas_dir)}}, self.root / "state")
+        self.assertEqual(again.canvases()["current"], second["path"])
+        self.assertEqual(again.canvas_open(None)["name"], "second")
+
+    def test_last_board_is_the_newest_recent_one_that_exists(self) -> None:
+        gone, kept = self.root / "gone.md", self.root / "kept.md"
+        kept.write_text("## A\n", encoding="utf-8")
+        state = self.root / "boards-state"
+        self.assertIsNone(desk_module.last_board(state))
+        state.mkdir()
+        (state / "recent.json").write_text(json.dumps([str(gone), str(kept)]), encoding="utf-8")
+        self.assertEqual(desk_module.last_board(state), kept)
 
     def test_recent_canvases_are_capped_at_eight(self) -> None:
         outside = self.root / "out"
@@ -637,6 +674,56 @@ class ServerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OutdatedServerTests(unittest.TestCase):
+    """A desk server from before an update gives its port back, so the page keeps its localStorage."""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        script = self.root / "desk.py"
+        script.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
+        self.process = subprocess.Popen([sys.executable, str(script)])
+        self.addCleanup(self.process.wait)
+        self.addCleanup(self.process.kill)
+        self.script = script
+        self.state = self.root / "state"
+        self.state.mkdir()
+        for _ in range(50):
+            started = desk_module._ps(self.process.pid, "lstart")
+            if started and "desk.py" in desk_module._ps(self.process.pid, "command"):
+                break
+            time.sleep(0.05)
+        self.started = started
+
+    def record(self, **changes: object) -> None:
+        info = {"pid": self.process.pid, "port": 8765, "lstart": self.started, **changes}
+        (self.state / "server.json").write_text(json.dumps(info), encoding="utf-8")
+
+    def outdated(self, code_changed: bool) -> int | None:
+        stamp = time.time() + (120 if code_changed else -3600)
+        os.utime(self.script, (stamp, stamp))
+        with patch.object(desk_module, "__file__", str(self.script)):
+            return desk_module._outdated_server(self.state, 8765)
+
+    def test_a_server_older_than_its_code_is_outdated(self) -> None:
+        self.record()
+        self.assertEqual(self.outdated(code_changed=True), self.process.pid)
+
+    def test_a_current_server_keeps_running_beside_a_new_one(self) -> None:
+        self.record()
+        self.assertIsNone(self.outdated(code_changed=False))
+
+    def test_another_port_start_time_or_program_is_never_touched(self) -> None:
+        for changes in ({"port": 9000}, {"lstart": "Mon Jan  1 00:00:00 2001"}, {"pid": os.getpid()}, {"pid": True}):
+            self.record(**changes)
+            self.assertIsNone(self.outdated(code_changed=True), changes)
+        self.record()
+        with patch.object(desk_module, "__file__", str(self.root / "other.py")):
+            (self.root / "other.py").write_text("", encoding="utf-8")
+            self.assertIsNone(desk_module._outdated_server(self.state, 8765))
 
 
 class CanvasFileActionTests(ServerTests):
@@ -961,6 +1048,240 @@ class BoardChooseTests(ServerTests):
             self.assertEqual(self.request("POST", "/api/boards/choose", {"create": True}), (200, {"path": None}))
         with patch.dict(os.environ, {"PATH": str(self.root / "empty")}):
             self.assertEqual(self.request("POST", "/api/boards/choose", {"create": True}), (200, {"unavailable": True}))
+
+
+class CanvasViewerTests(CanvasFileTests):
+    """The page's viewer: files served as themselves (never as a page that runs script), documents as HTML,
+    and link previews from public sites only."""
+
+    def raw(self, file: str, extra: dict | None = None):
+        query = {"t": TOKEN, "path": self.canvas, "file": file, "raw": "1", **(extra or {})}
+        connection = http.client.HTTPConnection(*self.address, timeout=10)
+        try:
+            connection.request("GET", "/media/canvas?" + urllib.parse.urlencode(query), headers=extra and {"Range": extra.pop("range")} or {})
+            response = connection.getresponse()
+            return response.status, dict(response.getheaders()), response.read()
+        finally:
+            connection.close()
+
+    def test_media_plays_with_ranges_and_text_never_becomes_a_page(self) -> None:
+        self.upload("clip.mp4", b"0123456789")
+        self.upload("evil.html", b"<script>alert(1)</script>")
+        self.upload("Report.pdf", b"%PDF-1.4")
+        status, headers, body = self.raw("attachments/clip.mp4")
+        self.assertEqual((status, headers["Content-Type"], body), (200, "video/mp4", b"0123456789"))
+        self.assertIn("sandbox", headers["Content-Security-Policy"])
+        connection = http.client.HTTPConnection(*self.address, timeout=10)
+        query = urllib.parse.urlencode({"t": TOKEN, "path": self.canvas, "file": "attachments/clip.mp4", "raw": "1"})
+        connection.request("GET", "/media/canvas?" + query, headers={"Range": "bytes=2-4"})
+        response = connection.getresponse()
+        self.assertEqual((response.status, response.read()), (206, b"234"))
+        connection.close()
+        status, headers, body = self.raw("attachments/evil.html")
+        self.assertEqual(headers["Content-Type"], "text/plain; charset=utf-8")
+        self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+        self.assertIn("sandbox", headers["Content-Security-Policy"])
+        status, headers, _ = self.raw("attachments/Report.pdf")
+        self.assertEqual(headers["Content-Type"], "application/pdf")
+        self.assertNotIn("Content-Security-Policy", headers, "the browser's PDF viewer refuses sandboxed frames")
+
+    def test_raw_is_only_for_known_kinds(self) -> None:
+        self.upload("tool.command", b"#!/bin/sh\n")
+        tools = self.fake_tool("qlmanage", 'exit 1\n')
+        with patch.dict(os.environ, {"PATH": str(tools)}):
+            status, headers, _ = self.raw("attachments/tool.command")
+        self.assertEqual(status, 404, "an unknown kind falls back to a Quick Look picture, never the bytes")
+
+    def test_documents_become_a_sandboxed_page(self) -> None:
+        self.upload("Report.docx", b"PK fake")
+        log = self.root / "textutil.log"
+        tools = self.fake_tool("textutil", f'echo "$@" >> {log}\nwhile [ "$1" != "-output" ]; do shift; done\necho "<p>Hello</p>" > "$2"\n')
+        with patch.dict(os.environ, {"PATH": str(tools)}):
+            status, kind, body = self.media("attachments/Report.docx")[0], None, None
+            query = {"t": TOKEN, "path": self.canvas, "file": "attachments/Report.docx", "doc": "1"}
+            connection = http.client.HTTPConnection(*self.address, timeout=10)
+            connection.request("GET", "/media/canvas?" + urllib.parse.urlencode(query))
+            response = connection.getresponse()
+            status, headers, body = response.status, dict(response.getheaders()), response.read()
+            connection.close()
+            self.media("attachments/Report.docx")  # cached: textutil is not run again
+        self.assertEqual((status, body.strip()), (200, b"<p>Hello</p>"))
+        self.assertTrue(headers["Content-Type"].startswith("text/html"))
+        self.assertIn("sandbox", headers["Content-Security-Policy"])
+        self.assertEqual(len(log.read_text().splitlines()), 1)
+        self.upload("notes.txt", b"x")
+        query = {"t": TOKEN, "path": self.canvas, "file": "attachments/notes.txt", "doc": "1"}
+        connection = http.client.HTTPConnection(*self.address, timeout=10)
+        connection.request("GET", "/media/canvas?" + urllib.parse.urlencode(query))
+        self.assertEqual(connection.getresponse().status, 400)
+        connection.close()
+
+    def test_link_previews_never_reach_private_addresses(self) -> None:
+        for host in ("127.0.0.1", "10.1.2.3", "169.254.169.254", "192.168.1.1", "::1", "localhost",
+                     "::127.0.0.1", "64:ff9b::7f00:1", "fec0::1", "::ffff:10.0.0.1"):
+            with self.assertRaises(ValueError, msg=host):
+                canvas._public_address(host, 80)
+        status, _, body = self.call("POST", "/api/canvas/link-preview", json.dumps({"path": self.canvas, "url": "http://127.0.0.1:9/"}).encode())
+        self.assertEqual(status, 400, body)
+        status, _, body = self.call("POST", "/api/canvas/link-preview", json.dumps({"path": self.canvas, "url": "file:///etc/passwd"}).encode())
+        self.assertEqual(status, 400, body)
+
+    def test_link_preview_reads_the_page_and_keeps_its_picture(self) -> None:
+        import http.server
+
+        picture = b"\x89PNG\r\n fake picture"
+        logo = b"\x89PNG\r\n the site's logo"
+
+        class Site(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args: object) -> None:
+                return
+
+            def do_GET(self) -> None:
+                if self.path == "/old":
+                    self.send_response(301)
+                    self.send_header("Location", "/page")
+                    self.end_headers()
+                    return
+                if self.path == "/page":
+                    body = ('<html><head><meta charset="utf-8"><title>Fallback</title>'
+                            '<meta property="og:title" content="Case \u2116 7\x07">'
+                            '<meta name="description" content="A short &amp; clear text">'
+                            '<meta property="og:image" content="/pic.png">'
+                            '<link rel="icon" href="/small.png" sizes="16x16"><link rel="icon" href="/logo.svg">'
+                            '<link rel="apple-touch-icon" href="/touch.png"></head></html>').encode()
+                    kind = "text/html; charset=utf-8"
+                elif self.path == "/touch.png":
+                    body, kind = logo, "application/octet-stream"  # a wrong type: the bytes say PNG
+                else:
+                    body, kind = picture, "image/png"
+                self.send_response(200)
+                if self.path == "/page":
+                    self.send_header("Content-Security-Policy", "default-src 'self'; frame-ancestors 'self' https://example.test")
+                self.send_header("Content-Type", kind)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        site = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
+        threading.Thread(target=site.serve_forever, daemon=True).start()
+        self.addCleanup(site.server_close)
+        self.addCleanup(site.shutdown)
+        url = f"http://example.test:{site.server_address[1]}/old"
+        with patch.object(canvas, "_public_address", return_value="127.0.0.1"):
+            status, _, body = self.call("POST", "/api/canvas/link-preview", json.dumps({"path": self.canvas, "url": url}).encode())
+        data = json.loads(body)
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["title"], "Case \u2116 7")
+        self.assertEqual(data["description"], "A short & clear text")
+        self.assertEqual(data["site"], "example.test")
+        self.assertTrue(data["image"].startswith("attachments/.previews/") and data["image"].endswith(".png"))
+        self.assertEqual((self.canvas_dir / data["image"]).read_bytes(), picture)
+        self.assertEqual((self.canvas_dir / data["icon"]).read_bytes(), logo, "the apple-touch-icon is the logo")
+        self.assertIs(data["frameable"], False, "frame-ancestors without http: keeps it out of the desk")
+
+    def test_site_logo_falls_back_to_favicon_and_frames_are_read(self) -> None:
+        self.assertTrue(canvas.frameable({}))
+        self.assertFalse(canvas.frameable({"x-frame-options": "SAMEORIGIN"}))
+        self.assertTrue(canvas.frameable({"content-security-policy": "frame-ancestors *"}))
+        self.assertFalse(canvas.frameable({"content-security-policy": "img-src *, frame-ancestors 'none'"}))
+        self.assertEqual(canvas._best_icon([]), "", "no icon tag: /favicon.ico")
+        self.assertEqual(canvas._best_icon([("icon", "/a.svg", ""), ("icon", "/b.png", "16x16"), ("shortcut icon", "/c.png", "48x48")]), "/c.png")
+        self.assertEqual(canvas._picture_suffix(b"\x00\x00\x01\x00rest"), ".ico")
+        self.assertEqual(canvas._picture_suffix(b"RIFF1234WEBPVP8 "), ".webp")
+        self.assertIsNone(canvas._picture_suffix(b"<svg onload=alert(1)>"), "never anything but a picture")
+
+
+class CanvasManageTests(ServerTests):
+    """Deleting canvases to the Trash, importing a dropped .canvas, gallery previews and the remembered dialog folder."""
+
+    fake_osascript = BoardChooseTests.fake_osascript
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.root / "home").mkdir(exist_ok=True)
+
+    def test_delete_moves_to_the_trash_and_opens_the_next_recent(self) -> None:
+        older = self.create("Older")
+        doomed = self.create("Doomed")
+        (self.canvas_dir / "attachments").mkdir()
+        status, overview = self.request("POST", "/api/canvas/delete", {"path": doomed["path"]})
+        self.assertEqual(status, 200, overview)
+        self.assertFalse(Path(doomed["path"]).exists())
+        self.assertTrue((self.root / "home" / ".Trash" / "Doomed.canvas").is_file())
+        self.assertTrue((self.canvas_dir / "attachments").is_dir(), "attachments stay for other canvases")
+        self.assertEqual([item["name"] for item in overview["items"]], ["Older"])
+        self.assertEqual(overview["current"], older["path"])
+        again = self.create("Doomed")
+        self.request("POST", "/api/canvas/delete", {"path": again["path"]})
+        self.assertTrue((self.root / "home" / ".Trash" / "Doomed 2.canvas").is_file(), "never over a file in the Trash")
+        status, data = self.request("POST", "/api/canvas/delete", {"path": doomed["path"]})
+        self.assertEqual(status, 404, data)
+
+    def test_favorites_and_groups_follow_renames_and_deletes(self) -> None:
+        plan, case = self.create("Plan")["path"], self.create("Case")["path"]
+        shelf = {"favorites": [plan, plan], "groups": [{"name": "  Work  stuff ", "paths": [plan, case]}, {"name": "Old", "paths": [case]}]}
+        status, overview = self.request("POST", "/api/canvas/shelf", {"shelf": shelf})
+        self.assertEqual(status, 200, overview)
+        self.assertEqual(overview["shelf"]["favorites"], [plan], "a path is listed once")
+        self.assertEqual(overview["shelf"]["groups"], [{"name": "Work stuff", "paths": [plan, case]}, {"name": "Old", "paths": []}], "one group per canvas")
+        self.assertTrue(Path(plan).is_file() and Path(case).is_file(), "nothing moves on disk")
+        status, renamed = self.request("POST", "/api/canvas/rename", {"path": plan, "name": "Roadmap"})
+        self.assertEqual(status, 200, renamed)
+        shelf = self.request("GET", "/api/canvases")[1]["shelf"]
+        self.assertEqual(shelf["favorites"], [renamed["path"]], "a renamed canvas keeps its star")
+        self.assertEqual(shelf["groups"][0]["paths"], [renamed["path"], case])
+        self.request("POST", "/api/canvas/delete", {"path": case})
+        self.assertEqual(self.request("GET", "/api/canvases")[1]["shelf"]["groups"][0]["paths"], [renamed["path"]])
+        for bad in ({"groups": [{"name": "A"}, {"name": "a"}]}, {"groups": [{"name": ""}]}, {"favorites": "x"}, [], {"groups": [{"name": "x" * 81}]}):
+            status, data = self.request("POST", "/api/canvas/shelf", {"shelf": bad})
+            self.assertEqual(status, 400, (bad, data))
+        (self.root / "state" / "canvases.json").write_text("{broken", encoding="utf-8")
+        self.assertEqual(self.request("GET", "/api/canvases")[1]["shelf"], {"version": 1, "favorites": [], "groups": []})
+
+    def test_delete_of_a_linked_canvas_trashes_only_the_link(self) -> None:
+        real = self.root / "elsewhere" / "Real.canvas"
+        real.parent.mkdir()
+        real.write_text('{"nodes":[],"edges":[]}', encoding="utf-8")
+        self.canvas_dir.mkdir(parents=True, exist_ok=True)
+        (self.canvas_dir / "Linked.canvas").symlink_to(real)
+        status, _ = self.request("POST", "/api/canvas/delete", {"path": "Linked"})
+        self.assertEqual(status, 200)
+        self.assertTrue(real.is_file())
+        self.assertTrue((self.root / "home" / ".Trash" / "Linked.canvas").is_symlink())
+
+    def test_import_makes_a_new_canvas_under_a_free_name(self) -> None:
+        self.create("Plan")
+        status, data = self.request("POST", "/api/canvas/import", {"name": "../Plan.canvas", "canvas": sample()})
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["name"], "Plan 2")
+        self.assertEqual(Path(data["path"]).parent, self.canvas_dir.resolve())
+        self.assertEqual(data["canvas"]["nodes"][0]["extra"], {"k": [1, 2]}, "unknown keys come along")
+        self.assertEqual(self.request("GET", "/api/canvases")[1]["current"], data["path"])
+        status, data = self.request("POST", "/api/canvas/import", {"name": "bad.canvas", "canvas": {"nodes": 3}})
+        self.assertEqual(status, 400, data)
+        self.assertFalse((self.canvas_dir / "bad.canvas").exists())
+
+    def test_peek_reads_without_switching(self) -> None:
+        first = self.create("First")
+        self.create("Second")
+        status, data = self.request("GET", "/api/canvas/peek?path=" + urllib.parse.quote(first["path"]))
+        self.assertEqual((status, data["name"]), (200, "First"))
+        self.assertTrue(self.request("GET", "/api/canvases")[1]["current"].endswith("Second.canvas"))
+        self.assertEqual(self.request("GET", "/api/canvas/peek?path=nope")[0], 404)
+
+    def test_the_open_dialog_starts_where_it_was_left(self) -> None:
+        picked = self.root / "Projects" / "Case.canvas"
+        picked.parent.mkdir()
+        log = self.root / "args"
+        tools = self.fake_osascript(f'for a in "$@"; do echo "$a" >> {log}; done\necho {picked}\n')
+        with patch.dict(os.environ, {"PATH": str(tools)}):
+            self.request("POST", "/api/canvas/choose", {})
+            self.request("POST", "/api/canvas/choose", {})
+            self.request("POST", "/api/boards/choose", {})
+        starts = [line for line in log.read_text().splitlines() if line.startswith("/")]
+        self.assertEqual(starts[0], str(self.root / "home"), "first time: the canvas folder, else HOME")
+        self.assertEqual(starts[1], str(picked.parent), "then the folder of the last pick")
+        self.assertEqual(starts[2], str(self.root / "home"), "boards remember their own folder")
 
 
 class SeedNameCollisionTests(unittest.TestCase):

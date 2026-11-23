@@ -119,6 +119,14 @@ type Result<T> = std::result::Result<T, String>;
 /// `--json`: results go to stdout as JSON lines, never as text.
 static JSON_MODE: AtomicBool = AtomicBool::new(false);
 
+/// Set when the call itself was wrong (exit 2, as the help says), not the archive or a tool.
+static USAGE_ERROR: AtomicBool = AtomicBool::new(false);
+
+fn usage(message: impl Into<String>) -> String {
+    USAGE_ERROR.store(true, Ordering::Relaxed);
+    message.into()
+}
+
 fn json_mode() -> bool {
     JSON_MODE.load(Ordering::Relaxed)
 }
@@ -1351,7 +1359,9 @@ fn settings(config: &Config) -> Result<Settings> {
 }
 
 fn dispatch(args: &[String], config: &Config) -> Result<i32> {
-    let (action_word, args) = match args.first().and_then(|word| action(word)) {
+    // `ls`, `x`, `test`... are actions, except a lone word naming a file here: `ul zip ls` zips the file `ls`.
+    let lone_file = args.len() == 1 && Path::new(&args[0]).exists();
+    let (action_word, args) = match args.first().and_then(|word| action(word)).filter(|_| !lone_file) {
         Some(action) => (Some(action), &args[1..]),
         None => (None, args),
     };
@@ -1386,14 +1396,14 @@ fn dispatch(args: &[String], config: &Config) -> Result<i32> {
         .map(|(flag, _)| *flag)
         .collect();
         if !used.is_empty() {
-            return Err(format!("{} only applies when creating an archive.", used.join(", ")));
+            return Err(usage(format!("{} only applies when creating an archive.", used.join(", "))));
         }
     }
     if matches!(action, Action::List | Action::Test) && (options.output.is_some() || options.here || options.keep_junk) {
-        return Err("--output, --here and --keep-junk do not apply to ls/test.".into());
+        return Err(usage("--output, --here and --keep-junk do not apply to ls/test."));
     }
     if action == Action::Create && options.here {
-        return Err("--here only applies when extracting.".into());
+        return Err(usage("--here only applies when extracting."));
     }
     if matches!(action, Action::List | Action::Test) {
         let mut worst = 0;
@@ -1417,16 +1427,16 @@ fn dispatch(args: &[String], config: &Config) -> Result<i32> {
         }
         return Ok(worst);
     }
-    let format = options.format.as_deref().map(normalize_format).transpose()?;
+    let format = options.format.as_deref().map(normalize_format).transpose().map_err(usage)?;
     let inferred = options.output.as_deref().and_then(|output| output_format(&name_of(Path::new(output))));
     if let (Some(format), Some(inferred)) = (format, inferred) {
         if format != inferred {
-            return Err(format!("--format {format} conflicts with the output name {}.", options.output.as_deref().unwrap_or("")));
+            return Err(usage(format!("--format {format} conflicts with the output name {}.", options.output.as_deref().unwrap_or(""))));
         }
     }
-    let level = options.level.as_deref().map(parse_level).transpose()?;
+    let level = options.level.as_deref().map(parse_level).transpose().map_err(usage)?;
     if options.best && level.is_some() {
-        return Err("--best already means level 9; drop the other level.".into());
+        return Err(usage("--best already means level 9; drop the other level."));
     }
     // --best: the smallest archive we can make. 7z (LZMA2, solid) beats every
     // other format; without 7-Zip, tar.xz is the next best.
@@ -1444,9 +1454,10 @@ fn dispatch(args: &[String], config: &Config) -> Result<i32> {
 }
 
 pub fn run(args: &[String], config: &Config) -> i32 {
+    // Only before `--`: after it, `-h` is a file name.
     let wants_help = args.is_empty()
         || matches!(args[0].as_str(), "-h" | "--help" | "help")
-        || args.iter().any(|arg| arg == "-h" || arg == "--help");
+        || args.iter().take_while(|arg| *arg != "--").any(|arg| arg == "-h" || arg == "--help");
     if wants_help {
         print!("{HELP}");
         return 0;
@@ -1455,7 +1466,7 @@ pub fn run(args: &[String], config: &Config) -> i32 {
     let _termination = catch_termination();
     let (code, message) = match dispatch(args, config) {
         Ok(code) => (code, None),
-        Err(message) => (1, Some(message)),
+        Err(message) => (if USAGE_ERROR.load(Ordering::Relaxed) { 2 } else { 1 }, Some(message)),
     };
     let (code, message) = match terminated() {
         Some(signal) => (128 + signal, Some("stopped".to_string())),

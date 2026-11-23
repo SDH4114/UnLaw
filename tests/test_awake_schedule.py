@@ -121,7 +121,7 @@ class ScheduleTests(AwakeBase):
         self.assertIsNone(item["days"])
         self.assertIsNone(item["date"])
         self.assertEqual(
-            (item["display"], item["lid"], item["name"]), (False, False, "")
+            (item["display"], item["lid"], item["name"]), (True, False, "")
         )
         self.assertTrue(item["created"])
 

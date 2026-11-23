@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import errno
 import hashlib
 import fcntl
@@ -27,11 +28,12 @@ from pathlib import Path
 
 from unlawful.command_help import COMMAND_HELP
 
-from .canvas import NEW_CANVAS, read_canvas, render_canvas, write_canvas
+from .canvas import NEW_CANVAS, link_preview, read_canvas, render_canvas, validate_canvas, write_canvas
 from .config import ConfigError, config_dir, load_config, storage_path
 from .desk_ui import PAGE
 from .kanban import (
     DONE_COLUMNS,
+    BoardChanged,
     NEW_BOARD,
     KanbanBoard,
     Section,
@@ -65,8 +67,29 @@ MAX_CANVAS_BODY = 16 * 1024 * 1024
 CANVAS_FILES = "attachments"
 MAX_UPLOAD = 256 * 1024 * 1024
 # Pictures the page shows as they are; anything else gets a Quick Look thumbnail (qlmanage).
-CANVAS_IMAGES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
+CANVAS_IMAGES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+    ".ico": "image/x-icon",  # site logos of link cards
+}
 THUMB_SIZE = 640
+# What the canvas viewer may fetch as the file itself (`raw=1`). Never HTML or SVG as a page: text of any kind goes
+# out as text/plain, and everything but PDF carries a sandbox CSP, so an attachment can never run script here.
+CANVAS_RAW = {
+    **{suffix: "video/mp4" for suffix in (".mp4", ".m4v", ".mov")},
+    ".webm": "video/webm",
+    ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".wav": "audio/wav",
+    ".flac": "audio/flac", ".ogg": "audio/ogg", ".opus": "audio/ogg",
+    ".pdf": "application/pdf",
+    **{suffix: "application/octet-stream" for suffix in (".glb", ".gltf", ".obj", ".stl", ".bin")},
+    **{suffix: "text/plain; charset=utf-8" for suffix in (
+        ".md", ".markdown", ".txt", ".text", ".log", ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".toml",
+        ".ini", ".cfg", ".conf", ".xml", ".html", ".htm", ".css", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+        ".py", ".rs", ".c", ".h", ".cc", ".cpp", ".hpp", ".m", ".swift", ".go", ".java", ".kt", ".rb", ".php",
+        ".sh", ".zsh", ".bash", ".fish", ".sql", ".lua", ".r", ".jl", ".tex", ".srt", ".vtt", ".svg")},
+}
+# Word-like documents the viewer shows as a page: `textutil -convert html`, served without scripts.
+CANVAS_DOCUMENTS = {".docx", ".doc", ".rtf", ".odt"}
+SANDBOX_CSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; media-src 'self'"
 # `open` runs these (a script in Terminal, an installer, Java), so a card naming one only shows it in Finder.
 RUNNABLE_SUFFIXES = {".command", ".tool", ".terminal", ".sh", ".zsh", ".bash", ".csh", ".jar", ".pkg", ".mpkg", ".app", ".workflow", ".action", ".scpt", ".applescript", ".scptd", ".osax", ".prefpane", ".inetloc", ".fileloc", ".webloc", ".definition"}
 THUMB_TIMEOUT = 30
@@ -97,7 +120,13 @@ CHOOSE_BOARD_SCRIPT = (
     "end run",
 )
 CHOOSE_TIMEOUT = 600
+CHOOSE_STATE = "choose.json"  # the folder each open/save dialog was left in, so the next one starts there
 MAX_CANVAS_NUMBER = 10000
+MAX_PEEK = 4 * 1024 * 1024  # canvases bigger than this get no gallery thumbnail
+# The gallery's favorites and groups: only a list of canvas paths, the files never move.
+SHELF_STATE = "canvases.json"
+MAX_SHELF_PATHS = 2000
+MAX_SHELF_GROUPS = 200
 
 
 def _number(value: object, default: float, minimum: float) -> float:
@@ -138,8 +167,13 @@ def _write_json(path: Path, data: object) -> None:
     with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", dir=path.parent, prefix=".desk.", delete=False
     ) as handle:
-        json.dump(data, handle, ensure_ascii=False, indent=1)
         temporary = Path(handle.name)
+        try:
+            json.dump(data, handle, ensure_ascii=False, indent=1)
+        except BaseException:
+            handle.close()
+            temporary.unlink(missing_ok=True)
+            raise
     os.replace(temporary, path)
 
 
@@ -259,8 +293,8 @@ class Pomodoro:
             paused=None,
         )
 
-    def _log(self, state: dict, board: str | None) -> None:
-        end = self.clock()
+    def _log(self, state: dict, board: str | None, end: float | None = None) -> None:
+        end = self.clock() if end is None else end
         entry = {
             "start": datetime.fromtimestamp(state["started_at"])
             .astimezone()
@@ -288,7 +322,8 @@ class Pomodoro:
                 return None
             ended = state["phase"]
             if ended == "work":
-                self._log(state, board)
+                # Logged when it really ended, not when the Mac woke up hours later (stats count days by the end).
+                self._log(state, board, end=state["ends_at"])
                 state["cycle"] += 1
                 long_break = state["cycle"] % self.settings["cycles"] == 0
                 self._begin(state, "long" if long_break else "short")
@@ -440,6 +475,11 @@ class Conflict(Exception):
     """The board changed since the client read it."""
 
 
+class GameEnded(LookupError):
+    """The game session the page asks about is over (HTTP 410). Its own class, so a stray KeyError or
+    IndexError elsewhere is never reported to the page as "game over"."""
+
+
 class CanvasConflict(Exception):
     """The canvas file changed since the client read it."""
 
@@ -452,6 +492,10 @@ def _clean_path(value: object) -> str:
     if not text or "\0" in text or len(text) > 4096:
         raise ValueError("invalid board path")
     return text
+
+
+def completed_column_name(config: dict) -> str:
+    return str(config.get("todo", {}).get("completed_column", "Completed"))
 
 
 def _clean_text(value: object) -> str:
@@ -493,7 +537,9 @@ class Desk:
         self.reminders = Reminders()
         self.boards_dir = boards_folder(self.settings["boards_dir"], config_dir())
         self.canvas_dir = boards_folder(self.settings["canvas_dir"], config_dir())
-        self.canvas_current: Path | None = None
+        # The newest recent canvas is the one the page had open: a restart (or an update) reopens it.
+        recent_canvas = self.canvas_recent()
+        self.canvas_current: Path | None = Path(recent_canvas[0]) if recent_canvas else None
         self.canvas_lock = threading.Lock()
         self.choose_lock = threading.Lock()
         self.pomodoro = Pomodoro(directory, self.settings, clock)
@@ -502,7 +548,7 @@ class Desk:
 
     @property
     def completed_column(self) -> str:
-        return str(self.config.get("todo", {}).get("completed_column", "Completed"))
+        return completed_column_name(self.config)
 
     @property
     def current(self) -> str:
@@ -559,7 +605,10 @@ class Desk:
             if request.get("version") != version:
                 raise Conflict
             self.apply(board, request)
-            write_board(self.path, board)
+            try:
+                write_board(self.path, board, expected=version)
+            except BoardChanged:
+                raise Conflict from None
             return self.board_json()
 
     def _task(
@@ -721,8 +770,40 @@ class Desk:
         return {
             "dir": str(self.canvas_dir),
             "current": str(current) if current is not None and current.is_file() else None,
-            "items": [{"path": path, "name": Path(path).stem} for path in dict.fromkeys([*files, *self.canvas_recent()])],
+            "shelf": self.canvas_shelf(),
+            "items": [
+                {"path": path, "name": Path(path).stem, "modified": _modified(path)}
+                for path in dict.fromkeys([*files, *self.canvas_recent()])
+            ],
         }
+
+    def canvas_shelf(self) -> dict:
+        """The gallery's favorites and groups; a damaged file counts as empty (it holds no canvas data)."""
+        try:
+            return clean_shelf(_read_json(self.directory / SHELF_STATE, {}))
+        except (ValueError, TypeError):
+            return clean_shelf({})
+
+    def canvas_shelf_save(self, data: object) -> dict:
+        """Replace the favorites and groups (the page sends them whole); returns the new overview."""
+        shelf = clean_shelf(data)
+        with self.canvas_lock:
+            _write_json(self.directory / SHELF_STATE, shelf)
+        return self.canvases()
+
+    def _shelf_move(self, old: Path, new: Path | None) -> None:
+        """A renamed canvas keeps its star and group; a deleted one leaves them (the caller holds canvas_lock)."""
+        shelf, before, after = self.canvas_shelf(), str(old), None if new is None else str(new)
+
+        def swap(paths: list[str]) -> list[str]:
+            return list(dict.fromkeys(after if item == before else item for item in paths if after or item != before))
+
+        changed = {"favorites": swap(shelf["favorites"]), "groups": [{**group, "paths": swap(group["paths"])} for group in shelf["groups"]]}
+        if changed != {"favorites": shelf["favorites"], "groups": shelf["groups"]}:
+            try:
+                _write_json(self.directory / SHELF_STATE, {**shelf, **changed})
+            except OSError:
+                pass
 
     def _canvas_json(self, path: Path, version: str, canvas: dict) -> dict:
         return {"path": str(path), "name": path.stem, "version": version, "canvas": canvas}
@@ -799,6 +880,7 @@ class Desk:
                         _rename_new(path, target)
                     except FileExistsError as error:
                         raise ValueError(f"A canvas named {clean} already exists") from error
+                self._shelf_move(path, target)
             version, canvas = read_canvas(target)
             self._canvas_shown(target)
         return self._canvas_json(target, version, canvas)
@@ -806,8 +888,71 @@ class Desk:
     def canvas_choose(self) -> dict:
         """Ask for a .canvas file in the macOS open dialog: {"path": None} when cancelled,
         {"unavailable": True} without osascript (the page then asks for a path)."""
-        start = self.canvas_dir if self.canvas_dir.is_dir() else Path.home()
-        return self._choose(CHOOSE_CANVAS_SCRIPT, [str(start)])
+        start = self._choice_start("canvas", self.canvas_dir)
+        return self._remember_choice("canvas", self._choose(CHOOSE_CANVAS_SCRIPT, [str(start)]))
+
+    def _choice_start(self, kind: str, default: Path) -> Path:
+        """Where a dialog opens: the folder it was left in last time, else `default`, else HOME."""
+        folders = _read_json(self.directory / CHOOSE_STATE, {})
+        folder = folders.get(kind) if isinstance(folders, dict) else None
+        if isinstance(folder, str) and Path(folder).is_dir():
+            return Path(folder)
+        return default if default.is_dir() else Path.home()
+
+    def _remember_choice(self, kind: str, answer: dict) -> dict:
+        chosen = answer.get("path")
+        if isinstance(chosen, str) and chosen:
+            folders = _read_json(self.directory / CHOOSE_STATE, {})
+            folders = folders if isinstance(folders, dict) else {}
+            folders[kind] = str(Path(chosen).parent)
+            try:
+                _write_json(self.directory / CHOOSE_STATE, folders)
+            except OSError:
+                pass
+        return answer
+
+    def canvas_peek(self, raw: object) -> dict:
+        """A canvas read for the gallery's thumbnail; unlike canvas_open it does not become the current one."""
+        with self.canvas_lock:
+            path = canvas_file(raw, create=False, canvas_dir=self.canvas_dir)
+            if path.stat().st_size > MAX_PEEK:
+                raise ValueError("The canvas is too big for a preview")
+            version, canvas = read_canvas(path)
+        return self._canvas_json(path, version, canvas)
+
+    def canvas_delete(self, raw: object) -> dict:
+        """Move a canvas to the Trash (never deleted outright; its attachments folder stays, other canvases may
+        use it). A canvas reached through a symlink in the canvas folder loses only the link. When it was the
+        open one, the next recent canvas becomes current. Returns the new overview."""
+        if not isinstance(raw, str):
+            raise TypeError("path must be a name or a .canvas file")
+        with self.canvas_lock:
+            path = canvas_file(raw, create=False, canvas_dir=self.canvas_dir)
+            entry = Path(str(self.canvas_dir / f"{raw}.canvas") if _bare_name(raw, ".canvas") else raw).expanduser().absolute()
+            if not entry.is_symlink():
+                entry = _link_in(self.canvas_dir, "*.canvas", path) or path
+            _to_trash(entry)
+            self._shelf_move(path, None)
+            recent = [item for item in self.canvas_recent() if Path(item).resolve() != path]
+            _write_json(self.directory / "recent-canvas.json", recent)
+            if self.canvas_current is not None and self.canvas_current.resolve() == path:
+                self.canvas_current = Path(recent[0]) if recent else None
+        return self.canvases()
+
+    def canvas_import(self, name: object, canvas: object) -> dict:
+        """A .canvas file dropped on the page: the browser only gives its contents, so it becomes a new canvas
+        in desk.canvas_dir under a free name (`Plan`, `Plan 2`, ...), never over a file, and opens."""
+        data = validate_canvas(canvas)
+        clean = attachment_name(name if isinstance(name, str) else "canvas")
+        if clean.casefold().endswith(".canvas"):
+            clean = clean[: -len(".canvas")].strip() or "canvas"
+        with self.canvas_lock:
+            self.canvas_dir.mkdir(parents=True, exist_ok=True)
+            content = render_canvas(data)
+            path = write_unique(self.canvas_dir, clean, ".canvas", lambda handle: handle.write(content), MAX_CANVAS_NUMBER).resolve()
+            version, data = read_canvas(path)
+            self._canvas_shown(path)
+        return self._canvas_json(path, version, data)
 
     def canvas_folder(self, raw: object) -> Path:
         """The folder of an existing canvas; file nodes are relative to it."""
@@ -823,27 +968,7 @@ class Desk:
         folder = self.canvas_folder(raw) / CANVAS_FILES
         folder.mkdir(parents=True, exist_ok=True)
         stem, suffix = os.path.splitext(clean)
-        for number in range(1, 1000):
-            target = folder / (clean if number == 1 else f"{stem} {number}{suffix}")
-            try:
-                handle = target.open("xb")
-            except FileExistsError:
-                continue
-            break
-        else:
-            raise ValueError(f"No free name for {clean} in {folder}")
-        try:
-            with handle:
-                left = length
-                while left > 0:
-                    chunk = source.read(min(1 << 16, left))
-                    if not chunk:
-                        raise ValueError("the upload ended early")
-                    handle.write(chunk)
-                    left -= len(chunk)
-        except BaseException:
-            target.unlink(missing_ok=True)
-            raise
+        target = write_unique(folder, stem, suffix, lambda handle: copy_exactly(source, handle, length))
         return {"file": f"{CANVAS_FILES}/{target.name}", "name": target.name, "size": length}
 
     def canvas_asset(self, raw: object, file: object) -> Path:
@@ -880,6 +1005,32 @@ class Desk:
             os.replace(made, thumb)
         return thumb
 
+    def canvas_document(self, path: Path) -> Path:
+        """A Word-like document as one HTML page (textutil, part of macOS), cached like the thumbnails."""
+        if path.suffix.casefold() not in CANVAS_DOCUMENTS:
+            raise ValueError("Only .docx, .doc, .rtf and .odt open as a page")
+        info = path.stat()
+        key = hashlib.sha256(f"doc\0{path}\0{info.st_size}\0{info.st_mtime_ns}".encode()).hexdigest()[:32]
+        cache = self.directory / "thumbs"
+        page = cache / f"{key}.html"
+        if page.is_file():
+            return page
+        cache.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=cache, prefix=".doc.") as work:
+            made = Path(work) / "page.html"
+            try:
+                result = subprocess.run(
+                    ["textutil", "-convert", "html", "-output", str(made), str(path)],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=THUMB_TIMEOUT, check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise FileNotFoundError(f"Could not read {path.name}") from error
+            if result.returncode != 0 or not made.is_file():
+                raise FileNotFoundError(f"Could not read {path.name}")
+            os.replace(made, page)
+        return page
+
     def canvas_open_file(self, raw: object, file: object) -> dict:
         """Open a canvas file in its macOS app (Preview, Pages, ...). A file that `open` would run
         (scripts, executables, installers) is only shown in Finder, so a card never starts a program."""
@@ -891,13 +1042,13 @@ class Desk:
     def board_choose(self, create: bool) -> dict:
         """The macOS save dialog for a new board (create) or the open dialog for an existing one.
         Same answers as canvas_choose; a new board's path gets .md when the name has none."""
-        start = self.boards_dir if self.boards_dir.is_dir() else Path.home()
+        start = self._choice_start("board", self.boards_dir)
         if create:
             answer = self._choose(CHOOSE_NEW_BOARD_SCRIPT, [str(start), "board.md"])
             if answer.get("path") and Path(answer["path"]).suffix.casefold() != ".md":
                 answer["path"] += ".md"
-            return answer
-        return self._choose(CHOOSE_BOARD_SCRIPT, [str(start)])
+            return self._remember_choice("board", answer)
+        return self._remember_choice("board", self._choose(CHOOSE_BOARD_SCRIPT, [str(start)]))
 
     def _choose(self, script: tuple[str, ...], args: list[str]) -> dict:
         osascript = shutil.which("osascript")
@@ -935,13 +1086,7 @@ class Desk:
         # symlink shows its target. Trash that link, never the real file it points to.
         given = Path(text).expanduser()
         if given.is_absolute() and not given.is_symlink():
-            try:
-                link = next(
-                    (item for item in self.boards_dir.glob("*.md") if item.is_symlink() and item.resolve() == path),
-                    None,
-                )
-            except OSError:
-                link = None
+            link = _link_in(self.boards_dir, "*.md", path)
             if link is not None:
                 text = str(link)
         with self.lock:
@@ -1043,6 +1188,40 @@ def attachment_name(raw: object) -> str:
     while len((stem + suffix).encode()) > 200:
         stem = stem[:-1]
     return (stem.rstrip() or "file") + suffix
+
+
+def clean_shelf(data: object) -> dict:
+    """{version, favorites: [path], groups: [{name, paths: [path]}]} checked; a canvas sits in one group at most,
+    group names are unique (case ignored). Wrong types raise ValueError/TypeError (HTTP 400)."""
+    data = {} if data is None else data
+    if not isinstance(data, dict):
+        raise TypeError("shelf must be an object")
+
+    def paths(value: object, what: str) -> list[str]:
+        if not isinstance(value, list) or len(value) > MAX_SHELF_PATHS:
+            raise ValueError(f"{what} must be a list of at most {MAX_SHELF_PATHS} canvas paths")
+        if not all(isinstance(item, str) and 0 < len(item) <= 4096 and item.isprintable() for item in value):
+            raise ValueError(f"{what} must hold canvas paths")
+        return list(dict.fromkeys(value))
+
+    groups, names, placed = [], set(), set()
+    raw_groups = data.get("groups", [])
+    if not isinstance(raw_groups, list) or len(raw_groups) > MAX_SHELF_GROUPS:
+        raise ValueError(f"groups must be a list of at most {MAX_SHELF_GROUPS}")
+    for group in raw_groups:
+        if not isinstance(group, dict):
+            raise TypeError("a group must be an object")
+        name = group.get("name")
+        name = " ".join(name.split()) if isinstance(name, str) else ""
+        if not name or len(name) > 80 or not name.isprintable():
+            raise ValueError("a group name is 1-80 printable characters")
+        if name.casefold() in names:
+            raise ValueError(f"two groups are named {name}")
+        names.add(name.casefold())
+        members = [item for item in paths(group.get("paths", []), f"group {name}") if item not in placed]
+        placed.update(members)
+        groups.append({"name": name, "paths": members})
+    return {"version": 1, "favorites": paths(data.get("favorites", []), "favorites"), "groups": groups}
 
 
 def canvas_file(raw: object, create: bool, canvas_dir: Path) -> Path:
@@ -1147,6 +1326,51 @@ def trash_board(raw: str, config: dict, boards_dir: Path) -> tuple[Path, Path]:
     if not entry.is_symlink():
         entry = path
     _refuse_default(path, config)
+    return path, _to_trash(entry)
+
+
+def write_unique(folder: Path, stem: str, suffix: str, write, tries: int = 1000) -> Path:
+    """Create `<stem><suffix>`, else `<stem> 2<suffix>`, ... in `folder` (exclusive create, never over a file)
+    and fill it with `write(handle)`; a failed write removes the file, so nothing half-written is left."""
+    for number in range(1, tries):
+        target = folder / (f"{stem}{suffix}" if number == 1 else f"{stem} {number}{suffix}")
+        try:
+            handle = target.open("xb")
+        except FileExistsError:
+            continue
+        try:
+            with handle:
+                write(handle)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+        return target
+    raise ValueError(f"No free name for {stem}{suffix} in {folder}")
+
+
+def copy_exactly(source, handle, length: int, head: bytes = b"") -> None:
+    """Write `head`, then the rest of `length` bytes from `source` (an upload that ends early is an error)."""
+    handle.write(head)
+    left = length - len(head)
+    while left > 0:
+        chunk = source.read(min(1 << 16, left))
+        if not chunk:
+            raise ValueError("the upload ended early")
+        handle.write(chunk)
+        left -= len(chunk)
+
+
+def _link_in(folder: Path, pattern: str, target: Path) -> Path | None:
+    """A symlink in `folder` that points to `target`: the page lists files by their resolved path, and deleting
+    such a file must trash that link, never the real file it points to."""
+    try:
+        return next((item for item in folder.glob(pattern) if item.is_symlink() and item.resolve() == target), None)
+    except OSError:
+        return None
+
+
+def _to_trash(entry: Path) -> Path:
+    """Move a file (or only the link, for a symlink) into ~/.Trash under a free name (`X 2.md`), never over one."""
     trash = Path.home() / ".Trash"
     trash.mkdir(exist_ok=True)
     target, number = trash / entry.name, 2
@@ -1154,7 +1378,14 @@ def trash_board(raw: str, config: dict, boards_dir: Path) -> tuple[Path, Path]:
         target = trash / f"{entry.stem} {number}{entry.suffix}"
         number += 1
     shutil.move(str(entry), str(target))
-    return path, target
+    return target
+
+
+def _modified(path: str) -> float | None:
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return None
 
 
 def _optional_board(config: dict) -> Path | None:
@@ -1307,6 +1538,13 @@ class Handler(BaseHTTPRequestHandler):
                 )
             elif url.path == "/api/canvases":
                 self._json(200, self.desk.canvases())
+            elif url.path == "/api/canvas/peek":
+                try:
+                    self._json(200, self.desk.canvas_peek(urllib.parse.parse_qs(url.query).get("path", [""])[0]))
+                except FileNotFoundError as error:
+                    self._json(404, {"error": str(error), "missing": True})
+                except (ValueError, TypeError) as error:
+                    self._json(400, {"error": str(error)})
             elif url.path == "/api/canvas":
                 try:
                     wanted = urllib.parse.parse_qs(url.query).get("path", [None])[0]
@@ -1360,8 +1598,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": str(error)})
         except FileNotFoundError as error:
             self._json(404, {"error": str(error)})
-        except ValueError as error:
-            self._json(400 if url.path.startswith("/api/studio/") else 500, {"error": str(error)})
+        except (ValueError, TypeError, OverflowError) as error:
+            # Bad input or a file that is not what it should be (a board without columns): the request failed, not the desk.
+            self._json(400, {"error": str(error)})
         except OSError as error:
             self._json(500, {"error": str(error)})
 
@@ -1381,7 +1620,19 @@ class Handler(BaseHTTPRequestHandler):
             path = self.studio.asset_file(query.get("name", [""])[0])
         elif url.path == "/media/canvas":
             target = self.desk.canvas_asset(query.get("path", [""])[0], query.get("file", [""])[0])
-            kind = CANVAS_IMAGES.get(target.suffix.casefold())
+            suffix = target.suffix.casefold()
+            if query.get("doc", [""])[0] == "1":
+                self._send_file(self.desk.canvas_document(target), "text/html; charset=utf-8", {"Content-Security-Policy": SANDBOX_CSP})
+                return
+            if query.get("raw", [""])[0] == "1":
+                if suffix not in CANVAS_RAW:
+                    raise FileNotFoundError(f"{target.name} is not served as itself")
+                extra = {"Content-Disposition": "inline"}
+                if suffix != ".pdf":
+                    extra["Content-Security-Policy"] = SANDBOX_CSP
+                self._send_file(target, CANVAS_RAW[suffix], extra)
+                return
+            kind = CANVAS_IMAGES.get(suffix)
             if kind is None or query.get("thumb", [""])[0] == "1":
                 target, kind = self.desk.canvas_thumb(target), "image/png"
             self._send_file(target, kind)
@@ -1397,7 +1648,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send_file(path)
 
-    def _send_file(self, path: Path, kind: str | None = None) -> None:
+    def _send_file(self, path: Path, kind: str | None = None, headers: dict[str, str] | None = None) -> None:
         """Serve a file with byte ranges, which video seeking needs."""
         kind = kind or MEDIA_TYPES.get(path.suffix.casefold())
         if kind is None or not path.is_file():
@@ -1429,6 +1680,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         if status == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.end_headers()
@@ -1470,7 +1723,7 @@ class Handler(BaseHTTPRequestHandler):
                 name = urllib.parse.parse_qs(url.query).get("name", [""])[0]
                 self._json(200, self.studio.add_asset(name, self.rfile, length))
                 return
-            limit = MAX_CANVAS_BODY if path == "/api/canvas" else MAX_STUDIO_BODY if path in {"/api/studio/setup", "/api/studio/project"} else MAX_BODY
+            limit = MAX_CANVAS_BODY if path in {"/api/canvas", "/api/canvas/import"} else MAX_STUDIO_BODY if path in {"/api/studio/setup", "/api/studio/project"} else MAX_BODY
             body = self._body(limit)
             if path == "/api/board":
                 self._json(200, self.desk.change(body))
@@ -1514,6 +1767,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.desk.canvas_rename(body.get("path"), body.get("name")))
             elif path == "/api/canvas/choose":
                 self._json(200, self.desk.canvas_choose())
+            elif path == "/api/canvas/link-preview":
+                self._json(200, link_preview(body.get("url"), self.desk.canvas_folder(body.get("path"))))
+            elif path == "/api/canvas/delete":
+                self._json(200, self.desk.canvas_delete(body.get("path")))
+            elif path == "/api/canvas/shelf":
+                self._json(200, self.desk.canvas_shelf_save(body.get("shelf")))
+            elif path == "/api/canvas/import":
+                self._json(200, self.desk.canvas_import(body.get("name"), body.get("canvas")))
             elif path == "/api/canvas/open-file":
                 self._json(200, self.desk.canvas_open_file(body.get("path"), body.get("file")))
             elif path == "/api/boards/delete":
@@ -1574,7 +1835,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": ok})
             else:
                 self._json(404, {"error": "not found"})
-        except LookupError as error:
+        except GameEnded as error:
             self._json(410, {"error": str(error)})
         except StudioError as error:
             self._json(400, {"error": str(error)})
@@ -1588,7 +1849,7 @@ class Handler(BaseHTTPRequestHandler):
             )
         except FileNotFoundError as error:
             self._json(404, {"error": str(error), "missing": True})
-        except (ValueError, TypeError, KeyError) as error:
+        except (ValueError, TypeError, KeyError, IndexError, OverflowError) as error:
             self._json(400, {"error": str(error)})
         except OSError as error:
             self._json(500, {"error": str(error)})
@@ -1606,9 +1867,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
         assert process.stdout is not None
-        # Raw reads: a buffered readline could hold frames that select() cannot see.
-        source = process.stdout.fileno()
+        # Raw reads: a buffered readline could hold frames that select() cannot see. The stream reads its own
+        # copy of the descriptor: Arcade closes process.stdout when a game stops, and the number could be
+        # reused by the next game's pipe while this loop still sits in select().
+        source = -1
         try:
+            source = os.dup(process.stdout.fileno())
             while True:
                 ready, _, _ = select.select([source], [], [], 2)
                 if not ready:
@@ -1625,6 +1889,8 @@ class Handler(BaseHTTPRequestHandler):
         except (OSError, ValueError):
             pass
         finally:
+            if source >= 0:
+                os.close(source)
             self.arcade.stop_if(process)
 
     def _open_obsidian(self, note: object) -> bool:
@@ -1640,7 +1906,8 @@ class Handler(BaseHTTPRequestHandler):
         return subprocess.run(["open", url], check=False).returncode == 0
 
 
-CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; base-uri 'none'; form-action 'none'"
+# frame-src: the canvas viewer shows PDFs and documents from here and live link pages from the web.
+CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; frame-src 'self' https: http:; base-uri 'none'; form-action 'none'"
 
 
 MEDIA_TYPES = {
@@ -2017,28 +2284,7 @@ class Studio:
             raise ValueError(f"this is not a {suffix[1:].upper()} image")
         folder = storage_path("studio", "assets")
         folder.mkdir(parents=True, exist_ok=True)
-        for number in range(1, 1000):
-            target = folder / (f"{stem}{suffix}" if number == 1 else f"{stem} {number}{suffix}")
-            try:
-                handle = target.open("xb")
-            except FileExistsError:
-                continue
-            break
-        else:
-            raise ValueError(f"no free name for {clean} in {folder}")
-        try:
-            with handle:
-                handle.write(head)
-                left = length - len(head)
-                while left > 0:
-                    chunk = source.read(min(1 << 16, left))
-                    if not chunk:
-                        raise ValueError("the upload ended early")
-                    handle.write(chunk)
-                    left -= len(chunk)
-        except BaseException:
-            target.unlink(missing_ok=True)
-            raise
+        target = write_unique(folder, stem, suffix, lambda handle: copy_exactly(source, handle, length, head))
         return {"asset": target.name}
 
     def add_project_asset(self, raw: object, name: object, source, length: int) -> dict:
@@ -2073,32 +2319,13 @@ class Studio:
             same = assets / f"{stem}{suffix}"
             if same.is_file() and not same.is_symlink() and same.read_bytes() == body:
                 return {"asset": same.name}
-        for number in range(1, 1000):
-            target = assets / (f"{stem}{suffix}" if number == 1 else f"{stem} {number}{suffix}")
-            try:
-                handle = target.open("xb")
-            except FileExistsError:
-                continue
-            break
-        else:
-            raise ValueError(f"no free name for {clean}")
-        try:
-            with handle:
-                if body is not None:
-                    handle.write(body)
-                else:
-                    handle.write(head)
-                    left = length - len(head)
-                    while left > 0:
-                        chunk = source.read(min(1 << 16, left))
-                        if not chunk:
-                            raise ValueError("the upload ended early")
-                        handle.write(chunk)
-                        left -= len(chunk)
-        except BaseException:
-            target.unlink(missing_ok=True)
-            raise
-        return {"asset": target.name}
+        def write(handle) -> None:
+            if body is not None:
+                handle.write(body)
+            else:
+                copy_exactly(source, handle, length, head)
+
+        return {"asset": write_unique(assets, stem, suffix, write).name}
 
     def import_sound(self, body: dict) -> dict:
         """Copy the sound of another project (an audio-only recording) into this one as a voice-over."""
@@ -2112,19 +2339,10 @@ class Studio:
             raise ValueError("the project's assets folder is a link")
         assets.mkdir(exist_ok=True)
         stem = f"{Path(str(body.get('from'))).name} {source.stem.lstrip('.')}"[:100]
-        for number in range(1, 1000):
-            target = assets / (f"{stem}{suffix}" if number == 1 else f"{stem} {number}{suffix}")
-            try:
-                with target.open("xb") as out, source.open("rb") as stream:
-                    try:
-                        shutil.copyfileobj(stream, out)
-                    except BaseException:
-                        target.unlink(missing_ok=True)
-                        raise
-            except FileExistsError:
-                continue
-            return {"asset": target.name}
-        raise ValueError("no free name for the sound")
+        # The source is opened first: one that cannot be read leaves no empty file behind.
+        with source.open("rb") as stream:
+            target = write_unique(assets, stem, suffix, lambda out: shutil.copyfileobj(stream, out))
+        return {"asset": target.name}
 
     def proxy(self, raw: object, start: bool) -> dict:
         """Light copies for the Edit tab (`ul capture proxy`), made in the background: {state, files, error}.
@@ -2142,8 +2360,8 @@ class Studio:
                         data = self.run("proxy", folder, timeout=3600)
                         files = data.get("files", {}) if isinstance(data, dict) else {}
                         entry.update(state="done", files=files)
-                    except (StudioError, OSError) as error:
-                        entry.update(state="failed", error=str(error))
+                    except Exception as error:  # the page must see "failed", never a run stuck at "running"
+                        entry.update(state="failed", error=str(error) or type(error).__name__)
 
                 threading.Thread(target=work, daemon=True).start()
             self.proxies[folder] = entry
@@ -2441,9 +2659,9 @@ class Arcade:
 
     def _current(self, session: object) -> subprocess.Popen:
         if not isinstance(session, str) or not session or not hmac.compare_digest(session, self.session):
-            raise LookupError("this game has ended")
+            raise GameEnded("this game has ended")
         if self.process is None:
-            raise LookupError("this game has ended")
+            raise GameEnded("this game has ended")
         return self.process
 
     def send(self, session: object, events: object) -> None:
@@ -2474,14 +2692,14 @@ class Arcade:
             except (BrokenPipeError, ValueError, OSError) as error:
                 # A timed-out partial JSON line must never prefix a later event.
                 self._stop_locked()
-                raise LookupError("this game has ended") from error
+                raise GameEnded("this game has ended") from error
 
     def claim(self, session: object) -> subprocess.Popen:
         """The process whose frames one stream may read; a second reader is refused."""
         with self.lock:
             process = self._current(session)
             if self.reading:
-                raise LookupError("this game is already shown in another tab")
+                raise GameEnded("this game is already shown in another tab")
             self.reading = True
             return process
 
@@ -2490,7 +2708,7 @@ class Arcade:
             if session is not None:
                 try:
                     self._current(session)
-                except LookupError:
+                except GameEnded:
                     return
             self._stop_locked()
 
@@ -2522,6 +2740,81 @@ class Arcade:
 
 def game_binary() -> str | None:
     return os.environ.get("UNLAW_BIN") or shutil.which("ul")
+
+
+def last_board(directory: Path) -> Path | None:
+    """The board the page showed last (the newest entry of recent.json that still exists)."""
+    items = _read_json(directory / "recent.json", [])
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, str) and Path(item).is_file():
+            return Path(item)
+    return None
+
+
+SERVER_FILE = "server.json"  # {pid, port, lstart} of the running page server
+
+
+def _ps(pid: int, field: str) -> str:
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", f"{field}="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            env={**os.environ, "TZ": "UTC", "LC_ALL": "C"},
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return " ".join(result.stdout.split())
+
+
+def _outdated_server(directory: Path, port: int) -> int | None:
+    """The pid of an earlier desk server holding `port` whose code has changed since it started (an update), or None.
+    The page keeps its settings in localStorage, which belongs to the port: a new server on the next port would
+    open an empty page, so an outdated one gives the port back. Two current desks still run side by side."""
+    info = _read_json(directory / SERVER_FILE, {})
+    if not isinstance(info, dict) or info.get("port") != port:
+        return None
+    pid = info.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1 or pid == os.getpid():
+        return None
+    started = _ps(pid, "lstart")
+    if not started or started != info.get("lstart") or Path(__file__).name not in _ps(pid, "command"):
+        return None
+    try:
+        began = calendar.timegm(time.strptime(started, "%a %b %d %H:%M:%S %Y"))
+        changed = Path(__file__).stat().st_mtime
+    except (OSError, ValueError):
+        return None
+    return pid if changed > began else None
+
+
+def _stop_outdated(directory: Path, port: int) -> None:
+    pid = _outdated_server(directory, port)
+    if pid is None:
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and _ps(pid, "pid"):
+        time.sleep(0.1)
+    print(f"Stopped the desk from before the update (pid {pid}).", flush=True)
+
+
+def _record_server(directory: Path, port: int) -> None:
+    _write_json(directory / SERVER_FILE, {"pid": os.getpid(), "port": port, "lstart": _ps(os.getpid(), "lstart")})
+
+
+def _forget_server(directory: Path) -> None:
+    info = _read_json(directory / SERVER_FILE, {})
+    if isinstance(info, dict) and info.get("pid") == os.getpid():
+        try:
+            (directory / SERVER_FILE).unlink()
+        except OSError:
+            pass
 
 
 def make_server(
@@ -2592,9 +2885,16 @@ def serve(
     desk.remember()
     token = secrets.token_urlsafe(18)
     settings = desk.settings
-    server = make_server(
-        desk, settings["port"] if port is None else port, token, exact=port is not None
-    )
+    wanted = settings["port"] if port is None else port
+    if wanted:
+        _stop_outdated(desk.directory, wanted)
+    server = make_server(desk, wanted, token, exact=port is not None)
+    _record_server(desk.directory, server.server_address[1])
+
+    def _terminate(_signum: int, _frame: object) -> None:
+        raise KeyboardInterrupt
+
+    previous_term = signal.signal(signal.SIGTERM, _terminate)
     url = f"http://127.0.0.1:{server.server_address[1]}/?token={token}"
     print(f"Desk: {url}", flush=True)
     print(f"Board: {desk.current if layer else path}", flush=True)
@@ -2608,9 +2908,11 @@ def serve(
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
+        signal.signal(signal.SIGTERM, previous_term)
         stop.set()
         server.RequestHandlerClass.arcade.stop()
         server.server_close()
+        _forget_server(desk.directory)
     return 0
 
 
@@ -2632,7 +2934,10 @@ def _pomodoro_cli(args: list[str], config: dict) -> int:
         card_title = " ".join(rest[at + 1 :])
         rest = rest[:at]
     if action == "start" and rest:
-        minutes = float(rest[0])
+        try:
+            minutes = float(rest[0])
+        except ValueError:
+            raise ValueError(f"start takes a length in minutes, not {rest[0]!r}") from None
         if not 0 < minutes <= 600 or len(rest) > 1:
             raise ValueError("start takes one length in minutes (0-600)")
         rest = []
@@ -2677,11 +2982,14 @@ def _stats_cli(path: Path | None, config: dict) -> int:
 
 
 def _board_choice(args: list[str]) -> tuple[str | None, list[str]]:
-    """`--board NAME` (or `-b`) anywhere in args; the rest stays in order."""
+    """`--board NAME` (or `-b`) anywhere before `--`; the rest stays in order (everything after `--` is text)."""
     rest, board = [], None
     position = 0
     while position < len(args):
         arg = args[position]
+        if arg == "--":
+            rest.extend(args[position + 1 :])
+            break
         if arg in {"--board", "-b"}:
             if position + 1 >= len(args) or board is not None:
                 raise ValueError(f"{arg} needs one board (a name or a .md file)")
@@ -2805,49 +3113,70 @@ def _list_cli(args: list[str], config: dict, boards_dir: Path) -> int:
 
 
 def _change_cli(action: str, args: list[str], config: dict, boards_dir: Path) -> int:
-    """add / move / done on a .md board, the same edits the page makes."""
+    """add / move / done on a .md board, the same edits the page makes. The file is written only if it is still
+    the version that was read; when the page or Obsidian changed it meanwhile, the edit is made again on the
+    fresh file (a few times), so nobody's change is lost."""
     raw, rest = _board_choice(args)
     path = _chosen_board(raw, config, boards_dir)
-    board = KanbanBoard.parse(path.read_bytes().decode("utf-8"))
-    if action == "add":
-        column: str | None = None
-        if "--column" in rest:
-            at = rest.index("--column")
-            if at + 1 >= len(rest):
-                raise ValueError("--column needs a column name")
-            column = rest[at + 1]
-            rest = rest[:at] + rest[at + 2 :]
-        text = quick_text(" ".join(rest), datetime.now().astimezone().date())
-        if not text or "\n" in text or "\r" in text:
-            raise ValueError("The task text must be one non-empty line")
-        if not board.sections:
-            raise ValueError(f"{path} has no columns")
-        section = board.section(column) if column else board.sections[0]
-        section.tasks.append([f"- [ ] {text}"])
-        write_board(path, board)
-        print(f"Added to {section.name}: {text}")
-        return 0
-    if not rest or not rest[0].isdigit():
+    column: str | None = None
+    if action == "add" and "--column" in rest:
+        at = rest.index("--column")
+        if at + 1 >= len(rest):
+            raise ValueError("--column needs a column name")
+        column = rest[at + 1]
+        rest = rest[:at] + rest[at + 2 :]
+    if action != "add" and (not rest or not rest[0].isdigit()):
         raise ValueError(f"{action} needs a card number from: ul desk show")
-    number = int(rest[0])
-    if action == "move":
-        if len(rest) < 2:
-            raise ValueError("move needs a card number and a column")
-        target = board.section(" ".join(rest[1:]))
-        source, task = board.pop_task(number)
-        target.tasks.append(task)
-        write_board(path, board)
-        print(f"Moved #{number}: {source.name} -> {target.name}")
-        return 0
-    if len(rest) != 1:
+    if action == "move" and len(rest) < 2:
+        raise ValueError("move needs a card number and a column")
+    if action == "done" and len(rest) != 1:
         raise ValueError("done takes one card number")
-    target = completed_section(board, str(config.get("todo", {}).get("completed_column", "Completed")))
-    _, task = board.pop_task(number)
-    title = complete_task(task, datetime.now().astimezone().date())
-    target.tasks.append(task)
-    write_board(path, board)
-    print(f"Completed #{number}: {title}")
-    return 0
+    today = datetime.now().astimezone().date()
+    text = _clean_text(quick_text(" ".join(rest), today)) if action == "add" else ""
+    if action == "add" and not text:
+        raise ValueError("The task text must be one non-empty line")
+
+    # The card the user meant, by its line: a retry after a concurrent change must not act on another card
+    # that now has the same number (the page checks `line` the same way).
+    meant: list[str] = []
+
+    def edit(board: KanbanBoard) -> str:
+        if action == "add":
+            if not board.sections:
+                raise ValueError(f"{path} has no columns")
+            section = board.section(column) if column else board.sections[0]
+            section.tasks.append([f"- [ ] {text}"])
+            return f"Added to {section.name}: {text}"
+        number = int(rest[0])
+        current = next((task[0] for n, _, task in board.numbered_tasks() if n == number), None)
+        if current is not None:
+            if meant and meant[0] != current:
+                raise ValueError(f"Card #{number} changed while it was being edited; check `ul desk show` and try again")
+            meant[:] = [current]
+        if action == "move":
+            target = board.section(" ".join(rest[1:]))
+            source, task = board.pop_task(number)
+            target.tasks.append(task)
+            return f"Moved #{number}: {source.name} -> {target.name}"
+        target = completed_section(board, completed_column_name(config))
+        _, task = board.pop_task(number)
+        title = complete_task(task, today)
+        target.tasks.append(task)
+        return f"Completed #{number}: {title}"
+
+    for attempt in range(3):
+        raw_bytes = path.read_bytes()
+        board = KanbanBoard.parse(raw_bytes.decode("utf-8"))
+        message = edit(board)
+        try:
+            write_board(path, board, expected=version_of(raw_bytes))
+        except BoardChanged:
+            if attempt == 2:
+                raise
+            continue
+        print(message)
+        return 0
+    return 1
 
 
 def _parse_serve(args: list[str]) -> tuple[str | None, int | None, bool, bool]:
@@ -2943,7 +3272,11 @@ def _main(args: list[str]) -> int:
                 raise ValueError("The Reminders layer is off (desk.reminders) or not on macOS")
             path = board_file(board, boards_dir=boards_dir) if board else _optional_board(config)
             return serve(path, config, port, open_browser, REMINDERS)
-        path = board_file(board, boards_dir=boards_dir) if board else default_board(config)
+        path = (
+            board_file(board, boards_dir=boards_dir)
+            if board
+            else last_board(storage_path("desk")) or default_board(config)
+        )
         return serve(path, config, port, open_browser)
     except (ConfigError, FileNotFoundError, OSError, ValueError, OverflowError) as error:
         print(f"unlaw desk: {error}", file=sys.stderr)

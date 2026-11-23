@@ -251,23 +251,9 @@ pub fn apply(current: &[&str], next: &[&'static str], no_build: bool) -> i32 {
     } else {
         println!("Added: {}. Removed: {}.", names(&added), names(&removed));
     }
-    // The schedules of `ul awake` live in a launchd job that would keep calling the removed command.
-    if removed.contains(&"awake") && !kept.contains(&"awake") {
-        match crate::remove::remove_awake_job() {
-            Ok(true) => println!("Removed the awake schedules' background job."),
-            Ok(false) => {}
-            Err(error) => eprintln!("unlaw features: could not remove the awake schedules' background job: {error}"),
-        }
-        crate::remove::note_lid_rule();
-    }
-    // The watcher of `ul clip on` would keep calling the removed command.
-    if removed.contains(&"clip") && !kept.contains(&"clip") {
-        match crate::remove::remove_clip_job() {
-            Ok(true) => println!("Removed the clipboard history's background watcher."),
-            Ok(false) => {}
-            Err(error) => eprintln!("unlaw features: could not remove the clipboard history's background watcher: {error}"),
-        }
-    }
+    // A launchd job (agent, awake schedules, clip watcher) would keep calling a removed command.
+    let gone: Vec<&str> = removed.iter().copied().filter(|name| !kept.contains(name)).collect();
+    crate::remove::remove_command_jobs(&gone, "unlaw features");
     for name in kept {
         println!("Kept commands/{name}: you edited it. Delete the folder to remove it.");
     }

@@ -141,7 +141,7 @@ Examples:
 ''',
     "awake": '''Keep the Mac from sleeping for a while, until a time or while something runs; lid closed too.
 Usage: ul awake [status [--json]]
-       ul awake <duration> | until [YYYY-MM-DD] HH:MM | on | off
+       ul awake <duration> | until [YYYY-MM-DD] HH:MM | on | off [--no-display] [--lid]
        ul awake --pid PID | -- <command...>
        ul awake lid setup|remove|status
        ul awake schedule add HH:MM-HH:MM [--days D | --date YYYY-MM-DD] [--name TEXT] | list [--json] | rm ID|--all
@@ -151,11 +151,11 @@ Usage: ul awake [status [--json]]
   --pid PID      While that process lives
   -- <command>   Run it in the foreground, awake while it runs; exits with its code
 Options:
-  --display      The screen stays on too (caffeinate -d)
+  --no-display   Let the screen sleep on its usual timer (by default it stays on: caffeinate -d)
   --lid          Keep a MacBook awake with the lid closed (needs lid setup, see below)
 A new session replaces the running one, except a `-- command` session (stop that command).
 Schedules: a window (may cross midnight) every day (--days daily|weekdays|weekends|mon,tue,..)
-  or once (--date), with --display/--lid (lid setup first). A launchd job (com.unlaw.awake)
+  or once (--date), with --no-display/--lid (lid setup first). A launchd job (com.unlaw.awake)
   starts it, never cutting short a longer manual session; `off` skips the rest of that
   window. A sleeping Mac is not woken at the start: it begins once awake and inside the window.
 Lid: caffeinate cannot do this, `pmset -a disablesleep 1` can but needs root. `ul awake lid
@@ -163,9 +163,9 @@ Lid: caffeinate cannot do this, `pmset -a disablesleep 1` can but needs root. `u
   `pmset -a disablesleep 0|1` without a password; `lid remove` deletes it (--yes skips the
   question). The setting is restored when the session ends, after a crash or reboot at the
   next login or any `ul awake` call; if that fails, `status` says so and `off` retries.
-  On battery, a closed MacBook in a bag gets hot and drains.
+  Without --lid closing the lid sleeps the Mac. A closed MacBook in a bag gets hot and drains.
 Settings: storage.root (state in runtime/awake.json).
-Examples: ul awake 2h --display
+Examples: ul awake 2h --no-display
           ul awake --lid -- make build
           ul awake schedule add 23:00-06:00 --days weekdays
 ''',
@@ -424,8 +424,8 @@ Usage: ul desk [board] [--reminders] [--port N] [--no-open]
        ul desk list | show [board] | add <text> | move <n> <column> | done <n>
        ul desk new <name> | rm <board> | path [board] | stats [board] | pomodoro [...]
 Page:
-  ul desk           Open the default board on 127.0.0.1: <desk.boards_dir>/board.md,
-                    created on first use (todo.vault_path + todo.file pick another)
+  ul desk           Open the board shown last on 127.0.0.1 (first time the default
+                    <desk.boards_dir>/board.md; todo.vault_path + todo.file pick another)
   [board]           A name = <desk.boards_dir>/<name>.md, or a path to any .md board
   --reminders       Open Apple Reminders as a board (lists = columns)
 Terminal (for you and AI agents):
@@ -438,7 +438,7 @@ Terminal (for you and AI agents):
   rm <board>        Move a board to the Trash (not the default board)
   stats, pomodoro   Focus statistics and the timer the page shows too
 The .md file is the source of truth: Obsidian, the page and these commands all
-see every change. Tabs on the page: Board, Today, Stats, Games, Studio, Canvas.
+see every change. Tabs on the page: Board, Today (with focus stats), Games, Studio, Canvas.
 Settings: desk.port, desk.boards_dir, desk.canvas_dir, desk.reminders, desk.pomodoro.*,
   todo.vault_path (empty = desk.boards_dir), todo.file, todo.completed_column.
 Examples: ul desk

@@ -831,6 +831,25 @@ class ScheduleParsingTests(CoreTestCase):
         self.assertEqual(parse_when("через 700 д", base), base + dt.timedelta(days=700))
 
 
+class AgentRobustnessTests(CoreTestCase):
+    def test_a_timed_out_command_with_a_detached_child_returns(self) -> None:
+        # The child left the process group and kept the pipes open: the agent waited for it forever.
+        from unlawful.agent import run_group
+
+        script = "import os, subprocess, sys; subprocess.Popen([sys.executable, '-c', 'import os, time; os.setsid(); time.sleep(30)']); import time; time.sleep(30)"
+        started = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired):
+            run_group([sys.executable, "-c", script], timeout=1)
+        self.assertLess(time.monotonic() - started, 15)
+
+    def test_search_without_roots_is_a_tool_error(self) -> None:
+        from unlawful.agent import ToolError, Tools
+
+        tools = Tools({"agent": {"roots": []}}, None, "terminal", "read")
+        with self.assertRaisesRegex(ToolError, "agent.roots is empty"):
+            tools._search("x")
+
+
 class SetupTests(AgentCase):
     def test_setup_saves_the_token_in_the_keychain(self) -> None:
         telegram = FakeTelegram("42")

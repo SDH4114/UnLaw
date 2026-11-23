@@ -340,7 +340,8 @@ pub fn multipart(content_type: &str, body: &[u8]) -> Option<Vec<Field>> {
         let head_end = find(body, b"\r\n\r\n", position)?;
         let head = String::from_utf8_lossy(&body[position..head_end]).to_string();
         let next = find(body, &delimiter, head_end + 4)?;
-        let content = body[head_end + 4..next.saturating_sub(2)].to_vec();
+        // A delimiter right after the head (no CRLF before it) must not make the range run backwards.
+        let content = body[head_end + 4..next.saturating_sub(2).max(head_end + 4)].to_vec();
         let disposition = head.lines().find(|line| line.to_ascii_lowercase().starts_with("content-disposition"))?.to_string();
         let attribute = |key: &str| {
             disposition.split(';').find_map(|part| part.trim().strip_prefix(&format!("{key}=")).map(|v| v.trim_matches('"').to_string()))
@@ -778,5 +779,8 @@ mod tests {
         assert_eq!(fields[0], ("model".to_string(), None, b"whisper".to_vec()));
         assert_eq!(fields[1], ("file".to_string(), Some("a.mp3".to_string()), b"\x00\x01\r\n\x02".to_vec()));
         assert!(multipart("application/json", body).is_none());
+        // A delimiter straight after the part's head made the slice run backwards and panicked the thread.
+        let tight = b"--XX\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n--XX--";
+        assert_eq!(multipart("multipart/form-data; boundary=XX", tight).unwrap()[0].2, b"");
     }
 }

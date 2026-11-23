@@ -709,15 +709,16 @@ fn run_command_with_timeout(mut command: Command, timeout: Duration) -> Result<(
         .map_err(|error| error.to_string())?;
     let mut stdout = child.stdout.take().unwrap();
     let mut stderr = child.stderr.take().unwrap();
+    // Bytes, then lossy text: read_to_string keeps nothing when the help has one byte that is not UTF-8.
     let out = thread::spawn(move || {
-        let mut text = String::new();
-        let _ = stdout.read_to_string(&mut text);
-        text
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        String::from_utf8_lossy(&bytes).into_owned()
     });
     let err = thread::spawn(move || {
-        let mut text = String::new();
-        let _ = stderr.read_to_string(&mut text);
-        text
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes);
+        String::from_utf8_lossy(&bytes).into_owned()
     });
     let group = -(child.id() as libc::pid_t);
     let _signals = StopSignals::new();

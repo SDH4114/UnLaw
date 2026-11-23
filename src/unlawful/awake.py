@@ -56,10 +56,10 @@ from .config import ConfigError, storage_path
 # session. A pid is never signalled unless `ps` confirms the process is ours.
 
 USAGE = """Usage: ul awake [status [--json]]
-       ul awake <duration> | until [YYYY-MM-DD] HH:MM | on | off [--display] [--lid]
+       ul awake <duration> | until [YYYY-MM-DD] HH:MM | on | off [--no-display] [--lid]
        ul awake --pid PID | -- <command...>
        ul awake lid setup|remove|status
-       ul awake schedule add HH:MM-HH:MM [--days D | --date YYYY-MM-DD] [--display] [--lid] [--name TEXT]
+       ul awake schedule add HH:MM-HH:MM [--days D | --date YYYY-MM-DD] [--no-display] [--lid] [--name TEXT]
        ul awake schedule list [--json] | rm ID|--all
 Run `ul awake --help` for details.
 """
@@ -122,7 +122,7 @@ class Plan:
     ends: float | None = None
     watch_pid: int | None = None
     command: list[str] | None = None
-    display: bool = False
+    display: bool = True
     lid: bool = False
     source: str = "manual"
 
@@ -1555,7 +1555,7 @@ def _reject_options(args: list[str]) -> None:
 
 
 def schedule_add(args: list[str]) -> int:
-    display, lid = _flag(args, "--display"), _flag(args, "--lid")
+    display, lid = _display_flag(args), _flag(args, "--lid")
     days_text, date_text = _take(args, "--days"), _take(args, "--date")
     name_text = _take(args, "--name")
     _reject_options(args)
@@ -1796,6 +1796,14 @@ def run_scheduled(args: list[str]) -> int:
 # ---------------------------------------------------------------- CLI
 
 
+def _display_flag(args: list[str]) -> bool:
+    """The screen stays on unless --no-display; --display is still accepted (it was the opt-in before 3.22.0)."""
+    on, off = _flag(args, "--display"), _flag(args, "--no-display")
+    if on and off:
+        raise AwakeError("--display and --no-display cannot be used together")
+    return not off
+
+
 def _flag(args: list[str], name: str) -> bool:
     found = name in args
     args[:] = [arg for arg in args if arg != name]
@@ -1832,10 +1840,16 @@ def _announce(plan: Plan, replaced: str | None) -> None:
     if replaced:
         print(f"Replaced: {replaced}")
     state = _base_state(plan, None)
-    extras = (", display stays on" if plan.display else "") + (
+    extras = (", display stays on" if plan.display else ", display may sleep") + (
         ", lid closed too" if plan.lid else ""
     )
     print(f"Awake {describe(state)}{extras}.")
+    if not plan.lid and _on_battery():
+        # caffeinate cannot stop lid sleep, and its -s (system sleep) only works on AC power.
+        print(
+            "unlaw awake: on battery; closing the lid still puts the Mac to sleep (use --lid after `ul awake lid setup`)",
+            file=sys.stderr,
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1872,13 +1886,14 @@ def _dispatch(args: list[str], command: list[str] | None) -> int:
             raise AwakeError("schedule does not take `-- command`")
         return schedule_main(args[1:])
     as_json, yes = _flag(args, "--json"), _flag(args, "--yes")
-    display, lid = _flag(args, "--display"), _flag(args, "--lid")
+    display_given = "--display" in args or "--no-display" in args
+    display, lid = _display_flag(args), _flag(args, "--lid")
     pid_text = _take(args, "--pid")
     unknown = next((arg for arg in args if arg.startswith("-") and len(arg) > 1), None)
     if unknown is not None:
         raise AwakeError(f"unknown option: {unknown}")
     words = args
-    options = display or lid
+    options = display_given or lid
     if words[:1] == ["lid"]:
         if (
             len(words) != 2
@@ -1913,7 +1928,7 @@ def _dispatch(args: list[str], command: list[str] | None) -> int:
     elif not words or words == ["status"]:
         if options:
             raise AwakeError(
-                "--display and --lid need a duration, until, on, --pid or -- command"
+                "--display/--no-display and --lid need a duration, until, on, --pid or -- command"
             )
         info = status_info()
         print(json.dumps(info, indent=2) if as_json else _status_text(info))

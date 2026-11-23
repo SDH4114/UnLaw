@@ -19,8 +19,9 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from unlawful import desk as desk_module
 from unlawful.desk import Conflict, Desk, Pomodoro, desk_settings, stats
-from unlawful.kanban import KanbanBoard, card, complete_task, quick_text, reopen_task, write_board
+from unlawful.kanban import BoardChanged, KanbanBoard, card, complete_task, quick_text, reopen_task, version_of, write_board
 
 BOARD = """---
 
@@ -146,6 +147,47 @@ class KanbanFileFormatTests(unittest.TestCase):
             path.chmod(0o644)
             write_board(path, KanbanBoard.parse(BOARD))
             self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+
+
+    def test_text_after_a_card_keeps_its_place_on_save(self) -> None:
+        # Moving such text to the end of the column reordered the user's file on the first save.
+        text = "## A\n\n- [ ] one\n\n- sub at col0\n- [ ] two\n\n## B\n"
+        board = KanbanBoard.parse(text)
+        self.assertEqual(board.sections[0].tasks, [["- [ ] one", "", "- sub at col0"], ["- [ ] two"]])
+        self.assertEqual(board.render(), text)
+
+    def test_write_board_refuses_a_file_that_changed_meanwhile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "board.md"
+            path.write_text(BOARD, encoding="utf-8")
+            read = version_of(path.read_bytes())
+            path.write_text(BOARD + "\nedited elsewhere\n", encoding="utf-8")
+            with self.assertRaises(BoardChanged):
+                write_board(path, KanbanBoard.parse(BOARD), expected=read)
+            self.assertIn("edited elsewhere", path.read_text(encoding="utf-8"))
+            self.assertEqual(sorted(item.name for item in Path(directory).iterdir()), ["board.md"], "no temporary file left")
+
+
+class CliRetryTests(unittest.TestCase):
+    def test_a_retry_never_completes_a_different_card(self) -> None:
+        # The page adds a card above while `ul desk done 1` writes: the retry must not complete that new card.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "board.md"
+            path.write_text("## To do\n\n- [ ] first\n\n## Completed\n", encoding="utf-8")
+            real = desk_module.write_board
+            calls = []
+
+            def racing(target, board, expected=None):
+                if not calls:
+                    target.write_text("## To do\n\n- [ ] inserted\n- [ ] first\n\n## Completed\n", encoding="utf-8")
+                calls.append(1)
+                return real(target, board, expected=expected)
+
+            config = {"todo": {"completed_column": "Completed"}}
+            with patch.object(desk_module, "write_board", racing):
+                with self.assertRaisesRegex(ValueError, "changed while it was being edited"):
+                    desk_module._change_cli("done", ["-b", str(path), "1"], config, Path(directory))
+            self.assertIn("- [ ] inserted", path.read_text(encoding="utf-8"))
 
 
 class DeskTests(unittest.TestCase):
@@ -433,6 +475,19 @@ class PomodoroTests(unittest.TestCase):
         )
         self.timer = Pomodoro(Path(temporary.name), settings, clock=lambda: self.now[0])
 
+    def test_a_session_that_ended_during_sleep_is_logged_at_its_end(self) -> None:
+        self.timer.act("start")
+        ends = self.now[0] + 25 * 60
+        self.now[0] += 10 * 3600  # the Mac slept far past the end
+        self.timer.tick()
+        entry = json.loads(self.timer.log_file.read_text(encoding="utf-8").splitlines()[-1])
+        self.assertEqual(entry["end"], desk_module.datetime.fromtimestamp(ends).astimezone().isoformat(timespec="seconds"))
+
+    def test_a_card_title_that_cannot_be_written_leaves_no_temporary_file(self) -> None:
+        with self.assertRaises(UnicodeEncodeError):
+            self.timer.act("start", card_title="a\ud800b")
+        self.assertEqual([item.name for item in self.timer.directory.iterdir() if item.name.startswith(".desk.")], [])
+
     def test_cycles_breaks_pause_and_log(self) -> None:
         self.timer.act("start", card_title="Write report")
         self.now[0] += 10 * 60
@@ -580,6 +635,16 @@ class DeskServerTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ul desk show", result.stdout)
+
+    def test_cli_text_after_double_dash_and_pomodoro_usage(self) -> None:
+        # After `--` everything is the card's text, -b included; tabs and runs of spaces collapse like on the page.
+        dashed = self.run_seed(self.desk, "add", "--", "fix", "-b", "flag\t\tnow")
+        self.assertEqual(dashed.returncode, 0, dashed.stderr)
+        self.assertIn("fix -b flag now", self.run_seed(self.desk, "show").stdout)
+        bad = self.run_seed(self.desk, "pomodoro", "start", "abc")
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn("length in minutes", bad.stderr)
+        self.assertNotIn("Traceback", bad.stderr)
 
     def test_server_guards_host_and_token_and_syncs_with_the_terminal(self) -> None:
         port, token = self.start()

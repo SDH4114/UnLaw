@@ -2,7 +2,7 @@
 """Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser.\nUsage: ul desk [board] [--reminders] [--port N] [--no-open]\n       ul desk list | show [board] | add <text> | move <n> <column> | done <n>\n       ul desk new <name> | rm <board> | path [board] | stats [board] | pomodoro [...]\nPage:\n  ul desk           Open the default board on 127.0.0.1: <desk.boards_dir>/board.md,\n                    created on first use (todo.vault_path + todo.file pick another)\n  [board]           A name = <desk.boards_dir>/<name>.md, or a path to any .md board\n  --reminders       Open Apple Reminders as a board (lists = columns)\nTerminal (for you and AI agents):\n  list [--json]     Default, recent and named boards, and whether Reminders is on\n  show [board]      Columns and numbered cards; --json for scripts, --reminders\n  add <text>        New card in the first column (--column C; @today/@tomorrow dates)\n  move <n> <col>    Move card n; done <n> checks it and moves it to the Done column\n                    add/move/done take -b <board>; without it the default board\n  new <name>        Create a board with To do / Doing / Done\n  rm <board>        Move a board to the Trash (not the default board)\n  stats, pomodoro   Focus statistics and the timer the page shows too\nThe .md file is the source of truth: Obsidian, the page and these commands all\nsee every change. Tabs on the page: Board, Today, Stats, Games, Studio, Canvas.\nSettings: desk.port, desk.boards_dir, desk.canvas_dir, desk.reminders, desk.pomodoro.*,\n  todo.vault_path (empty = desk.boards_dir), todo.file, todo.completed_column.\nExamples: ul desk\n          ul desk show Work --json\n          ul desk add "Call the bank @tomorrow" -b Work\n'
+COMMAND_HELP = 'Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser.\nUsage: ul desk [board] [--reminders] [--port N] [--no-open]\n       ul desk list | show [board] | add <text> | move <n> <column> | done <n>\n       ul desk new <name> | rm <board> | path [board] | stats [board] | pomodoro [...]\nPage:\n  ul desk           Open the board shown last on 127.0.0.1 (first time the default\n                    <desk.boards_dir>/board.md; todo.vault_path + todo.file pick another)\n  [board]           A name = <desk.boards_dir>/<name>.md, or a path to any .md board\n  --reminders       Open Apple Reminders as a board (lists = columns)\nTerminal (for you and AI agents):\n  list [--json]     Default, recent and named boards, and whether Reminders is on\n  show [board]      Columns and numbered cards; --json for scripts, --reminders\n  add <text>        New card in the first column (--column C; @today/@tomorrow dates)\n  move <n> <col>    Move card n; done <n> checks it and moves it to the Done column\n                    add/move/done take -b <board>; without it the default board\n  new <name>        Create a board with To do / Doing / Done\n  rm <board>        Move a board to the Trash (not the default board)\n  stats, pomodoro   Focus statistics and the timer the page shows too\nThe .md file is the source of truth: Obsidian, the page and these commands all\nsee every change. Tabs on the page: Board, Today (with focus stats), Games, Studio, Canvas.\nSettings: desk.port, desk.boards_dir, desk.canvas_dir, desk.reminders, desk.pomodoro.*,\n  todo.vault_path (empty = desk.boards_dir), todo.file, todo.completed_column.\nExamples: ul desk\n          ul desk show Work --json\n          ul desk add "Call the bank @tomorrow" -b Work\n'
 
 import copy
 import os
@@ -103,7 +103,7 @@ class KanbanBoard:
         lines = re.split(r"\r?\n", text)
         first_heading = next((i for i, line in enumerate(lines) if HEADING.match(line)), None)
         if first_heading is None:
-            raise ValueError("TODO.md has no '##' Kanban columns")
+            raise ValueError("the board has no '##' Kanban columns")
         # The footer starts at Obsidian's `***` archive separator or at the settings block, whichever comes first.
         footer_at = next(
             (
@@ -120,7 +120,7 @@ class KanbanBoard:
             if (match := HEADING.match(line))
         ]
         if not heading_positions:
-            raise ValueError("TODO.md has no '##' Kanban columns")
+            raise ValueError("the board has no '##' Kanban columns")
         prefix = body[: heading_positions[0][0]]
         sections: list[Section] = []
         for position, (start, name) in enumerate(heading_positions):
@@ -140,6 +140,7 @@ class KanbanBoard:
                 task_end = (
                     starts[index + 1] if index + 1 < len(starts) else len(content)
                 )
+                # Everything up to the next card belongs to this card, so the file keeps its order on save.
                 tasks.append(_trim_blank(content[task_start:task_end]))
             sections.append(Section(name=name, preamble=preamble, tasks=tasks))
         return cls(
@@ -259,8 +260,13 @@ def _trim_blank_right(lines: list[str]) -> list[str]:
     return lines[:end]
 
 
-def write_board(path: Path, board: KanbanBoard) -> None:
-    """Replace the board file atomically (a temporary file next to it, then rename)."""
+class BoardChanged(ValueError):
+    """The file changed between reading and writing it (the page, Obsidian or another `ul desk`)."""
+
+
+def write_board(path: Path, board: KanbanBoard, expected: str | None = None) -> None:
+    """Replace the board file atomically (a temporary file next to it, then rename). With `expected` (the
+    version that was read), a file that changed meanwhile is left alone and BoardChanged is raised."""
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -281,6 +287,8 @@ def write_board(path: Path, board: KanbanBoard) -> None:
             os.chmod(temporary, path.stat().st_mode & 0o7777)
         except FileNotFoundError:
             pass
+        if expected is not None and version_of(path.read_bytes()) != expected:
+            raise BoardChanged(f"{path.name} changed while it was being edited")
         os.replace(temporary, path)
     finally:
         if temporary is not None and temporary.exists():
@@ -657,11 +665,19 @@ here (on nodes, edges, elements and the top level) is kept exactly as it was rea
 
 # ruff: noqa: TRY004  (every bad input is a ValueError for the HTTP layer)
 
+import hashlib
+import http.client
+import ipaddress
 import json
 import math
 import os
 import re
+import socket
+import ssl
 import tempfile
+import time
+import urllib.parse
+from html.parser import HTMLParser
 from pathlib import Path
 
 
@@ -715,8 +731,15 @@ def _id(item: object, what: str, seen: set[str]) -> dict:
     return item
 
 
+def _hidden(item: dict, what: str) -> None:
+    """unlawHidden: the eye of the Layers panel (Obsidian ignores the key and still shows the item)."""
+    if "unlawHidden" in item and not isinstance(item["unlawHidden"], bool):
+        raise ValueError(f"{what}: unlawHidden must be true or false")
+
+
 def _validate_node(node: dict) -> None:
     what = f"node {node['id']!r}"
+    _hidden(node, what)
     if node.get("type") not in NODE_TYPES:
         raise ValueError(f"{what}: type must be one of {', '.join(sorted(NODE_TYPES))}")
     for key in ("x", "y", "width", "height"):
@@ -733,11 +756,19 @@ def _validate_edge(edge: dict) -> None:
             raise ValueError(f"{what}: {key} must be a non-empty string")
     if "label" in edge:
         _text(edge["label"], what)
+    # The spot of the card an end is tied to (thread tool), as fractions of the card box.
+    for key in ("unlawFrom", "unlawTo"):
+        spot = edge.get(key)
+        if key in edge and not (
+            isinstance(spot, list) and len(spot) == 2 and all(_canvas_number(v) and 0 <= v <= 1 for v in spot)
+        ):
+            raise ValueError(f"{what}: {key} must be [x, y] with numbers 0-1")
 
 
 def _validate_element(element: dict) -> int:
     """Check one drawing element; returns how many points it has."""
     what = f"element {element['id']!r}"
+    _hidden(element, what)
     kind = element.get("type")
     if kind not in ELEMENT_TYPES:
         raise ValueError(
@@ -890,6 +921,248 @@ def write_canvas(path: Path, data: dict) -> str:
         if temporary is not None and temporary.exists():
             temporary.unlink()
     return version_of(raw)
+
+
+# ---- link cards: a page's title, description and picture, fetched once by the desk server ----
+# Only public addresses (no localhost, LAN, link-local, metadata services): a canvas from someone else could
+# otherwise make the desk probe this Mac's network. The connection goes to the address that was checked, so a
+# second DNS answer cannot swap it, and every redirect is checked again.
+LINK_TIMEOUT = 5
+LINK_MAX_PAGE = 1024 * 1024
+LINK_MAX_IMAGE = 5 * 1024 * 1024
+LINK_REDIRECTS = 3
+LINK_DEADLINE = 15  # seconds for one page or picture, redirects included
+LINK_MAX_ICON = 1024 * 1024
+PREVIEW_FOLDER = "attachments/.previews"
+
+
+# Networks `ipaddress.is_global` still calls global but that lead back inside: IPv4-compatible IPv6, NAT64
+# (64:ff9b::/96 wraps any IPv4, 127.0.0.1 included) and the old site-local block.
+_INNER_NETWORKS = tuple(ipaddress.ip_network(net) for net in ("::/96", "64:ff9b::/96", "64:ff9b:1::/48", "fec0::/10"))
+
+
+def _allowed(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            return _allowed(address.ipv4_mapped)
+        if any(address in network for network in _INNER_NETWORKS):
+            return False
+    return address.is_global and not address.is_multicast
+
+
+def _public_address(host: str, port: int) -> str:
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (OSError, UnicodeError) as error:
+        raise ValueError(f"Unknown host {host}") from error
+    for info in infos:
+        address = ipaddress.ip_address(info[4][0].split("%")[0])
+        if _allowed(address):
+            return str(address)
+    raise ValueError(f"{host} is not a public address")
+
+
+class _PinnedHTTP(http.client.HTTPConnection):
+    """Connects to the address that was checked, whatever DNS says the second time."""
+
+    def __init__(self, host: str, port: int, address: str) -> None:
+        super().__init__(host, port, timeout=LINK_TIMEOUT)
+        self.address = address
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection((self.address, self.port), LINK_TIMEOUT)
+
+
+class _PinnedHTTPS(_PinnedHTTP):
+    default_port = 443
+
+    def connect(self) -> None:
+        super().connect()
+        self.sock = ssl.create_default_context().wrap_socket(self.sock, server_hostname=self.host)
+
+
+def _read_until(response: http.client.HTTPResponse, limit: int, deadline: float) -> bytes:
+    """At most `limit` bytes, and never past `deadline`: a server dripping a byte at a time cannot hold the desk."""
+    parts, size = [], 0
+    while size < limit:
+        if time.monotonic() > deadline:
+            raise ValueError("The page took too long")
+        chunk = response.read1(min(65536, limit - size)) if hasattr(response, "read1") else response.read(min(65536, limit - size))
+        if not chunk:
+            break
+        parts.append(chunk)
+        size += len(chunk)
+    return b"".join(parts)
+
+
+def _fetch_public(url: str, limit: int) -> tuple[str, str, bytes, dict[str, str]]:
+    """GET an http(s) URL from a public address: (final URL, content type, at most `limit` bytes, the headers
+    that say whether the page may be framed)."""
+    deadline = time.monotonic() + LINK_DEADLINE
+    for _ in range(LINK_REDIRECTS + 1):
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ValueError("Only http and https links have a preview")
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        kind = _PinnedHTTPS if parts.scheme == "https" else _PinnedHTTP
+        connection = kind(parts.hostname, port, _public_address(parts.hostname, port))
+        try:
+            target = (parts.path or "/") + ("?" + parts.query if parts.query else "")
+            connection.request("GET", target, headers={
+                "Host": parts.netloc.rsplit("@", 1)[-1],
+                "User-Agent": "Mozilla/5.0 (Macintosh) unlaw-desk",
+                "Accept": "text/html,application/xhtml+xml,image/*;q=0.8,*/*;q=0.5",
+            })
+            response = connection.getresponse()
+            if response.status in (301, 302, 303, 307, 308):
+                url = urllib.parse.urljoin(url, response.getheader("Location") or "")
+                continue
+            if response.status != 200:
+                raise ValueError(f"The page answered {response.status}")
+            body = _read_until(response, limit, deadline)
+            headers = {name: ", ".join(response.headers.get_all(name) or []) for name in ("x-frame-options", "content-security-policy")}
+            return url, (response.getheader("Content-Type") or "").split(";")[0].strip().lower(), body, headers
+        except (OSError, http.client.HTTPException) as error:
+            raise ValueError(f"Could not reach {parts.hostname}: {error}") from error
+        finally:
+            connection.close()
+    raise ValueError("Too many redirects")
+
+
+def _page_meta(raw: bytes, charset_hint: str = "") -> dict:
+    """<title> and the og:/twitter: tags of a page."""
+    text = raw.decode(charset_hint or "utf-8", errors="replace")
+    found = re.search(r"""<meta[^>]+charset=["']?([\w-]+)""", text[:4096], re.I)
+    if found and not charset_hint:
+        try:
+            text = raw.decode(found[1], errors="replace")
+        except LookupError:
+            pass
+
+    class Meta(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.meta: dict[str, str] = {}
+            self.icons: list[tuple[str, str, str]] = []  # (rel, href, sizes) of <link rel=...icon...>
+            self.title: list[str] = []
+            self.in_title = False
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            values = {key.lower(): value or "" for key, value in attrs}
+            if tag == "title":
+                self.in_title = True
+            elif tag == "meta":
+                name = (values.get("property") or values.get("name") or "").lower()
+                if name and "content" in values:
+                    self.meta.setdefault(name, values["content"])
+            elif tag == "link" and "icon" in values.get("rel", "").lower() and values.get("href") and len(self.icons) < 50:
+                self.icons.append((values["rel"].lower(), values["href"], values.get("sizes", "")))
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag == "title":
+                self.in_title = False
+
+        def handle_data(self, data: str) -> None:
+            if self.in_title:
+                self.title.append(data)
+
+    parser = Meta()
+    try:
+        parser.feed(text)
+    except Exception:  # noqa: BLE001  (a broken page still gives what was read)
+        pass
+    meta = parser.meta
+    return {
+        "title": meta.get("og:title") or meta.get("twitter:title") or "".join(parser.title),
+        "description": meta.get("og:description") or meta.get("twitter:description") or meta.get("description") or "",
+        "image": meta.get("og:image") or meta.get("og:image:url") or meta.get("twitter:image") or "",
+        "icon": _best_icon(parser.icons),
+    }
+
+
+def _best_icon(icons: list[tuple[str, str, str]]) -> str:
+    """The site's logo: the biggest apple-touch-icon (made for home screens, so it is large and square), else the
+    biggest other icon that is not SVG (the card draws pictures only); empty means /favicon.ico."""
+
+    def size(sizes: str) -> int:
+        found = re.findall(r"(\d+)x\d+", sizes)
+        return max((int(value) for value in found), default=0)
+
+    usable = [(rel, href, sizes) for rel, href, sizes in icons if not href.lower().split("?")[0].endswith(".svg")]
+    for wanted in (lambda rel: "apple-touch-icon" in rel, lambda rel: True):
+        picked = [icon for icon in usable if wanted(icon[0])]
+        if picked:
+            return max(picked, key=lambda icon: size(icon[2]))[1]
+    return ""
+
+
+def frameable(headers: dict[str, str]) -> bool:
+    """Whether a browser will show the page inside the desk: X-Frame-Options or a CSP frame-ancestors list that
+    does not let any http page in (the desk is http://127.0.0.1) means no."""
+    if headers.get("x-frame-options", "").strip():
+        return False
+    for policy in headers.get("content-security-policy", "").split(","):
+        for directive in policy.split(";"):
+            words = directive.split()
+            if words and words[0].lower() == "frame-ancestors":
+                return any(word in ("*", "http:") for word in words[1:])
+    return True
+
+
+# The picture's own first bytes say what it is (a server's Content-Type is often wrong for icons).
+PICTURE_MAGIC = ((b"\x89PNG", ".png"), (b"\xff\xd8\xff", ".jpg"), (b"GIF8", ".gif"), (b"\x00\x00\x01\x00", ".ico"))
+
+
+def _picture_suffix(data: bytes) -> str | None:
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    return next((suffix for magic, suffix in PICTURE_MAGIC if data.startswith(magic)), None)
+
+
+def _save_picture(url: str, limit: int, folder: Path) -> str | None:
+    """Download a picture of a page into `folder`/attachments/.previews (named by its hash, so the same logo is
+    kept once); its path relative to the canvas, or None when it is missing or not a picture."""
+    try:
+        _, _, picture, _ = _fetch_public(url, limit)
+    except ValueError:
+        return None
+    suffix = _picture_suffix(picture)
+    if suffix is None:
+        return None
+    name = hashlib.sha256(picture).hexdigest()[:16] + suffix
+    target = folder / PREVIEW_FOLDER / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        temporary = target.with_name("." + name + ".part")
+        temporary.write_bytes(picture)
+        os.replace(temporary, target)
+    return f"{PREVIEW_FOLDER}/{name}"
+
+
+def _clean_line(text: str, limit: int) -> str:
+    return " ".join("".join(char for char in text if char.isprintable() or char.isspace()).split())[:limit]
+
+
+def link_preview(url: object, folder: Path) -> dict:
+    """{title, description, site, image, icon, frameable}: image (the page's picture) and icon (the site's logo)
+    are saved under `folder`/attachments/.previews (so the card works offline), as paths relative to the canvas,
+    or None; frameable says whether the page can be shown inside the desk."""
+    if not isinstance(url, str) or len(url) > 4000:
+        raise ValueError("url must be a link")
+    final, kind, body, headers = _fetch_public(url.strip(), LINK_MAX_PAGE)
+    site = urllib.parse.urlsplit(final).hostname or ""
+    page = kind in ("text/html", "application/xhtml+xml", "")
+    meta = _page_meta(body) if page else {"title": "", "description": "", "image": "", "icon": ""}
+    image = _save_picture(urllib.parse.urljoin(final, meta["image"]), LINK_MAX_IMAGE, folder) if meta["image"] else None
+    icon = _save_picture(urllib.parse.urljoin(final, meta["icon"] or "/favicon.ico"), LINK_MAX_ICON, folder)
+    return {
+        "title": _clean_line(meta["title"], 300) or site,
+        "description": _clean_line(meta["description"], 600),
+        "site": site,
+        "image": image,
+        "icon": icon,
+        "frameable": page and frameable(headers),
+    }
 
 """The Studio's Edit tab for `ul desk`: a track timeline in vanilla JS (no framework, no build step).
 
@@ -1074,14 +1347,22 @@ function liftClips(edit, ids) {
 }
 // Make [a, b) of a track empty (overwrite): clips inside go, clips across the edges are trimmed or split.
 // Returns whether anything changed.
-function clearRange(edit, trackId, a, b, except) {
+function clearRange(edit, trackId, a, b, except, links) {
   let changed = false;
+  links = links || {};
   for (const clip of edit.clips.filter((item) => item.track === trackId && !(except && except.has(item.id)))) {
     const start = clip.start, end = clipEnd(clip);
     if (end <= a + 1e-6 || start >= b - 1e-6) continue;
     changed = true;
     if (start >= a - 1e-6 && end <= b + 1e-6) { edit.clips.splice(edit.clips.indexOf(clip), 1); continue; }
-    if (start < a && end > b) { splitClip(edit, clip, b); clip.out = round3(clip.in + a - start); continue; }
+    if (start < a && end > b) {
+      // The right part is a new piece: like the blade, linked right parts get one fresh link of their own, so
+      // the left part and the right part are not one group.
+      const right = splitClip(edit, clip, b);
+      if (clip.link) right.link = links[clip.link] || (links[clip.link] = freshLink(edit, Object.values(links)));
+      clip.out = round3(clip.in + a - start);
+      continue;
+    }
     if (start < a) clip.out = round3(clip.in + a - start);
     else { clip.in = round3(clip.in + b - start); clip.start = round3(b); }
   }
@@ -1090,15 +1371,17 @@ function clearRange(edit, trackId, a, b, except) {
 // Empty [a, b) on every unlocked track and leave the gap (Premiere's lift).
 function liftRange(edit, a, b) {
   let changed = false;
-  for (const track of edit.tracks) if (!track.locked && clearRange(edit, track.id, a, b, null)) changed = true;
+  const links = {};
+  for (const track of edit.tracks) if (!track.locked && clearRange(edit, track.id, a, b, null, links)) changed = true;
   return changed;
 }
 // Take [a, b) out of every unlocked track and close the gap (Premiere's extract, Resolve's ripple).
 function extractRange(edit, a, b) {
   if (!(b - a > 0.01)) return false;
+  const links = {};
   for (const track of edit.tracks) {
     if (track.locked) continue;
-    clearRange(edit, track.id, a, b, null);
+    clearRange(edit, track.id, a, b, null, links);
     for (const clip of edit.clips) if (clip.track === track.id && clip.start >= b - 1e-6) clip.start = round3(clip.start - (b - a));
   }
   return true;
@@ -1166,7 +1449,13 @@ function trimClip(edit, id, side, t, project, linked) {
   if (low > high) return false;
   const next = round3(Math.max(low, Math.min(high, t)));
   for (const item of group) {
-    if (side === "start") { item.in = round3(item.in + next - item.start); item.start = next; } else item.out = round3(item.in + next - item.start);
+    if (side !== "start") item.out = round3(item.in + next - item.start);
+    else if (sourceLimit(project, item)[0] === -Infinity) {
+      // Text and captions have no source to slide through: the start moves, `in` stays 0 (the project refuses
+      // a negative one) and the length follows.
+      const end = clipEnd(item);
+      item.start = next; item.out = round3(item.in + end - next);
+    } else { item.in = round3(item.in + next - item.start); item.start = next; }
   }
   return true;
 }
@@ -5904,6 +6193,10 @@ main { flex: 1; overflow: auto; }
 .page .where { font-size: 11px; color: var(--muted); }
 .empty { color: var(--muted); padding: 8px 2px; }
 .numbers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.today-stats { margin-bottom: 14px; }
+.today-stats:empty { display: none; }
+.week.mini { height: auto; min-height: 64px; padding: 8px 10px; gap: 4px; }
+.week.mini .bars i { width: 6px; }
 .number { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 16px; }
 .number b { display: block; font-size: 26px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 .number span { color: var(--muted); font-size: 12px; }
@@ -5983,7 +6276,6 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width
 .cvbar .group .swatch.custom input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; padding: 0; cursor: pointer; }
 .cvbar .cvname { width: 150px; font-weight: 600; border: 1px solid transparent; background: transparent; border-radius: 7px; padding: 3px 7px; color: var(--text); }
 .cvbar .cvname:hover, .cvbar .cvname:focus { border-color: var(--line); background: var(--column); outline: none; }
-.cvbar .cvpick { max-width: 120px; border-color: transparent; background: var(--column); color: var(--muted); }
 .cvbar .group button.more { position: relative; }
 .cvbar .group button.more::after { content: ""; position: absolute; right: 2px; bottom: 2px; border-style: solid; border-width: 0 0 5px 5px; border-color: transparent transparent currentColor transparent; opacity: .55; }
 .cvbar .cvwidth { width: 100px; margin: 0 4px; accent-color: var(--accent); }
@@ -5998,6 +6290,89 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width
 .cvmenu .num { width: 18px; text-align: center; font-weight: 700; font-size: 15px; }
 .cvzoom, .cvstatus { font: 12px var(--mono); color: var(--muted); min-width: 40px; text-align: center; }
 .cvstage { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+.cvbody { flex: 1; min-height: 0; display: flex; position: relative; }
+.cvbar .cvpick { display: inline-flex; gap: 5px; align-items: center; max-width: 140px; border-color: transparent; background: var(--column); color: var(--muted); }
+.cvview { display: none; position: absolute; inset: 0; z-index: 6; background: var(--bg); flex-direction: column; }
+.cvview.on { display: flex; }
+.cvview .head { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.cvview .head b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cvview .head .spacer { flex: 1; }
+.cvview .head button { display: inline-flex; align-items: center; gap: 5px; }
+.cvview .head button svg { width: 16px; height: 16px; }
+.cvview .body { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 14px; overflow: auto; }
+.cvview .body img, .cvview .body video { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
+.cvview .body iframe { flex: 1; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.cvview .body.text { align-items: stretch; justify-content: flex-start; }
+.cvview .body pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 13px/1.5 var(--mono); color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+.cvview .body .sound { display: flex; flex-direction: column; align-items: center; gap: 14px; font-weight: 600; }
+.cvview .body .sound > svg { width: 64px; height: 64px; color: var(--accent-ink); }
+.cvview .body .sound audio { width: min(520px, 80vw); }
+.cvview .body canvas.model { flex: 1; width: 100%; min-height: 200px; cursor: grab; touch-action: none; }
+.cvview .note { color: var(--muted); font-size: 12px; text-align: center; }
+.cvgallery { display: none; position: absolute; inset: 0; z-index: 5; background: var(--bg); overflow: auto; padding: 14px 18px 24px; }
+.cvgallery.on { display: block; }
+.cvgallery .head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.cvgallery .head .hint { color: var(--muted); font-size: 12px; }
+.cvgallery .head .search { width: 220px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; }
+.cvgallery .head .search:focus { outline: none; border-color: var(--accent-ink); }
+.cvgallery > .shelves > .empty { color: var(--muted); padding: 20px 4px; }
+.cvgallery .head .spacer { flex: 1; }
+.cvgallery .head button { display: inline-flex; align-items: center; gap: 5px; }
+.cvgallery .head button svg { width: 16px; height: 16px; }
+.cvgallery .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+.cvgallery .tile { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; cursor: pointer; }
+.cvgallery .tile:hover { border-color: var(--accent-ink); }
+.cvgallery .tile.on { box-shadow: 0 0 0 2px var(--accent); }
+.cvgallery .thumb { display: block; width: 100%; aspect-ratio: 8 / 5; background: var(--column); }
+.cvgallery .meta { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; }
+.cvgallery .meta .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cvgallery .meta .when { color: var(--muted); font-size: 11px; }
+.cvgallery .acts { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; }
+.cvgallery .acts button { display: none; border: none; border-radius: 7px; padding: 5px; background: var(--panel); color: var(--muted); box-shadow: var(--shadow); }
+.cvgallery .acts svg { width: 16px; height: 16px; display: block; }
+.cvgallery .tile:hover .acts button, .cvgallery .acts .fav.on { display: block; }
+.cvgallery .acts .fav.on { color: var(--energy); }
+.cvgallery .acts .fav.on svg { fill: currentColor; }
+.cvgallery .acts button:hover { color: var(--text); }
+.cvgallery .acts .del:hover { color: #e5484d; }
+.cvgallery .shelf { margin-bottom: 22px; border-radius: var(--radius); }
+.cvgallery .shelf.drop { outline: 2px dashed var(--accent-ink); outline-offset: 6px; }
+.cvgallery .section { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; color: var(--text); }
+.cvgallery .section > svg { width: 16px; height: 16px; color: var(--muted); }
+.cvgallery .section.favorites > svg { color: var(--energy); fill: currentColor; }
+.cvgallery .section .count { color: var(--muted); font-size: 12px; }
+.cvgallery .section .mini { border: none; background: transparent; padding: 3px; color: var(--muted); display: inline-flex; }
+.cvgallery .section .mini svg { width: 15px; height: 15px; }
+.cvgallery .section .mini:hover { color: var(--text); }
+.cvgallery .shelf .empty { color: var(--muted); font-size: 12px; padding: 18px 4px; }
+.cvinline { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; }
+.cvinline iframe { position: absolute; border: 0; background: #ffffff; pointer-events: auto; box-shadow: 0 2px 10px rgba(0, 0, 0, .25); }
+.cvplayers { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+.cvlayers { display: none; width: 240px; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; font-size: 13px; }
+.cvlayers.on { display: block; }
+.cvlayers .head { display: flex; align-items: baseline; gap: 8px; padding: 10px 12px 6px; position: sticky; top: 0; background: var(--panel); }
+.cvlayers .head .n { color: var(--muted); font-size: 11px; }
+.cvlayers .head .spacer { flex: 1; }
+.cvlayers .head .all { border: none; background: transparent; padding: 2px; color: var(--muted); display: inline-flex; align-self: center; }
+.cvlayers .head .all svg { width: 14px; height: 14px; }
+.cvlayers .head .all:hover { color: var(--text); }
+.cvlayers .fold { width: 18px; flex: none; border: none; background: transparent; padding: 1px; color: var(--muted); display: inline-flex; }
+.cvlayers .fold svg { width: 14px; height: 14px; }
+.cvlayers .fold:hover { color: var(--text); }
+.cvlayers .row.section { margin-top: 6px; color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; cursor: pointer; }
+.cvlayers .row.group .name { font-weight: 600; }
+.cvlayers .row .count { margin-left: auto; color: var(--muted); font-size: 11px; background: var(--column); border-radius: 8px; padding: 0 6px; }
+.cvlayers .row { display: flex; align-items: center; gap: 6px; padding: 4px 8px; margin: 0 4px; border-radius: 6px; cursor: default; }
+.cvlayers .row:hover { background: var(--column); }
+.cvlayers .row.on { background: var(--accent-soft); }
+.cvlayers .row.inner { padding-left: 32px; }
+.cvlayers .row.hidden .name, .cvlayers .row.hidden > svg { opacity: .4; }
+.cvlayers .row > svg { width: 16px; height: 16px; flex: none; color: var(--muted); }
+.cvlayers .row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cvlayers .eye { border: none; background: transparent; padding: 2px; color: var(--muted); display: inline-flex; }
+.cvlayers .eye svg { width: 16px; height: 16px; }
+.cvlayers .eye:hover { color: var(--text); }
+.cvlayers .empty { padding: 8px 14px; }
 .cvcanvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
 .cvedit { position: absolute; display: none; resize: none; border: 2px solid var(--accent); border-radius: 8px; background: var(--panel); color: var(--text); padding: 4px 6px; outline: none; z-index: 3; line-height: 1.3; overflow: auto; }
 .cvempty { position: absolute; inset: 0; display: none; place-content: center; justify-items: center; gap: 10px; color: var(--muted); }
@@ -6012,11 +6387,10 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width
   <div id="boards" class="picker"></div>
   <div class="tabs" id="tabs">
     <button data-view="board" class="on" title="Board (1)">Board</button>
-    <button data-view="today" title="Today (2)">Today</button>
-    <button data-view="stats" title="Stats (3)">Stats</button>
-    <button data-view="games" title="Games (4)">Games</button>
-    <button data-view="studio" title="Studio: record and screenshots (5)">Studio</button>
-    <button data-view="canvas" title="Canvas: whiteboard (6)">Canvas</button>
+    <button data-view="today" title="Today: tasks and focus stats (2)">Today</button>
+    <button data-view="games" title="Games (3)">Games</button>
+    <button data-view="studio" title="Studio: record and screenshots (4)">Studio</button>
+    <button data-view="canvas" title="Canvas: whiteboard (5)">Canvas</button>
   </div>
   <span class="spacer"></span>
   <button id="recPill" class="rec-pill" title="Recording: open the Studio"></button>
@@ -6048,12 +6422,12 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width
     <dt><kbd>n</kbd></dt><dd>New card (Today: quick add)</dd>
     <dt><kbd>/</kbd></dt><dd>Search cards</dd>
     <dt><kbd>space</kbd></dt><dd>Start / pause the focus timer</dd>
-    <dt><kbd>1</kbd> … <kbd>6</kbd></dt><dd>Board, Today, Stats, Games, Studio, Canvas (on the Studio Record tab the digits pick scenes)</dd>
+    <dt><kbd>1</kbd> … <kbd>5</kbd></dt><dd>Board, Today (tasks and focus stats), Games, Studio, Canvas (on the Studio Record tab the digits pick scenes)</dd>
     <dt><kbd>Esc</kbd></dt><dd>Clear search and tag filter</dd>
     <dt>double-click</dt><dd>Edit a card; drag cards between columns</dd>
     <dt>Games</dt><dd>While a game runs every key goes to it: arrows/WASD, Space, P pause, Esc leaves. Mouse works as in the terminal.</dd>
     <dt>Studio</dt><dd>Record tab: <kbd>r</kbd> start (after the countdown) / stop, <kbd>p</kbd> pause / resume, <kbd>m</kbd> mark, <kbd>1</kbd> … <kbd>9</kbd> scenes. Drag a source to move it (corners and edges snap; a corner pins it), drag its yellow corner to resize, <kbd>⌥</kbd>-drag to pan inside it. Recording runs <code>ul capture</code>, so it keeps going when the page is closed; every recording becomes a project you export from the Projects tab.</dd>
-    <dt>Canvas</dt><dd>Photoshop-style keys; a tool stays until you pick another. <kbd>v</kbd> select, <kbd>h</kbd> hand (or hold <kbd>space</kbd>), <kbd>n</kbd> card, <kbd>t</kbd> text, <kbd>u</kbd> shapes (<kbd>Shift</kbd>+<kbd>u</kbd> cycles rectangle, ellipse, diamond, line, arrow; also <kbd>r</kbd> <kbd>o</kbd> <kbd>l</kbd> <kbd>a</kbd>), <kbd>b</kbd> brush, <kbd>g</kbd> fill (<kbd>Alt</kbd>+click clears; open space reaching the edge of the view fills the background), <kbd>e</kbd> eraser (<kbd>Shift</kbd>+<kbd>e</kbd> switches whole object / only where it passes). Click an active eraser or shape tool again for its options (shape evenness 3 perfect, 2, 1 rougher). The fill tool floods the area of the clicked color like a paint program. <kbd>[</kbd> <kbd>]</kbd> or <kbd>-</kbd> <kbd>=</kbd> stroke width (slider 1-100; click the number to type one), <kbd>d</kbd> default color, <kbd>Cmd/Ctrl</kbd>+<kbd>G</kbd> group, <kbd>Cmd/Ctrl</kbd>+<kbd>0</kbd> fit, <kbd>Cmd/Ctrl</kbd>+<kbd>+</kbd> <kbd>-</kbd> zoom, <kbd>Del</kbd> delete, arrows nudge, <kbd>Cmd/Ctrl</kbd>+<kbd>Z</kbd> <kbd>C</kbd> <kbd>V</kbd> <kbd>D</kbd> <kbd>A</kbd>. Wheel pans, <kbd>Ctrl</kbd>+wheel or pinch zooms, double-click edits text, drag a side dot of a card to connect. The name left of the tools renames the file.</dd>
+    <dt>Canvas</dt><dd>Photoshop-style keys; a tool stays until you pick another. <kbd>v</kbd> select, <kbd>h</kbd> hand (or hold <kbd>space</kbd>), <kbd>n</kbd> card, <kbd>t</kbd> text, <kbd>u</kbd> shapes (<kbd>Shift</kbd>+<kbd>u</kbd> cycles rectangle, ellipse, diamond, line, arrow; also <kbd>r</kbd> <kbd>o</kbd> <kbd>l</kbd> <kbd>a</kbd>), <kbd>b</kbd> brush, <kbd>g</kbd> fill (<kbd>Alt</kbd>+click clears; open space reaching the edge of the view fills the background), <kbd>e</kbd> eraser (<kbd>Shift</kbd>+<kbd>e</kbd> switches whole object / only where it passes). Click an active eraser or shape tool again for its options (shape evenness 3 perfect, 2, 1 rougher). The fill tool floods the area of the clicked color like a paint program. <kbd>[</kbd> <kbd>]</kbd> or <kbd>-</kbd> <kbd>=</kbd> stroke width (slider 1-100; click the number to type one), <kbd>d</kbd> default color, <kbd>Cmd/Ctrl</kbd>+<kbd>G</kbd> group, <kbd>Cmd/Ctrl</kbd>+<kbd>0</kbd> fit, <kbd>Cmd/Ctrl</kbd>+<kbd>+</kbd> <kbd>-</kbd> zoom, <kbd>Del</kbd> delete, arrows nudge, <kbd>Cmd/Ctrl</kbd>+<kbd>Z</kbd> <kbd>C</kbd> <kbd>V</kbd> <kbd>D</kbd> <kbd>A</kbd>. Wheel pans, <kbd>Ctrl</kbd>+wheel or pinch zooms, double-click edits text, drag a side dot of a card to connect (let go on empty canvas for a new card). <kbd>k</kbd> thread: click a spot on one card, then on another; drag the end of a selected edge to move it. <kbd>F7</kbd> or the layers button: Layers, the eye hides a card, group or drawing, drag rows to reorder. The name left of the tools renames the file.</dd>
     <dt><kbd>?</kbd></dt><dd>This list</dd>
   </dl>
 </div></div>
@@ -6067,8 +6441,10 @@ if (params.get("token")) {
   history.replaceState(null, "", location.pathname + location.hash);
 }
 const TOKEN = sessionStorage.getItem("desk-token") || "";
-const VIEWS = ["board", "today", "stats", "games", "studio", "canvas"];
-const state = { board: null, view: VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : localStorage.getItem("desk-view") || "board", query: "", tag: "", timer: null, timerAt: 0, editing: null, dragging: null, draggingColumn: null, stats: null };
+const VIEWS = ["board", "today", "games", "studio", "canvas"];
+// Stats became part of Today (3.22.0): an old bookmark or saved view opens Today.
+const savedView = (view) => view === "stats" ? "today" : view;
+const state = { board: null, view: VIEWS.includes(savedView(location.hash.slice(1))) ? savedView(location.hash.slice(1)) : savedView(localStorage.getItem("desk-view") || "board"), query: "", tag: "", timer: null, timerAt: 0, editing: null, dragging: null, draggingColumn: null, stats: null };
 if (!VIEWS.includes(state.view)) state.view = "board";
 const $ = (id) => document.getElementById(id);
 
@@ -6408,7 +6784,10 @@ function renderToday(main) {
     quick.value = "";
     if (await change({ op: "add", column: Math.max(0, first), text })) document.querySelector(".quick input")?.focus();
   });
-  const page = h("div", { class: "page" }, h("div", { class: "quick" }, quick));
+  const stats = h("div", { class: "today-stats" });
+  const page = h("div", { class: "page" }, stats, h("div", { class: "quick" }, quick));
+  drawTodayStats(stats);
+  loadTodayStats(stats);
   const section = (title, items) => {
     page.append(h("h3", {}, title, h("span", { class: "n", text: items.length })));
     if (!items.length) page.append(h("div", { class: "empty", text: "Nothing here." }));
@@ -6418,43 +6797,61 @@ function renderToday(main) {
   section("Today", due);
   section("In progress", doing);
   section("Next 7 days", soon);
+  const most = h("div", { class: "most-focused" });
+  page.append(most);
+  drawMostFocused(most);
   main.append(page);
 }
 
+// Calendar arithmetic in UTC: a local noon is the previous UTC day in UTC+13/+14.
 function addDays(iso, days) {
-  const date = new Date(iso + "T12:00:00");
-  date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
 }
 
-async function renderStats(main) {
+// Focus numbers for Today come from /api/stats (pomodoro log + done dates); kept between renders so the
+// page does not flicker, refreshed at most every 20 s or when the board/timer changes them.
+let todayStatsAt = 0;
+async function loadTodayStats(node) {
+  if (Date.now() - todayStatsAt < 20000 && state.stats) return;
+  todayStatsAt = Date.now();
   const { status, data } = await api("GET", "/api/stats");
-  if (status !== 200) { toast(data.error || "Could not load stats"); return; }
-  if (state.view !== "stats") return;
-  main.textContent = "";
-  const page = h("div", { class: "page" });
-  page.append(h("h3", { text: "Today" }), h("div", { class: "numbers" },
-    h("div", { class: "number" }, h("b", { text: data.today.pomodoros }), h("span", { text: "focus sessions" })),
-    h("div", { class: "number" }, h("b", { text: Math.round(data.today.minutes) }), h("span", { text: "focus minutes" })),
-    h("div", { class: "number" }, h("b", { text: data.today.done }), h("span", { text: "tasks done" })),
-    h("div", { class: "number" }, h("b", { text: data.streak }), h("span", { text: "day streak" }))));
+  if (status !== 200) { todayStatsAt = 0; return; }
+  state.stats = data;
+  if (state.view !== "today" || !node.isConnected) return;
+  drawTodayStats(node);
+  const most = document.querySelector(".most-focused");
+  if (most) drawMostFocused(most);
+}
+
+function drawTodayStats(node) {
+  node.textContent = "";
+  const data = state.stats;
+  if (!data) return;
+  const number = (value, label) => h("div", { class: "number" }, h("b", { text: value }), h("span", { text: label }));
   const most = Math.max(1, ...data.week.map((day) => Math.max(day.pomodoros, day.done)));
-  page.append(h("h3", { text: "Last 7 days" }), h("div", { class: "week" }, data.week.map((day) => h("div", { class: "day", title: day.date + ": " + day.pomodoros + " focus, " + day.minutes + " min, " + day.done + " done" },
+  const week = h("div", { class: "week mini", title: "Last 7 days: focus sessions (orange) and tasks done (green)" }, data.week.map((day) => h("div", { class: "day", title: day.date + ": " + day.pomodoros + " focus, " + day.minutes + " min, " + day.done + " done" },
     h("div", { class: "bars" }, h("i", { class: "f", style: "height:" + (day.pomodoros / most * 100) + "%" }), h("i", { class: "d", style: "height:" + (day.done / most * 100) + "%" })),
-    h("span", { text: new Date(day.date + "T12:00:00").toLocaleDateString(undefined, { weekday: "short" }) })))));
-  page.append(h("div", { class: "legend" }, h("span", {}, h("i", { style: "background:var(--energy)" }), "focus sessions"), h("span", {}, h("i", { style: "background:var(--ok)" }), "tasks done")));
-  page.append(h("h3", { text: "Most focused cards" }));
-  page.append(data.cards.length
-    ? h("div", { class: "top" }, data.cards.map((item) => h("div", {}, h("span", { text: item.card }), h("span", { class: "where", text: Math.round(item.minutes) + " min" }))))
-    : h("div", { class: "empty", text: "Start a focus session from a card (Focus) to see time per card." }));
-  page.append(h("div", { class: "where", style: "margin-top:18px", text: "All time: " + data.total_pomodoros + " focus sessions" }));
-  main.append(page);
+    h("span", { text: new Date(day.date + "T12:00:00").toLocaleDateString(undefined, { weekday: "narrow" }) }))));
+  node.append(h("div", { class: "numbers" },
+    number(Math.round(data.today.minutes), "focus min today"),
+    number(data.today.done, "done today"),
+    number(data.streak, "day streak"),
+    week));
+}
+
+function drawMostFocused(node) {
+  node.textContent = "";
+  const data = state.stats;
+  if (!data || !data.cards.length) return;
+  node.append(h("h3", {}, "Most focused cards", h("span", { class: "n", text: data.total_pomodoros + " sessions all time" })),
+    h("div", { class: "top" }, data.cards.map((item) => h("div", {}, h("span", { text: item.card }), h("span", { class: "where", text: Math.round(item.minutes) + " min" })))));
 }
 
 function render() {
   const main = $("main");
   for (const button of $("tabs").children) button.classList.toggle("on", button.dataset.view === state.view);
-  $("toolbar").classList.toggle("hidden", ["games", "stats", "studio", "canvas"].includes(state.view));
+  $("toolbar").classList.toggle("hidden", ["games", "studio", "canvas"].includes(state.view));
   const filter = $("filter");
   filter.classList.toggle("on", Boolean(state.tag));
   filter.textContent = state.tag ? "#" + state.tag + " " : "";
@@ -6464,7 +6861,6 @@ function render() {
   if (state.view === "studio") { renderStudio(main); return; }
   if (state.view === "canvas") { renderCanvas(main); return; }
   if (!state.board) return;
-  if (state.view === "stats") { renderStats(main); return; }
   const scroll = main.scrollLeft;
   const active = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.column : undefined;
   main.textContent = "";
@@ -7008,7 +7404,7 @@ async function timer(action, card) {
   state.timerAt = Date.now();
   drawTimer();
   if (card && card !== linkedBefore) toast("Focus: " + card);
-  if (state.board && !["stats", "games", "studio", "canvas"].includes(state.view)) render();
+  if (state.board && !["games", "studio", "canvas"].includes(state.view)) { todayStatsAt = 0; render(); }
 }
 
 function remaining() {
@@ -7066,8 +7462,8 @@ for (const button of $("tabs").children) button.addEventListener("click", () => 
 // The pure helpers (geometry, hit-testing, rough strokes, edits, history) come first so the tests can call them.
 // Photoshop-style keys (letters by physical key, so they work in any layout): the first one is shown in tooltips,
 // the rest are aliases; Shift+U cycles the shape tools like Photoshop's tool groups.
-const CV_TOOLS = { select: "vm", hand: "h", card: "n", text: "t", rectangle: "ur", ellipse: "o", diamond: "", line: "l", arrow: "a", freedraw: "bp", fill: "g", eraser: "e" };
-const CV_LABELS = { select: "Select", hand: "Hand", card: "Card", text: "Text", rectangle: "Rectangle", ellipse: "Ellipse", diamond: "Diamond", line: "Line", arrow: "Arrow", freedraw: "Brush", fill: "Fill", eraser: "Eraser" };
+const CV_TOOLS = { select: "vm", hand: "h", card: "n", text: "t", thread: "k", rectangle: "ur", ellipse: "o", diamond: "", line: "l", arrow: "a", freedraw: "bp", fill: "g", eraser: "e" };
+const CV_LABELS = { select: "Select", hand: "Hand", card: "Card", text: "Text", thread: "Thread", rectangle: "Rectangle", ellipse: "Ellipse", diamond: "Diamond", line: "Line", arrow: "Arrow", freedraw: "Brush", fill: "Fill", eraser: "Eraser" };
 const CV_BY_KEY = Object.fromEntries(Object.entries(CV_TOOLS).flatMap(([tool, keys]) => [...keys].map((key) => [key, tool])));
 const CV_SHAPE_CYCLE = ["rectangle", "ellipse", "diamond", "line", "arrow"];
 // 24x24 outline icons (stroke = currentColor), built with createElementNS, never innerHTML.
@@ -7076,6 +7472,20 @@ const CV_ICONS = {
   hand: "M8 12.5V5.5a1.5 1.5 0 0 1 3 0V11 M11 10.5v-6a1.5 1.5 0 0 1 3 0V11 M14 10.5V6.5a1.5 1.5 0 0 1 3 0V14a6 6 0 0 1-6 6h-.6a6 6 0 0 1-4.7-2.3L3.8 13.6a1.6 1.6 0 0 1 2.5-2L8 13.6",
   card: "M4 4h16v11l-5 5H4z M15 20v-5h5 M8 9h8 M8 12.5h5",
   text: "M5 7V4h14v3 M12 4v16 M9 20h6",
+  thread: "M3.5 6.5a2 2 0 1 0 4 0a2 2 0 1 0-4 0 M16.5 17.5a2 2 0 1 0 4 0a2 2 0 1 0-4 0 M7 8c3 9 7 2 10 8",
+  audio: "M9 18V5l12-2v13 M3 18a3 3 0 1 0 6 0a3 3 0 1 0-6 0 M15 16a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
+  trash: "M4 7h16 M9 7V4h6v3 M6 7l1 13h10l1-13 M10 11v5 M14 11v5",
+  gallery: "M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z",
+  close: "M6 6l12 12 M18 6L6 18",
+  chevron: "M9 6l6 6-6 6",
+  chevronDown: "M6 9l6 6 6-6",
+  star: "M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.8L12 16.8l-5.2 2.8 1-5.8-4.3-4.1 5.9-.8z",
+  back: "M15 18l-6-6 6-6",
+  edit: "M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z M14 7l3 3",
+  link: "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1 M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
+  layers: "M12 3l9 5-9 5-9-5z M3 12.5l9 5 9-5 M3 16.5l9 5 9-5",
+  eye: "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
+  eyeOff: "M3 3l18 18 M10.6 5.1A10.6 10.6 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.1 3.9 M6.6 6.6A17 17 0 0 0 2 12s3.6 7 10 7a10 10 0 0 0 5.4-1.6 M9.9 9.9a3 3 0 0 0 4.2 4.2",
   rectangle: "M4 6h16v12H4z",
   ellipse: "M3 12a9 7 0 1 0 18 0a9 7 0 1 0-18 0",
   diamond: "M12 3l9 9-9 9-9-9z",
@@ -7121,10 +7531,12 @@ const CV_CORK = { light: "#b8875a", dark: "#5e4128" };
 const CV_PAPER = "#fff1a6";
 const CV_THREAD = "#c1121f";
 const CV_PINS = ["#d62828", "#1d6fd8", "#2b9348", "#f4a300", "#7b2cbf", "#e5e5e5"];
-const CV_IMAGE_FILE = /\.(png|jpe?g|gif|webp)$/i;
+const CV_IMAGE_FILE = /\.(png|jpe?g|gif|webp|ico)$/i;
+const CV_CANVAS_FILE = /\.canvas$/i;
 // Quick Look draws plain text as dark text on a dark page when macOS is in dark mode: these stay a paper sheet.
 const CV_PLAIN_FILE = /\.(txt|text|log|csv|tsv|json|jsonl|ya?ml|toml|ini|cfg|conf|xml|html?|css|js|mjs|cjs|ts|tsx|jsx|py|rs|c|h|cc|cpp|hpp|m|swift|go|java|kt|rb|php|sh|zsh|bash|fish|sql|lua|r|jl|tex|srt|vtt)$/i;
 const CV_MAX_UPLOAD = 256 * 1024 * 1024;
+const CV_PLAYED = "#f5a524";
 const cvNum = (value, fallback) => (typeof value === "number" && Number.isFinite(value) ? value : fallback);
 const cvClone = (value) => JSON.parse(JSON.stringify(value));
 const cvId = () => Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
@@ -7185,13 +7597,36 @@ function idHash(id, salt) {
 }
 const nodeTilt = (node) => (node.type === "group" ? 0 : (idHash(node.id) * 2 - 1) * 0.045);
 const pinColor = (node) => CV_PINS[Math.floor(idHash(node.id, "pin") * CV_PINS.length)];
-function pinPoint(node) {
+// A point of a card given as fractions of its unrotated box ([0.5, 0.5] = the middle), turned with the card's
+// tilt on the detective board, so a pin stays on the same spot of the paper.
+function anchorPoint(node, frac, tilted) {
+  const tilt = tilted ? nodeTilt(node) : 0, dx = (frac[0] - 0.5) * node.width, dy = (frac[1] - 0.5) * node.height;
+  return { x: node.x + node.width / 2 + Math.cos(tilt) * dx - Math.sin(tilt) * dy, y: node.y + node.height / 2 + Math.sin(tilt) * dx + Math.cos(tilt) * dy };
+}
+// The inverse of anchorPoint, clamped to the card.
+function fracAt(node, w, tilted) {
+  const tilt = tilted ? nodeTilt(node) : 0, x = w.x - (node.x + node.width / 2), y = w.y - (node.y + node.height / 2);
+  const lx = Math.cos(tilt) * x + Math.sin(tilt) * y, ly = -Math.sin(tilt) * x + Math.cos(tilt) * y;
+  const part = (v, size) => Math.round(Math.max(0, Math.min(1, v / (size || 1) + 0.5)) * 10000) / 10000;
+  return [part(lx, node.width), part(ly, node.height)];
+}
+// An edge end tied to a spot of its card (the thread tool or a dragged end): unlawFrom/unlawTo, [fx, fy] in 0..1.
+// Obsidian does not know the keys and keeps using fromSide/toSide, which are set to the nearest side.
+function edgeAnchor(edge, end) {
+  const value = edge && edge[end === "to" ? "unlawTo" : "unlawFrom"];
+  return Array.isArray(value) && value.length === 2 && value.every((n) => Number.isFinite(n) && n >= 0 && n <= 1) ? value : null;
+}
+function pinPoint(node, frac) {
+  if (frac) return anchorPoint(node, frac, true);
   const tilt = nodeTilt(node), dy = -node.height / 2 + Math.min(14, node.height / 4);
   return { x: node.x + node.width / 2 - Math.sin(tilt) * dy, y: node.y + node.height / 2 + Math.cos(tilt) * dy };
 }
 // The thread hangs: a quadratic sag written as a cubic, so hit-testing and labels use the edge code as is.
-function threadCurve(a, b) {
-  const p0 = pinPoint(a), p3 = pinPoint(b), length = Math.hypot(p3.x - p0.x, p3.y - p0.y);
+function threadCurve(a, b, fa, fb) {
+  return sagCurve(pinPoint(a, fa), pinPoint(b, fb));
+}
+function sagCurve(p0, p3) {
+  const length = Math.hypot(p3.x - p0.x, p3.y - p0.y);
   const q = { x: (p0.x + p3.x) / 2, y: (p0.y + p3.y) / 2 + Math.min(90, 10 + length * 0.12) };
   return { p0, c1: { x: p0.x + (2 / 3) * (q.x - p0.x), y: p0.y + (2 / 3) * (q.y - p0.y) }, c2: { x: p3.x + (2 / 3) * (q.x - p3.x), y: p3.y + (2 / 3) * (q.y - p3.y) }, p3 };
 }
@@ -7283,8 +7718,10 @@ const cvKey = (kind, item) => kind + ":" + item.id;
 function validBox(item) {
   return Boolean(item) && typeof item === "object" && typeof item.id === "string" && Number.isFinite(item.x) && Number.isFinite(item.y) && Number.isFinite(item.width) && Number.isFinite(item.height);
 }
-const docNodes = (doc) => cvList(doc, "n").filter(validBox);
-const docElements = (doc) => cvList(doc, "x").filter((el) => validBox(el) && CV_SHAPES.has(el.type));
+// unlawHidden (the eye in Layers) takes a card, group or drawing out of painting and picking; `all` keeps them.
+const cvHidden = (item) => Boolean(item && item.unlawHidden === true);
+const docNodes = (doc, all) => cvList(doc, "n").filter((n) => validBox(n) && (all || !cvHidden(n)));
+const docElements = (doc, all) => cvList(doc, "x").filter((el) => validBox(el) && CV_SHAPES.has(el.type) && (all || !cvHidden(el)));
 const docEdges = (doc) => cvList(doc, "e").filter((e) => e && typeof e === "object" && typeof e.id === "string" && typeof e.fromNode === "string" && typeof e.toNode === "string");
 function ensureList(doc, name) {
   if (!Array.isArray(doc[name])) doc[name] = [];
@@ -7382,8 +7819,7 @@ function nearestSide(box, x, y) {
   if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? "right" : "left";
   return dy > 0 ? "bottom" : "top";
 }
-function edgeCurve(a, sideA, b, sideB) {
-  const p0 = sideAnchor(a, sideA), p3 = sideAnchor(b, sideB);
+function edgeCurve(a, sideA, b, sideB, p0 = sideAnchor(a, sideA), p3 = sideAnchor(b, sideB)) {
   const reach = Math.max(40, Math.min(200, Math.hypot(p3.x - p0.x, p3.y - p0.y) / 2));
   const v0 = CV_SIDES[sideA], v1 = CV_SIDES[sideB];
   return { p0, c1: { x: p0.x + v0[0] * reach, y: p0.y + v0[1] * reach }, c2: { x: p3.x + v1[0] * reach, y: p3.y + v1[1] * reach }, p3 };
@@ -7401,11 +7837,13 @@ function hitEdge(curve, x, y, tol) {
 function edgeCurveFor(map, edge, cork) {
   const a = map.get(edge.fromNode), b = map.get(edge.toNode);
   if (!a || !b) return null;
-  if (cork) return threadCurve(a, b);
+  const fa = edgeAnchor(edge, "from"), fb = edgeAnchor(edge, "to");
+  if (cork) return threadCurve(a, b, fa, fb);
   const ca = { x: a.x + a.width / 2, y: a.y + a.height / 2 }, cb = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-  const from = CV_SIDE_NAMES.includes(edge.fromSide) ? edge.fromSide : nearestSide(a, cb.x, cb.y);
-  const to = CV_SIDE_NAMES.includes(edge.toSide) ? edge.toSide : nearestSide(b, ca.x, ca.y);
-  return edgeCurve(a, from, b, to);
+  const p0 = fa ? anchorPoint(a, fa, false) : undefined, p3 = fb ? anchorPoint(b, fb, false) : undefined;
+  const from = p0 ? nearestSide(a, p0.x, p0.y) : CV_SIDE_NAMES.includes(edge.fromSide) ? edge.fromSide : nearestSide(a, cb.x, cb.y);
+  const to = p3 ? nearestSide(b, p3.x, p3.y) : CV_SIDE_NAMES.includes(edge.toSide) ? edge.toSide : nearestSide(b, ca.x, ca.y);
+  return edgeCurve(a, from, b, to, p0, p3);
 }
 const nodeMap = (doc) => new Map(docNodes(doc).map((n) => [n.id, n]));
 
@@ -7887,8 +8325,8 @@ function moveItems(doc, keys, dx, dy) {
 }
 function containedIds(doc, group) {
   const keys = [];
-  for (const node of docNodes(doc)) if (node.id !== group.id && boxInside(node, group)) keys.push(cvKey("n", node));
-  for (const el of docElements(doc)) if (boxInside(el, group)) keys.push(cvKey("x", el));
+  for (const node of docNodes(doc, true)) if (node.id !== group.id && boxInside(node, group)) keys.push(cvKey("n", node));
+  for (const el of docElements(doc, true)) if (boxInside(el, group)) keys.push(cvKey("x", el));
   return keys;
 }
 function groupAround(doc, keys, id) {
@@ -7987,6 +8425,8 @@ const cv = {
   style: { stroke: CV_INK[0], fill: false, width: 4, rough: 1 }, hist: null, drag: null, editing: null, space: false,
   dirty: false, saving: null, saveTimer: 0, clip: null, pasted: 0, hover: null, pointer: null, lastLabel: "", lastAt: 0,
   drawPending: false, el: null, ctx: null, w: 0, h: 0, dpr: 1, ui: {}, gesture: 1, eraser: "object", cursor: null, menu: "",
+  thread: null, threadAt: null, layers: false, gallery: false, viewing: null, pasteWait: 0,
+  back: [], shelf: { favorites: [], groups: [] }, gallerySearch: "", playing: null, inline: null, clickTimer: 0, folded: null, ticking: false, galleryDrag: null,
 };
 
 // The eraser mode, shape evenness and width are remembered in this browser.
@@ -8003,12 +8443,14 @@ function cvSavePrefs() {
 cvLoadPrefs();
 
 function cvLoad(shape) {
+  if (shape.path !== cv.path) { cvStopMedia(); cvCloseInline(); cvCanvasThumbs.clear(); }
   cv.path = shape.path;
   cv.name = shape.name || "";
   cv.version = shape.version;
   const doc = shape.canvas && typeof shape.canvas === "object" && !Array.isArray(shape.canvas) ? shape.canvas : {};
   ensureList(doc, "nodes");
   ensureList(doc, "edges");
+  const linked = doc.nodes.filter((node) => textToLink(node)).length;
   cv.doc = doc;
   cv.hist = makeHistory(CV_HISTORY, JSON.stringify(doc));
   cv.sel = cv.sel.filter((key) => cvLookup(doc, key));
@@ -8021,6 +8463,7 @@ function cvLoad(shape) {
   cvStatus("Saved");
   cvSync();
   cvDraw();
+  if (linked) cvChanged(); // written back, so Obsidian sees link cards too
 }
 
 function cvStatus(text) {
@@ -8096,6 +8539,7 @@ async function loadCanvasList() {
   const { status, data } = await api("GET", "/api/canvases");
   if (status !== 200) { toast(data.error || "Could not list the canvases"); return null; }
   cv.items = Array.isArray(data.items) ? data.items : [];
+  cv.shelf = cleanShelf(data.shelf);
   cvFillPick();
   return data;
 }
@@ -8173,6 +8617,13 @@ async function cvStart() {
 function leaveCanvas() {
   cvCancelDrag();
   cvEndEdit();
+  cvCloseView();
+  cvStopMedia();
+  cvCloseInline();
+  clearTimeout(cv.clickTimer);
+  cv.gallery = false;
+  cv.layerDrag = null;
+  cv.thread = null;
   saveCanvas();
   cv.el = null;
   cv.ctx = null;
@@ -8298,7 +8749,7 @@ function paintNode(ctx, node, pal, hideText, image) {
   ctx.lineWidth = color ? 2 : 1.5;
   ctx.strokeStyle = color || pal.line;
   ctx.stroke();
-  if (image && node.height > 60) {
+  if (image && node.height > 60 && node.type !== "link") {
     // A picture fills the card above a one-line caption.
     ctx.save();
     roundPath(ctx, node.x + 5, node.y + 5, node.width - 10, node.height - 38, 5);
@@ -8309,7 +8760,7 @@ function paintNode(ctx, node, pal, hideText, image) {
       ctx.font = "600 13px " + CV_FONT;
       ctx.textBaseline = "middle";
       ctx.fillStyle = pal.text;
-      ctx.fillText(String(node.file ?? "").split("/").pop(), node.x + 10, node.y + node.height - 17, Math.max(10, node.width - 20));
+      ctx.fillText(fileLabel(node.file), node.x + 10, node.y + node.height - 17, Math.max(10, node.width - 20));
     }
   } else if (!hideText) {
     ctx.beginPath();
@@ -8326,8 +8777,13 @@ function paintNode(ctx, node, pal, hideText, image) {
       paintLines(ctx, node, wrapped(file.split("/").pop(), "600 15px " + CV_FONT), "600 15px " + CV_FONT, pal.text, 21, cursor);
       if (file.includes("/")) paintLines(ctx, node, wrapped(file, "12px " + CV_FONT), "12px " + CV_FONT, pal.muted, 17, cursor);
     } else if (node.type === "link") {
-      paintLines(ctx, node, ["Link"], "11px " + CV_FONT, pal.muted, 16, cursor);
+      // The site's logo on top, then the page's title and the address.
+      const preview = node.unlawPreview && typeof node.unlawPreview === "object" ? node.unlawPreview : null;
+      const size = Math.min(72, node.height - 96, node.width - 40);
+      if (size >= 24) { paintSiteLogo(ctx, image, node.x + node.width / 2, cursor.y + 2, size, pal, linkSite(node)); cursor.y += size + 14; }
+      if (preview && preview.title) paintLines(ctx, node, wrapped(String(preview.title), "600 15px " + CV_FONT), "600 15px " + CV_FONT, pal.text, 21, cursor);
       paintLines(ctx, node, wrapped(node.url ?? "", "13px " + CV_MONO), "13px " + CV_MONO, pal.accent, 18, cursor);
+      if (preview && preview.description) paintLines(ctx, node, wrapped(String(preview.description), "13px " + CV_FONT), "13px " + CV_FONT, pal.muted, 18, cursor);
     } else {
       paintLines(ctx, node, [String(node.type)], "12px " + CV_FONT, pal.muted, 16, cursor);
     }
@@ -8335,10 +8791,134 @@ function paintNode(ctx, node, pal, hideText, image) {
   ctx.restore();
 }
 
+// A logo in a rounded white square (icons are often transparent), or the site's first letter when it has none.
+function paintSiteLogo(ctx, image, cx, top, size, pal, site) {
+  const x = cx - size / 2;
+  ctx.save();
+  roundPath(ctx, x, top, size, size, size * 0.22);
+  if (image) {
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.clip();
+    const pad = size * 0.1;
+    drawCover(ctx, image, { x: x + pad, y: top + pad, width: size - pad * 2, height: size - pad * 2 }, true);
+  } else {
+    ctx.fillStyle = pal.accent;
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "700 " + Math.round(size * 0.5) + "px " + CV_FONT;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText((String(site || "").replace(/^www\./, "")[0] || "?").toUpperCase(), cx, top + size / 2 + 1);
+  }
+  ctx.restore();
+}
+
+function linkSite(node) {
+  const preview = node.unlawPreview;
+  if (preview && typeof preview === "object" && preview.site) return String(preview.site);
+  const found = /^https?:\/\/([^/?#:]+)/i.exec(String(node.url ?? "").trim());
+  return found ? found[1] : "";
+}
+
+// A file card's caption: the file name; a linked canvas without its .canvas.
+function fileLabel(file) {
+  return String(file ?? "").split("/").pop().replace(CV_CANVAS_FILE, "");
+}
+
+function linkTitle(node) {
+  const preview = node.unlawPreview;
+  return preview && typeof preview === "object" && preview.title ? String(preview.title) : String(node.url ?? "");
+}
+
+// Video, sound and 3D cards say so: a play button or a 3D tag over the card; a linked canvas gets a tag. A card that
+// plays (media from cvMediaState) shows its progress, a sound its wave.
+function paintFileBadge(ctx, node, media, cork) {
+  if (node.type !== "file" || node.width < 60 || node.height < 60) return;
+  const kind = cvFileKind(node.file);
+  if (kind === "canvas") { paintCanvasTag(ctx, node, cork); return; }
+  if (kind !== "video" && kind !== "audio" && kind !== "model") return;
+  if (media) paintMediaBar(ctx, node, media, cork);
+  if (media && media.playing) return;
+  const r = Math.min(24, node.width / 6, node.height / 6), x = node.x + node.width / 2, y = node.y + Math.max(r + 6, (node.height - 33) / 2 + 5);
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  if (kind === "model") {
+    ctx.font = "700 " + Math.round(r * 0.8) + "px " + CV_FONT;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("3D", x, y + 1);
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(x - r * 0.3, y - r * 0.45);
+    ctx.lineTo(x + r * 0.5, y);
+    ctx.lineTo(x - r * 0.3, y + r * 0.45);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// The picture area of a file card (where a photo, a video frame or a PDF page is), unrotated.
+function cvPictureBox(node, cork) {
+  return cork
+    ? { x: node.x + 10, y: node.y + 10, width: node.width - 20, height: Math.max(10, node.height - 50) }
+    : { x: node.x + 5, y: node.y + 5, width: node.width - 10, height: node.height - 38 };
+}
+
+function paintMediaBar(ctx, node, media, cork) {
+  const draw = () => {
+    const box = cvPictureBox(node, cork);
+    if (box.width < 30 || box.height < 30) return;
+    ctx.save();
+    if (media.peaks && media.peaks.length) {
+      const n = media.peaks.length, gap = box.width / n, tall = Math.min(56, box.height * 0.4), base = box.y + box.height - (media.idle ? 8 : 24);
+      ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+      ctx.fillRect(box.x, base - tall - 6, box.width, tall + (media.idle ? 14 : 30));
+      for (let i = 0; i < n; i++) {
+        const tallness = Math.max(1.5, media.peaks[i] * tall);
+        ctx.fillStyle = (i + 0.5) / n <= media.progress ? CV_PLAYED : "rgba(255, 255, 255, 0.8)";
+        ctx.fillRect(box.x + i * gap + gap * 0.2, base - tallness, Math.max(1, gap * 0.6), tallness);
+      }
+    }
+    if (!media.idle) {
+      ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+      ctx.fillRect(box.x, box.y + box.height - 18, box.width, 18);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
+      ctx.fillRect(box.x + 8, box.y + box.height - 10, box.width - 16, 3);
+      ctx.fillStyle = CV_PLAYED;
+      ctx.fillRect(box.x + 8, box.y + box.height - 10, (box.width - 16) * media.progress, 3);
+    }
+    ctx.restore();
+  };
+  if (cork) tilted(ctx, node, draw); else draw();
+}
+
+function paintCanvasTag(ctx, node, cork) {
+  const draw = () => {
+    const box = cvPictureBox(node, cork);
+    ctx.save();
+    ctx.font = "700 11px " + CV_FONT;
+    const label = "CANVAS \u2197", width = ctx.measureText(label).width + 14;
+    roundPath(ctx, box.x + 6, box.y + 6, width, 20, 6);
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, box.x + 13, box.y + 16.5);
+    ctx.restore();
+  };
+  if (cork) tilted(ctx, node, draw); else draw();
+}
+
 // ---- detective board painting ----
 // Photos fill their frame (cropped); a document's preview is shown whole, so its page is never cut.
 function drawCover(ctx, image, box, whole) {
-  const iw = image.naturalWidth || image.width || 1, ih = image.naturalHeight || image.height || 1;
+  const iw = image.videoWidth || image.naturalWidth || image.width || 1, ih = image.videoHeight || image.naturalHeight || image.height || 1;
   if (whole) {
     const scale = Math.min(box.width / iw, box.height / ih), w = iw * scale, h = ih * scale;
     ctx.drawImage(image, box.x + (box.width - w) / 2, box.y + (box.height - h) / 2, w, h);
@@ -8484,7 +9064,7 @@ function paintCorkNode(ctx, node, pal, hideText, image) {
         ctx.fillStyle = ink;
         ctx.textBaseline = "middle";
         ctx.textAlign = "center";
-        ctx.fillText(String(node.file ?? "").split("/").pop(), x + w / 2, y + h - 20, Math.max(10, w - 20));
+        ctx.fillText(fileLabel(node.file), x + w / 2, y + h - 20, Math.max(10, w - 20));
         ctx.textAlign = "left";
       }
       return;
@@ -8500,7 +9080,9 @@ function paintCorkNode(ctx, node, pal, hideText, image) {
       ctx.fillRect(x, y + 30, w, 1.5);
       ctx.fillStyle = "#9cc3e6";
       for (let line = y + 52; line < y + h - 4; line += 22) ctx.fillRect(x, line, w, 1);
-      if (!hideText) handLines(ctx, node, node.url ?? "", y + 36, 16, "#1d4f91", false);
+      const size = Math.min(56, h - 110, w - 40);
+      if (size >= 24) paintSiteLogo(ctx, image, x + w / 2, y + 40, size, { accent: "#1d4f91" }, linkSite(node));
+      if (!hideText) handLines(ctx, node, linkTitle(node) + (linkTitle(node) === String(node.url ?? "") ? "" : "\n" + String(node.url ?? "")), y + 36 + (size >= 24 ? size + 14 : 0), 16, "#1d4f91", false);
       return;
     }
     const color = nodeColor(node.color), paper = color ? mixColor(color, "#ffffff", 0.55) : CV_PAPER, curl = Math.min(22, w / 6, h / 6);
@@ -8570,6 +9152,48 @@ function paintThread(ctx, curve, edge, pal, selected, hideLabel) {
 }
 
 // A push pin seen from above: its shadow and needle on the cork, a round head with a cap.
+function paintEndHandle(ctx, p, pal, z) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, 5 / z, 0, Math.PI * 2);
+  ctx.fillStyle = pal.panel || "#fff";
+  ctx.fill();
+  ctx.lineWidth = 2 / z;
+  ctx.strokeStyle = pal.accent;
+  ctx.stroke();
+  ctx.restore();
+}
+
+// The thread tool between its first click and the second: a pin and thread (or a dashed line) to the pointer.
+function paintThreadDraft(ctx, t, pal, cork, z) {
+  ctx.save();
+  if (cork) {
+    const c = sagCurve(t.a, t.b);
+    ctx.beginPath();
+    ctx.moveTo(c.p0.x, c.p0.y);
+    ctx.bezierCurveTo(c.c1.x, c.c1.y, c.c2.x, c.c2.y, c.p3.x, c.p3.y);
+    ctx.strokeStyle = CV_THREAD;
+    ctx.lineWidth = 2.4;
+    ctx.stroke();
+    ctx.restore();
+    paintPin(ctx, t.a, CV_PINS[0]);
+    return;
+  }
+  ctx.setLineDash([6 / z, 5 / z]);
+  ctx.beginPath();
+  ctx.moveTo(t.a.x, t.a.y);
+  ctx.lineTo(t.b.x, t.b.y);
+  ctx.strokeStyle = pal.accent;
+  ctx.lineWidth = 2 / z;
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.arc(t.a.x, t.a.y, 4 / z, 0, Math.PI * 2);
+  ctx.fillStyle = pal.accent;
+  ctx.fill();
+  ctx.restore();
+}
+
 function paintPin(ctx, p, color) {
   ctx.save();
   ctx.fillStyle = "rgba(25, 10, 0, 0.35)";
@@ -8768,7 +9392,7 @@ function paintScene(o) {
     if (pattern) { ctx.fillStyle = pattern; ctx.fillRect(vis.x, vis.y, vis.width, vis.height); }
   }
   const editing = ui && ui.editing;
-  const picture = (node) => (node.type === "file" && o.images ? o.images(node) : null);
+  const picture = (node) => ((node.type === "file" || node.type === "link") && o.images ? o.images(node) : null);
   const nodes = docNodes(doc), map = new Map(nodes.map((n) => [n.id, n]));
   for (const node of nodes) if (node.type === "group" && rectsIntersect(node, vis)) paintGroup(ctx, node, pal, editing === cvKey("n", node));
   const edges = docEdges(doc), selected = (edge) => Boolean(ui && ui.sel.has(cvKey("e", edge)));
@@ -8782,22 +9406,36 @@ function paintScene(o) {
     if (node.type === "group" || !rectsIntersect(node, vis)) continue;
     if (cork) paintCorkNode(ctx, node, pal, editing === cvKey("n", node), picture(node));
     else paintNode(ctx, node, pal, editing === cvKey("n", node), picture(node));
+    paintFileBadge(ctx, node, o.media ? o.media(node) : null, cork);
   }
   if (cork) {
     // Thread goes over the paper from pin to pin; every card has its pin, a group only when thread is tied to it.
-    const pinned = new Set();
+    // A thread end tied to a spot of the card gets its own pin there.
+    const pinned = new Set(), spots = [];
     for (const edge of edges) {
       const curve = edgeCurveFor(map, edge, true);
       if (!curve) continue;
       paintThread(ctx, curve, edge, pal, selected(edge), editing === cvKey("e", edge));
-      pinned.add(edge.fromNode).add(edge.toNode);
+      for (const [id, end] of [[edge.fromNode, "from"], [edge.toNode, "to"]]) {
+        const spot = edgeAnchor(edge, end);
+        if (spot) spots.push([map.get(id), spot]); else pinned.add(id);
+      }
     }
     for (const node of nodes) {
       if ((node.type !== "group" || pinned.has(node.id)) && rectsIntersect(node, vis)) paintPin(ctx, pinPoint(node), pinColor(node));
     }
+    for (const [node, spot] of spots) paintPin(ctx, pinPoint(node, spot), pinColor(node));
   }
   for (const el of docElements(doc)) if (rectsIntersect(el, vis)) paintElement(ctx, el, pal, editing === cvKey("x", el));
   if (ui && ui.draft) paintElement(ctx, ui.draft, pal, false);
+  if (ui) {
+    // The ends of a selected edge can be dragged to another spot of their card.
+    for (const edge of edges) {
+      const curve = selected(edge) && edgeCurveFor(map, edge, cork);
+      if (curve) for (const p of [curve.p0, curve.p3]) paintEndHandle(ctx, p, pal, view.z);
+    }
+    if (ui.thread) paintThreadDraft(ctx, ui.thread, pal, cork, view.z);
+  }
   if (ui && cork) { ctx.setTransform(k, 0, 0, k, 0, 0); paintVignette(ctx, o.w, o.h); }
   if (ui) paintOverlay({ ...o, ui });
 }
@@ -8816,9 +9454,16 @@ function cvDraw() {
       return;
     }
     const eraser = cv.tool === "eraser" && cv.eraser === "part" && cv.cursor ? { ...cv.cursor, r: cvEraserRadius() * cv.view.z } : null;
-    const ui = { sel: new Set(cv.sel), hover: cv.hover, drag: cv.drag, editing: cv.editing && cv.editing.key, tool: cv.tool, draft: cvDraft(), eraser };
-    paintScene({ ctx: cv.ctx, doc: cv.doc, view: cv.view, w: cv.w, h: cv.h, pal, scale: cv.dpr, ui, images: cvImageFor });
+    const ui = { sel: new Set(cv.sel), hover: cv.hover, drag: cv.drag, editing: cv.editing && cv.editing.key, tool: cv.tool, draft: cvDraft(), eraser, thread: cvThreadDraft() };
+    paintScene({ ctx: cv.ctx, doc: cv.doc, view: cv.view, w: cv.w, h: cv.h, pal, scale: cv.dpr, ui, images: cvImageFor, media: cvMediaState });
+    cvPlaceInline();
   });
+}
+
+function cvThreadDraft() {
+  const start = cv.tool === "thread" && cv.thread && cvLookup(cv.doc, "n:" + cv.thread.node);
+  if (!validBox(start) || !cv.threadAt) return null;
+  return { a: anchorPoint(start, cv.thread.frac, cvCork(cv.doc)), b: cv.threadAt };
 }
 
 function cvResize() {
@@ -8897,6 +9542,7 @@ function cvSelect(keys) {
 function cvSetTool(tool) {
   cvCloseMenu();
   cv.tool = tool;
+  cv.thread = null;
   cv.hover = null;
   cvSync();
   cvCursor();
@@ -8912,6 +9558,7 @@ function cvCursor() {
 function cvSync() {
   const ui = cv.ui;
   if (!ui.tools) return;
+  cvRenderLayers();
   for (const [tool, button] of Object.entries(ui.tools)) button.classList.toggle("on", tool === cv.tool);
   CV_INK.forEach((color, i) => ui.ink[i].classList.toggle("on", color === cv.style.stroke));
   const custom = !CV_INK.includes(cv.style.stroke);
@@ -9013,12 +9660,15 @@ function cvDown(event) {
   cv.el.focus();
   if (cv.el.setPointerCapture) cv.el.setPointerCapture(event.pointerId);
   const { s, w } = cvPoint(event);
+  // A PDF shown in its card closes when something else is clicked.
+  if (cv.inline && hitTest(cv.doc, w.x, w.y, cv.view.z) !== "n:" + cv.inline.id) cvCloseInline();
   if (event.button === 1 || cv.tool === "hand" || cv.space) { cv.drag = { mode: "pan", s, view: { ...cv.view } }; cvCursor(); return; }
   if (cv.tool === "select") { cvDownSelect(event, s, w); return; }
   // The tool stays active, so the click that closes a card or text editor only closes it.
-  if (wasEditing && (cv.tool === "text" || cv.tool === "card")) return;
+  if (wasEditing && (cv.tool === "text" || cv.tool === "card" || cv.tool === "thread")) return;
   if (cv.tool === "fill") { cvBucket(w, s, event.altKey); return; }
   if (cv.tool === "eraser") { cv.drag = { mode: "erase", removed: 0, last: null }; cvErase(w); return; }
+  if (cv.tool === "thread") { cvThreadClick(w); return; }
   if (cv.sel.length) cvSelect([]);
   if (cv.tool === "freedraw") { cv.drag = { mode: "pen", pts: [[w.x, w.y]], seed: cvSeed() }; return; }
   if (cv.tool === "text") {
@@ -9034,6 +9684,8 @@ function cvDownSelect(event, s, w) {
   const solo = singleBox(cv.doc, cv.sel);
   const handle = solo && handleAt(solo, s.x, s.y, cv.view);
   if (handle) { cv.drag = { mode: "resize", handle, key: cv.sel[0], orig: cvClone(solo), start: w, moved: false }; return; }
+  const end = cvEdgeEndAt(s);
+  if (end) { cv.drag = { mode: "anchor", key: end.key, end: end.end, moved: false }; return; }
   const side = cvSideHandle(s);
   if (side) { cv.drag = { mode: "connect", from: side.node, side: side.side, s, s2: null }; return; }
   const key = hitTest(cv.doc, w.x, w.y, cv.view.z);
@@ -9042,7 +9694,6 @@ function cvDownSelect(event, s, w) {
     cv.drag = { mode: "marquee", s, s2: null, w, base: event.shiftKey ? cv.sel.slice() : [] };
     return;
   }
-  const wasSole = cv.sel.length === 1 && cv.sel[0] === key;
   if (event.shiftKey) {
     if (cv.sel.includes(key)) { cvSelect(cv.sel.filter((k) => k !== key)); return; }
     cvSelect([...cv.sel, key]);
@@ -9054,7 +9705,7 @@ function cvDownSelect(event, s, w) {
     const item = cvLookup(cv.doc, k);
     if (k[0] === "n" && item && item.type === "group") for (const inner of containedIds(cv.doc, item)) keys.add(inner);
   }
-  cv.drag = { mode: "move", keys: [...keys], s, last: w, armed: false, key, wasSole };
+  cv.drag = { mode: "move", keys: [...keys], s, last: w, armed: false, key };
 }
 
 function cvMove(event) {
@@ -9062,6 +9713,7 @@ function cvMove(event) {
   const { s, w } = cvPoint(event);
   const d = cv.drag;
   if (cv.tool === "eraser" && cv.eraser === "part") { cv.cursor = s; cvDraw(); }
+  if (cv.tool === "thread") { cv.threadAt = w; if (cv.thread) cvDraw(); }
   if (!d) {
     const key = cvHoverKey(w);
     if (key !== cv.hover) { cv.hover = key; cvCursor(); cvDraw(); }
@@ -9083,6 +9735,8 @@ function cvMove(event) {
     if (!item) return;
     applyBox(item, d.orig, resizeBox(d.orig, d.handle, w.x - d.start.x, w.y - d.start.y));
     d.moved = true;
+  } else if (d.mode === "anchor") {
+    if (cvMoveEnd(d, w)) d.moved = true;
   } else if (d.mode === "marquee" || d.mode === "connect") {
     d.s2 = s;
     d.w2 = w;
@@ -9106,9 +9760,11 @@ function cvUp(event) {
   const { w } = cvPoint(event);
   if (d.mode === "move") {
     if (d.armed) cvCommit("move");
-    else if (d.wasSole && !event.shiftKey) cvOpenFile(d.key);
+    else if (!event.shiftKey) cvClickCard(d.key, w);
   } else if (d.mode === "resize") {
     if (d.moved) cvCommit("resize");
+  } else if (d.mode === "anchor") {
+    if (d.moved) cvCommit("thread end");
   } else if (d.mode === "marquee") {
     const box = normRect(d.w.x, d.w.y, w.x, w.y), picked = [];
     for (const node of docNodes(cv.doc)) if (node.type === "group" ? boxInside(node, box) : rectsIntersect(node, box)) picked.push(cvKey("n", node));
@@ -9137,7 +9793,7 @@ function cvCancelDrag() {
   if (!cv.drag) return;
   const mode = cv.drag.mode;
   cv.drag = null;
-  if ((mode === "move" || mode === "resize" || mode === "erase") && cv.hist) cv.doc = JSON.parse(cv.hist.cur);
+  if ((mode === "move" || mode === "resize" || mode === "erase" || mode === "anchor") && cv.hist) cv.doc = JSON.parse(cv.hist.cur);
   cv.sel = cv.doc ? cv.sel.filter((key) => cvLookup(cv.doc, key)) : [];
   cvCursor();
   cvDraw();
@@ -9215,13 +9871,84 @@ function cvBucket(w, s, clear) {
   if (key ? applyFill(cv.doc, key, color) : setBackground(cv.doc, color)) cvCommit("fill");
 }
 
+// Released on another card: an edge to it. Released on empty canvas (after a real drag): a new card there,
+// connected and open for typing, like Obsidian.
+// On a detective board the thread is tied where it was pulled from (that side's dot, not the pin on top) and where
+// it was let go on the other card; a new card gets it on the side facing the first one.
+const CV_SIDE_SPOTS = { top: [0.5, 0], right: [1, 0.5], bottom: [0.5, 1], left: [0, 0.5] };
 function cvFinishConnect(d, w) {
-  const target = cvNodeAt(w);
-  if (!target || target.id === d.from.id) return;
-  const edge = { id: cvId(), fromNode: d.from.id, fromSide: d.side, toNode: target.id, toSide: nearestSide(target, w.x, w.y), toEnd: "arrow" };
+  const target = cvNodeAt(w), cork = cvCork(cv.doc);
+  if (target && target.id === d.from.id) return;
+  const spots = (to) => (cork ? { unlawFrom: CV_SIDE_SPOTS[d.side].slice(), unlawTo: to } : {});
+  if (!target) {
+    if (!d.s2 || Math.hypot(d.s2.x - d.s.x, d.s2.y - d.s.y) < 24) return;
+    const card = cvNewCardAt(w), c = { x: d.from.x + d.from.width / 2, y: d.from.y + d.from.height / 2 }, side = nearestSide(card, c.x, c.y);
+    ensureList(cv.doc, "edges").push({ id: cvId(), fromNode: d.from.id, fromSide: d.side, toNode: card.id, toSide: side, toEnd: "arrow", ...spots(CV_SIDE_SPOTS[side].slice()) });
+    cvSelect([cvKey("n", card)]);
+    // Like the card tool: the card, the edge and the typed text become one undo step when the editor closes.
+    cvStartEdit(cvKey("n", card));
+    if (!cv.editing) cvCommit("connect");
+    return;
+  }
+  const edge = { id: cvId(), fromNode: d.from.id, fromSide: d.side, toNode: target.id, toSide: nearestSide(target, w.x, w.y), toEnd: "arrow", ...spots(fracAt(target, w, cork)) };
   ensureList(cv.doc, "edges").push(edge);
   cvSelect([cvKey("e", edge)]);
   cvCommit("connect");
+}
+
+function cvNewCardAt(w) {
+  const node = { id: cvId(), type: "text", text: "", x: Math.round(w.x - 130), y: Math.round(w.y - 60), width: 260, height: 120 };
+  ensureList(cv.doc, "nodes").push(node);
+  return node;
+}
+
+// Thread tool: the first click pins the start on a card at that spot, the second ends it on another card's
+// spot, or on empty canvas makes a new card there. Esc or another tool drops a started thread.
+function cvThreadClick(w) {
+  const cork = cvCork(cv.doc), node = cvNodeAt(w);
+  const start = cv.thread && cvLookup(cv.doc, "n:" + cv.thread.node);
+  if (!validBox(start)) {
+    cv.thread = node ? { node: node.id, frac: fracAt(node, w, cork) } : null;
+    cv.threadAt = w;
+    if (!node) toast("Click the spot on a card where the thread starts");
+    cvDraw();
+    return;
+  }
+  const from = cv.thread.frac;
+  cv.thread = null;
+  if (node && node.id === start.id) { cvDraw(); return; }
+  const a = anchorPoint(start, from, cork), target = node || cvNewCardAt(w);
+  const edge = { id: cvId(), fromNode: start.id, fromSide: nearestSide(start, a.x, a.y), toNode: target.id, toSide: nearestSide(target, a.x, a.y), toEnd: "arrow", unlawFrom: from };
+  if (node) {
+    edge.unlawTo = fracAt(node, w, cork);
+    const b = anchorPoint(node, edge.unlawTo, cork);
+    edge.toSide = nearestSide(node, b.x, b.y);
+  }
+  ensureList(cv.doc, "edges").push(edge);
+  cvSelect([cvKey(node ? "e" : "n", node ? edge : target)]);
+  if (!node) cvStartEdit(cvKey("n", target));
+  if (!cv.editing) cvCommit("thread");
+}
+
+// An end of the single selected edge under the pointer (screen point), as {key, end}.
+function cvEdgeEndAt(s) {
+  if (cv.sel.length !== 1 || cv.sel[0][0] !== "e") return null;
+  const edge = cvLookup(cv.doc, cv.sel[0]), curve = edge && edgeCurveFor(nodeMap(cv.doc), edge, cvCork(cv.doc));
+  if (!curve) return null;
+  for (const [p, end] of [[curve.p0, "from"], [curve.p3, "to"]]) {
+    const at = toScreen(cv.view, p.x, p.y);
+    if (Math.hypot(at.x - s.x, at.y - s.y) <= 9) return { key: cv.sel[0], end };
+  }
+  return null;
+}
+
+function cvMoveEnd(d, w) {
+  const edge = cvLookup(cv.doc, d.key), node = edge && cvLookup(cv.doc, "n:" + (d.end === "from" ? edge.fromNode : edge.toNode));
+  if (!validBox(node)) return false;
+  const cork = cvCork(cv.doc), frac = fracAt(node, w, cork), p = anchorPoint(node, frac, cork);
+  edge[d.end === "from" ? "unlawFrom" : "unlawTo"] = frac;
+  edge[d.end === "from" ? "fromSide" : "toSide"] = nearestSide(node, p.x, p.y);
+  return true;
 }
 
 function cvEraserRadius() {
@@ -9252,23 +9979,273 @@ function cvErase(w) {
   }
 }
 
-// Clicking a file card that is already the only selection opens it: a note in Obsidian, anything else in its app.
-async function cvOpenFile(key) {
-  const node = cvLookup(cv.doc, key);
-  if (!node || node.type !== "file") return;
-  const name = noteName(node.file);
-  if (name) { openNote(name); return; }
-  const { data } = await api("POST", "/api/canvas/open-file", { path: cv.path, file: String(node.file ?? "") });
-  if (!data.ok) toast(data.error || "Could not open " + String(node.file ?? "").split("/").pop());
-  else if (data.revealed) toast("Shown in Finder: files that would run a program are never opened from the canvas");
+// One click works the card in place: a video or sound plays (a click on its bar seeks), a PDF opens in the card,
+// a site opens inside the desk, a linked canvas opens. Two clicks open it whole: the viewer, or a site in a new tab.
+// The single click waits CV_DOUBLE_MS so a double click never does both.
+const CV_DOUBLE_MS = 230;
+function cvClickCard(key, w) {
+  const node = cv.doc && key[0] === "n" ? cvLookup(cv.doc, key) : null;
+  if (!node || (node.type !== "file" && node.type !== "link")) return;
+  clearTimeout(cv.clickTimer);
+  cv.clickTimer = setTimeout(() => { cv.clickTimer = 0; cvCardAction(key, w); }, CV_DOUBLE_MS);
+}
+function cvCardAction(key, w) {
+  const node = cv.doc && cvLookup(cv.doc, key);
+  if (!node) return;
+  if (node.type === "link") {
+    // A site that refuses to be shown inside other pages would be an empty frame: it opens in a tab instead.
+    if (node.unlawPreview && node.unlawPreview.frameable === false) cvOpenInApp(node); else cvView(key);
+    return;
+  }
+  const kind = cvFileKind(node.file);
+  if (kind === "canvas") cvFollowLink(node);
+  else if (kind === "video" || kind === "audio") cvTogglePlay(node, w);
+  else if (kind === "pdf") cvOpenInline(node);
+}
+function cvCardDouble(key) {
+  clearTimeout(cv.clickTimer);
+  cv.clickTimer = 0;
+  const node = cv.doc && cvLookup(cv.doc, key);
+  if (!node) return;
+  if (node.type === "link") { cvOpenInApp(node); return; }
+  if (cvFileKind(node.file) === "canvas") { cvFollowLink(node); return; }
+  cvStopMedia();
+  cvCloseInline();
+  cvView(key);
+}
+
+// ---- cards that play in place: one video or sound at a time, drawn on the canvas from a hidden media element ----
+const CV_WAVE_LIMIT = 60 * 1024 * 1024;
+const cvWaves = new Map(); // canvas path + file -> peaks 0..1 (null while loading or when it cannot be read)
+function cvMediaState(node) {
+  if (node.type !== "file") return null;
+  const p = cv.playing, file = String(node.file ?? "");
+  if (!p || p.id !== node.id || p.path !== cv.path) {
+    const peaks = cvWaves.get(cv.path + "\n" + file);
+    return peaks ? { kind: "audio", playing: false, progress: 0, peaks, idle: true } : null;
+  }
+  const m = p.media, duration = Number.isFinite(m.duration) && m.duration > 0 ? m.duration : 0;
+  return { kind: p.kind, playing: !m.paused && !m.ended, progress: duration ? Math.min(1, m.currentTime / duration) : 0, peaks: cvWaves.get(p.path + "\n" + p.file) || null, idle: false };
+}
+function cvTogglePlay(node, w) {
+  const file = String(node.file ?? ""), kind = cvFileKind(file), p = cv.playing;
+  if (p && p.id === node.id && p.path === cv.path) {
+    const m = p.media, box = cvPictureBox(node, cvCork(cv.doc));
+    if (w && Number.isFinite(m.duration) && m.duration > 0 && w.y >= box.y + box.height - 22 && w.y <= box.y + box.height + 2) {
+      m.currentTime = Math.max(0, Math.min(1, (w.x - box.x) / box.width)) * m.duration;
+    } else if (m.paused || m.ended) {
+      cvPlay(m);
+    } else {
+      m.pause();
+    }
+    cvDraw();
+    return;
+  }
+  cvStopMedia();
+  if (typeof document.createElement !== "function") return;
+  const media = document.createElement(kind === "video" ? "video" : "audio");
+  media.preload = "auto";
+  media.playsInline = true;
+  media.src = cvMediaUrl(cv.path, file, "&raw=1");
+  for (const type of ["loadeddata", "pause", "ended", "seeked"]) media.addEventListener(type, () => cvDraw());
+  media.addEventListener("error", () => { if (cv.playing && cv.playing.media === media) toast("Could not play " + file.split("/").pop()); });
+  if (cv.ui.players) cv.ui.players.append(media);
+  cv.playing = { id: node.id, path: cv.path, file, kind, media };
+  cvPlay(media);
+  if (kind === "audio") cvLoadWave(cv.path, file);
+}
+function cvPlay(media) {
+  const started = media.play();
+  // Stopping a sound that is still starting rejects play() with AbortError: nothing to report then.
+  if (started && typeof started.catch === "function") started.catch((error) => { if (error && error.name !== "AbortError") toast("Could not play: " + error.message); });
+  cvTick();
+}
+// Redraws while something plays; stops by itself when it pauses, ends, or its card or canvas is gone.
+function cvTick() {
+  if (cv.ticking) return;
+  cv.ticking = true;
+  const step = () => {
+    const p = cv.playing;
+    if (p && (p.path !== cv.path || !cv.doc || !cvLookup(cv.doc, "n:" + p.id))) { cv.ticking = false; cvStopMedia(); return; }
+    if (!p || !cv.ctx || p.media.paused || p.media.ended) { cv.ticking = false; cvDraw(); return; }
+    cvDraw();
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+function cvStopMedia() {
+  const p = cv.playing;
+  if (!p) return;
+  cv.playing = null;
+  p.media.pause();
+  if (typeof p.media.removeAttribute === "function") p.media.removeAttribute("src");
+  if (typeof p.media.load === "function") p.media.load(); // lets the browser drop the download
+  if (typeof p.media.remove === "function") p.media.remove();
+  cvDraw();
+}
+async function cvLoadWave(path, file) {
+  const key = path + "\n" + file;
+  if (cvWaves.has(key) || typeof AudioContext !== "function") return;
+  cvWaves.set(key, null);
+  try {
+    const response = await fetch(cvMediaUrl(path, file, "&raw=1"), { cache: "force-cache" });
+    if (!response.ok || Number(response.headers.get("Content-Length") || 0) > CV_WAVE_LIMIT) return;
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > CV_WAVE_LIMIT) return;
+    const context = new AudioContext();
+    try {
+      const sound = await context.decodeAudioData(buffer);
+      cvWaves.set(key, cvPeaks(sound.getChannelData(0), 160));
+    } finally {
+      context.close();
+    }
+    cvDraw();
+  } catch {
+    // No wave for this sound: the progress bar alone.
+  }
+}
+function cvPeaks(samples, count) {
+  // Every sample of a slice would be millions for a song: about 256 of them are enough for its loudest point.
+  const peaks = [], step = Math.max(1, Math.floor(samples.length / count)), stride = Math.max(1, Math.floor(step / 256));
+  for (let i = 0; i < count; i++) {
+    let top = 0;
+    for (let j = i * step, end = Math.min(samples.length, (i + 1) * step); j < end; j += stride) top = Math.max(top, Math.abs(samples[j]));
+    peaks.push(top);
+  }
+  const loudest = Math.max(0.01, ...peaks);
+  return peaks.map((peak) => peak / loudest);
+}
+
+// ---- a PDF read inside its card: a live frame over the card's picture, moved and turned with it ----
+function cvOpenInline(node) {
+  if (cv.inline && cv.inline.id === node.id && cv.inline.path === cv.path) return;
+  cvCloseInline();
+  const layer = cv.ui.inline;
+  if (!layer) return;
+  const file = String(node.file ?? ""), frame = h("iframe", { src: cvMediaUrl(cv.path, file, "&raw=1") + "#view=FitH", title: file.split("/").pop() });
+  layer.append(frame);
+  cv.inline = { id: node.id, path: cv.path, frame };
+  cvPlaceInline();
+}
+function cvCloseInline() {
+  const inline = cv.inline;
+  if (!inline) return;
+  cv.inline = null;
+  if (typeof inline.frame.remove === "function") inline.frame.remove();
+}
+function cvPlaceInline() {
+  const inline = cv.inline;
+  if (!inline) return;
+  const node = inline.path === cv.path && cv.doc ? cvLookup(cv.doc, "n:" + inline.id) : null;
+  if (!node || cvHidden(node)) { cvCloseInline(); return; }
+  const cork = cvCork(cv.doc), box = cvPictureBox(node, cork), z = cv.view.z, at = toScreen(cv.view, box.x, box.y);
+  const origin = (node.x + node.width / 2 - box.x) * z + "px " + (node.y + node.height / 2 - box.y) * z + "px";
+  Object.assign(inline.frame.style, {
+    left: at.x + "px", top: at.y + "px", width: box.width * z + "px", height: box.height * z + "px",
+    transformOrigin: origin, transform: cork ? "rotate(" + nodeTilt(node) + "rad)" : "",
+  });
+}
+
+// ---- links between canvases: a file card naming a .canvas opens it; Back returns ----
+// A card's path is relative to its canvas's folder (like attachments) or absolute for a canvas elsewhere.
+function canvasLinkPath(from, file) {
+  const name = String(file ?? ""), joined = name.startsWith("/") ? name : String(from || "").replace(/\/[^/]*$/, "") + "/" + name, parts = [];
+  for (const part of joined.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") parts.pop(); else parts.push(part);
+  }
+  return "/" + parts.join("/");
+}
+function canvasLinkFile(from, target) {
+  const folder = String(from || "").replace(/\/[^/]*$/, "") + "/";
+  return target.startsWith(folder) ? target.slice(folder.length) : target;
+}
+async function cvFollowLink(node) {
+  const from = cv.path, target = canvasLinkPath(from, node.file);
+  if (!from || target === from) return;
+  if (await cvOpen(target, false)) {
+    cv.back = [...cv.back, from].slice(-30);
+    cvFillPick();
+  }
+}
+async function cvGoBack() {
+  const from = cv.back[cv.back.length - 1];
+  if (!from) return;
+  cv.back = cv.back.slice(0, -1);
+  await cvOpen(from, false);
+  cvFillPick();
+}
+function cvAddCanvasLink(item) {
+  if (!cv.doc || !cv.path || item.path === cv.path) return;
+  const center = toWorld(cv.view, cv.w / 2, cv.h / 2);
+  const node = { id: cvId(), type: "file", file: canvasLinkFile(cv.path, item.path), x: Math.round(center.x - 150), y: Math.round(center.y - 110), width: 300, height: 220 };
+  ensureList(cv.doc, "nodes").push(node);
+  cvToggleGallery(false);
+  cvSelect([cvKey("n", node)]);
+  cvCommit("canvas link");
+  toast("\u201c" + item.name + "\u201d is linked: click the card to open it");
+}
+// Another canvas as a picture for its card, read without switching to it (cleared when the open canvas changes).
+const cvCanvasThumbs = new Map();
+function cvCanvasThumb(path) {
+  let entry = cvCanvasThumbs.get(path);
+  if (!entry) {
+    entry = { image: null };
+    cvCanvasThumbs.set(path, entry);
+    cvMakeCanvasThumb(path, entry);
+  }
+  return entry.image;
+}
+async function cvMakeCanvasThumb(path, entry) {
+  if (typeof document.createElement !== "function") return;
+  const { status, data } = await api("GET", "/api/canvas/peek?path=" + encodeURIComponent(path));
+  if (status !== 200 || !data.canvas || cvCanvasThumbs.get(path) !== entry) return;
+  const picture = document.createElement("canvas"), width = 240, height = 150;
+  const ctx = picture.getContext && picture.getContext("2d");
+  if (!ctx) return;
+  picture.width = width * 2;
+  picture.height = height * 2;
+  paintScene({ ctx, doc: data.canvas, view: fitView(sceneBounds(data.canvas), width, height, 12), w: width, h: height, pal: cvPalette(), scale: 2, ui: null, images: null, flat: true });
+  entry.image = picture;
+  cvDraw();
+}
+
+// A text card holding only a web address (or a title line above one) is a link card.
+function urlCardText(text) {
+  const lines = String(text ?? "").split("\n").map((line) => line.trim()).filter(Boolean);
+  if (!lines.length || lines.length > 2 || !cvHttpUrl(lines[lines.length - 1])) return null;
+  if (lines.length === 2 && (lines[0].length > 200 || cvHttpUrl(lines[0]))) return null;
+  return { url: lines[lines.length - 1], title: lines.length === 2 ? lines[0] : "" };
+}
+function textToLink(node) {
+  const found = node && typeof node === "object" && node.type === "text" ? urlCardText(node.text) : null;
+  if (!found) return false;
+  node.type = "link";
+  node.url = found.url;
+  delete node.text;
+  if (found.title) node.unlawPreview = { title: found.title, description: "", site: "", image: null };
+  return true;
 }
 
 // Pictures of file cards: the file itself for images, a Quick Look thumbnail for anything else (PDF, documents).
 // Loaded once per canvas and file; a failed one is not asked again, so the card stays a plain document.
 const cvImages = new Map();
 function cvImageFor(node) {
-  const file = String(node.file ?? "");
+  if (node.type === "link") {
+    // Cards from before logos (no icon key) ask once for the site's logo.
+    const preview = node.unlawPreview && typeof node.unlawPreview === "object" ? node.unlawPreview : null;
+    if (!preview || !("icon" in preview)) cvFetchPreview(node, true);
+    return preview && typeof preview.icon === "string" && preview.icon ? cvImageFor({ file: preview.icon }) : null;
+  }
+  const file = String(node.file ?? ""), p = cv.playing;
+  if (p && p.kind === "video" && p.id === node.id && p.path === cv.path && p.media.readyState >= 2) return p.media;
+  if (CV_CANVAS_FILE.test(file)) return cv.path ? cvCanvasThumb(canvasLinkPath(cv.path, file)) : null;
   if (!file || !cv.path || noteName(file) || CV_PLAIN_FILE.test(file) || typeof Image !== "function") return null;
+  if (CV_MODEL.test(file)) {
+    const still = cvStills.get(cv.path + "\n" + file);
+    if (still && still.image) return still.image;
+    if (!still && typeof document.createElement === "function") cvModelStill(cv.path, file);
+  }
   const key = cv.path + "\n" + file;
   let entry = cvImages.get(key);
   if (!entry) {
@@ -9337,7 +10314,8 @@ function cvToggleCork() {
 function cvDouble(event) {
   if (!cv.doc || cv.tool !== "select") return;
   const { w } = cvPoint(event);
-  const key = hitTest(cv.doc, w.x, w.y, cv.view.z);
+  const key = hitTest(cv.doc, w.x, w.y, cv.view.z), item = key && key[0] === "n" ? cvLookup(cv.doc, key) : null;
+  if (item && (item.type === "file" || item.type === "link")) { cvCardDouble(key); return; }
   if (key) { cvSelect([key]); cvStartEdit(key); }
 }
 
@@ -9420,11 +10398,571 @@ function cvEndEdit() {
       item.label = value;
     } else {
       item.text = value;
+      if (textToLink(item)) cvFetchPreview(item);
     }
     cvCommit("text");
   }
   if (cv.el) cv.el.focus();
   cvDraw();
+}
+
+// ---- the viewer: a file or link card opened inside the page, so nothing has to leave the desk ----
+const CV_VIDEO = /\.(mp4|m4v|mov|webm)$/i, CV_AUDIO = /\.(mp3|m4a|aac|wav|flac|ogg|opus)$/i, CV_PDF = /\.pdf$/i;
+const CV_DOC = /\.(docx|doc|rtf|odt)$/i, CV_MODEL = /\.(glb|gltf|obj|stl)$/i, CV_NOTE = /\.(md|markdown)$/i;
+const CV_TEXT_LIMIT = 2 * 1024 * 1024, CV_MODEL_LIMIT = 200 * 1024 * 1024, CV_STILL_LIMIT = 30 * 1024 * 1024;
+function cvFileKind(file) {
+  const name = String(file || "");
+  if (CV_IMAGE_FILE.test(name)) return "image";
+  if (CV_CANVAS_FILE.test(name)) return "canvas";
+  if (CV_VIDEO.test(name)) return "video";
+  if (CV_AUDIO.test(name)) return "audio";
+  if (CV_PDF.test(name)) return "pdf";
+  if (CV_DOC.test(name)) return "doc";
+  if (CV_MODEL.test(name)) return "model";
+  if (CV_NOTE.test(name) || CV_PLAIN_FILE.test(name)) return "text";
+  return "other";
+}
+const cvMediaUrl = (path, file, extra) => "/media/canvas?t=" + encodeURIComponent(TOKEN) + "&path=" + encodeURIComponent(path) + "&file=" + encodeURIComponent(file) + (extra || "");
+const cvHttpUrl = (url) => /^https?:\/\/[^\s]+$/i.test(String(url || "").trim());
+
+function cvCloseView() {
+  const viewing = cv.viewing, panel = cv.ui.view;
+  if (!viewing) return;
+  cv.viewing = null;
+  if (viewing.stop) viewing.stop();
+  if (!panel) return;
+  for (const media of panel.querySelectorAll("video, audio")) media.pause();
+  panel.textContent = "";
+  panel.classList.remove("on");
+  if (cv.el) cv.el.focus();
+}
+
+async function cvOpenInApp(node) {
+  if (node.type === "link") {
+    // Only web addresses: a canvas from someone else may carry javascript:, file: or app links.
+    if (!cvHttpUrl(node.url)) { toast("Only http and https links open from the canvas"); return; }
+    window.open(String(node.url).trim(), "_blank", "noopener,noreferrer");
+    return;
+  }
+  const name = noteName(node.file);
+  if (name) { openNote(name); return; }
+  const { data } = await api("POST", "/api/canvas/open-file", { path: cv.path, file: String(node.file ?? "") });
+  if (!data.ok) toast(data.error || "Could not open " + String(node.file ?? "").split("/").pop());
+  else if (data.revealed) toast("Shown in Finder: files that would run a program are never opened from the canvas");
+}
+
+function cvView(key) {
+  const node = cv.doc && cvLookup(cv.doc, key), panel = cv.ui.view;
+  if (!node || !panel || (node.type !== "file" && node.type !== "link")) return false;
+  cvCloseView();
+  const path = cv.path, file = String(node.file ?? ""), kind = node.type === "link" ? "link" : cvFileKind(file);
+  const title = node.type === "link" ? (node.unlawPreview && node.unlawPreview.title) || String(node.url || "") : file.split("/").pop();
+  const outside = node.type === "link" ? "Open in browser" : noteName(file) ? "Open in Obsidian" : "Open in app";
+  const openButton = h("button", { title: outside }, cvIcon(node.type === "link" ? "link" : "export"), outside);
+  openButton.addEventListener("click", () => cvOpenInApp(node));
+  const close = h("button", { class: "x", title: "Close (Esc)", "aria-label": "Close" }, cvIcon("close"));
+  close.addEventListener("click", cvCloseView);
+  const body = h("div", { class: "body " + kind });
+  panel.textContent = "";
+  panel.append(h("div", { class: "head" }, h("b", { text: title }), h("span", { class: "spacer" }), openButton, close), body);
+  panel.classList.add("on");
+  cv.viewing = { key, stop: null };
+  const url = (extra) => cvMediaUrl(path, file, extra);
+  if (kind === "image") body.append(h("img", { src: url(""), alt: title }));
+  else if (kind === "video") body.append(h("video", { src: url("&raw=1"), controls: "", autoplay: "", playsinline: "" }));
+  else if (kind === "audio") body.append(h("div", { class: "sound" }, cvIcon("audio"), h("span", { text: title }), h("audio", { src: url("&raw=1"), controls: "", autoplay: "" })));
+  else if (kind === "pdf") body.append(h("iframe", { src: url("&raw=1"), title }));
+  else if (kind === "doc") body.append(h("iframe", { src: url("&doc=1"), sandbox: "", title }));
+  else if (kind === "text") cvShowText(body, url("&raw=1"));
+  else if (kind === "model") cvShowModel(body, url("&raw=1"), file);
+  else if (kind === "link") cvShowLink(body, node);
+  else body.append(h("img", { src: url("&thumb=1"), alt: title }), h("div", { class: "note", text: "No live view for this kind of file in the page: Quick Look's picture of it. " + outside + " shows it whole." }));
+  return true;
+}
+
+async function cvShowText(body, src) {
+  let text = "";
+  try {
+    const response = await fetch(src, { cache: "no-store" });
+    if (!response.ok) throw Error(String(response.status));
+    text = await response.text();
+  } catch (error) {
+    body.append(h("div", { class: "note", text: "Could not read the file: " + error.message }));
+    return;
+  }
+  const cut = text.length > CV_TEXT_LIMIT;
+  body.append(h("pre", { text: cut ? text.slice(0, CV_TEXT_LIMIT) : text }));
+  if (cut) body.append(h("div", { class: "note", text: "Only the first 2 MB are shown." }));
+}
+
+function cvShowLink(body, node) {
+  const preview = node.unlawPreview && typeof node.unlawPreview === "object" ? node.unlawPreview : null;
+  if (!cvHttpUrl(node.url)) { body.append(h("div", { class: "note", text: "This card has no web address." })); return; }
+  // allow-same-origin here is the site's own origin, never the desk's; no top navigation, so it cannot take the tab.
+  body.append(h("iframe", { src: String(node.url).trim(), sandbox: "allow-scripts allow-same-origin allow-forms allow-popups", referrerpolicy: "no-referrer", title: (preview && preview.title) || "Page" }));
+  body.append(h("div", { class: "note", text: "Empty? Some sites (Google, GitHub, banks) refuse to be shown inside other pages: use Open in browser." }));
+  if (!preview) cvFetchPreview(node);
+}
+
+// The page's title, description and picture for a link card, fetched once by the desk (public sites only).
+// Cards whose preview is being fetched, by canvas and id (kept out of the node, which autosave writes to the file).
+const cvPreviewing = new Set();
+const cvPreviewTried = new Set(); // cards whose logo was asked for by drawing: asked once per page, even when it failed
+async function cvFetchPreview(node, again) {
+  const path = cv.path, busy = path + "\n" + node.id;
+  if (!cvHttpUrl(node.url) || !path || cvPreviewing.has(busy) || (again && cvPreviewTried.has(busy))) return;
+  cvPreviewTried.add(busy);
+  cvPreviewing.add(busy);
+  let answer;
+  try {
+    answer = await api("POST", "/api/canvas/link-preview", { path, url: String(node.url).trim() });
+  } finally {
+    cvPreviewing.delete(busy); // a lost connection must not block this card's preview for good
+  }
+  const { status, data } = answer;
+  if (status !== 200 || cv.path !== path || !cv.doc) return;
+  const live = cvLookup(cv.doc, cvKey("n", node));
+  if (!live) return;
+  live.unlawPreview = {
+    title: String(data.title || ""), description: String(data.description || ""), site: String(data.site || ""),
+    image: typeof data.image === "string" ? data.image : null, icon: typeof data.icon === "string" ? data.icon : null, frameable: data.frameable !== false,
+  };
+  cvCommit("link preview");
+}
+
+// A link pasted on the canvas becomes a link card with the page's preview.
+function cvPasteText(text) {
+  const found = urlCardText(text);
+  if (!cv.doc || !found) return false;
+  const center = toWorld(cv.view, cv.w / 2, cv.h / 2);
+  const node = { id: cvId(), type: "link", url: found.url, x: Math.round(center.x - 160), y: Math.round(center.y - 120), width: 320, height: 240 };
+  ensureList(cv.doc, "nodes").push(node);
+  cvSelect([cvKey("n", node)]);
+  cvCommit("paste link");
+  cvFetchPreview(node);
+  return true;
+}
+
+// ---- 3D: GLB/glTF, OBJ and STL parsed here and drawn with WebGL (no library): flat triangles with their colors ----
+const CV_MAX_TRIANGLES = 3000000;
+function meshFromTriangles(positions, colors) {
+  const count = positions.length / 9;
+  if (count > CV_MAX_TRIANGLES) throw Error("more than 3 million triangles");
+  const normals = new Float32Array(positions.length);
+  for (let t = 0; t < count; t++) {
+    const o = t * 9, ax = positions[o + 3] - positions[o], ay = positions[o + 4] - positions[o + 1], az = positions[o + 5] - positions[o + 2];
+    const bx = positions[o + 6] - positions[o], by = positions[o + 7] - positions[o + 1], bz = positions[o + 8] - positions[o + 2];
+    let nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    nx /= len; ny /= len; nz /= len;
+    for (let v = 0; v < 3; v++) { normals[o + v * 3] = nx; normals[o + v * 3 + 1] = ny; normals[o + v * 3 + 2] = nz; }
+  }
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < positions.length; i += 3) for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], positions[i + k]); max[k] = Math.max(max[k], positions[i + k]); }
+  if (!count || !min.every(Number.isFinite)) throw Error("no triangles");
+  return { positions, normals, colors: colors || null, count, min, max };
+}
+function parseSTL(buffer) {
+  const view = new DataView(buffer);
+  const triangles = buffer.byteLength >= 84 ? view.getUint32(80, true) : 0;
+  // Binary when the size fits the count (some exporters add a few trailing bytes) and it does not start like ASCII.
+  const ascii = /^\s*solid[\s\S]*facet/.test(new TextDecoder().decode(buffer.slice(0, 512)));
+  if (triangles > 0 && buffer.byteLength >= 84 + triangles * 50 && (buffer.byteLength === 84 + triangles * 50 || !ascii)) {
+    if (triangles > CV_MAX_TRIANGLES) throw Error("more than 3 million triangles");
+    const positions = new Float32Array(triangles * 9);
+    for (let t = 0; t < triangles; t++) for (let k = 0; k < 9; k++) positions[t * 9 + k] = view.getFloat32(84 + t * 50 + 12 + k * 4, true);
+    return meshFromTriangles(positions);
+  }
+  const text = new TextDecoder().decode(buffer), points = [];
+  for (const match of text.matchAll(/vertex\s+(\S+)\s+(\S+)\s+(\S+)/g)) points.push(+match[1], +match[2], +match[3]);
+  return meshFromTriangles(new Float32Array(points.length - (points.length % 9)).map((_, i) => points[i]));
+}
+function parseOBJ(text) {
+  const vertices = [], out = [];
+  const at = (token) => {
+    const index = parseInt(token.split("/")[0], 10);
+    const i = index < 0 ? vertices.length / 3 + index : index - 1;
+    return i >= 0 && i < vertices.length / 3 ? i : -1;
+  };
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (line.startsWith("v ")) { const p = line.split(/\s+/); vertices.push(+p[1], +p[2], +p[3]); }
+    else if (line.startsWith("f ")) {
+      const face = line.split(/\s+/).slice(1).map(at);
+      if (face.some((i) => i < 0)) continue;
+      for (let k = 1; k + 1 < face.length; k++) for (const i of [face[0], face[k], face[k + 1]]) out.push(vertices[i * 3], vertices[i * 3 + 1], vertices[i * 3 + 2]);
+      if (out.length / 9 > CV_MAX_TRIANGLES) throw Error("more than 3 million triangles");
+    }
+  }
+  return meshFromTriangles(new Float32Array(out));
+}
+// glTF 2.0: the default scene's meshes with their node transforms and base colors (textures are not read).
+async function parseGLTF(buffer, loadBuffer) {
+  const view = new DataView(buffer);
+  let json, bin = null;
+  if (buffer.byteLength >= 12 && view.getUint32(0, true) === 0x46546c67) {
+    let offset = 12;
+    while (offset + 8 <= buffer.byteLength) {
+      const length = view.getUint32(offset, true), type = view.getUint32(offset + 4, true), chunk = buffer.slice(offset + 8, offset + 8 + length);
+      if (type === 0x4e4f534a) json = JSON.parse(new TextDecoder().decode(chunk));
+      else if (type === 0x004e4942) bin = chunk;
+      offset += 8 + length;
+    }
+  } else {
+    json = JSON.parse(new TextDecoder().decode(buffer));
+  }
+  if (!json || !Array.isArray(json.meshes)) throw Error("not a glTF model");
+  const buffers = [];
+  for (const [i, b] of (json.buffers || []).entries()) {
+    if (!b.uri) buffers.push(bin);
+    else if (/^data:/.test(b.uri)) buffers.push(Uint8Array.from(atob(b.uri.split(",")[1] || ""), (c) => c.charCodeAt(0)).buffer);
+    else buffers.push(await loadBuffer(b.uri, i));
+  }
+  const SIZES = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };
+  const read = (index) => {
+    const acc = json.accessors[index], bv = acc && json.bufferViews[acc.bufferView], data = bv && buffers[bv.buffer];
+    if (!bv) throw Error("sparse or empty accessors are not supported");
+    if (!data) throw Error("a buffer of the model is missing");
+    const size = SIZES[acc.type], ctor = { 5126: Float32Array, 5125: Uint32Array, 5123: Uint16Array, 5121: Uint8Array }[acc.componentType];
+    if (!ctor) throw Error("unsupported accessor type");
+    const stride = bv.byteStride || size * ctor.BYTES_PER_ELEMENT, base = (bv.byteOffset || 0) + (acc.byteOffset || 0), dv = new DataView(data), out = new Float64Array(acc.count * size);
+    const get = { 5126: (o) => dv.getFloat32(o, true), 5125: (o) => dv.getUint32(o, true), 5123: (o) => dv.getUint16(o, true), 5121: (o) => dv.getUint8(o) }[acc.componentType];
+    for (let i = 0; i < acc.count; i++) for (let k = 0; k < size; k++) out[i * size + k] = get(base + i * stride + k * ctor.BYTES_PER_ELEMENT);
+    return out;
+  };
+  const local = (node) => {
+    if (Array.isArray(node.matrix) && node.matrix.length === 16) return node.matrix;
+    const [x, y, z, w] = node.rotation || [0, 0, 0, 1], [sx, sy, sz] = node.scale || [1, 1, 1], [tx, ty, tz] = node.translation || [0, 0, 0];
+    return [(1 - 2 * (y * y + z * z)) * sx, 2 * (x * y + z * w) * sx, 2 * (x * z - y * w) * sx, 0,
+      2 * (x * y - z * w) * sy, (1 - 2 * (x * x + z * z)) * sy, 2 * (y * z + x * w) * sy, 0,
+      2 * (x * z + y * w) * sz, 2 * (y * z - x * w) * sz, (1 - 2 * (x * x + y * y)) * sz, 0, tx, ty, tz, 1];
+  };
+  const positions = [], colors = [];
+  const addMesh = (mesh, m) => {
+    for (const prim of mesh.primitives || []) {
+      if ((prim.mode ?? 4) !== 4 || prim.attributes.POSITION === undefined) continue;
+      const p = read(prim.attributes.POSITION), idx = prim.indices !== undefined ? read(prim.indices) : null;
+      const material = (json.materials || [])[prim.material], f = (material && material.pbrMetallicRoughness && material.pbrMetallicRoughness.baseColorFactor) || [0.78, 0.78, 0.8, 1];
+      const total = idx ? idx.length : p.length / 3;
+      for (let i = 0; i < total; i++) {
+        const v = idx ? idx[i] : i, x = p[v * 3], y = p[v * 3 + 1], z = p[v * 3 + 2];
+        positions.push(m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], m[2] * x + m[6] * y + m[10] * z + m[14]);
+        colors.push(f[0], f[1], f[2]);
+      }
+      if (positions.length / 9 > CV_MAX_TRIANGLES) throw Error("more than 3 million triangles");
+    }
+  };
+  const visit = (index, parent, depth) => {
+    const node = json.nodes[index];
+    if (!node || depth > 64) return;
+    const m = mat4Multiply(parent, local(node));
+    if (node.mesh !== undefined && json.meshes[node.mesh]) addMesh(json.meshes[node.mesh], m);
+    for (const child of node.children || []) visit(child, m, depth + 1);
+  };
+  const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  const scene = (json.scenes || [])[json.scene || 0];
+  if (scene && Array.isArray(json.nodes)) for (const root of scene.nodes || []) visit(root, identity, 0);
+  else json.meshes.forEach((mesh) => addMesh(mesh, identity));
+  return meshFromTriangles(new Float32Array(positions), new Float32Array(colors));
+}
+async function cvLoadModel(src, file, limit = CV_MODEL_LIMIT, path = cv.path) {
+  const response = await fetch(src, { cache: "no-store" });
+  if (!response.ok) throw Error("could not read the model (" + response.status + ")");
+  if (Number(response.headers.get("Content-Length")) > limit) throw Error("the model is larger than " + Math.round(limit / 1048576) + " MB");
+  const buffer = await response.arrayBuffer();
+  if (buffer.byteLength > limit) throw Error("the model is larger than " + Math.round(limit / 1048576) + " MB");
+  if (/\.stl$/i.test(file)) return parseSTL(buffer);
+  if (/\.obj$/i.test(file)) return parseOBJ(new TextDecoder().decode(buffer));
+  const folder = file.includes("/") ? file.slice(0, file.lastIndexOf("/") + 1) : "";
+  return parseGLTF(buffer, async (uri) => {
+    const next = await fetch(cvMediaUrl(path, folder + decodeURIComponent(uri), "&raw=1"), { cache: "no-store" });
+    if (!next.ok) throw Error("missing " + uri);
+    return next.arrayBuffer();
+  });
+}
+// Column-major 4x4 helpers for the camera.
+function mat4Perspective(fov, aspect, near, far) {
+  const f = 1 / Math.tan(fov / 2), nf = 1 / (near - far);
+  return [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0];
+}
+function mat4LookAt(eye, center, up) {
+  let zx = eye[0] - center[0], zy = eye[1] - center[1], zz = eye[2] - center[2];
+  let len = Math.hypot(zx, zy, zz) || 1; zx /= len; zy /= len; zz /= len;
+  let xx = up[1] * zz - up[2] * zy, xy = up[2] * zx - up[0] * zz, xz = up[0] * zy - up[1] * zx;
+  len = Math.hypot(xx, xy, xz) || 1; xx /= len; xy /= len; xz /= len;
+  const yx = zy * xz - zz * xy, yy = zz * xx - zx * xz, yz = zx * xy - zy * xx;
+  return [xx, yx, zx, 0, xy, yy, zy, 0, xz, yz, zz, 0, -(xx * eye[0] + xy * eye[1] + xz * eye[2]), -(yx * eye[0] + yy * eye[1] + yz * eye[2]), -(zx * eye[0] + zy * eye[1] + zz * eye[2]), 1];
+}
+function mat4Multiply(a, b) {
+  const r = new Array(16).fill(0);
+  for (let c = 0; c < 4; c++) for (let row = 0; row < 4; row++) for (let k = 0; k < 4; k++) r[c * 4 + row] += a[k * 4 + row] * b[c * 4 + k];
+  return r;
+}
+// An orbit camera around the model's middle: drag turns it, the wheel zooms, Shift-drag moves it, double-click resets.
+function makeModelView(canvas, mesh) {
+  const gl = canvas.getContext("webgl", { antialias: true, preserveDrawingBuffer: true });
+  if (!gl) throw Error("WebGL is off in this browser");
+  const shader = (type, source) => { const s = gl.createShader(type); gl.shaderSource(s, source); gl.compileShader(s); return s; };
+  const program = gl.createProgram();
+  gl.attachShader(program, shader(gl.VERTEX_SHADER, "attribute vec3 p;attribute vec3 n;attribute vec3 c;uniform mat4 m;varying vec3 vn;varying vec3 vc;void main(){gl_Position=m*vec4(p,1.0);vn=n;vc=c;}"));
+  gl.attachShader(program, shader(gl.FRAGMENT_SHADER, "precision mediump float;varying vec3 vn;varying vec3 vc;void main(){vec3 n=normalize(vn);float l=0.35+0.55*abs(dot(n,normalize(vec3(0.4,0.8,0.6))))+0.2*abs(dot(n,normalize(vec3(-0.6,-0.2,-0.7))));gl_FragColor=vec4(vc*l,1.0);}"));
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw Error("WebGL could not build its shader: " + (gl.getProgramInfoLog(program) || "unknown error"));
+  gl.useProgram(program);
+  const attribute = (name, data) => {
+    const buffer = gl.createBuffer(), at = gl.getAttribLocation(program, name);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(at);
+    gl.vertexAttribPointer(at, 3, gl.FLOAT, false, 0, 0);
+  };
+  attribute("p", mesh.positions);
+  attribute("n", mesh.normals);
+  attribute("c", mesh.colors || new Float32Array(mesh.positions.length).fill(0.78));
+  const where = gl.getUniformLocation(program, "m");
+  const center = [0, 1, 2].map((k) => (mesh.min[k] + mesh.max[k]) / 2), radius = Math.max(1e-6, Math.hypot(...[0, 1, 2].map((k) => mesh.max[k] - mesh.min[k])) / 2);
+  const start = { yaw: 0.6, pitch: 0.35, distance: radius * 2.6, pan: [0, 0, 0] };
+  const cam = { ...start, pan: [0, 0, 0] };
+  const draw = () => {
+    const w = canvas.width, h = canvas.height;
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    const target = center.map((v, k) => v + cam.pan[k]);
+    const eye = [target[0] + cam.distance * Math.cos(cam.pitch) * Math.sin(cam.yaw), target[1] + cam.distance * Math.sin(cam.pitch), target[2] + cam.distance * Math.cos(cam.pitch) * Math.cos(cam.yaw)];
+    const matrix = mat4Multiply(mat4Perspective(0.8, w / Math.max(1, h), radius / 100, radius * 100), mat4LookAt(eye, target, [0, 1, 0]));
+    gl.uniformMatrix4fv(where, false, new Float32Array(matrix));
+    gl.drawArrays(gl.TRIANGLES, 0, mesh.count * 3);
+  };
+  let drag = null;
+  const down = (event) => { drag = { x: event.clientX, y: event.clientY, pan: event.shiftKey || event.button === 2 }; canvas.setPointerCapture && canvas.setPointerCapture(event.pointerId); };
+  const move = (event) => {
+    if (!drag) return;
+    const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+    drag.x = event.clientX; drag.y = event.clientY;
+    if (drag.pan) {
+      const step = cam.distance / 600;
+      cam.pan[0] -= Math.cos(cam.yaw) * dx * step; cam.pan[2] += Math.sin(cam.yaw) * dx * step; cam.pan[1] += dy * step;
+    } else {
+      cam.yaw -= dx * 0.01;
+      cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch + dy * 0.01));
+    }
+    draw();
+  };
+  const up = () => { drag = null; };
+  const wheel = (event) => { event.preventDefault(); cam.distance = Math.max(radius * 0.2, Math.min(radius * 40, cam.distance * Math.exp(event.deltaY * 0.0015))); draw(); };
+  const reset = () => { Object.assign(cam, start, { pan: [0, 0, 0] }); draw(); };
+  canvas.addEventListener("pointerdown", down);
+  canvas.addEventListener("pointermove", move);
+  canvas.addEventListener("pointerup", up);
+  canvas.addEventListener("wheel", wheel, { passive: false });
+  canvas.addEventListener("dblclick", reset);
+  canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+  return { draw, stop: () => { const lose = gl.getExtension("WEBGL_lose_context"); if (lose) lose.loseContext(); } };
+}
+async function cvShowModel(body, src, file) {
+  const canvas = h("canvas", { class: "model" }), note = h("div", { class: "note", text: "Loading the model…" });
+  body.append(canvas, note);
+  try {
+    const mesh = await cvLoadModel(src, file);
+    if (!canvas.isConnected) return;
+    const box = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.round(box.width * dpr));
+    canvas.height = Math.max(1, Math.round(box.height * dpr));
+    const viewer = makeModelView(canvas, mesh);
+    viewer.draw();
+    if (cv.viewing) cv.viewing.stop = viewer.stop;
+    note.textContent = mesh.count.toLocaleString() + " triangles · drag to turn, wheel to zoom, Shift-drag to move, double-click to reset";
+  } catch (error) {
+    note.textContent = "Could not show the model: " + error.message;
+  }
+}
+// A 3D card shows the model itself: drawn once into a picture (in memory, per file), after the Quick Look one.
+const cvStills = new Map();
+async function cvModelStill(path, file) {
+  const key = path + "\n" + file;
+  if (cvStills.has(key)) return;
+  const entry = { image: null };
+  cvStills.set(key, entry);
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = 640; canvas.height = 480;
+    const mesh = await cvLoadModel(cvMediaUrl(path, file, "&raw=1"), file, CV_STILL_LIMIT, path);
+    const viewer = makeModelView(canvas, mesh);
+    try {
+      viewer.draw();
+      const image = new Image();
+      image.onload = () => { entry.image = image; cvDraw(); };
+      image.src = canvas.toDataURL("image/png");
+    } finally {
+      viewer.stop(); // the picture is taken; the WebGL context is given back at once (browsers keep only ~16)
+    }
+  } catch {
+    entry.failed = true;
+  }
+}
+
+// ---- layers: like Photoshop's panel, topmost first (drawings over cards, cards over groups, as painted) ----
+const CV_LAYERS_PREF = "desk-canvas-layers";
+const CV_MAX_LAYER_ROWS = 500;
+function layerName(key, item) {
+  const clip = (text) => { const t = String(text || "").replace(/\s+/g, " ").trim(); return t.length > 40 ? t.slice(0, 39) + "\u2026" : t; };
+  if (key[0] === "x") return item.type === "text" ? clip(item.text) || "Text" : item.type === "paint" ? "Fill" : CV_LABELS[item.type] || item.type;
+  if (item.type === "group") return clip(item.label) || "Group";
+  if (item.type === "file") return clip(fileLabel(item.file)) || "File";
+  if (item.type === "link") return clip(item.url) || "Link";
+  return clip(item.text) || "Empty card";
+}
+function layerIcon(row) {
+  const type = row.item.type;
+  if (row.key[0] === "x") return type === "paint" ? "fill" : CV_ICONS[type] ? type : "rectangle";
+  return { group: "group", file: "attach", link: "link" }[type] || "card";
+}
+// Rows topmost first: the drawings and the cards outside groups under their own headings, then each group with the
+// cards inside the smallest group around them, like layers inside a folder. `folded` holds the keys of headings and
+// groups shown closed (one row with the name and a count).
+function layerRows(doc, folded = new Set()) {
+  const rows = [], elements = docElements(doc, true), nodes = docNodes(doc, true);
+  const folder = (head, items) => {
+    const shut = folded.has(head.key);
+    rows.push({ ...head, depth: 0, count: items.length, folded: shut });
+    if (!shut) for (const item of items) rows.push({ ...item, depth: 1 });
+  };
+  const topFirst = (list, kind) => list.slice().reverse().map((item) => ({ key: cvKey(kind, item), item }));
+  if (elements.length) folder({ key: "sec:drawings", section: true, name: "Drawings" }, topFirst(elements, "x"));
+  const groups = nodes.filter((n) => n.type === "group"), cards = nodes.filter((n) => n.type !== "group"), owner = new Map();
+  for (const card of cards) {
+    let best = null;
+    for (const group of groups) if (boxInside(card, group) && (!best || group.width * group.height < best.width * best.height)) best = group;
+    if (best) owner.set(card.id, best.id);
+  }
+  const loose = cards.filter((card) => !owner.has(card.id));
+  if (loose.length) folder({ key: "sec:cards", section: true, name: groups.length ? "Cards outside groups" : "Cards" }, topFirst(loose, "n"));
+  for (let i = groups.length - 1; i >= 0; i--) {
+    folder({ key: cvKey("n", groups[i]), item: groups[i] }, topFirst(cards.filter((card) => owner.get(card.id) === groups[i].id), "n"));
+  }
+  return rows;
+}
+// Which headings and groups are folded, per canvas, in this browser (localStorage; the file never changes).
+const CV_FOLDED_PREF = "desk-canvas-folded";
+function cvReadFolded() {
+  try {
+    const all = JSON.parse(localStorage.getItem(CV_FOLDED_PREF) || "{}");
+    return all && typeof all === "object" && !Array.isArray(all) ? all : {};
+  } catch {
+    return {};
+  }
+}
+function cvFolded() {
+  if (!cv.folded || cv.folded.path !== cv.path) {
+    const keys = cvReadFolded()[cv.path];
+    cv.folded = { path: cv.path, keys: new Set(Array.isArray(keys) ? keys.filter((key) => typeof key === "string") : []) };
+  }
+  return cv.folded.keys;
+}
+function cvSaveFolded() {
+  const all = cvReadFolded(), keys = cvFolded();
+  delete all[cv.path]; // written last again, so the oldest canvases are the ones forgotten past 50
+  if (keys.size) all[cv.path] = [...keys].slice(0, 500);
+  const paths = Object.keys(all);
+  for (const old of paths.slice(0, Math.max(0, paths.length - 50))) delete all[old];
+  try { localStorage.setItem(CV_FOLDED_PREF, JSON.stringify(all)); } catch { /* private mode: not remembered */ }
+}
+function cvToggleFold(key) {
+  const keys = cvFolded();
+  if (keys.has(key)) keys.delete(key); else keys.add(key);
+  cvSaveFolded();
+  cvRenderLayers();
+}
+// Fold or open every heading and group at once.
+function cvFoldAll(fold) {
+  const keys = cvFolded();
+  keys.clear();
+  if (fold && cv.doc) for (const row of layerRows(cv.doc)) if (row.depth === 0 && row.count) keys.add(row.key);
+  cvSaveFolded();
+  cvRenderLayers();
+}
+// The eye: hidden things are kept in the file (unlawHidden) but not painted, picked, filled or exported.
+// A group takes everything inside it along.
+function cvToggleHidden(key) {
+  const item = cv.doc && cvLookup(cv.doc, key);
+  if (!item) return;
+  const hide = !cvHidden(item);
+  const keys = [key, ...(key[0] === "n" && item.type === "group" ? containedIds(cv.doc, item) : [])];
+  for (const k of keys) {
+    const it = cvLookup(cv.doc, k);
+    if (!it) continue;
+    if (hide) it.unlawHidden = true; else delete it.unlawHidden;
+  }
+  if (hide) cv.sel = cv.sel.filter((k) => !keys.includes(k));
+  cvCommit(hide ? "hide" : "show");
+}
+// Dropping a row on another of the same kind puts it at that place in the drawing order.
+function cvReorderLayer(from, to) {
+  if (!cv.doc || from === to || from[0] !== to[0] || from[0] === "e") return;
+  const list = cvList(cv.doc, from[0]), a = list.indexOf(cvLookup(cv.doc, from)), b = list.indexOf(cvLookup(cv.doc, to));
+  if (a < 0 || b < 0) return;
+  list.splice(b, 0, ...list.splice(a, 1));
+  cvCommit("order");
+}
+function cvToggleLayers() {
+  cv.layers = !cv.layers;
+  localStorage.setItem(CV_LAYERS_PREF, cv.layers ? "1" : "0");
+  cvRenderLayers();
+  cvResize();
+}
+function cvFoldArrow(row) {
+  if (!row.count) return h("span", { class: "fold" });
+  const arrow = h("button", { class: "fold", title: row.folded ? "Open" : "Fold", "aria-label": row.folded ? "Open" : "Fold", "aria-expanded": row.folded ? "false" : "true" }, cvIcon(row.folded ? "chevron" : "chevronDown"));
+  arrow.addEventListener("click", (event) => { event.stopPropagation(); cvToggleFold(row.key); });
+  return arrow;
+}
+function cvLayerRow(row) {
+  if (row.section) {
+    const node = h("div", { class: "row section" }, cvFoldArrow(row), h("span", { class: "name", text: row.name }), h("span", { class: "count", text: String(row.count) }));
+    node.addEventListener("click", () => cvToggleFold(row.key));
+    return node;
+  }
+  const hidden = cvHidden(row.item), picked = cv.sel.includes(row.key), group = row.item.type === "group";
+  const eye = h("button", { class: "eye", title: hidden ? "Show" : "Hide", "aria-label": hidden ? "Show" : "Hide" }, cvIcon(hidden ? "eyeOff" : "eye"));
+  eye.addEventListener("click", (event) => { event.stopPropagation(); cvToggleHidden(row.key); });
+  const node = h("div", { class: "row" + (hidden ? " hidden" : "") + (picked ? " on" : "") + (row.depth ? " inner" : "") + (group ? " group" : ""), draggable: "true", title: "Click to select (Shift adds); drag onto another row to change the order" },
+    group ? cvFoldArrow(row) : null, eye, cvIcon(layerIcon(row)), h("span", { class: "name", text: layerName(row.key, row.item) }),
+    group && row.folded ? h("span", { class: "count", text: String(row.count) }) : null);
+  node.addEventListener("click", (event) => {
+    if (hidden) return;
+    cvSelect(event.shiftKey ? [...new Set([...cv.sel, row.key])] : [row.key]);
+  });
+  node.addEventListener("dragstart", (event) => { cv.layerDrag = row.key; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", row.key); });
+  node.addEventListener("dragover", (event) => { if (cv.layerDrag && cv.layerDrag[0] === row.key[0]) event.preventDefault(); });
+  node.addEventListener("drop", (event) => {
+    event.preventDefault();
+    const from = cv.layerDrag;
+    cv.layerDrag = null;
+    if (from) cvReorderLayer(from, row.key);
+  });
+  node.addEventListener("dragend", () => { cv.layerDrag = null; });
+  return node;
+}
+function cvRenderLayers() {
+  const panel = cv.ui.layers;
+  if (!panel) return;
+  panel.classList.toggle("on", cv.layers);
+  if (cv.ui.layersButton) cv.ui.layersButton.classList.toggle("on", cv.layers);
+  if (!cv.layers) return;
+  panel.textContent = "";
+  const foldAll = h("button", { class: "all", title: "Fold every group" }, cvIcon("chevron"));
+  foldAll.addEventListener("click", () => cvFoldAll(true));
+  const openAll = h("button", { class: "all", title: "Open every group" }, cvIcon("chevronDown"));
+  openAll.addEventListener("click", () => cvFoldAll(false));
+  panel.append(h("div", { class: "head" }, h("b", { text: "Layers" }), h("span", { class: "n", text: "topmost first" }), h("span", { class: "spacer" }), foldAll, openAll));
+  if (!cv.doc) return;
+  const rows = layerRows(cv.doc, cvFolded()), list = h("div", { class: "list" });
+  for (const row of rows.slice(0, CV_MAX_LAYER_ROWS)) list.append(cvLayerRow(row));
+  if (rows.length > CV_MAX_LAYER_ROWS) list.append(h("div", { class: "empty", text: rows.length - CV_MAX_LAYER_ROWS + " more not listed" }));
+  if (!rows.length) list.append(h("div", { class: "empty", text: "Nothing on this canvas yet." }));
+  panel.append(list);
 }
 
 // ---- actions ----
@@ -9555,13 +11093,19 @@ function cvToolClick(tool) {
 
 function canvasKey(event) {
   if (event.key === "Escape" && cv.menu) { cvCloseMenu(); return true; }
+  if (event.key === "Escape" && cv.viewing) { cvCloseView(); return true; }
+  if (event.key === "Escape" && cv.inline) { cvCloseInline(); return true; }
+  if (event.key === "Escape" && cv.gallery) { cvToggleGallery(false); return true; }
+  if (cv.viewing || cv.gallery) return false;
   if (!cv.doc) return false;
   const key = event.key, mod = event.metaKey || event.ctrlKey;
   // Physical keys, so the shortcuts also work with a Russian (or any) keyboard layout.
   const code = event.code || "", physical = code.startsWith("Key") ? code.slice(3).toLowerCase() : code.startsWith("Digit") ? code.slice(5) : "";
   if (key === " " && !mod) { event.preventDefault(); cv.space = true; cvCursor(); return true; }
+  if (code === "F7" || key === "F7") { event.preventDefault(); cvToggleLayers(); return true; }
   if (key === "Escape") {
     if ($("help").classList.contains("on")) return false;
+    if (cv.thread) { cv.thread = null; cvDraw(); return true; }
     if (cv.drag) { cvCancelDrag(); return true; }
     if (cv.sel.length) { cvSelect([]); return true; }
     if (cv.tool !== "select") { cvSetTool("select"); return true; }
@@ -9575,12 +11119,18 @@ function canvasKey(event) {
     }
     const letter = physical || (key.length === 1 ? key.toLowerCase() : "");
     if (!letter || !"zyacvdg0".includes(letter)) return false;
-    event.preventDefault();
+    if (letter !== "v") event.preventDefault();
     if (letter === "z") { if (event.shiftKey) cvRedo(); else cvUndo(); }
     else if (letter === "y") cvRedo();
     else if (letter === "a") cvSelectAll();
     else if (letter === "c") cvCopy();
-    else if (letter === "v") cvPaste(cv.clip);
+    else if (letter === "v") {
+      // The browser's paste event follows the key when the clipboard has text: a link there becomes a link card;
+      // otherwise the canvas's own copied items are pasted.
+      clearTimeout(cv.pasteWait);
+      cv.pasteWait = setTimeout(() => { cv.pasteWait = 0; cvPaste(cv.clip); }, 80);
+      return true;
+    }
     else if (letter === "g") cvGroup();
     else if (letter === "0") cvFit();
     else cvDuplicate();
@@ -9617,13 +11167,10 @@ function canvasKey(event) {
 
 // ---- toolbar and view ----
 function cvFillPick() {
-  const pick = cv.ui.pick;
-  if (pick) {
-    pick.textContent = "";
-    const items = cv.items.some((item) => item.path === cv.path) || !cv.path ? cv.items : [...cv.items, { path: cv.path, name: cv.name || cv.path }];
-    pick.append(h("option", { value: "", text: "Canvases", disabled: true }));
-    for (const item of items) pick.append(h("option", { value: item.path, text: (item.path === cv.path ? "\u2713 " : "") + item.name }));
-    pick.value = "";
+  if (cv.gallery) cvRenderGallery();
+  if (cv.ui.back) {
+    cv.ui.back.style.display = cv.back.length ? "" : "none";
+    cv.ui.back.title = cv.back.length ? "Back to " + cv.back[cv.back.length - 1].split("/").pop().replace(CV_CANVAS_FILE, "") : "Back";
   }
   const field = cv.ui.name;
   if (field) {
@@ -9632,10 +11179,242 @@ function cvFillPick() {
   }
 }
 
-async function cvPickChanged() {
-  const value = cv.ui.pick.value;
-  cv.ui.pick.value = "";
-  if (value && value !== cv.path) await cvOpen(value, false);
+// ---- the canvas gallery: every canvas as a thumbnail, open with a click, delete to the Trash, drop to import ----
+const cvThumbs = new Map(); // path -> {modified, shape} read through /api/canvas/peek (does not switch canvases)
+function cvToggleGallery(open) {
+  cv.gallery = typeof open === "boolean" ? open : !cv.gallery;
+  if (cv.gallery) loadCanvasList();
+  cvRenderGallery();
+  if (cv.gallery && cv.ui.gallerySearch && typeof cv.ui.gallerySearch.focus === "function") cv.ui.gallerySearch.focus();
+}
+// The gallery's favorites and groups are a list of paths on the server (canvases.json); the files never move.
+function cleanShelf(raw) {
+  const paths = (list) => (Array.isArray(list) ? list.filter((path) => typeof path === "string") : []);
+  const groups = raw && Array.isArray(raw.groups) ? raw.groups.filter((group) => group && typeof group.name === "string").map((group) => ({ name: group.name, paths: paths(group.paths) })) : [];
+  return { favorites: paths(raw && raw.favorites), groups };
+}
+function shelfFavorite(shelf, path) {
+  const on = shelf.favorites.includes(path);
+  return { ...shelf, favorites: on ? shelf.favorites.filter((item) => item !== path) : [...shelf.favorites, path] };
+}
+// Into the group named `name` (out of any other), or out of every group with null.
+function shelfMove(shelf, path, name) {
+  return { ...shelf, groups: shelf.groups.map((group) => ({ name: group.name, paths: [...group.paths.filter((item) => item !== path), ...(group.name === name ? [path] : [])] })) };
+}
+const shelfName = (name) => String(name ?? "").replace(/\s+/g, " ").trim();
+function shelfAddGroup(shelf, name) {
+  const clean = shelfName(name);
+  if (!clean || clean.length > 80 || shelf.groups.some((group) => group.name.toLowerCase() === clean.toLowerCase())) return null;
+  return { ...shelf, groups: [...shelf.groups, { name: clean, paths: [] }] };
+}
+function shelfRenameGroup(shelf, from, to) {
+  const clean = shelfName(to);
+  if (!clean || clean.length > 80 || shelf.groups.some((group) => group.name !== from && group.name.toLowerCase() === clean.toLowerCase())) return null;
+  return { ...shelf, groups: shelf.groups.map((group) => (group.name === from ? { ...group, name: clean } : group)) };
+}
+function shelfRemoveGroup(shelf, name) {
+  return { ...shelf, groups: shelf.groups.filter((group) => group.name !== name) };
+}
+// Favorites first (they also stay in their group), then each group, then the canvases in no group. A search keeps
+// the canvases whose name holds every word of it (case ignored) and drops the sections it leaves empty.
+function galleryMatch(item, search) {
+  const name = String(item.name ?? "").toLowerCase();
+  return String(search ?? "").toLowerCase().split(/\s+/).filter(Boolean).every((word) => name.includes(word));
+}
+function gallerySections(items, shelf, search = "") {
+  const sections = shelfSections(items, shelf);
+  if (!String(search).trim()) return sections;
+  return sections.map((section) => ({ ...section, items: section.items.filter((item) => galleryMatch(item, search)) })).filter((section) => section.items.length);
+}
+function shelfSections(items, shelf) {
+  const byPath = new Map(items.map((item) => [item.path, item])), grouped = new Set(), sections = [];
+  const pick = (paths) => paths.map((path) => byPath.get(path)).filter(Boolean);
+  const favorites = pick(shelf.favorites);
+  if (favorites.length) sections.push({ kind: "favorites", name: "Favorites", items: favorites });
+  for (const group of shelf.groups) {
+    group.paths.forEach((path) => grouped.add(path));
+    sections.push({ kind: "group", name: group.name, items: pick(group.paths) });
+  }
+  sections.push({ kind: "other", name: shelf.groups.length ? "Not in a group" : "All canvases", items: items.filter((item) => !grouped.has(item.path)) });
+  return sections;
+}
+async function cvSaveShelf(next) {
+  if (!next) return false;
+  cv.shelf = next;
+  cvRenderGallery();
+  const { status, data } = await api("POST", "/api/canvas/shelf", { shelf: next });
+  if (status !== 200) { toast(data.error || "Could not save the gallery"); await loadCanvasList(); return false; }
+  if (Array.isArray(data.items)) cv.items = data.items;
+  cv.shelf = cleanShelf(data.shelf);
+  cvRenderGallery();
+  return true;
+}
+function cvNewGroup() {
+  const name = prompt("Name of the new group");
+  if (name === null) return;
+  const next = shelfAddGroup(cv.shelf, name);
+  if (!next) { toast("A group needs a name of its own (up to 80 characters)"); return; }
+  cvSaveShelf(next);
+}
+function cvGallerySection(section) {
+  const button = (icon, title, run) => {
+    const b = h("button", { class: "mini", title, "aria-label": title }, cvIcon(icon));
+    b.addEventListener("click", (event) => { event.stopPropagation(); run(); });
+    return b;
+  };
+  const tools = section.kind === "group" ? [
+    button("edit", "Rename the group", () => {
+      const name = prompt("New name of the group", section.name);
+      if (name === null || shelfName(name) === section.name) return;
+      const next = shelfRenameGroup(cv.shelf, section.name, name);
+      if (!next) toast("That name is empty or taken"); else cvSaveShelf(next);
+    }),
+    button("trash", "Remove the group (its canvases stay)", () => {
+      if (confirm("Remove the group \u201c" + section.name + "\u201d?\nIts canvases stay where they are.")) cvSaveShelf(shelfRemoveGroup(cv.shelf, section.name));
+    }),
+  ] : [];
+  const icon = section.kind === "favorites" ? "star" : section.kind === "group" ? "folder" : "gallery";
+  const head = h("div", { class: "section " + section.kind }, cvIcon(icon), h("b", { text: section.name }), h("span", { class: "count", text: String(section.items.length) }), ...tools);
+  const grid = h("div", { class: "grid" });
+  for (const item of section.items) grid.append(cvGalleryTile(item));
+  if (!section.items.length) grid.append(h("div", { class: "empty", text: section.kind === "group" ? "Drag canvases here." : "No canvases yet: make one with New, or drop a .canvas file here." }));
+  const box = h("div", { class: "shelf" }, head, grid);
+  // Dropping a tile on a group puts the canvas in it; on "Not in a group", takes it out.
+  if (section.kind !== "favorites") {
+    box.addEventListener("dragover", (event) => { if (cv.galleryDrag) { event.preventDefault(); box.classList.add("drop"); } });
+    box.addEventListener("dragleave", (event) => { if (!box.contains(event.relatedTarget)) box.classList.remove("drop"); });
+    box.addEventListener("drop", (event) => {
+      box.classList.remove("drop");
+      const path = cv.galleryDrag;
+      cv.galleryDrag = null;
+      if (!path) return;
+      event.preventDefault();
+      event.stopPropagation();
+      cvSaveShelf(shelfMove(cv.shelf, path, section.kind === "group" ? section.name : null));
+    });
+  }
+  return box;
+}
+function cvRenderGallery() {
+  const panel = cv.ui.gallery;
+  if (!panel) return;
+  panel.classList.toggle("on", Boolean(cv.gallery));
+  if (cv.ui.pick) cv.ui.pick.classList.toggle("on", Boolean(cv.gallery));
+  if (!cv.gallery) return;
+  // The search field survives a redraw (typing would lose focus otherwise): only the sections are rebuilt.
+  if (!cv.ui.gallerySearch) {
+    const field = h("input", { class: "search", type: "search", placeholder: "Search by name", spellcheck: "false", "aria-label": "Search canvases by name" });
+    field.addEventListener("input", () => { cv.gallerySearch = field.value; cvRenderShelves(); });
+    field.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && field.value) { event.stopPropagation(); event.preventDefault(); field.value = ""; cv.gallerySearch = ""; cvRenderShelves(); }
+      else if (event.key === "Enter") { const first = cv.ui.galleryList && cv.ui.galleryList.querySelector && cv.ui.galleryList.querySelector(".tile"); if (first) first.click(); }
+    });
+    cv.ui.gallerySearch = field;
+  }
+  const search = cv.ui.gallerySearch;
+  search.value = cv.gallerySearch;
+  panel.textContent = "";
+  const button = (icon, text, run, title) => {
+    const b = h("button", { title: title || text }, cvIcon(icon), text);
+    b.addEventListener("click", run);
+    return b;
+  };
+  panel.append(h("div", { class: "head" },
+    h("b", { text: "Canvases" }),
+    search,
+    h("span", { class: "hint", text: "Click to open \u00b7 drag a canvas onto a group \u00b7 drop a .canvas file here to import it" }),
+    h("span", { class: "spacer" }),
+    button("folder", "New group", cvNewGroup, "A group in this gallery; the files stay where they are"),
+    button("plus", "New", () => { cvToggleGallery(false); cvNew(); }),
+    button("folder", "Open file\u2026", () => { cvToggleGallery(false); cvChoose(); }, "Open a .canvas file anywhere on the Mac"),
+    button("close", "", () => cvToggleGallery(false), "Close (Esc)")));
+  cv.ui.galleryList = h("div", { class: "shelves" });
+  panel.append(cv.ui.galleryList);
+  cvRenderShelves();
+}
+function cvRenderShelves() {
+  const list = cv.ui.galleryList;
+  if (!list) return;
+  list.textContent = "";
+  const items = cv.items.some((item) => item.path === cv.path) || !cv.path ? cv.items : [{ path: cv.path, name: cv.name || cv.path }, ...cv.items];
+  const sections = gallerySections(items, cv.shelf, cv.gallerySearch);
+  for (const section of sections) list.append(cvGallerySection(section));
+  if (!sections.length) list.append(h("div", { class: "empty", text: "No canvas is named like \u201c" + cv.gallerySearch.trim() + "\u201d." }));
+}
+function cvGalleryTile(item) {
+  const thumb = h("canvas", { class: "thumb", width: "480", height: "300" });
+  const when = Number.isFinite(item.modified) ? new Date(item.modified * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+  const action = (icon, cls, title, run) => {
+    const b = h("button", { class: cls, title, "aria-label": title + ": " + item.name }, cvIcon(icon));
+    b.addEventListener("click", (event) => { event.stopPropagation(); run(); });
+    return b;
+  };
+  const favorite = cv.shelf.favorites.includes(item.path);
+  const actions = h("div", { class: "acts" },
+    action("star", "fav" + (favorite ? " on" : ""), favorite ? "Remove from favorites" : "Add to favorites", () => cvSaveShelf(shelfFavorite(cv.shelf, item.path))),
+    cv.doc && cv.path && item.path !== cv.path ? action("link", "lnk", "Put a link to this canvas on the open one", () => cvAddCanvasLink(item)) : null,
+    action("trash", "del", "Move to the Trash", () => cvDeleteCanvas(item)));
+  const tile = h("div", { class: "tile" + (item.path === cv.path ? " on" : ""), title: item.path, draggable: "true" },
+    thumb, h("div", { class: "meta" }, h("span", { class: "name", text: item.name }), h("span", { class: "when", text: when })), actions);
+  tile.addEventListener("click", async () => { cvToggleGallery(false); if (item.path !== cv.path) await cvOpen(item.path, false); });
+  tile.addEventListener("dragstart", (event) => { cv.galleryDrag = item.path; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.name); });
+  tile.addEventListener("dragend", () => { cv.galleryDrag = null; });
+  cvDrawThumb(thumb, item);
+  return tile;
+}
+async function cvDrawThumb(canvas, item) {
+  let cached = cvThumbs.get(item.path);
+  if (!cached || cached.modified !== item.modified) {
+    const { status, data } = await api("GET", "/api/canvas/peek?path=" + encodeURIComponent(item.path));
+    if (status !== 200) return;
+    cached = { modified: item.modified, shape: data };
+    cvThumbs.set(item.path, cached);
+  }
+  const ctx = canvas.getContext && canvas.getContext("2d");
+  if (!ctx) return;
+  const doc = item.path === cv.path && cv.doc ? cv.doc : cached.shape.canvas, width = 240, height = 150;
+  paintScene({ ctx, doc, view: fitView(sceneBounds(doc), width, height, 12), w: width, h: height, pal: cvPalette(), scale: 2, ui: null, images: null, flat: true });
+}
+async function cvDeleteCanvas(item) {
+  if (!confirm("Move \u201c" + item.name + "\u201d to the Trash?\nIts attached files stay in the folder.")) return;
+  const open = item.path === cv.path;
+  // A save on its way would write the file again after it went to the Trash.
+  while (cv.saving) await cv.saving;
+  const { status, data } = await api("POST", "/api/canvas/delete", { path: item.path });
+  if (status !== 200) { toast(data.error || "Could not delete the canvas"); return; }
+  if (open) { clearTimeout(cv.saveTimer); cv.saveTimer = 0; cv.dirty = false; }
+  cvThumbs.delete(item.path);
+  cv.items = Array.isArray(data.items) ? data.items : [];
+  if (data.shelf) cv.shelf = cleanShelf(data.shelf);
+  toast("\u201c" + item.name + "\u201d is in the Trash");
+  if (open) {
+    cv.doc = null; cv.path = ""; cv.name = ""; cv.version = ""; cv.sel = []; cv.hist = null;
+    localStorage.setItem("desk-canvas", "");
+    const next = data.current || (cv.items[0] && cv.items[0].path);
+    if (next) await cvOpen(next, false);
+    cvSync();
+    cvDraw();
+  }
+  cvFillPick();
+}
+// A .canvas file dropped on the page: the browser gives only its contents, so it becomes a new canvas in the
+// canvas folder. Files it names by relative path are not copied along.
+async function cvImportCanvas(file) {
+  let canvas;
+  try { canvas = JSON.parse(await file.text()); } catch { toast(file.name + " is not a canvas file"); return false; }
+  await saveCanvas();
+  const { status, data } = await api("POST", "/api/canvas/import", { name: file.name, canvas });
+  if (status !== 200) { toast(data.error || "Could not import " + file.name); return false; }
+  cvToggleGallery(false);
+  await cvShow(data);
+  toast("Opened " + file.name + " as \u201c" + data.name + "\u201d in the canvas folder");
+  return true;
+}
+const cvIsCanvasFile = (file) => /\.canvas$/i.test(String(file && file.name || ""));
+async function cvDropFiles(files, at) {
+  const list = Array.from(files || []), canvases = list.filter(cvIsCanvasFile), others = list.filter((file) => !cvIsCanvasFile(file));
+  for (const file of canvases.slice(0, 5)) await cvImportCanvas(file);
+  if (others.length) await cvAddFiles(others, canvases.length ? null : at);
 }
 
 function cvBuildBar() {
@@ -9649,7 +11428,7 @@ function cvBuildBar() {
   const toolButtons = Object.keys(CV_TOOLS).map((tool) => {
     const keys = CV_TOOLS[tool], shape = CV_SHAPE_CYCLE.includes(tool);
     const hint = [keys ? keys[0].toUpperCase() : "", shape ? "Shift+U cycles shapes" : ""].filter(Boolean).join("; ");
-    const extra = tool === "fill" ? ". Floods the clicked color; Alt+click clears" : tool === "eraser" ? ". Click again: whole object or only where it passes (Shift+E)" : shape ? ". Click again: how even" : "";
+    const extra = tool === "thread" ? ". Click a spot on a card, then a spot on another card (on empty canvas: a new card)" : tool === "fill" ? ". Floods the clicked color; Alt+click clears" : tool === "eraser" ? ". Click again: whole object or only where it passes (Shift+E)" : shape ? ". Click again: how even" : "";
     const button = iconButton(tool, CV_LABELS[tool] + (hint ? " (" + hint + ")" : "") + extra, () => cvToolClick(tool));
     if (tool === "eraser" || shape) button.classList.add("more");
     ui.tools[tool] = button;
@@ -9685,9 +11464,12 @@ function cvBuildBar() {
     else if (event.key === "Escape") { ui.name.value = cv.name; ui.name.blur(); }
   });
   ui.name.addEventListener("blur", () => cvRename(ui.name.value));
-  ui.pick = h("select", { class: "cvpick", title: "Switch canvas" });
-  ui.pick.addEventListener("change", cvPickChanged);
+  ui.back = iconButton("back", "Back", cvGoBack);
+  ui.back.style.display = "none";
+  ui.pick = h("button", { class: "cvpick", title: "All canvases: open, favorites, groups, links, delete, drop a .canvas file to import" }, cvIcon("gallery"), "Canvases");
+  ui.pick.addEventListener("click", press(ui.pick, cvToggleGallery));
   ui.zoom = h("span", { class: "cvzoom", title: "Zoom" });
+  ui.layersButton = iconButton("layers", "Layers: every card, group and drawing; the eye hides one (F7)", cvToggleLayers);
   ui.cork = iconButton("pin", "Detective board: cork, paper notes, photos and red thread between pins", cvToggleCork);
   ui.files = h("input", { type: "file", multiple: true, style: "display:none", "aria-hidden": "true" });
   ui.files.addEventListener("change", () => { const picked = Array.from(ui.files.files || []); ui.files.value = ""; cvAddFiles(picked); });
@@ -9696,13 +11478,13 @@ function cvBuildBar() {
   ui.status = h("span", { class: "cvstatus" });
   ui.root = h("div", { class: "cvbar" },
     ui.name,
-    h("div", { class: "group" }, ui.pick, iconButton("plus", "New canvas (canvas-1, canvas-2, \u2026)", cvNew), iconButton("folder", "Open a canvas file\u2026", cvChoose)),
+    h("div", { class: "group" }, ui.back, ui.pick, iconButton("plus", "New canvas (canvas-1, canvas-2, \u2026)", cvNew), iconButton("folder", "Open a canvas file\u2026", cvChoose)),
     h("div", { class: "group" }, toolButtons),
     h("div", { class: "group" }, swatches, ui.customWrap),
     h("div", { class: "group" }, ui.fill, ui.width, ui.widthValue),
     h("div", { class: "group" }, iconButton("group", "Group the selection (Cmd/Ctrl+G)", cvGroup), ui.undo, ui.redo),
     h("div", { class: "group" }, iconButton("fit", "Fit everything in view (Cmd/Ctrl+0)", cvFit), ui.zoom),
-    h("div", { class: "group" }, ui.cork, iconButton("export", "Export the canvas as a PNG image", cvExport)),
+    h("div", { class: "group" }, ui.layersButton, ui.cork, iconButton("export", "Export the canvas as a PNG image", cvExport)),
     ui.status,
     h("div", { class: "group cvadd" }, ui.add, ui.files));
   return ui;
@@ -9715,8 +11497,22 @@ function renderCanvas(main) {
   const canvas = h("canvas", { class: "cvcanvas", tabindex: "0" });
   ui.editor = h("textarea", { class: "cvedit", spellcheck: "false" });
   ui.empty = h("div", { class: "cvempty" }, h("div", { text: "No canvas yet" }), h("button", { class: "primary", text: "New canvas", onclick: cvNew }));
-  const stage = h("div", { class: "cvstage" }, canvas, ui.editor, ui.empty);
-  main.append(h("div", { class: "cv" }, ui.root, stage, ui.menu));
+  ui.inline = h("div", { class: "cvinline" });
+  ui.players = h("div", { class: "cvplayers", "aria-hidden": "true" });
+  const stage = h("div", { class: "cvstage" }, canvas, ui.inline, ui.players, ui.editor, ui.empty);
+  ui.layers = h("div", { class: "cvlayers" });
+  cv.layers = localStorage.getItem(CV_LAYERS_PREF) === "1";
+  ui.gallery = h("div", { class: "cvgallery" });
+  ui.view = h("div", { class: "cvview" });
+  main.append(h("div", { class: "cv" }, ui.root, h("div", { class: "cvbody" }, stage, ui.layers, ui.gallery, ui.view), ui.menu));
+  ui.gallery.addEventListener("dragover", (event) => { if (cvHasFiles(event)) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } });
+  ui.gallery.addEventListener("drop", (event) => {
+    if (!cvHasFiles(event)) return;
+    event.preventDefault();
+    const files = Array.from(event.dataTransfer.files || []).filter(cvIsCanvasFile);
+    if (!files.length) { toast("Drop .canvas files here; other files go onto an open canvas"); return; }
+    cvDropFiles(files);
+  });
   // Files dragged in from Finder (or the desktop) are pinned where they are dropped.
   stage.addEventListener("dragover", (event) => {
     if (!cvHasFiles(event)) return;
@@ -9729,7 +11525,7 @@ function renderCanvas(main) {
     stage.classList.remove("dropping");
     if (!cvHasFiles(event)) return;
     event.preventDefault();
-    cvAddFiles(event.dataTransfer.files, cvPoint(event).w);
+    cvDropFiles(event.dataTransfer.files, cvPoint(event).w);
   });
   cv.el = canvas;
   cv.ctx = canvas.getContext("2d");
@@ -9769,6 +11565,16 @@ document.addEventListener("visibilitychange", () => { if (document.hidden && sta
 // A file dropped beside the canvas must not make the browser leave the page to show it.
 for (const type of ["dragover", "drop"]) document.addEventListener(type, (event) => { if (state.view === "canvas" && cvHasFiles(event)) event.preventDefault(); });
 $("theme").addEventListener("click", () => { if (state.view === "canvas") cvDraw(); });
+document.addEventListener("paste", (event) => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || "");
+  if (state.view !== "canvas" || typing || !cv.doc || cv.viewing || cv.gallery) return;
+  const text = event.clipboardData ? event.clipboardData.getData("text/plain") : "";
+  if (!cvHttpUrl(text)) return;
+  event.preventDefault();
+  clearTimeout(cv.pasteWait);
+  cv.pasteWait = 0;
+  cvPasteText(text);
+});
 
 // ---- theme, search, keys ----
 function applyTheme(theme) {
@@ -9805,17 +11611,17 @@ document.addEventListener("keydown", (event) => {
   if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.key === "?") { $("help").classList.toggle("on"); return; }
   if (state.view === "canvas") {
-    if (event.key >= "1" && event.key <= "6") setView(VIEWS[Number(event.key) - 1]);
+    if (event.key >= "1" && event.key <= "5") setView(VIEWS[Number(event.key) - 1]);
     return;
   }
-  if (event.key === "/") { event.preventDefault(); if (state.view === "games" || state.view === "stats") setView("board"); $("search").focus(); }
+  if (event.key === "/") { event.preventDefault(); if (state.view === "games") setView("board"); $("search").focus(); }
   else if (event.key === "n") {
     event.preventDefault();
     if (state.view === "today") document.querySelector(".quick input")?.focus();
     else { if (state.view !== "board") setView("board"); document.querySelector(".add input")?.focus(); }
   }
   else if (event.key === " ") { event.preventDefault(); togglePlay(); }
-  else if (event.key >= "1" && event.key <= "6") setView(VIEWS[Number(event.key) - 1]);
+  else if (event.key >= "1" && event.key <= "5") setView(VIEWS[Number(event.key) - 1]);
 });
 
 // ---- start ----
@@ -9844,6 +11650,7 @@ start();
 """
 PAGE = _PAGE.replace("/*@STUDIO_CSS@*/\n", STUDIO_CSS).replace("/*@STUDIO_JS@*/\n", STUDIO_JS)
 
+import calendar
 import errno
 import hashlib
 import fcntl
@@ -9890,8 +11697,29 @@ MAX_CANVAS_BODY = 16 * 1024 * 1024
 CANVAS_FILES = "attachments"
 MAX_UPLOAD = 256 * 1024 * 1024
 # Pictures the page shows as they are; anything else gets a Quick Look thumbnail (qlmanage).
-CANVAS_IMAGES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
+CANVAS_IMAGES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+    ".ico": "image/x-icon",  # site logos of link cards
+}
 THUMB_SIZE = 640
+# What the canvas viewer may fetch as the file itself (`raw=1`). Never HTML or SVG as a page: text of any kind goes
+# out as text/plain, and everything but PDF carries a sandbox CSP, so an attachment can never run script here.
+CANVAS_RAW = {
+    **{suffix: "video/mp4" for suffix in (".mp4", ".m4v", ".mov")},
+    ".webm": "video/webm",
+    ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".wav": "audio/wav",
+    ".flac": "audio/flac", ".ogg": "audio/ogg", ".opus": "audio/ogg",
+    ".pdf": "application/pdf",
+    **{suffix: "application/octet-stream" for suffix in (".glb", ".gltf", ".obj", ".stl", ".bin")},
+    **{suffix: "text/plain; charset=utf-8" for suffix in (
+        ".md", ".markdown", ".txt", ".text", ".log", ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".toml",
+        ".ini", ".cfg", ".conf", ".xml", ".html", ".htm", ".css", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+        ".py", ".rs", ".c", ".h", ".cc", ".cpp", ".hpp", ".m", ".swift", ".go", ".java", ".kt", ".rb", ".php",
+        ".sh", ".zsh", ".bash", ".fish", ".sql", ".lua", ".r", ".jl", ".tex", ".srt", ".vtt", ".svg")},
+}
+# Word-like documents the viewer shows as a page: `textutil -convert html`, served without scripts.
+CANVAS_DOCUMENTS = {".docx", ".doc", ".rtf", ".odt"}
+SANDBOX_CSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; media-src 'self'"
 # `open` runs these (a script in Terminal, an installer, Java), so a card naming one only shows it in Finder.
 RUNNABLE_SUFFIXES = {".command", ".tool", ".terminal", ".sh", ".zsh", ".bash", ".csh", ".jar", ".pkg", ".mpkg", ".app", ".workflow", ".action", ".scpt", ".applescript", ".scptd", ".osax", ".prefpane", ".inetloc", ".fileloc", ".webloc", ".definition"}
 THUMB_TIMEOUT = 30
@@ -9922,7 +11750,13 @@ CHOOSE_BOARD_SCRIPT = (
     "end run",
 )
 CHOOSE_TIMEOUT = 600
+CHOOSE_STATE = "choose.json"  # the folder each open/save dialog was left in, so the next one starts there
 MAX_CANVAS_NUMBER = 10000
+MAX_PEEK = 4 * 1024 * 1024  # canvases bigger than this get no gallery thumbnail
+# The gallery's favorites and groups: only a list of canvas paths, the files never move.
+SHELF_STATE = "canvases.json"
+MAX_SHELF_PATHS = 2000
+MAX_SHELF_GROUPS = 200
 
 
 def _number(value: object, default: float, minimum: float) -> float:
@@ -9963,8 +11797,13 @@ def _write_json(path: Path, data: object) -> None:
     with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", dir=path.parent, prefix=".desk.", delete=False
     ) as handle:
-        json.dump(data, handle, ensure_ascii=False, indent=1)
         temporary = Path(handle.name)
+        try:
+            json.dump(data, handle, ensure_ascii=False, indent=1)
+        except BaseException:
+            handle.close()
+            temporary.unlink(missing_ok=True)
+            raise
     os.replace(temporary, path)
 
 
@@ -10084,8 +11923,8 @@ class Pomodoro:
             paused=None,
         )
 
-    def _log(self, state: dict, board: str | None) -> None:
-        end = self.clock()
+    def _log(self, state: dict, board: str | None, end: float | None = None) -> None:
+        end = self.clock() if end is None else end
         entry = {
             "start": datetime.fromtimestamp(state["started_at"])
             .astimezone()
@@ -10113,7 +11952,8 @@ class Pomodoro:
                 return None
             ended = state["phase"]
             if ended == "work":
-                self._log(state, board)
+                # Logged when it really ended, not when the Mac woke up hours later (stats count days by the end).
+                self._log(state, board, end=state["ends_at"])
                 state["cycle"] += 1
                 long_break = state["cycle"] % self.settings["cycles"] == 0
                 self._begin(state, "long" if long_break else "short")
@@ -10265,6 +12105,11 @@ class Conflict(Exception):
     """The board changed since the client read it."""
 
 
+class GameEnded(LookupError):
+    """The game session the page asks about is over (HTTP 410). Its own class, so a stray KeyError or
+    IndexError elsewhere is never reported to the page as "game over"."""
+
+
 class CanvasConflict(Exception):
     """The canvas file changed since the client read it."""
 
@@ -10277,6 +12122,10 @@ def _clean_path(value: object) -> str:
     if not text or "\0" in text or len(text) > 4096:
         raise ValueError("invalid board path")
     return text
+
+
+def completed_column_name(config: dict) -> str:
+    return str(config.get("todo", {}).get("completed_column", "Completed"))
 
 
 def _clean_text(value: object) -> str:
@@ -10318,7 +12167,9 @@ class Desk:
         self.reminders = Reminders()
         self.boards_dir = boards_folder(self.settings["boards_dir"], config_dir())
         self.canvas_dir = boards_folder(self.settings["canvas_dir"], config_dir())
-        self.canvas_current: Path | None = None
+        # The newest recent canvas is the one the page had open: a restart (or an update) reopens it.
+        recent_canvas = self.canvas_recent()
+        self.canvas_current: Path | None = Path(recent_canvas[0]) if recent_canvas else None
         self.canvas_lock = threading.Lock()
         self.choose_lock = threading.Lock()
         self.pomodoro = Pomodoro(directory, self.settings, clock)
@@ -10327,7 +12178,7 @@ class Desk:
 
     @property
     def completed_column(self) -> str:
-        return str(self.config.get("todo", {}).get("completed_column", "Completed"))
+        return completed_column_name(self.config)
 
     @property
     def current(self) -> str:
@@ -10384,7 +12235,10 @@ class Desk:
             if request.get("version") != version:
                 raise Conflict
             self.apply(board, request)
-            write_board(self.path, board)
+            try:
+                write_board(self.path, board, expected=version)
+            except BoardChanged:
+                raise Conflict from None
             return self.board_json()
 
     def _task(
@@ -10546,8 +12400,40 @@ class Desk:
         return {
             "dir": str(self.canvas_dir),
             "current": str(current) if current is not None and current.is_file() else None,
-            "items": [{"path": path, "name": Path(path).stem} for path in dict.fromkeys([*files, *self.canvas_recent()])],
+            "shelf": self.canvas_shelf(),
+            "items": [
+                {"path": path, "name": Path(path).stem, "modified": _modified(path)}
+                for path in dict.fromkeys([*files, *self.canvas_recent()])
+            ],
         }
+
+    def canvas_shelf(self) -> dict:
+        """The gallery's favorites and groups; a damaged file counts as empty (it holds no canvas data)."""
+        try:
+            return clean_shelf(_read_json(self.directory / SHELF_STATE, {}))
+        except (ValueError, TypeError):
+            return clean_shelf({})
+
+    def canvas_shelf_save(self, data: object) -> dict:
+        """Replace the favorites and groups (the page sends them whole); returns the new overview."""
+        shelf = clean_shelf(data)
+        with self.canvas_lock:
+            _write_json(self.directory / SHELF_STATE, shelf)
+        return self.canvases()
+
+    def _shelf_move(self, old: Path, new: Path | None) -> None:
+        """A renamed canvas keeps its star and group; a deleted one leaves them (the caller holds canvas_lock)."""
+        shelf, before, after = self.canvas_shelf(), str(old), None if new is None else str(new)
+
+        def swap(paths: list[str]) -> list[str]:
+            return list(dict.fromkeys(after if item == before else item for item in paths if after or item != before))
+
+        changed = {"favorites": swap(shelf["favorites"]), "groups": [{**group, "paths": swap(group["paths"])} for group in shelf["groups"]]}
+        if changed != {"favorites": shelf["favorites"], "groups": shelf["groups"]}:
+            try:
+                _write_json(self.directory / SHELF_STATE, {**shelf, **changed})
+            except OSError:
+                pass
 
     def _canvas_json(self, path: Path, version: str, canvas: dict) -> dict:
         return {"path": str(path), "name": path.stem, "version": version, "canvas": canvas}
@@ -10624,6 +12510,7 @@ class Desk:
                         _rename_new(path, target)
                     except FileExistsError as error:
                         raise ValueError(f"A canvas named {clean} already exists") from error
+                self._shelf_move(path, target)
             version, canvas = read_canvas(target)
             self._canvas_shown(target)
         return self._canvas_json(target, version, canvas)
@@ -10631,8 +12518,71 @@ class Desk:
     def canvas_choose(self) -> dict:
         """Ask for a .canvas file in the macOS open dialog: {"path": None} when cancelled,
         {"unavailable": True} without osascript (the page then asks for a path)."""
-        start = self.canvas_dir if self.canvas_dir.is_dir() else Path.home()
-        return self._choose(CHOOSE_CANVAS_SCRIPT, [str(start)])
+        start = self._choice_start("canvas", self.canvas_dir)
+        return self._remember_choice("canvas", self._choose(CHOOSE_CANVAS_SCRIPT, [str(start)]))
+
+    def _choice_start(self, kind: str, default: Path) -> Path:
+        """Where a dialog opens: the folder it was left in last time, else `default`, else HOME."""
+        folders = _read_json(self.directory / CHOOSE_STATE, {})
+        folder = folders.get(kind) if isinstance(folders, dict) else None
+        if isinstance(folder, str) and Path(folder).is_dir():
+            return Path(folder)
+        return default if default.is_dir() else Path.home()
+
+    def _remember_choice(self, kind: str, answer: dict) -> dict:
+        chosen = answer.get("path")
+        if isinstance(chosen, str) and chosen:
+            folders = _read_json(self.directory / CHOOSE_STATE, {})
+            folders = folders if isinstance(folders, dict) else {}
+            folders[kind] = str(Path(chosen).parent)
+            try:
+                _write_json(self.directory / CHOOSE_STATE, folders)
+            except OSError:
+                pass
+        return answer
+
+    def canvas_peek(self, raw: object) -> dict:
+        """A canvas read for the gallery's thumbnail; unlike canvas_open it does not become the current one."""
+        with self.canvas_lock:
+            path = canvas_file(raw, create=False, canvas_dir=self.canvas_dir)
+            if path.stat().st_size > MAX_PEEK:
+                raise ValueError("The canvas is too big for a preview")
+            version, canvas = read_canvas(path)
+        return self._canvas_json(path, version, canvas)
+
+    def canvas_delete(self, raw: object) -> dict:
+        """Move a canvas to the Trash (never deleted outright; its attachments folder stays, other canvases may
+        use it). A canvas reached through a symlink in the canvas folder loses only the link. When it was the
+        open one, the next recent canvas becomes current. Returns the new overview."""
+        if not isinstance(raw, str):
+            raise TypeError("path must be a name or a .canvas file")
+        with self.canvas_lock:
+            path = canvas_file(raw, create=False, canvas_dir=self.canvas_dir)
+            entry = Path(str(self.canvas_dir / f"{raw}.canvas") if _bare_name(raw, ".canvas") else raw).expanduser().absolute()
+            if not entry.is_symlink():
+                entry = _link_in(self.canvas_dir, "*.canvas", path) or path
+            _to_trash(entry)
+            self._shelf_move(path, None)
+            recent = [item for item in self.canvas_recent() if Path(item).resolve() != path]
+            _write_json(self.directory / "recent-canvas.json", recent)
+            if self.canvas_current is not None and self.canvas_current.resolve() == path:
+                self.canvas_current = Path(recent[0]) if recent else None
+        return self.canvases()
+
+    def canvas_import(self, name: object, canvas: object) -> dict:
+        """A .canvas file dropped on the page: the browser only gives its contents, so it becomes a new canvas
+        in desk.canvas_dir under a free name (`Plan`, `Plan 2`, ...), never over a file, and opens."""
+        data = validate_canvas(canvas)
+        clean = attachment_name(name if isinstance(name, str) else "canvas")
+        if clean.casefold().endswith(".canvas"):
+            clean = clean[: -len(".canvas")].strip() or "canvas"
+        with self.canvas_lock:
+            self.canvas_dir.mkdir(parents=True, exist_ok=True)
+            content = render_canvas(data)
+            path = write_unique(self.canvas_dir, clean, ".canvas", lambda handle: handle.write(content), MAX_CANVAS_NUMBER).resolve()
+            version, data = read_canvas(path)
+            self._canvas_shown(path)
+        return self._canvas_json(path, version, data)
 
     def canvas_folder(self, raw: object) -> Path:
         """The folder of an existing canvas; file nodes are relative to it."""
@@ -10648,27 +12598,7 @@ class Desk:
         folder = self.canvas_folder(raw) / CANVAS_FILES
         folder.mkdir(parents=True, exist_ok=True)
         stem, suffix = os.path.splitext(clean)
-        for number in range(1, 1000):
-            target = folder / (clean if number == 1 else f"{stem} {number}{suffix}")
-            try:
-                handle = target.open("xb")
-            except FileExistsError:
-                continue
-            break
-        else:
-            raise ValueError(f"No free name for {clean} in {folder}")
-        try:
-            with handle:
-                left = length
-                while left > 0:
-                    chunk = source.read(min(1 << 16, left))
-                    if not chunk:
-                        raise ValueError("the upload ended early")
-                    handle.write(chunk)
-                    left -= len(chunk)
-        except BaseException:
-            target.unlink(missing_ok=True)
-            raise
+        target = write_unique(folder, stem, suffix, lambda handle: copy_exactly(source, handle, length))
         return {"file": f"{CANVAS_FILES}/{target.name}", "name": target.name, "size": length}
 
     def canvas_asset(self, raw: object, file: object) -> Path:
@@ -10705,6 +12635,32 @@ class Desk:
             os.replace(made, thumb)
         return thumb
 
+    def canvas_document(self, path: Path) -> Path:
+        """A Word-like document as one HTML page (textutil, part of macOS), cached like the thumbnails."""
+        if path.suffix.casefold() not in CANVAS_DOCUMENTS:
+            raise ValueError("Only .docx, .doc, .rtf and .odt open as a page")
+        info = path.stat()
+        key = hashlib.sha256(f"doc\0{path}\0{info.st_size}\0{info.st_mtime_ns}".encode()).hexdigest()[:32]
+        cache = self.directory / "thumbs"
+        page = cache / f"{key}.html"
+        if page.is_file():
+            return page
+        cache.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=cache, prefix=".doc.") as work:
+            made = Path(work) / "page.html"
+            try:
+                result = subprocess.run(
+                    ["textutil", "-convert", "html", "-output", str(made), str(path)],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=THUMB_TIMEOUT, check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise FileNotFoundError(f"Could not read {path.name}") from error
+            if result.returncode != 0 or not made.is_file():
+                raise FileNotFoundError(f"Could not read {path.name}")
+            os.replace(made, page)
+        return page
+
     def canvas_open_file(self, raw: object, file: object) -> dict:
         """Open a canvas file in its macOS app (Preview, Pages, ...). A file that `open` would run
         (scripts, executables, installers) is only shown in Finder, so a card never starts a program."""
@@ -10716,13 +12672,13 @@ class Desk:
     def board_choose(self, create: bool) -> dict:
         """The macOS save dialog for a new board (create) or the open dialog for an existing one.
         Same answers as canvas_choose; a new board's path gets .md when the name has none."""
-        start = self.boards_dir if self.boards_dir.is_dir() else Path.home()
+        start = self._choice_start("board", self.boards_dir)
         if create:
             answer = self._choose(CHOOSE_NEW_BOARD_SCRIPT, [str(start), "board.md"])
             if answer.get("path") and Path(answer["path"]).suffix.casefold() != ".md":
                 answer["path"] += ".md"
-            return answer
-        return self._choose(CHOOSE_BOARD_SCRIPT, [str(start)])
+            return self._remember_choice("board", answer)
+        return self._remember_choice("board", self._choose(CHOOSE_BOARD_SCRIPT, [str(start)]))
 
     def _choose(self, script: tuple[str, ...], args: list[str]) -> dict:
         osascript = shutil.which("osascript")
@@ -10760,13 +12716,7 @@ class Desk:
         # symlink shows its target. Trash that link, never the real file it points to.
         given = Path(text).expanduser()
         if given.is_absolute() and not given.is_symlink():
-            try:
-                link = next(
-                    (item for item in self.boards_dir.glob("*.md") if item.is_symlink() and item.resolve() == path),
-                    None,
-                )
-            except OSError:
-                link = None
+            link = _link_in(self.boards_dir, "*.md", path)
             if link is not None:
                 text = str(link)
         with self.lock:
@@ -10868,6 +12818,40 @@ def attachment_name(raw: object) -> str:
     while len((stem + suffix).encode()) > 200:
         stem = stem[:-1]
     return (stem.rstrip() or "file") + suffix
+
+
+def clean_shelf(data: object) -> dict:
+    """{version, favorites: [path], groups: [{name, paths: [path]}]} checked; a canvas sits in one group at most,
+    group names are unique (case ignored). Wrong types raise ValueError/TypeError (HTTP 400)."""
+    data = {} if data is None else data
+    if not isinstance(data, dict):
+        raise TypeError("shelf must be an object")
+
+    def paths(value: object, what: str) -> list[str]:
+        if not isinstance(value, list) or len(value) > MAX_SHELF_PATHS:
+            raise ValueError(f"{what} must be a list of at most {MAX_SHELF_PATHS} canvas paths")
+        if not all(isinstance(item, str) and 0 < len(item) <= 4096 and item.isprintable() for item in value):
+            raise ValueError(f"{what} must hold canvas paths")
+        return list(dict.fromkeys(value))
+
+    groups, names, placed = [], set(), set()
+    raw_groups = data.get("groups", [])
+    if not isinstance(raw_groups, list) or len(raw_groups) > MAX_SHELF_GROUPS:
+        raise ValueError(f"groups must be a list of at most {MAX_SHELF_GROUPS}")
+    for group in raw_groups:
+        if not isinstance(group, dict):
+            raise TypeError("a group must be an object")
+        name = group.get("name")
+        name = " ".join(name.split()) if isinstance(name, str) else ""
+        if not name or len(name) > 80 or not name.isprintable():
+            raise ValueError("a group name is 1-80 printable characters")
+        if name.casefold() in names:
+            raise ValueError(f"two groups are named {name}")
+        names.add(name.casefold())
+        members = [item for item in paths(group.get("paths", []), f"group {name}") if item not in placed]
+        placed.update(members)
+        groups.append({"name": name, "paths": members})
+    return {"version": 1, "favorites": paths(data.get("favorites", []), "favorites"), "groups": groups}
 
 
 def canvas_file(raw: object, create: bool, canvas_dir: Path) -> Path:
@@ -10972,6 +12956,51 @@ def trash_board(raw: str, config: dict, boards_dir: Path) -> tuple[Path, Path]:
     if not entry.is_symlink():
         entry = path
     _refuse_default(path, config)
+    return path, _to_trash(entry)
+
+
+def write_unique(folder: Path, stem: str, suffix: str, write, tries: int = 1000) -> Path:
+    """Create `<stem><suffix>`, else `<stem> 2<suffix>`, ... in `folder` (exclusive create, never over a file)
+    and fill it with `write(handle)`; a failed write removes the file, so nothing half-written is left."""
+    for number in range(1, tries):
+        target = folder / (f"{stem}{suffix}" if number == 1 else f"{stem} {number}{suffix}")
+        try:
+            handle = target.open("xb")
+        except FileExistsError:
+            continue
+        try:
+            with handle:
+                write(handle)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+        return target
+    raise ValueError(f"No free name for {stem}{suffix} in {folder}")
+
+
+def copy_exactly(source, handle, length: int, head: bytes = b"") -> None:
+    """Write `head`, then the rest of `length` bytes from `source` (an upload that ends early is an error)."""
+    handle.write(head)
+    left = length - len(head)
+    while left > 0:
+        chunk = source.read(min(1 << 16, left))
+        if not chunk:
+            raise ValueError("the upload ended early")
+        handle.write(chunk)
+        left -= len(chunk)
+
+
+def _link_in(folder: Path, pattern: str, target: Path) -> Path | None:
+    """A symlink in `folder` that points to `target`: the page lists files by their resolved path, and deleting
+    such a file must trash that link, never the real file it points to."""
+    try:
+        return next((item for item in folder.glob(pattern) if item.is_symlink() and item.resolve() == target), None)
+    except OSError:
+        return None
+
+
+def _to_trash(entry: Path) -> Path:
+    """Move a file (or only the link, for a symlink) into ~/.Trash under a free name (`X 2.md`), never over one."""
     trash = Path.home() / ".Trash"
     trash.mkdir(exist_ok=True)
     target, number = trash / entry.name, 2
@@ -10979,7 +13008,14 @@ def trash_board(raw: str, config: dict, boards_dir: Path) -> tuple[Path, Path]:
         target = trash / f"{entry.stem} {number}{entry.suffix}"
         number += 1
     shutil.move(str(entry), str(target))
-    return path, target
+    return target
+
+
+def _modified(path: str) -> float | None:
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return None
 
 
 def _optional_board(config: dict) -> Path | None:
@@ -11132,6 +13168,13 @@ class Handler(BaseHTTPRequestHandler):
                 )
             elif url.path == "/api/canvases":
                 self._json(200, self.desk.canvases())
+            elif url.path == "/api/canvas/peek":
+                try:
+                    self._json(200, self.desk.canvas_peek(urllib.parse.parse_qs(url.query).get("path", [""])[0]))
+                except FileNotFoundError as error:
+                    self._json(404, {"error": str(error), "missing": True})
+                except (ValueError, TypeError) as error:
+                    self._json(400, {"error": str(error)})
             elif url.path == "/api/canvas":
                 try:
                     wanted = urllib.parse.parse_qs(url.query).get("path", [None])[0]
@@ -11185,8 +13228,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": str(error)})
         except FileNotFoundError as error:
             self._json(404, {"error": str(error)})
-        except ValueError as error:
-            self._json(400 if url.path.startswith("/api/studio/") else 500, {"error": str(error)})
+        except (ValueError, TypeError, OverflowError) as error:
+            # Bad input or a file that is not what it should be (a board without columns): the request failed, not the desk.
+            self._json(400, {"error": str(error)})
         except OSError as error:
             self._json(500, {"error": str(error)})
 
@@ -11206,7 +13250,19 @@ class Handler(BaseHTTPRequestHandler):
             path = self.studio.asset_file(query.get("name", [""])[0])
         elif url.path == "/media/canvas":
             target = self.desk.canvas_asset(query.get("path", [""])[0], query.get("file", [""])[0])
-            kind = CANVAS_IMAGES.get(target.suffix.casefold())
+            suffix = target.suffix.casefold()
+            if query.get("doc", [""])[0] == "1":
+                self._send_file(self.desk.canvas_document(target), "text/html; charset=utf-8", {"Content-Security-Policy": SANDBOX_CSP})
+                return
+            if query.get("raw", [""])[0] == "1":
+                if suffix not in CANVAS_RAW:
+                    raise FileNotFoundError(f"{target.name} is not served as itself")
+                extra = {"Content-Disposition": "inline"}
+                if suffix != ".pdf":
+                    extra["Content-Security-Policy"] = SANDBOX_CSP
+                self._send_file(target, CANVAS_RAW[suffix], extra)
+                return
+            kind = CANVAS_IMAGES.get(suffix)
             if kind is None or query.get("thumb", [""])[0] == "1":
                 target, kind = self.desk.canvas_thumb(target), "image/png"
             self._send_file(target, kind)
@@ -11222,7 +13278,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send_file(path)
 
-    def _send_file(self, path: Path, kind: str | None = None) -> None:
+    def _send_file(self, path: Path, kind: str | None = None, headers: dict[str, str] | None = None) -> None:
         """Serve a file with byte ranges, which video seeking needs."""
         kind = kind or MEDIA_TYPES.get(path.suffix.casefold())
         if kind is None or not path.is_file():
@@ -11254,6 +13310,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         if status == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.end_headers()
@@ -11295,7 +13353,7 @@ class Handler(BaseHTTPRequestHandler):
                 name = urllib.parse.parse_qs(url.query).get("name", [""])[0]
                 self._json(200, self.studio.add_asset(name, self.rfile, length))
                 return
-            limit = MAX_CANVAS_BODY if path == "/api/canvas" else MAX_STUDIO_BODY if path in {"/api/studio/setup", "/api/studio/project"} else MAX_BODY
+            limit = MAX_CANVAS_BODY if path in {"/api/canvas", "/api/canvas/import"} else MAX_STUDIO_BODY if path in {"/api/studio/setup", "/api/studio/project"} else MAX_BODY
             body = self._body(limit)
             if path == "/api/board":
                 self._json(200, self.desk.change(body))
@@ -11339,6 +13397,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.desk.canvas_rename(body.get("path"), body.get("name")))
             elif path == "/api/canvas/choose":
                 self._json(200, self.desk.canvas_choose())
+            elif path == "/api/canvas/link-preview":
+                self._json(200, link_preview(body.get("url"), self.desk.canvas_folder(body.get("path"))))
+            elif path == "/api/canvas/delete":
+                self._json(200, self.desk.canvas_delete(body.get("path")))
+            elif path == "/api/canvas/shelf":
+                self._json(200, self.desk.canvas_shelf_save(body.get("shelf")))
+            elif path == "/api/canvas/import":
+                self._json(200, self.desk.canvas_import(body.get("name"), body.get("canvas")))
             elif path == "/api/canvas/open-file":
                 self._json(200, self.desk.canvas_open_file(body.get("path"), body.get("file")))
             elif path == "/api/boards/delete":
@@ -11399,7 +13465,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": ok})
             else:
                 self._json(404, {"error": "not found"})
-        except LookupError as error:
+        except GameEnded as error:
             self._json(410, {"error": str(error)})
         except StudioError as error:
             self._json(400, {"error": str(error)})
@@ -11413,7 +13479,7 @@ class Handler(BaseHTTPRequestHandler):
             )
         except FileNotFoundError as error:
             self._json(404, {"error": str(error), "missing": True})
-        except (ValueError, TypeError, KeyError) as error:
+        except (ValueError, TypeError, KeyError, IndexError, OverflowError) as error:
             self._json(400, {"error": str(error)})
         except OSError as error:
             self._json(500, {"error": str(error)})
@@ -11431,9 +13497,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
         assert process.stdout is not None
-        # Raw reads: a buffered readline could hold frames that select() cannot see.
-        source = process.stdout.fileno()
+        # Raw reads: a buffered readline could hold frames that select() cannot see. The stream reads its own
+        # copy of the descriptor: Arcade closes process.stdout when a game stops, and the number could be
+        # reused by the next game's pipe while this loop still sits in select().
+        source = -1
         try:
+            source = os.dup(process.stdout.fileno())
             while True:
                 ready, _, _ = select.select([source], [], [], 2)
                 if not ready:
@@ -11450,6 +13519,8 @@ class Handler(BaseHTTPRequestHandler):
         except (OSError, ValueError):
             pass
         finally:
+            if source >= 0:
+                os.close(source)
             self.arcade.stop_if(process)
 
     def _open_obsidian(self, note: object) -> bool:
@@ -11465,7 +13536,8 @@ class Handler(BaseHTTPRequestHandler):
         return subprocess.run(["open", url], check=False).returncode == 0
 
 
-CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; base-uri 'none'; form-action 'none'"
+# frame-src: the canvas viewer shows PDFs and documents from here and live link pages from the web.
+CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; frame-src 'self' https: http:; base-uri 'none'; form-action 'none'"
 
 
 MEDIA_TYPES = {
@@ -11842,28 +13914,7 @@ class Studio:
             raise ValueError(f"this is not a {suffix[1:].upper()} image")
         folder = storage_path("studio", "assets")
         folder.mkdir(parents=True, exist_ok=True)
-        for number in range(1, 1000):
-            target = folder / (f"{stem}{suffix}" if number == 1 else f"{stem} {number}{suffix}")
-            try:
-                handle = target.open("xb")
-            except FileExistsError:
-                continue
-            break
-        else:
-            raise ValueError(f"no free name for {clean} in {folder}")
-        try:
-            with handle:
-                handle.write(head)
-                left = length - len(head)
-                while left > 0:
-                    chunk = source.read(min(1 << 16, left))
-                    if not chunk:
-                        raise ValueError("the upload ended early")
-                    handle.write(chunk)
-                    left -= len(chunk)
-        except BaseException:
-            target.unlink(missing_ok=True)
-            raise
+        target = write_unique(folder, stem, suffix, lambda handle: copy_exactly(source, handle, length, head))
         return {"asset": target.name}
 
     def add_project_asset(self, raw: object, name: object, source, length: int) -> dict:
@@ -11898,32 +13949,13 @@ class Studio:
             same = assets / f"{stem}{suffix}"
             if same.is_file() and not same.is_symlink() and same.read_bytes() == body:
                 return {"asset": same.name}
-        for number in range(1, 1000):
-            target = assets / (f"{stem}{suffix}" if number == 1 else f"{stem} {number}{suffix}")
-            try:
-                handle = target.open("xb")
-            except FileExistsError:
-                continue
-            break
-        else:
-            raise ValueError(f"no free name for {clean}")
-        try:
-            with handle:
-                if body is not None:
-                    handle.write(body)
-                else:
-                    handle.write(head)
-                    left = length - len(head)
-                    while left > 0:
-                        chunk = source.read(min(1 << 16, left))
-                        if not chunk:
-                            raise ValueError("the upload ended early")
-                        handle.write(chunk)
-                        left -= len(chunk)
-        except BaseException:
-            target.unlink(missing_ok=True)
-            raise
-        return {"asset": target.name}
+        def write(handle) -> None:
+            if body is not None:
+                handle.write(body)
+            else:
+                copy_exactly(source, handle, length, head)
+
+        return {"asset": write_unique(assets, stem, suffix, write).name}
 
     def import_sound(self, body: dict) -> dict:
         """Copy the sound of another project (an audio-only recording) into this one as a voice-over."""
@@ -11937,19 +13969,10 @@ class Studio:
             raise ValueError("the project's assets folder is a link")
         assets.mkdir(exist_ok=True)
         stem = f"{Path(str(body.get('from'))).name} {source.stem.lstrip('.')}"[:100]
-        for number in range(1, 1000):
-            target = assets / (f"{stem}{suffix}" if number == 1 else f"{stem} {number}{suffix}")
-            try:
-                with target.open("xb") as out, source.open("rb") as stream:
-                    try:
-                        shutil.copyfileobj(stream, out)
-                    except BaseException:
-                        target.unlink(missing_ok=True)
-                        raise
-            except FileExistsError:
-                continue
-            return {"asset": target.name}
-        raise ValueError("no free name for the sound")
+        # The source is opened first: one that cannot be read leaves no empty file behind.
+        with source.open("rb") as stream:
+            target = write_unique(assets, stem, suffix, lambda out: shutil.copyfileobj(stream, out))
+        return {"asset": target.name}
 
     def proxy(self, raw: object, start: bool) -> dict:
         """Light copies for the Edit tab (`ul capture proxy`), made in the background: {state, files, error}.
@@ -11967,8 +13990,8 @@ class Studio:
                         data = self.run("proxy", folder, timeout=3600)
                         files = data.get("files", {}) if isinstance(data, dict) else {}
                         entry.update(state="done", files=files)
-                    except (StudioError, OSError) as error:
-                        entry.update(state="failed", error=str(error))
+                    except Exception as error:  # the page must see "failed", never a run stuck at "running"
+                        entry.update(state="failed", error=str(error) or type(error).__name__)
 
                 threading.Thread(target=work, daemon=True).start()
             self.proxies[folder] = entry
@@ -12266,9 +14289,9 @@ class Arcade:
 
     def _current(self, session: object) -> subprocess.Popen:
         if not isinstance(session, str) or not session or not hmac.compare_digest(session, self.session):
-            raise LookupError("this game has ended")
+            raise GameEnded("this game has ended")
         if self.process is None:
-            raise LookupError("this game has ended")
+            raise GameEnded("this game has ended")
         return self.process
 
     def send(self, session: object, events: object) -> None:
@@ -12299,14 +14322,14 @@ class Arcade:
             except (BrokenPipeError, ValueError, OSError) as error:
                 # A timed-out partial JSON line must never prefix a later event.
                 self._stop_locked()
-                raise LookupError("this game has ended") from error
+                raise GameEnded("this game has ended") from error
 
     def claim(self, session: object) -> subprocess.Popen:
         """The process whose frames one stream may read; a second reader is refused."""
         with self.lock:
             process = self._current(session)
             if self.reading:
-                raise LookupError("this game is already shown in another tab")
+                raise GameEnded("this game is already shown in another tab")
             self.reading = True
             return process
 
@@ -12315,7 +14338,7 @@ class Arcade:
             if session is not None:
                 try:
                     self._current(session)
-                except LookupError:
+                except GameEnded:
                     return
             self._stop_locked()
 
@@ -12347,6 +14370,81 @@ class Arcade:
 
 def game_binary() -> str | None:
     return os.environ.get("UNLAW_BIN") or shutil.which("ul")
+
+
+def last_board(directory: Path) -> Path | None:
+    """The board the page showed last (the newest entry of recent.json that still exists)."""
+    items = _read_json(directory / "recent.json", [])
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, str) and Path(item).is_file():
+            return Path(item)
+    return None
+
+
+SERVER_FILE = "server.json"  # {pid, port, lstart} of the running page server
+
+
+def _ps(pid: int, field: str) -> str:
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", f"{field}="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            env={**os.environ, "TZ": "UTC", "LC_ALL": "C"},
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return " ".join(result.stdout.split())
+
+
+def _outdated_server(directory: Path, port: int) -> int | None:
+    """The pid of an earlier desk server holding `port` whose code has changed since it started (an update), or None.
+    The page keeps its settings in localStorage, which belongs to the port: a new server on the next port would
+    open an empty page, so an outdated one gives the port back. Two current desks still run side by side."""
+    info = _read_json(directory / SERVER_FILE, {})
+    if not isinstance(info, dict) or info.get("port") != port:
+        return None
+    pid = info.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1 or pid == os.getpid():
+        return None
+    started = _ps(pid, "lstart")
+    if not started or started != info.get("lstart") or Path(__file__).name not in _ps(pid, "command"):
+        return None
+    try:
+        began = calendar.timegm(time.strptime(started, "%a %b %d %H:%M:%S %Y"))
+        changed = Path(__file__).stat().st_mtime
+    except (OSError, ValueError):
+        return None
+    return pid if changed > began else None
+
+
+def _stop_outdated(directory: Path, port: int) -> None:
+    pid = _outdated_server(directory, port)
+    if pid is None:
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and _ps(pid, "pid"):
+        time.sleep(0.1)
+    print(f"Stopped the desk from before the update (pid {pid}).", flush=True)
+
+
+def _record_server(directory: Path, port: int) -> None:
+    _write_json(directory / SERVER_FILE, {"pid": os.getpid(), "port": port, "lstart": _ps(os.getpid(), "lstart")})
+
+
+def _forget_server(directory: Path) -> None:
+    info = _read_json(directory / SERVER_FILE, {})
+    if isinstance(info, dict) and info.get("pid") == os.getpid():
+        try:
+            (directory / SERVER_FILE).unlink()
+        except OSError:
+            pass
 
 
 def make_server(
@@ -12417,9 +14515,16 @@ def serve(
     desk.remember()
     token = secrets.token_urlsafe(18)
     settings = desk.settings
-    server = make_server(
-        desk, settings["port"] if port is None else port, token, exact=port is not None
-    )
+    wanted = settings["port"] if port is None else port
+    if wanted:
+        _stop_outdated(desk.directory, wanted)
+    server = make_server(desk, wanted, token, exact=port is not None)
+    _record_server(desk.directory, server.server_address[1])
+
+    def _terminate(_signum: int, _frame: object) -> None:
+        raise KeyboardInterrupt
+
+    previous_term = signal.signal(signal.SIGTERM, _terminate)
     url = f"http://127.0.0.1:{server.server_address[1]}/?token={token}"
     print(f"Desk: {url}", flush=True)
     print(f"Board: {desk.current if layer else path}", flush=True)
@@ -12433,9 +14538,11 @@ def serve(
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
+        signal.signal(signal.SIGTERM, previous_term)
         stop.set()
         server.RequestHandlerClass.arcade.stop()
         server.server_close()
+        _forget_server(desk.directory)
     return 0
 
 
@@ -12457,7 +14564,10 @@ def _pomodoro_cli(args: list[str], config: dict) -> int:
         card_title = " ".join(rest[at + 1 :])
         rest = rest[:at]
     if action == "start" and rest:
-        minutes = float(rest[0])
+        try:
+            minutes = float(rest[0])
+        except ValueError:
+            raise ValueError(f"start takes a length in minutes, not {rest[0]!r}") from None
         if not 0 < minutes <= 600 or len(rest) > 1:
             raise ValueError("start takes one length in minutes (0-600)")
         rest = []
@@ -12502,11 +14612,14 @@ def _stats_cli(path: Path | None, config: dict) -> int:
 
 
 def _board_choice(args: list[str]) -> tuple[str | None, list[str]]:
-    """`--board NAME` (or `-b`) anywhere in args; the rest stays in order."""
+    """`--board NAME` (or `-b`) anywhere before `--`; the rest stays in order (everything after `--` is text)."""
     rest, board = [], None
     position = 0
     while position < len(args):
         arg = args[position]
+        if arg == "--":
+            rest.extend(args[position + 1 :])
+            break
         if arg in {"--board", "-b"}:
             if position + 1 >= len(args) or board is not None:
                 raise ValueError(f"{arg} needs one board (a name or a .md file)")
@@ -12630,49 +14743,70 @@ def _list_cli(args: list[str], config: dict, boards_dir: Path) -> int:
 
 
 def _change_cli(action: str, args: list[str], config: dict, boards_dir: Path) -> int:
-    """add / move / done on a .md board, the same edits the page makes."""
+    """add / move / done on a .md board, the same edits the page makes. The file is written only if it is still
+    the version that was read; when the page or Obsidian changed it meanwhile, the edit is made again on the
+    fresh file (a few times), so nobody's change is lost."""
     raw, rest = _board_choice(args)
     path = _chosen_board(raw, config, boards_dir)
-    board = KanbanBoard.parse(path.read_bytes().decode("utf-8"))
-    if action == "add":
-        column: str | None = None
-        if "--column" in rest:
-            at = rest.index("--column")
-            if at + 1 >= len(rest):
-                raise ValueError("--column needs a column name")
-            column = rest[at + 1]
-            rest = rest[:at] + rest[at + 2 :]
-        text = quick_text(" ".join(rest), datetime.now().astimezone().date())
-        if not text or "\n" in text or "\r" in text:
-            raise ValueError("The task text must be one non-empty line")
-        if not board.sections:
-            raise ValueError(f"{path} has no columns")
-        section = board.section(column) if column else board.sections[0]
-        section.tasks.append([f"- [ ] {text}"])
-        write_board(path, board)
-        print(f"Added to {section.name}: {text}")
-        return 0
-    if not rest or not rest[0].isdigit():
+    column: str | None = None
+    if action == "add" and "--column" in rest:
+        at = rest.index("--column")
+        if at + 1 >= len(rest):
+            raise ValueError("--column needs a column name")
+        column = rest[at + 1]
+        rest = rest[:at] + rest[at + 2 :]
+    if action != "add" and (not rest or not rest[0].isdigit()):
         raise ValueError(f"{action} needs a card number from: ul desk show")
-    number = int(rest[0])
-    if action == "move":
-        if len(rest) < 2:
-            raise ValueError("move needs a card number and a column")
-        target = board.section(" ".join(rest[1:]))
-        source, task = board.pop_task(number)
-        target.tasks.append(task)
-        write_board(path, board)
-        print(f"Moved #{number}: {source.name} -> {target.name}")
-        return 0
-    if len(rest) != 1:
+    if action == "move" and len(rest) < 2:
+        raise ValueError("move needs a card number and a column")
+    if action == "done" and len(rest) != 1:
         raise ValueError("done takes one card number")
-    target = completed_section(board, str(config.get("todo", {}).get("completed_column", "Completed")))
-    _, task = board.pop_task(number)
-    title = complete_task(task, datetime.now().astimezone().date())
-    target.tasks.append(task)
-    write_board(path, board)
-    print(f"Completed #{number}: {title}")
-    return 0
+    today = datetime.now().astimezone().date()
+    text = _clean_text(quick_text(" ".join(rest), today)) if action == "add" else ""
+    if action == "add" and not text:
+        raise ValueError("The task text must be one non-empty line")
+
+    # The card the user meant, by its line: a retry after a concurrent change must not act on another card
+    # that now has the same number (the page checks `line` the same way).
+    meant: list[str] = []
+
+    def edit(board: KanbanBoard) -> str:
+        if action == "add":
+            if not board.sections:
+                raise ValueError(f"{path} has no columns")
+            section = board.section(column) if column else board.sections[0]
+            section.tasks.append([f"- [ ] {text}"])
+            return f"Added to {section.name}: {text}"
+        number = int(rest[0])
+        current = next((task[0] for n, _, task in board.numbered_tasks() if n == number), None)
+        if current is not None:
+            if meant and meant[0] != current:
+                raise ValueError(f"Card #{number} changed while it was being edited; check `ul desk show` and try again")
+            meant[:] = [current]
+        if action == "move":
+            target = board.section(" ".join(rest[1:]))
+            source, task = board.pop_task(number)
+            target.tasks.append(task)
+            return f"Moved #{number}: {source.name} -> {target.name}"
+        target = completed_section(board, completed_column_name(config))
+        _, task = board.pop_task(number)
+        title = complete_task(task, today)
+        target.tasks.append(task)
+        return f"Completed #{number}: {title}"
+
+    for attempt in range(3):
+        raw_bytes = path.read_bytes()
+        board = KanbanBoard.parse(raw_bytes.decode("utf-8"))
+        message = edit(board)
+        try:
+            write_board(path, board, expected=version_of(raw_bytes))
+        except BoardChanged:
+            if attempt == 2:
+                raise
+            continue
+        print(message)
+        return 0
+    return 1
 
 
 def _parse_serve(args: list[str]) -> tuple[str | None, int | None, bool, bool]:
@@ -12768,7 +14902,11 @@ def _main(args: list[str]) -> int:
                 raise ValueError("The Reminders layer is off (desk.reminders) or not on macOS")
             path = board_file(board, boards_dir=boards_dir) if board else _optional_board(config)
             return serve(path, config, port, open_browser, REMINDERS)
-        path = board_file(board, boards_dir=boards_dir) if board else default_board(config)
+        path = (
+            board_file(board, boards_dir=boards_dir)
+            if board
+            else last_board(storage_path("desk")) or default_board(config)
+        )
         return serve(path, config, port, open_browser)
     except (ConfigError, FileNotFoundError, OSError, ValueError, OverflowError) as error:
         print(f"unlaw desk: {error}", file=sys.stderr)

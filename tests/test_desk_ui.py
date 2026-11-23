@@ -57,6 +57,21 @@ class DeskUITests(unittest.TestCase):
     def test_camera_permission_cannot_outlive_studio(self) -> None:
         self.run_case("camera_leave")
 
+    def test_today_shows_tasks_and_focus_stats(self) -> None:
+        self.run_case("today_shows_tasks_and_focus_stats")
+
+    def test_canvas_threads_new_cards_and_layers(self) -> None:
+        self.run_case("canvas_threads_new_cards_and_layers")
+
+    def test_canvas_gallery_shelf_links_and_cards_that_play(self) -> None:
+        self.run_case("canvas_gallery_shelf_links_and_cards_that_play")
+
+    def test_canvas_gallery_import_and_delete(self) -> None:
+        self.run_case("canvas_gallery_import_and_delete")
+
+    def test_canvas_viewer_3d_and_links(self) -> None:
+        self.run_case("canvas_viewer_3d_and_links")
+
     def test_board_dialogs(self) -> None:
         self.run_case("board_dialogs")
 

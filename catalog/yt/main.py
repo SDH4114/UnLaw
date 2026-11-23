@@ -116,8 +116,12 @@ def _select_subtitle(info: dict, requested: str | None) -> tuple[str, bool] | No
                 kind = "automatic" if automatic else "authored"
                 print(f"  {key:<12} {label} ({kind})", file=sys.stderr)
             print("Use --sub-lang <code>, or --sub-lang alone for the original language.", file=sys.stderr)
-            raise ValueError("Choose one of the available subtitle languages")
+            raise _UsageError("Choose one of the available subtitle languages")
     return selected, tracks[selected][1]
+
+
+class _UsageError(ValueError):
+    """The call itself was wrong (exit 2); every other ValueError is a failed download (exit 1)."""
 
 
 def _subtitle_text(path: Path) -> str:
@@ -365,7 +369,7 @@ def _subtitle_bundle(options, executable: str, output: Path) -> int:
                             f"Language: {language} · Subtitles: {kind}\n\n{text}\n", encoding="utf-8",
                         )
                         _publish(markdown, destination)
-                    except (ValueError, KeyError, TypeError) as error:
+                    except (ValueError, KeyError, TypeError, AttributeError) as error:
                         print(f"unlaw yt: Invalid subtitle data: {error}", file=sys.stderr)
                         caption_failed = True
         if options.full:
@@ -558,7 +562,7 @@ def _run_download(args: list[str]) -> int:
         return 124
     except (ConfigError, OSError, ValueError, KeyError, TypeError) as error:
         print(f"unlaw yt: {error}", file=sys.stderr)
-        return 2 if isinstance(error, ValueError) else 1
+        return 2 if isinstance(error, (_UsageError, ConfigError)) else 1
     except KeyboardInterrupt as stop:
         print("\nunlaw yt: download cancelled.", file=sys.stderr)
         return getattr(stop, "code", 130)

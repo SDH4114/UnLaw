@@ -647,15 +647,10 @@ def _run_all(commands: list[list[str]]) -> int:
     return 0
 
 
-def _git_clean(text: str) -> str:
-    """Drop control characters (ESC sequences, BEL...) so text from a server cannot drive the terminal."""
-    return "".join(ch for ch in text if ch in "\t\n" or (ord(ch) >= 32 and ord(ch) != 127))
-
-
 def _git_checked_remote(url: str) -> str:
     """An address from a host's API must look like one: never an option, a helper transport or text with spaces."""
     if not url or url.startswith("-") or "::" in url or any(ch.isspace() or ord(ch) < 32 for ch in url):
-        raise HostError(f"the host answered with an unusable repository address: {_git_clean(url)!r}")
+        raise HostError(f"the host answered with an unusable repository address: {_hosts_clean(url)!r}")
     return url
 
 
@@ -841,7 +836,7 @@ def _git_secrets_guard(allow: bool) -> int:
         stdin="\0".join(path for path, _ in found),
     )
     if reset.returncode:
-        return _git_fail(_git_clean(reset.stderr.strip()) or "could not unstage the files below.")
+        return _git_fail(_hosts_clean(reset.stderr.strip()) or "could not unstage the files below.")
     lines = [
         "not committing, these staged files look like secrets or are too big (now unstaged):"
     ]
@@ -880,7 +875,7 @@ def _commit_workflow(
 
 def _git_shown(url: str) -> str:
     """A remote URL for printing: a user:password@ part (a token) is masked."""
-    return _git_clean(re.sub(r"(://)[^/@\s]+@", r"\1***@", url))
+    return _hosts_clean(re.sub(r"(://)[^/@\s]+@", r"\1***@", url))
 
 
 def _git_commit_args(args: list[str]) -> tuple[list[str], bool]:
@@ -1018,7 +1013,7 @@ def _git_verify_remote(target: str) -> int:
     result = _git_out("ls-remote", "--end-of-options", target)
     if result.returncode:
         return _git_fail(
-            f"cannot access {_git_shown(target)}: {_git_clean(result.stderr.strip()) or 'ls-remote failed'}"
+            f"cannot access {_git_shown(target)}: {_hosts_clean(result.stderr.strip()) or 'ls-remote failed'}"
         )
     return 0
 

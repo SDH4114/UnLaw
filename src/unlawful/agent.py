@@ -739,7 +739,14 @@ def run_group(argv: list[str], timeout: float, cwd: Path | None = None) -> subpr
         with contextlib.suppress(OSError):
             os.killpg(process.pid, signal.SIGKILL)
         process.kill()
-        process.communicate()
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            # A child that left the group (setsid) still holds the pipes: stop reading instead of waiting forever.
+            for stream in (process.stdout, process.stderr):
+                with contextlib.suppress(OSError):
+                    stream.close()
+            process.wait()
         raise
     return subprocess.CompletedProcess(argv, process.returncode, output, errors)
 
@@ -1123,6 +1130,8 @@ class Tools:
         return f"{file}:\n{body}{footer}"
 
     def _search(self, query: str, path: str = "", content: bool = False) -> str:
+        if not path and not roots(self.config):
+            raise ToolError("agent.roots is empty: give a path to search in")
         folder = self._path(path or str(roots(self.config)[0]))
         needle = query.casefold()
         if not needle:
@@ -2653,6 +2662,7 @@ class Bot:
 
     def run_job(self, job: dict) -> None:
         self.log(f"scheduled #{job['id']} › {job['prompt'][:100]}")
+        # A job without a kind comes from before kinds existed (3.5.0), when every job was a task.
         if job.get("kind", "task") == "reminder":
             chat_id = str(job.get("by") or self.owner)
             self.send(chat_id if chat_id in self.allowed else self.owner, f"⏰ {job['prompt']}")

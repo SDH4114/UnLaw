@@ -181,14 +181,22 @@ function liftClips(edit, ids) {
 }
 // Make [a, b) of a track empty (overwrite): clips inside go, clips across the edges are trimmed or split.
 // Returns whether anything changed.
-function clearRange(edit, trackId, a, b, except) {
+function clearRange(edit, trackId, a, b, except, links) {
   let changed = false;
+  links = links || {};
   for (const clip of edit.clips.filter((item) => item.track === trackId && !(except && except.has(item.id)))) {
     const start = clip.start, end = clipEnd(clip);
     if (end <= a + 1e-6 || start >= b - 1e-6) continue;
     changed = true;
     if (start >= a - 1e-6 && end <= b + 1e-6) { edit.clips.splice(edit.clips.indexOf(clip), 1); continue; }
-    if (start < a && end > b) { splitClip(edit, clip, b); clip.out = round3(clip.in + a - start); continue; }
+    if (start < a && end > b) {
+      // The right part is a new piece: like the blade, linked right parts get one fresh link of their own, so
+      // the left part and the right part are not one group.
+      const right = splitClip(edit, clip, b);
+      if (clip.link) right.link = links[clip.link] || (links[clip.link] = freshLink(edit, Object.values(links)));
+      clip.out = round3(clip.in + a - start);
+      continue;
+    }
     if (start < a) clip.out = round3(clip.in + a - start);
     else { clip.in = round3(clip.in + b - start); clip.start = round3(b); }
   }
@@ -197,15 +205,17 @@ function clearRange(edit, trackId, a, b, except) {
 // Empty [a, b) on every unlocked track and leave the gap (Premiere's lift).
 function liftRange(edit, a, b) {
   let changed = false;
-  for (const track of edit.tracks) if (!track.locked && clearRange(edit, track.id, a, b, null)) changed = true;
+  const links = {};
+  for (const track of edit.tracks) if (!track.locked && clearRange(edit, track.id, a, b, null, links)) changed = true;
   return changed;
 }
 // Take [a, b) out of every unlocked track and close the gap (Premiere's extract, Resolve's ripple).
 function extractRange(edit, a, b) {
   if (!(b - a > 0.01)) return false;
+  const links = {};
   for (const track of edit.tracks) {
     if (track.locked) continue;
-    clearRange(edit, track.id, a, b, null);
+    clearRange(edit, track.id, a, b, null, links);
     for (const clip of edit.clips) if (clip.track === track.id && clip.start >= b - 1e-6) clip.start = round3(clip.start - (b - a));
   }
   return true;
@@ -273,7 +283,13 @@ function trimClip(edit, id, side, t, project, linked) {
   if (low > high) return false;
   const next = round3(Math.max(low, Math.min(high, t)));
   for (const item of group) {
-    if (side === "start") { item.in = round3(item.in + next - item.start); item.start = next; } else item.out = round3(item.in + next - item.start);
+    if (side !== "start") item.out = round3(item.in + next - item.start);
+    else if (sourceLimit(project, item)[0] === -Infinity) {
+      // Text and captions have no source to slide through: the start moves, `in` stays 0 (the project refuses
+      // a negative one) and the length follows.
+      const end = clipEnd(item);
+      item.start = next; item.out = round3(item.in + end - next);
+    } else { item.in = round3(item.in + next - item.start); item.start = next; }
   }
   return true;
 }
