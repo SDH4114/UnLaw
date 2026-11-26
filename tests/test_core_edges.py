@@ -159,6 +159,18 @@ class RunTests(CoreTestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("Could not run js: node not found", result.stderr)
 
+    def test_python_is_found_outside_a_dock_path(self) -> None:
+        # Started from the Dock, PATH is /usr/bin:/bin...: only an old python3 there.
+        self.command("py", "print('ran')\n")
+        self.tool("python3", "#!/bin/sh\necho old python >&2\nexit 1\n")
+        local = self.home / ".local" / "bin"
+        local.mkdir(parents=True, exist_ok=True)
+        newer = local / "python3.12"
+        newer.write_text(f"#!/bin/sh\nexec {sys.executable} \"$@\"\n", encoding="utf-8")
+        newer.chmod(0o755)
+        result = self.ul("py", env={"UNLAW_PYTHON": "", "PATH": str(self.bin)})
+        self.assertEqual((result.returncode, result.stdout), (0, "ran\n"), result.stderr)
+
     def test_signals_become_shell_exit_codes(self) -> None:
         self.command("die", "import os, signal\nos.kill(os.getpid(), signal.SIGTERM)\n")
         self.assertEqual(self.ul("--verbose", "die").returncode, 143)

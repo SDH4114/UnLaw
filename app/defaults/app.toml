@@ -6,6 +6,7 @@ icon = "app"
 id = "name"
 type = "text"
 label = "Application"
+required = true
 placeholder = "Safari"
 
 [[panel.button]]

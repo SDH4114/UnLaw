@@ -2,13 +2,14 @@ title = "YouTube"
 icon = "play"
 
 [[action]]
-id = "open"
+id = "launch"
 label = "Open YouTube"
 args = []
 
 [panel]
 [[panel.field]]
 id = "url"
+required = true
 type = "text"
 label = "Video link"
 placeholder = "https://www.youtube.com/watch?v=..."
@@ -33,6 +34,13 @@ args = ["download", "{url}", "--sub"]
 label = "Video, MP3 and subtitles"
 args = ["download", "{url}", "--full"]
 
+[[panel.field]]
+id = "query"
+type = "text"
+label = "Search YouTube"
+placeholder = "lofi hip hop"
+required = true
+
 [[panel.button]]
 label = "Search"
-args = ["{url}"]
+args = ["{query}"]

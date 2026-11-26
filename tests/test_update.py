@@ -80,7 +80,12 @@ class UpdateTests(CoreTestCase):
         common = [sys.executable, "install", "--locked", "--force", "--git", REPOSITORY, "--root", str(self.home / ".local")]
         self.assertEqual(
             log.read_text().splitlines(),
-            [*common, "--no-default-features", "--features", "lm,agent,capture,game", "unlaw", "==", *common, "ule", "=="],
+            [
+                *common, "--no-default-features", "--features", "lm,agent,capture,game", "unlaw", "==",
+                *common, "ule", "==",
+                # Unlaw.app (feature menubar, part of "all"): its own package.
+                *common, "unlaw-app", "==",
+            ],
         )
         self.assertIn("Updated to Unlaw 9.9.9", result.stdout)
         self.assertIn("edited ones are kept", result.stdout)
@@ -93,6 +98,10 @@ class UpdateTests(CoreTestCase):
         ule.parent.mkdir(parents=True)
         ule.write_text("#!/bin/sh\n")
         ule.chmod(0o755)
+        # Unlaw.app is chosen too ("all"), so its program must be there as well.
+        app = ule.with_name("ul-app")
+        app.write_text("#!/bin/sh\n")
+        app.chmod(0o755)
         log = self.fake_cargo()
         result = self.ok("update")
         self.assertIn("is up to date", result.stdout)
@@ -102,6 +111,13 @@ class UpdateTests(CoreTestCase):
         # Without ule installed, the same commit is installed to add it.
         log.unlink()
         ule.unlink()
+        self.ok("update")
+        self.assertTrue(log.exists())
+        # Nor without ul-app while the menubar feature is chosen.
+        ule.write_text("#!/bin/sh\n")
+        ule.chmod(0o755)
+        log.unlink()
+        app.unlink()
         self.ok("update")
         self.assertTrue(log.exists())
 
@@ -150,6 +166,20 @@ class UpdateTests(CoreTestCase):
         self.assertIn("unlaw was installed", result.stderr)
         self.assertIn("ule", result.stderr)
         self.assertNotIn("was not changed", result.stderr)
+
+    def test_app_failure_still_refreshes_the_skill(self) -> None:
+        self.fake_cargo()
+        cargo = self.bin / "cargo"
+        source = cargo.read_text()
+        # ul is installed as a script that logs its calls; only unlaw-app fails to build.
+        source = source.replace("root = pathlib.Path", "if sys.argv[-1] == 'unlaw-app': raise SystemExit(7)\nroot = pathlib.Path")
+        source = source.replace("echo Unlaw 9.9.9", 'echo \\"$@\\" >> ' + str(self.root / "ul-calls.log") + "; echo Unlaw 9.9.9")
+        self.assertIn("ul-calls.log", source)
+        cargo.write_text(source)
+        result = self.ul("update", "--force")
+        self.assertEqual(result.returncode, 7)
+        self.assertIn("unlaw-app installation failed", result.stderr)
+        self.assertIn("skills install", (self.root / "ul-calls.log").read_text())
 
     def test_missing_cargo_explains_how_to_install_rust(self) -> None:
         result = self.ul("update")

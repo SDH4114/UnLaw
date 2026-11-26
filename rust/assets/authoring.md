@@ -45,6 +45,16 @@ The working directory is where the user ran `ul`. Arguments are passed as typed.
 - Description for `ul commands --describe`, shell completion and this skill: the first line of `help.txt` if the file exists, else the first docstring line of `main.py`, the `description` in `Cargo.toml`, or the first comment of a shell or JavaScript script. Unlaw never runs the command to read it. Keep it to one accurate line.
 - Keep secrets out of the folder, argv, logs and any `config.toml`. Store tokens in the macOS Keychain (`security add-generic-password` / `find-generic-password`).
 
+## In Unlaw.app
+
+Every command shows up in the menu bar app's palette and can be pinned to the menu bar.
+For a panel (a form), actions or live menu bar text, add `app.toml` next to the entry file;
+the format is in `reference/app-integration.md` (`ul skills show app-integration`) and
+`ul gui check` validates it. The app runs `ul <name> <args>` with stdin closed and
+`UNLAW_APP=1`, so a command that prompts or draws a terminal UI must set `terminal = true`.
+A `[status]` should call a quick, read-only mode of the command that prints JSON (for
+example `status --json`).
+
 ## Settings and data (one convention)
 
 - Settings of this command: `config.toml` in the command folder (`$UNLAW_COMMAND_DIR/config.toml`), read by the command itself (Python: `tomllib`). Do not add a `[<name>]` table to Unlaw's own `config.toml`: `ul reinstall` resets that file to defaults and moves your tables to a backup. The command folder survives updates, `ul features` changes and `ul reinstall`. Document each setting in `--help`.

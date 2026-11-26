@@ -85,10 +85,30 @@ pub fn resolve(name: &str) -> Option<UserCommand> {
     entry_point(&directory).map(|(path, kind)| UserCommand { name: name.to_string(), path, kind })
 }
 
-/// Versioned interpreters tried newest first (3.11 is the oldest with tomllib); then `python3`.
+/// Versioned interpreters tried newest first (3.11 is the oldest with tomllib).
 /// A range, not a list, so a new Python (3.15 today) is found without a release.
-fn pythons() -> impl Iterator<Item = String> {
-    (11..=20).rev().map(|minor| format!("python3.{minor}")).chain(std::iter::once("python3".to_string()))
+fn versioned_pythons() -> impl Iterator<Item = String> {
+    (11..=20).rev().map(|minor| format!("python3.{minor}"))
+}
+
+/// Where Pythons are installed on a Mac. A program started from the Dock or
+/// Finder (Unlaw.app) gets PATH=/usr/bin:/bin:/usr/sbin:/sbin, which holds only
+/// macOS' own python3 (3.9, no tomllib); these folders are searched before it.
+fn python_folders() -> Vec<PathBuf> {
+    let home = crate::util::home();
+    vec![
+        home.join(".local/bin"),
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/Library/Frameworks/Python.framework/Versions/Current/bin"),
+        home.join(".pyenv/shims"),
+    ]
+}
+
+fn installed_python() -> Option<PathBuf> {
+    versioned_pythons().find_map(|name| {
+        python_folders().into_iter().map(|folder| folder.join(&name)).find(|path| crate::util::is_executable(path))
+    })
 }
 
 /// Interpreter for `main.py`: `UNLAW_PYTHON`, then `core.python`, then the
@@ -105,7 +125,10 @@ pub fn python(config: Option<&Config>) -> Option<PathBuf> {
             return which(&crate::util::expand_user(&configured).to_string_lossy()).or(Some(configured.into()));
         }
     }
-    pythons().find_map(|name| which(&name))
+    versioned_pythons()
+        .find_map(|name| which(&name))
+        .or_else(installed_python)
+        .or_else(|| which("python3"))
 }
 
 pub fn command_line(command: &UserCommand, args: &[String], config: &Config) -> Vec<OsString> {

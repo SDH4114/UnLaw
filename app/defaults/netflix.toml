@@ -2,6 +2,6 @@ title = "Netflix"
 icon = "play"
 
 [[action]]
-id = "open"
+id = "launch"
 label = "Open"
 args = []

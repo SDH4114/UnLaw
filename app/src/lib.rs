@@ -5,5 +5,7 @@ pub mod args;
 pub mod hotkey;
 pub mod runner;
 pub mod settings;
+pub mod setup;
 pub mod spec;
 pub mod template;
+pub mod views;

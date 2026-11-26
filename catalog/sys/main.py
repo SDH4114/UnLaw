@@ -1,11 +1,14 @@
 # Unlaw command source. Edit freely: this file has no runtime dependency on Unlaw.
-"""Computer stats: CPU, GPU, RAM, disk, battery and charge cycles."""
+"""Computer stats: CPU per core, GPU, RAM, network, disk, battery and power."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Computer stats: CPU, GPU, RAM, disk, battery and charge cycles.\nUsage: ul sys [cpu|gpu|mem|disk|battery|top] [--json] [--watch [seconds]]\n  (none)         One-screen summary of everything below\n  cpu            Usage (user/system), load average, performance/efficiency cores\n  gpu            GPU utilization (Apple Silicon)\n  mem            Used (app, wired, compressed), swap, memory pressure\n  disk           Mounted volumes: used, free, a bar\n  battery        Charge, time left, cycles, condition, max capacity (laptops only)\n  top            Top 5 processes by CPU and by memory\nOptions:\n  --json             Machine-readable output: stable keys, numbers, null for n/a\n  --watch [seconds]  Refresh in place (default 2); Ctrl+C exits\nNotes:\n  CPU takes two samples, about 1.3 s. A tool that is missing or fails shows as n/a.\n  Everything is read-only and needs no sudo; CPU and fan temperatures would, so they are left out.\n  Colors only on a terminal; NO_COLOR turns them off.\nExamples:\n  ul sys\n  ul sys battery --json\n  ul sys --watch 5 cpu\n'
+COMMAND_HELP = "Computer stats: CPU per core, GPU, RAM, network, disk, battery and power.\nUsage: ul sys [cpu|gpu|mem|net|io|disk|battery|top] [--json] [--watch [seconds]]\n  (none)         One-screen summary of everything below\n  cpu            Usage (user/system), every core (performance and efficiency), load average\n  gpu            GPU utilization and the memory it holds (Apple Silicon)\n  mem            Used (app, wired, compressed), swap, memory pressure (like Activity Monitor)\n  net            Download and upload speed now, totals since start-up\n  io             Disk reads and writes per second\n  disk           Mounted volumes: used, free, a bar\n  battery        Charge, time left, cycles, condition, max capacity, what the Mac draws (W)\n  top            Top 5 processes by CPU and by memory, number of processes\nOptions:\n  --json             Machine-readable output: stable keys, numbers, null for n/a\n  --watch [seconds]  Refresh in place (default 2); Ctrl+C exits\nNotes:\n  Numbers come straight from macOS: the kernel's CPU ticks and memory counters, sysctl,\n  IOKit (GPU, battery, disks) and the thermal state, the sources Activity Monitor uses.\n  CPU, network and disk speed are measured over 0.5 s. A part that cannot be read shows as n/a.\n  Read-only, no sudo; CPU and fan temperatures would need it, so they are left out.\n  Colors only on a terminal; NO_COLOR turns them off.\nExamples:\n  ul sys\n  ul sys battery --json\n  ul sys --watch 5 cpu\n"
 
+import ctypes
+import ctypes.util
 import json
 import os
+import platform
 import plistlib
 import re
 import subprocess
@@ -16,10 +19,13 @@ from concurrent.futures import ThreadPoolExecutor
 from xml.parsers.expat import ExpatError
 
 
-SECTIONS = ("system", "cpu", "gpu", "memory", "disk", "battery", "top")
+SECTIONS = ("system", "cpu", "gpu", "memory", "network", "io", "disk", "battery", "top")
 SECTION_NAMES = {
     "cpu": "cpu",
     "gpu": "gpu",
+    "net": "network",
+    "network": "network",
+    "io": "io",
     "mem": "memory",
     "memory": "memory",
     "ram": "memory",
@@ -29,7 +35,7 @@ SECTION_NAMES = {
     "batt": "battery",
     "top": "top",
 }
-USAGE = "Usage: ul sys [cpu|gpu|mem|disk|battery|top] [--json] [--watch [seconds]]  (ul sys --help)"
+USAGE = "Usage: ul sys [cpu|gpu|mem|net|io|disk|battery|top] [--json] [--watch [seconds]]  (ul sys --help)"
 DEFAULT_WATCH = 2.0
 MAX_WATCH = 3600.0
 BAR_WIDTH = 20
@@ -37,6 +43,11 @@ LABEL_WIDTH = 9
 TOP_COUNT = 5
 
 PRESSURE_NAMES = {1: "normal", 2: "warning", 4: "critical"}
+THERMAL_NAMES = {0: "nominal", 1: "fair", 2: "serious", 3: "critical"}
+# Seconds between the two readings of the CPU tick, network and disk counters (they run side by side).
+SAMPLE = 0.5
+# Interfaces that are tunnels, bridges or Apple's peer-to-peer links, not the Mac's connection.
+VIRTUAL_INTERFACES = ("lo", "utun", "awdl", "llw", "bridge", "gif", "stf", "anpi", "ap", "ipsec", "vmenet", "pktap")
 # Mounts that are implementation details of macOS, simulators or installers, not drives a person uses.
 HIDDEN_MOUNT_PREFIXES = ("/Library/Developer/", "/private/", "/System/Volumes/")
 UNITS = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
@@ -44,6 +55,156 @@ UNITS = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
 
 class UsageError(Exception):
     pass
+
+
+# ---------------------------------------------------------------- native readings
+#
+# The numbers Activity Monitor shows come from the kernel: per-core CPU ticks
+# (host_processor_info), the VM counters (host_statistics64), sysctl values and
+# NSProcessInfo's thermal state. They are read here through ctypes, with no tool
+# started; when that is impossible (or UNLAW_SYS_NATIVE=0, which the tests set)
+# the collectors fall back to top, vm_stat and sysctl.
+
+PROCESSOR_CPU_LOAD_INFO = 2
+HOST_VM_INFO64 = 4
+_LIBC: ctypes.CDLL | None = None
+
+
+def native() -> ctypes.CDLL | None:
+    global _LIBC
+    if os.environ.get("UNLAW_SYS_NATIVE", "1") == "0" or sys.platform != "darwin":
+        return None
+    if _LIBC is None:
+        try:
+            _LIBC = ctypes.CDLL(None, use_errno=True)
+            _LIBC.mach_host_self.restype = ctypes.c_uint
+        except (OSError, AttributeError):
+            return None
+    return _LIBC
+
+
+def native_sysctl(name: str) -> bytes | None:
+    libc = native()
+    if libc is None:
+        return None
+    key = name.encode()
+    length = ctypes.c_size_t(0)
+    if libc.sysctlbyname(key, None, ctypes.byref(length), None, ctypes.c_size_t(0)) != 0 or not length.value:
+        return None
+    buffer = ctypes.create_string_buffer(length.value)
+    if libc.sysctlbyname(key, buffer, ctypes.byref(length), None, ctypes.c_size_t(0)) != 0:
+        return None
+    return buffer.raw[: length.value]
+
+
+def cpu_ticks() -> list[tuple[int, int, int, int]] | None:
+    """(user, system, idle, nice) ticks per logical core since boot."""
+    libc = native()
+    if libc is None:
+        return None
+    count = ctypes.c_uint(0)
+    info = ctypes.POINTER(ctypes.c_int)()
+    size = ctypes.c_uint(0)
+    host = libc.mach_host_self()
+    if libc.host_processor_info(host, PROCESSOR_CPU_LOAD_INFO, ctypes.byref(count), ctypes.byref(info), ctypes.byref(size)) != 0:
+        return None
+    ticks = [tuple(info[core * 4 + state] & 0xFFFFFFFF for state in range(4)) for core in range(count.value)]
+    task = ctypes.c_uint.in_dll(libc, "mach_task_self_")
+    libc.vm_deallocate(task, ctypes.cast(info, ctypes.c_void_p), ctypes.c_size_t(size.value * 4))
+    return ticks  # type: ignore[return-value]
+
+
+def core_usage(before: Sequence[tuple[int, ...]], after: Sequence[tuple[int, ...]]) -> list[dict]:
+    """Per-core busy, user and system shares between two tick readings (32-bit counters may wrap)."""
+    cores = []
+    for old, new in zip(before, after):
+        user, system, idle, nice = ((b - a) % (1 << 32) for a, b in zip(old, new))
+        total = user + system + idle + nice
+        cores.append(
+            {
+                "busy": 100 * (total - idle) / total if total else 0.0,
+                "user": 100 * (user + nice) / total if total else 0.0,
+                "system": 100 * system / total if total else 0.0,
+                "ticks": total,
+            }
+        )
+    return cores
+
+
+class _VmStatistics64(ctypes.Structure):
+    _fields_ = (
+        [(name, ctypes.c_uint32) for name in ("free_count", "active_count", "inactive_count", "wire_count")]
+        + [(name, ctypes.c_uint64) for name in ("zero_fill_count", "reactivations", "pageins", "pageouts", "faults", "cow_faults", "lookups", "hits", "purges")]
+        + [(name, ctypes.c_uint32) for name in ("purgeable_count", "speculative_count")]
+        + [(name, ctypes.c_uint64) for name in ("decompressions", "compressions", "swapins", "swapouts")]
+        + [(name, ctypes.c_uint32) for name in ("compressor_page_count", "throttled_count", "external_page_count", "internal_page_count")]
+        + [("total_uncompressed_pages_in_compressor", ctypes.c_uint64)]
+    )
+
+
+def native_vm() -> dict | None:
+    """The VM counters under vm_stat's names, so memory_info reads both the same way."""
+    libc = native()
+    page = native_sysctl("hw.pagesize")
+    if libc is None or page is None:
+        return None
+    stats = _VmStatistics64()
+    count = ctypes.c_uint(ctypes.sizeof(stats) // 4)
+    if libc.host_statistics64(libc.mach_host_self(), HOST_VM_INFO64, ctypes.byref(stats), ctypes.byref(count)) != 0:
+        return None
+    return {
+        "page_size": int.from_bytes(page, "little"),
+        "Pages free": stats.free_count,
+        "Pages speculative": stats.speculative_count,
+        "Pages wired down": stats.wire_count,
+        "Pages purgeable": stats.purgeable_count,
+        "File-backed pages": stats.external_page_count,
+        "Anonymous pages": stats.internal_page_count,
+        "Pages occupied by compressor": stats.compressor_page_count,
+        "Pageins": stats.pageins,
+        "Pageouts": stats.pageouts,
+        "Swapins": stats.swapins,
+        "Swapouts": stats.swapouts,
+    }
+
+
+def native_swap() -> tuple[int, int] | None:
+    """(total, used) from the xsw_usage struct of vm.swapusage."""
+    raw = native_sysctl("vm.swapusage")
+    if raw is None or len(raw) < 24:
+        return None
+    total, _available, used = (int.from_bytes(raw[i : i + 8], "little") for i in (0, 8, 16))
+    return total, used
+
+
+def native_int(name: str) -> int | None:
+    raw = native_sysctl(name)
+    return int.from_bytes(raw, "little", signed=True) if raw is not None and len(raw) in (4, 8) else None
+
+
+def native_text(name: str) -> str | None:
+    raw = native_sysctl(name)
+    return printable(raw.rstrip(b"\0").decode("utf-8", "replace")) if raw else None
+
+
+def thermal_state() -> str | None:
+    """NSProcessInfo.thermalState: how hard macOS is throttling for heat (nominal, fair, serious, critical)."""
+    if native() is None:
+        return None
+    try:
+        objc = ctypes.CDLL(ctypes.util.find_library("objc") or "/usr/lib/libobjc.A.dylib")
+        ctypes.CDLL("/System/Library/Frameworks/Foundation.framework/Foundation")
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.sel_registerName.restype = ctypes.c_void_p
+        address = ctypes.cast(objc.objc_msgSend, ctypes.c_void_p).value
+        send_object = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(address)
+        send_long = ctypes.CFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p)(address)
+        info = send_object(objc.objc_getClass(b"NSProcessInfo"), objc.sel_registerName(b"processInfo"))
+        if not info:
+            return None
+        return THERMAL_NAMES.get(send_long(info, objc.sel_registerName(b"thermalState")))
+    except (OSError, AttributeError, TypeError):
+        return None
 
 
 # ---------------------------------------------------------------- running tools
@@ -71,12 +232,22 @@ def tool_text(command: list[str], timeout: float = 5.0) -> str | None:
     return None if raw is None else raw.decode("utf-8", errors="replace")
 
 
+STRING_SYSCTLS = ("hw.model", "machdep.cpu.brand_string")
+
+
 def sysctl_text(key: str) -> str | None:
+    if key in STRING_SYSCTLS:
+        text = native_text(key)
+        if text:
+            return text
     text = tool_text(["sysctl", "-n", key])
     return text.strip() if text and text.strip() else None
 
 
 def sysctl_int(key: str) -> int | None:
+    value = native_int(key)
+    if value is not None:
+        return value
     text = sysctl_text(key)
     try:
         return int(text) if text is not None else None
@@ -104,6 +275,68 @@ def parse_top(text: str) -> dict | None:
     }
 
 
+def parse_cluster_types(raw: bytes) -> list[str] | None:
+    """"P"/"E" per logical CPU, from the CPU nodes of the IOKit device tree (`ioreg -rlc IOPlatformDevice -k cluster-type -a`)."""
+    try:
+        nodes = plistlib.loads(raw)
+    except (plistlib.InvalidFileException, ExpatError, ValueError, OverflowError):
+        return None
+    kinds: dict[int, str] = {}
+    for node in nodes if isinstance(nodes, list) else []:
+        kind, number = (node.get("cluster-type"), node.get("logical-cpu-id")) if isinstance(node, dict) else (None, None)
+        if isinstance(kind, bytes):
+            kind = kind.rstrip(b"\0").decode("ascii", "replace")
+        if isinstance(number, bytes):
+            number = int.from_bytes(number, "little")
+        if kind in ("P", "E") and isinstance(number, int) and not isinstance(number, bool):
+            kinds[number] = kind
+    if not kinds or sorted(kinds) != list(range(len(kinds))):
+        return None
+    return [kinds[number] for number in range(len(kinds))]
+
+
+def parse_netstat(text: str) -> dict[str, tuple[int, int]]:
+    """Bytes in and out per physical interface from `netstat -ibn` (the <Link#> row has the interface totals)."""
+    counters: dict[str, tuple[int, int]] = {}
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < 10 or not fields[2].startswith("<Link#"):
+            continue
+        name = fields[0].rstrip("*")
+        if name.startswith(VIRTUAL_INTERFACES):
+            continue
+        numbers = [field for field in fields[3:] if re.fullmatch(r"\d+|-", field)]
+        # Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll; the address column is missing for some interfaces.
+        if len(numbers) >= 6 and numbers[2].isdigit() and numbers[5].isdigit():
+            counters[name] = (int(numbers[2]), int(numbers[5]))
+    return counters
+
+
+def parse_block_stats(raw: bytes) -> tuple[int, int, int, int] | None:
+    """(bytes read, bytes written, reads, writes) summed over every disk driver in `ioreg -r -c IOBlockStorageDriver -a`."""
+    try:
+        drivers = plistlib.loads(raw)
+    except (plistlib.InvalidFileException, ExpatError, ValueError, OverflowError):
+        return None
+    totals = [0, 0, 0, 0]
+    found = False
+    for driver in drivers if isinstance(drivers, list) else []:
+        stats = driver.get("Statistics") if isinstance(driver, dict) else None
+        if not isinstance(stats, dict):
+            continue
+        found = True
+        for index, key in enumerate(("Bytes (Read)", "Bytes (Write)", "Operations (Read)", "Operations (Write)")):
+            value = stats.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                totals[index] += value
+    return (totals[0], totals[1], totals[2], totals[3]) if found else None
+
+
+def per_second(before: Sequence[int], after: Sequence[int], seconds: float) -> list[float]:
+    """Rates between two counter readings; a counter that went down (a reset, a disk unplugged) counts as 0."""
+    return [max(b - a, 0) / seconds if seconds > 0 else 0.0 for a, b in zip(before, after)]
+
+
 def parse_vm_stat(text: str) -> dict | None:
     size = re.search(r"page size of (\d+) bytes", text)
     if size is None:
@@ -116,8 +349,10 @@ def parse_vm_stat(text: str) -> dict | None:
     return result if len(result) > 1 else None
 
 
-def parse_swap(text: str) -> tuple[int, int] | None:
-    """(total, used) bytes from `sysctl vm.swapusage`."""
+def parse_swap(text: str | tuple[int, int] | None) -> tuple[int, int] | None:
+    """(total, used) bytes from `sysctl vm.swapusage` (or already read natively)."""
+    if text is None or isinstance(text, tuple):
+        return text
     match = re.search(r"total = ([\d.]+)([KMGT]).*?used = ([\d.]+)([KMGT])", text)
     if match is None:
         return None
@@ -127,7 +362,11 @@ def parse_swap(text: str) -> tuple[int, int] | None:
 
 
 def memory_info(
-    vm: dict, total_bytes: int, swap_text: str, pressure_level: int | None
+    vm: dict,
+    total_bytes: int,
+    swap_text: str | tuple[int, int] | None,
+    pressure_level: int | None,
+    available_percent: int | None = None,
 ) -> dict:
     """Memory the way Activity Monitor counts it: used = app + wired + compressed."""
     page = vm["page_size"]
@@ -151,6 +390,12 @@ def memory_info(
         if pressure_level is not None
         else None,
         "pressure_level": pressure_level,
+        # kern.memorystatus_level: the share of memory macOS considers available; Activity Monitor's
+        # memory pressure graph is 100 minus it.
+        "available_percent": available_percent,
+        "pressure_percent": 100 - available_percent if available_percent is not None else None,
+        "pageouts": vm.get("Pageouts"),
+        "swapouts": vm.get("Swapouts"),
     }
 
 
@@ -240,8 +485,17 @@ def parse_gpu(text: str) -> dict | None:
         return None
     cores = re.search(r'"gpu-core-count"\s*=\s*(\d+)', text)
     name = re.search(r'"model"\s*=\s*"([^"]*)"', text)
+
+    def number(key: str) -> int | None:
+        found = re.search(r'"' + re.escape(key) + r'"\s*=\s*(\d+)', text)
+        return int(found.group(1)) if found else None
+
     return {
         "usage_percent": int(usage.group(1)),
+        "renderer_percent": number("Renderer Utilization %"),
+        "tiler_percent": number("Tiler Utilization %"),
+        # Unified memory the GPU driver holds right now (Apple silicon shares RAM with the CPU).
+        "memory_in_use_bytes": number("In use system memory"),
         "cores": int(cores.group(1)) if cores else None,
         "name": printable(name.group(1)) if name else None,
     }
@@ -330,6 +584,23 @@ def parse_battery(raw: bytes, profiler: str | None) -> dict | None:
     elif design and raw_max:
         capacity = round(100 * raw_max / design)
     temperature = number("Temperature")
+    telemetry = data.get("PowerTelemetryData") if isinstance(data.get("PowerTelemetryData"), dict) else {}
+    adapter = data.get("AdapterDetails") if isinstance(data.get("AdapterDetails"), dict) else {}
+
+    def milli(source: dict, name: str) -> float | None:
+        value = source.get(name)
+        return round(value / 1000, 2) if isinstance(value, int) and not isinstance(value, bool) else None
+
+    # What the whole Mac draws right now (the power manager's own telemetry, in mW).
+    system_power = milli(telemetry, "SystemPowerIn") if plugged else None
+    if not system_power:
+        system_power = milli(telemetry, "SystemLoad")
+    battery_power = milli(telemetry, "BatteryPower")
+    if battery_power is None:
+        battery_power = milli(detail, "BatteryPower")
+    adapter_watts = adapter.get("Watts")
+    voltage = number("Voltage")
+    amperage = number("Amperage", "InstantAmperage")
     cycles = number("CycleCount")
     if cycles is None:
         cycles = health.get("sppower_battery_cycle_count")
@@ -349,6 +620,12 @@ def parse_battery(raw: bytes, profiler: str | None) -> dict | None:
         "temperature_c": round(temperature / 100, 2)
         if temperature is not None
         else None,
+        "system_power_watts": system_power if system_power else None,
+        # Negative while the battery is giving power, positive while it charges.
+        "battery_power_watts": battery_power,
+        "adapter_watts": adapter_watts if isinstance(adapter_watts, int) and not isinstance(adapter_watts, bool) and plugged else None,
+        "voltage_v": round(voltage / 1000, 2) if voltage is not None else None,
+        "amperage_ma": amperage,
     }
 
 
@@ -362,10 +639,17 @@ def collect_system(now: float) -> dict:
         hardware = json.loads(text or "")["SPHardwareDataType"][0]
     except (ValueError, KeyError, IndexError, TypeError):
         hardware = {}
-    version = tool_text(["sw_vers", "-productVersion"])
-    boot_text = sysctl_text("kern.boottime")
-    boot = parse_boot_time(boot_text) if boot_text else None
+    version = platform.mac_ver()[0] if native() is not None else None
+    if not version:
+        version = tool_text(["sw_vers", "-productVersion"])
+    raw_boot = native_sysctl("kern.boottime")
+    if raw_boot is not None and len(raw_boot) >= 8:
+        boot: int | None = int.from_bytes(raw_boot[:8], "little")  # struct timeval: seconds first
+    else:
+        boot_text = sysctl_text("kern.boottime")
+        boot = parse_boot_time(boot_text) if boot_text else None
     return {
+        "thermal": thermal_state(),
         "model": hardware.get("machine_name"),
         "identifier": hardware.get("machine_model") or sysctl_text("hw.model"),
         "chip": hardware.get("chip_type") or sysctl_text("machdep.cpu.brand_string"),
@@ -374,11 +658,41 @@ def collect_system(now: float) -> dict:
     }
 
 
+def core_kinds() -> list[str] | None:
+    raw = run_tool(["ioreg", "-rlc", "IOPlatformDevice", "-k", "cluster-type", "-a"])
+    return parse_cluster_types(raw) if raw else None
+
+
+def native_cpu() -> dict | None:
+    """Busy share per core over SAMPLE seconds, from the kernel's tick counters (what Activity Monitor reads)."""
+    before = cpu_ticks()
+    if before is None:
+        return None
+    time.sleep(SAMPLE)
+    after = cpu_ticks()
+    if after is None or len(after) != len(before):
+        return None
+    cores = core_usage(before, after)
+    ticks = sum(core["ticks"] for core in cores) or 1
+    user = sum(core["user"] * core["ticks"] for core in cores) / ticks
+    system = sum(core["system"] * core["ticks"] for core in cores) / ticks
+    load = os.getloadavg()
+    return {
+        "user": user,
+        "system": system,
+        "idle": max(100 - user - system, 0.0),
+        "load": [round(value, 2) for value in load],
+        "cores": [core["busy"] for core in cores],
+    }
+
+
 def collect_cpu() -> dict | None:
-    # One `top -l 2 -s 1` takes ~1.3 s; the second sample is a true one-second interval. The first sample and
-    # `top -l 1` average over the time since boot, and `-s 0` gives a ~0.1 s window that jumps between runs.
-    text = tool_text(["top", "-l", "2", "-n", "0", "-s", "1"], timeout=10.0)
-    parsed = parse_top(text) if text else None
+    parsed = native_cpu()
+    if parsed is None:
+        # One `top -l 2 -s 1` takes ~1.3 s; the second sample is a true one-second interval. The first sample and
+        # `top -l 1` average over the time since boot, and `-s 0` gives a ~0.1 s window that jumps between runs.
+        text = tool_text(["top", "-l", "2", "-n", "0", "-s", "1"], timeout=10.0)
+        parsed = parse_top(text) if text else None
     if parsed is None:
         return None
     performance = sysctl_int("hw.perflevel0.logicalcpu")
@@ -387,6 +701,16 @@ def collect_cpu() -> dict | None:
         performance = efficiency = None
     total = sysctl_int("hw.ncpu") or os.cpu_count()
     usage = min(max(100 - parsed["idle"], 0.0), 100.0)
+    per_core = None
+    by_kind: dict[str, float | None] = {"P": None, "E": None}
+    if parsed.get("cores"):
+        kinds = core_kinds()
+        if kinds is None or len(kinds) != len(parsed["cores"]):
+            kinds = [""] * len(parsed["cores"])
+        per_core = [{"kind": kind or None, "usage_percent": round(busy, 1)} for kind, busy in zip(kinds, parsed["cores"])]
+        for kind in by_kind:
+            shares = [busy for core_kind, busy in zip(kinds, parsed["cores"]) if core_kind == kind]
+            by_kind[kind] = round(sum(shares) / len(shares), 1) if shares else None
     return {
         "usage_percent": round(usage, 1),
         "user_percent": round(parsed["user"], 1),
@@ -394,6 +718,9 @@ def collect_cpu() -> dict | None:
         "idle_percent": round(parsed["idle"], 1),
         "cores": {"total": total, "performance": performance, "efficiency": efficiency},
         "load_average": parsed["load"],
+        "per_core": per_core,
+        "performance_percent": by_kind["P"],
+        "efficiency_percent": by_kind["E"],
     }
 
 
@@ -403,15 +730,76 @@ def collect_gpu() -> dict | None:
 
 
 def collect_memory() -> dict | None:
-    vm_text = tool_text(["vm_stat"])
-    vm = parse_vm_stat(vm_text) if vm_text else None
+    vm = native_vm()
+    if vm is None:
+        vm_text = tool_text(["vm_stat"])
+        vm = parse_vm_stat(vm_text) if vm_text else None
     total = sysctl_int("hw.memsize")
     if vm is None or total is None:
         return None
-    swap_text = tool_text(["sysctl", "vm.swapusage"]) or ""
+    swap: str | tuple[int, int] | None = native_swap()
+    if swap is None:
+        swap = tool_text(["sysctl", "vm.swapusage"]) or ""
     return memory_info(
-        vm, total, swap_text, sysctl_int("kern.memorystatus_vm_pressure_level")
+        vm,
+        total,
+        swap,
+        sysctl_int("kern.memorystatus_vm_pressure_level"),
+        native_int("kern.memorystatus_level"),
     )
+
+
+def collect_network() -> dict | None:
+    """Download and upload speed over SAMPLE seconds, summed over the physical interfaces."""
+    first = tool_text(["netstat", "-ibn"])
+    if first is None:
+        return None
+    started = time.monotonic()
+    time.sleep(SAMPLE)
+    second = tool_text(["netstat", "-ibn"])
+    elapsed = time.monotonic() - started
+    before, after = parse_netstat(first), parse_netstat(second or "")
+    names = sorted(set(before) & set(after))
+    if not names:
+        return None
+    down = up = 0.0
+    active = []
+    for name in names:
+        rates = per_second(before[name], after[name], elapsed)
+        down, up = down + rates[0], up + rates[1]
+        if after[name][0] or after[name][1]:
+            active.append(name)
+    return {
+        "download_bytes_per_sec": round(down),
+        "upload_bytes_per_sec": round(up),
+        "received_bytes": sum(after[name][0] for name in names),
+        "sent_bytes": sum(after[name][1] for name in names),
+        "interfaces": active,
+    }
+
+
+def collect_io() -> dict | None:
+    """Disk reads and writes over SAMPLE seconds, from the block storage drivers' own counters."""
+    command = ["ioreg", "-r", "-c", "IOBlockStorageDriver", "-a"]
+    first = run_tool(command)
+    before = parse_block_stats(first) if first else None
+    if before is None:
+        return None
+    started = time.monotonic()
+    time.sleep(SAMPLE)
+    second = run_tool(command)
+    after = parse_block_stats(second) if second else None
+    if after is None:
+        return None
+    read, write, reads, writes = per_second(before, after, time.monotonic() - started)
+    return {
+        "read_bytes_per_sec": round(read),
+        "write_bytes_per_sec": round(write),
+        "read_ops_per_sec": round(reads),
+        "write_ops_per_sec": round(writes),
+        "read_bytes": after[0],
+        "written_bytes": after[1],
+    }
 
 
 def collect_disk() -> list[dict] | None:
@@ -439,6 +827,7 @@ def collect_top() -> dict | None:
     return {
         "cpu": top_processes(rows, "cpu", TOP_COUNT),
         "memory": top_processes(rows, "memory", TOP_COUNT),
+        "processes": len(rows),
     }
 
 
@@ -457,6 +846,8 @@ def collect(sections: Sequence[str], now: float | None = None) -> dict:
         "cpu": collect_cpu,
         "gpu": collect_gpu,
         "memory": collect_memory,
+        "network": collect_network,
+        "io": collect_io,
         "disk": collect_disk,
         "battery": collect_battery,
         "top": collect_top,
@@ -545,7 +936,18 @@ def render_system(style: Style, system: dict | None) -> list[str]:
             parts.append(part)
     if system["uptime_seconds"] is not None:
         parts.append(f"up {human_duration(system['uptime_seconds'])}")
+    thermal = system.get("thermal")
+    if thermal and thermal != "nominal":
+        parts.append(style.paint("33" if thermal == "fair" else "31", f"thermal {thermal}"))
     return ["  ".join(parts)]
+
+
+LEVELS = "▁▂▃▄▅▆▇█"
+
+
+def sparkline(values: Sequence[float]) -> str:
+    """One block character per value, 0-100."""
+    return "".join(LEVELS[min(max(round(value / 100 * 7), 0), 7)] for value in values)
 
 
 def render_cpu(style: Style, cpu: dict | None) -> list[str]:
@@ -571,21 +973,37 @@ def render_cpu(style: Style, cpu: dict | None) -> list[str]:
     if load:
         details.append(f"load {load}")
     body = style.meter(cpu["usage_percent"], f"{cpu['usage_percent']:5.1f}%")
-    return [
+    lines = [
         row(
             style,
             "CPU",
             body + "  " + style.dim("  ".join(part for part in details if part)),
         )
     ]
+    per_core = cpu.get("per_core")
+    if per_core:
+        groups = []
+        for kind, name in (("P", "performance"), ("E", "efficiency")):
+            shares = [core["usage_percent"] for core in per_core if core["kind"] == kind]
+            if shares:
+                groups.append(f"{sparkline(shares)} {name} {cpu[name + '_percent']:.0f}%")
+        if not groups:
+            groups.append(sparkline([core["usage_percent"] for core in per_core]))
+        lines.append(row(style, "Cores", "   ".join(groups)))
+    return lines
 
 
 def render_gpu(style: Style, gpu: dict | None) -> list[str]:
     if not gpu:
         return [row(style, "GPU", "n/a")]
+    memory = gpu.get("memory_in_use_bytes")
     detail = " ".join(
         part
-        for part in (gpu["name"], f"{gpu['cores']} cores" if gpu["cores"] else None)
+        for part in (
+            gpu["name"],
+            f"{gpu['cores']} cores" if gpu["cores"] else None,
+            f"memory {human_bytes(memory, True)}" if memory else None,
+        )
         if part
     )
     body = style.meter(gpu["usage_percent"], f"{gpu['usage_percent']:5d}%")
@@ -602,7 +1020,8 @@ def render_memory(style: Style, memory: dict | None) -> list[str]:
         f"app {human_bytes(memory['app_bytes'], True)}",
         f"wired {human_bytes(memory['wired_bytes'], True)}",
         f"compressed {human_bytes(memory['compressed_bytes'], True)}",
-        f"pressure {memory['pressure'] or 'n/a'}",
+        f"pressure {memory['pressure'] or 'n/a'}"
+        + (f" ({memory['pressure_percent']}%)" if memory.get("pressure_percent") is not None else ""),
     ]
     lines = [
         row(
@@ -619,6 +1038,27 @@ def render_memory(style: Style, memory: dict | None) -> list[str]:
     else:
         lines.append(row(style, "Swap", "n/a"))
     return lines
+
+
+def rate(count: float) -> str:
+    return human_bytes(count) + "/s"
+
+
+def render_network(style: Style, network: dict | None) -> list[str]:
+    if not network:
+        return [row(style, "Network", "n/a")]
+    names = ", ".join(network["interfaces"]) or "no traffic"
+    body = f"↓ {rate(network['download_bytes_per_sec']):>10}   ↑ {rate(network['upload_bytes_per_sec']):>10}"
+    total = f"{names}  received {human_bytes(network['received_bytes'])}  sent {human_bytes(network['sent_bytes'])}"
+    return [row(style, "Network", body + "  " + style.dim(total))]
+
+
+def render_io(style: Style, io: dict | None) -> list[str]:
+    if not io:
+        return [row(style, "Disk I/O", "n/a")]
+    body = f"read {rate(io['read_bytes_per_sec']):>10}   write {rate(io['write_bytes_per_sec']):>10}"
+    ops = f"{io['read_ops_per_sec']} reads/s  {io['write_ops_per_sec']} writes/s"
+    return [row(style, "Disk I/O", body + "  " + style.dim(ops))]
 
 
 def render_disk(style: Style, disks: list[dict] | None) -> list[str]:
@@ -664,6 +1104,10 @@ def render_battery(style: Style, battery: dict | None) -> list[str]:
         details.append(capacity)
     if battery["temperature_c"] is not None:
         details.append(f"{battery['temperature_c']:.1f} °C")
+    if battery.get("system_power_watts"):
+        details.append(f"Mac draws {battery['system_power_watts']:.1f} W")
+    if battery.get("adapter_watts"):
+        details.append(f"{battery['adapter_watts']} W adapter")
     if battery["percent"] is None:
         return [row(style, "Battery", "  ".join(details))]
     body = style.meter(battery["percent"], f"{battery['percent']:5d}%", invert=True)
@@ -688,6 +1132,8 @@ RENDERERS = {
     "cpu": render_cpu,
     "gpu": render_gpu,
     "memory": render_memory,
+    "network": render_network,
+    "io": render_io,
     "disk": render_disk,
     "battery": render_battery,
     "top": render_top,

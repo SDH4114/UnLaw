@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -99,31 +99,78 @@ fn command(program: &Path, args: &[String]) -> Command {
     command
 }
 
-fn collect(mut stream: impl Read + Send + 'static) -> thread::JoinHandle<String> {
+/// Output read by a background thread, up to `MAX_OUTPUT` bytes.
+struct Collected {
+    kept: Arc<Mutex<Vec<u8>>>,
+    done: mpsc::Receiver<()>,
+}
+
+impl Collected {
+    /// What was read, once the stream ends or after `wait` at most: a daemon the
+    /// command started in its own session may hold the pipe open for hours, and
+    /// the run must not wait for it (the reader thread is left to finish alone).
+    fn finish(self, wait: Duration) -> String {
+        let _ = self.done.recv_timeout(wait);
+        let kept = self.kept.lock().map(|kept| kept.clone()).unwrap_or_default();
+        let mut text = String::from_utf8_lossy(&kept).into_owned();
+        // The cap may cut a character in two; drop the broken end.
+        if kept.len() >= MAX_OUTPUT && text.ends_with('\u{FFFD}') {
+            text.pop();
+        }
+        text
+    }
+}
+
+fn collect(mut stream: impl Read + Send + 'static) -> Collected {
+    let kept = Arc::new(Mutex::new(Vec::new()));
+    let (sender, done) = mpsc::channel();
+    let shared = kept.clone();
     thread::spawn(move || {
-        let mut kept = Vec::new();
         let mut buffer = [0u8; 8192];
         while let Ok(read) = stream.read(&mut buffer) {
             if read == 0 {
                 break;
             }
-            let room = MAX_OUTPUT.saturating_sub(kept.len());
-            kept.extend_from_slice(&buffer[..read.min(room)]);
+            if let Ok(mut kept) = shared.lock() {
+                let room = MAX_OUTPUT.saturating_sub(kept.len());
+                kept.extend_from_slice(&buffer[..read.min(room)]);
+            }
         }
-        String::from_utf8_lossy(&kept).into_owned()
-    })
+        let _ = sender.send(());
+    });
+    Collected { kept, done }
 }
+
+/// How long the output readers get after the command has ended.
+const DRAIN: Duration = Duration::from_secs(1);
 
 /// Whether the child has exited, without reaping it: while the zombie exists its
 /// pid (and so its process group id) cannot be reused, so signalling the group
 /// afterwards never reaches an unrelated process.
 fn exited(child: &Child) -> bool {
+    peek(child) != Peek::Running
+}
+
+#[derive(PartialEq)]
+enum Peek {
+    Running,
+    /// Exited, not reaped: the group id is still ours.
+    Exited,
+    /// Already reaped (by `wait`/`try_wait`): its pid may belong to another process now.
+    Reaped,
+}
+
+fn peek(child: &Child) -> Peek {
     let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
     // SAFETY: waitid on our own child with WNOWAIT only peeks at its state.
     let result = unsafe {
         libc::waitid(libc::P_PID, child.id() as libc::id_t, &mut info, libc::WEXITED | libc::WNOHANG | libc::WNOWAIT)
     };
-    result == 0 && unsafe { info.si_pid() } != 0
+    match result {
+        0 if unsafe { info.si_pid() } != 0 => Peek::Exited,
+        0 => Peek::Running,
+        _ => Peek::Reaped,
+    }
 }
 
 fn kill_group(child: &Child, signal: libc::c_int) {
@@ -133,7 +180,11 @@ fn kill_group(child: &Child, signal: libc::c_int) {
 }
 
 /// SIGTERM to the whole group, then SIGKILL after a grace period; reaps the child.
+/// A child that was already reaped is left alone: its pid may belong to someone else now.
 pub fn stop_group(child: &mut Child, grace: Duration) {
+    if peek(child) == Peek::Reaped {
+        return;
+    }
     if !exited(child) {
         kill_group(child, libc::SIGTERM);
         let deadline = Instant::now() + grace;
@@ -176,7 +227,37 @@ pub fn run(program: &Path, args: &[String], timeout: Duration) -> Outcome {
         kill_group(&child, libc::SIGKILL);
     }
     let code = if timed_out { None } else { child.wait().ok().and_then(|status| status.code()) };
-    Outcome { code, stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default(), timed_out }
+    Outcome { code, stdout: stdout.finish(DRAIN), stderr: stderr.finish(DRAIN), timed_out }
+}
+
+const PATH_MARK: &str = "__UNLAW_PATH__";
+
+/// The PATH a login shell prints after the marker (shell start-up files may
+/// print other things first).
+pub fn path_after_mark(output: &str) -> Option<String> {
+    let path = output.rsplit_once(PATH_MARK)?.1.lines().next()?.trim();
+    (!path.is_empty() && path.contains('/') && !path.chars().any(char::is_control)).then(|| path.to_string())
+}
+
+/// Opened from the Dock or Finder, a Mac app gets PATH=/usr/bin:/bin:/usr/sbin:/sbin,
+/// so commands would find macOS' old python3 and miss Homebrew. Ask the user's
+/// login shell for its PATH (what VS Code does), at most 4 s; else add the usual folders.
+pub fn adopt_login_path() {
+    let shell = std::env::var("SHELL").ok().filter(|shell| shell.starts_with('/')).unwrap_or_else(|| "/bin/zsh".into());
+    let script = format!("printf '\\n{PATH_MARK}%s\\n' \"$PATH\"");
+    let outcome = run(Path::new(&shell), &["-ilc".into(), script], Duration::from_secs(4));
+    let found = path_after_mark(&outcome.stdout);
+    let current = std::env::var("PATH").unwrap_or_default();
+    let home = crate::settings::home();
+    let usual = [home.join(".local/bin"), PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin")];
+    let mut parts: Vec<String> = found.map(|path| path.split(':').map(str::to_string).collect()).unwrap_or_default();
+    for folder in usual.iter().map(|folder| folder.display().to_string()).chain(current.split(':').map(str::to_string))
+    {
+        if !folder.is_empty() && !parts.contains(&folder) {
+            parts.push(folder);
+        }
+    }
+    std::env::set_var("PATH", parts.join(":"));
 }
 
 /// The first local page address in a line: `http://127.0.0.1:PORT/...` or
@@ -185,8 +266,13 @@ pub fn local_url(line: &str) -> Option<String> {
     let start = ["http://127.0.0.1:", "http://localhost:"].iter().filter_map(|prefix| line.find(prefix)).min()?;
     let url: String = line[start..].chars().take_while(|c| !c.is_whitespace() && *c != '"' && *c != '\'').collect();
     let rest = url.split_once("://").map(|(_, rest)| rest)?;
-    let port: String = rest.split_once(':')?.1.chars().take_while(char::is_ascii_digit).collect();
-    (!port.is_empty() && port.parse::<u16>().is_ok()).then_some(url)
+    let (_, after_host) = rest.split_once(':')?;
+    let port: String = after_host.chars().take_while(char::is_ascii_digit).collect();
+    // Right after the port only a path, query or the end: `127.0.0.1:80@evil.com`
+    // would make another host the window's own origin.
+    let next = after_host[port.len()..].chars().next();
+    let clean = matches!(next, None | Some('/' | '?' | '#'));
+    (clean && !port.is_empty() && port.parse::<u16>().is_ok()).then_some(url)
 }
 
 /// A command that serves a page: started in the background; returns it and its
@@ -198,21 +284,25 @@ pub fn serve(program: &Path, args: &[String], wait: Duration) -> Result<(Child, 
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let mut sent = false;
-        for line in BufReader::new(stdout).lines() {
-            let Ok(line) = line else { break };
+        // Read to the end, bytes not UTF-8 lines: stopping early would close the
+        // pipe and the server would die of SIGPIPE on its next print.
+        let mut reader = BufReader::new(stdout);
+        let mut line = Vec::new();
+        while matches!(reader.read_until(b'\n', &mut line), Ok(read) if read > 0) {
             if !sent {
-                if let Some(url) = local_url(&line) {
+                if let Some(url) = local_url(&String::from_utf8_lossy(&line)) {
                     let _ = sender.send(url);
                     sent = true;
                 }
             }
+            line.clear();
         }
     });
     match receiver.recv_timeout(wait) {
         Ok(url) => Ok((child, url)),
         Err(_) => {
             stop_group(&mut child, Duration::from_secs(2));
-            let text = stderr.join().unwrap_or_default();
+            let text = stderr.finish(DRAIN);
             let reason = strip_ansi(text.trim());
             Err(if reason.is_empty() { "it printed no local address".into() } else { reason })
         }
@@ -225,6 +315,38 @@ mod tests {
 
     fn sh(script: &str) -> (PathBuf, Vec<String>) {
         (PathBuf::from("/bin/sh"), vec!["-c".into(), script.into()])
+    }
+
+    #[test]
+    fn a_daemon_holding_the_pipe_does_not_hold_the_run() {
+        // The daemon gets its own session (out of reach of the group kill) and
+        // inherits stdout, like a supervisor a command starts and leaves running.
+        let (program, args) = sh(
+            "python3 -c 'import subprocess; subprocess.Popen([\"sleep\", \"4\"], start_new_session=True)'; echo started",
+        );
+        let begun = Instant::now();
+        let outcome = run(&program, &args, Duration::from_secs(10));
+        assert!(begun.elapsed() < Duration::from_secs(3), "waited {:?} for the daemon", begun.elapsed());
+        assert_eq!((outcome.code, outcome.stdout.as_str()), (Some(0), "started\n"));
+    }
+
+    #[test]
+    fn the_login_path_is_read_after_the_marker() {
+        assert_eq!(
+            path_after_mark("motd\n__UNLAW_PATH__/opt/homebrew/bin:/usr/bin\n").as_deref(),
+            Some("/opt/homebrew/bin:/usr/bin")
+        );
+        assert_eq!(path_after_mark("no marker"), None);
+        assert_eq!(path_after_mark("__UNLAW_PATH__\n"), None);
+    }
+
+    #[test]
+    fn a_reaped_child_is_never_signalled() {
+        let (program, args) = sh("exit 0");
+        let mut child = command(&program, &args).spawn().unwrap();
+        child.wait().unwrap();
+        // Would SIGTERM/SIGKILL a reused process group before the fix; now returns at once.
+        stop_group(&mut child, Duration::from_secs(1));
     }
 
     #[test]
@@ -278,6 +400,8 @@ mod tests {
         assert_eq!(local_url("http://example.com:80/"), None);
         assert_eq!(local_url("http://127.0.0.1:/x"), None);
         assert_eq!(local_url("http://127.0.0.1:99999/"), None);
+        assert_eq!(local_url("http://127.0.0.1:8765@evil.com/"), None);
+        assert_eq!(local_url("http://127.0.0.1:8765?t=1").as_deref(), Some("http://127.0.0.1:8765?t=1"));
     }
 
     #[test]

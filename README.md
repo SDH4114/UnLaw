@@ -145,6 +145,125 @@ project templates and shell integration; all other commands are created in
 own command's code and the minimal settings it needs — code from other commands is
 never mixed in.
 
+## Unlaw.app: one app for the Dock, the menu bar and hotkeys
+
+Unlaw.app is the other half of `ul`: an app in the Dock with a main window, plus items in
+the menu bar and global hotkeys. Every command works in both, through the same `ul`,
+config and aliases.
+
+- **The main window** (click the Dock icon, ⌘1-⌘9 switch parts):
+  - *Commands*: every command the app can run. Hover a tile and click the pin in its corner
+    to put the command in the menu bar (a filled pin = pinned; click again to unpin).
+  - *Templates*: your `ul template` environments as cards with a sketch of where each
+    window goes; Open (with the template's own focus setting) or Focus (hides every other
+    app), edit the TOML or save the windows open now as a new template (those two open the
+    terminal, they ask questions there), delete with a confirmation.
+  - *System*: every reading at once, live: CPU, memory, GPU, battery, disks, top processes.
+  - *Clipboard*: the history with text, pictures (thumbnails) and copied files; filter by
+    kind, search, click to copy again, Show in Finder, turn the watcher on or off.
+  - *Games*: the arcade in the window, zoomed to fill it.
+  - *Board*, *Today*, *Canvas*, *Studio*: the parts of `ul desk`, each its own item.
+
+  - *Settings* (⌘,): shortcuts (click and type the keys), menu bar items and their order,
+    live status, how many clipboard pictures and files to keep, appearance, Dock icon. Changes apply at once and are written to `app.toml`
+    with its comments kept.
+
+  Closing the window takes Unlaw out of the Dock; it keeps running in the menu bar (with
+  its hotkeys) until you quit it with ⌘Q or the UL menu. Started at login it waits in the
+  menu bar; opening Unlaw.app brings the window and the Dock icon back. A command with a single
+  action (ChatGPT, Claude, Obsidian...) runs it right away instead of opening a panel.
+
+- **Ctrl+Space** opens the command palette: type to search commands and their actions,
+  Enter runs, Tab opens the command's panel, Cmd+Enter runs it in the terminal, Cmd+P pins
+  it to the menu bar, Cmd+, opens the settings.
+- **Pinned commands** sit in the menu bar: `awake` is an empty cup, or a full steaming one
+  while the Mac is kept awake; a click switches it (until you turn it off), a right click
+  opens its panel (one-click durations, until a time with a countdown, screen on, lid
+  closed, schedules). `sys` shows the readings you pick in Settings (CPU, memory, pressure,
+  GPU, network, battery, power draw) and a click opens a live popover with tabs (Overview,
+  CPU, Memory, GPU, Battery, Network, Disks; arrow keys switch). `desk` opens your board in
+  the main window.
+- **Permissions**: commands started from the app run as Unlaw.app for macOS, so macOS asks
+  once for Unlaw (microphone and camera for `ul capture`, Reminders for `ul desk`, Screen
+  Recording for screenshots), separately from the permissions your terminal has. `ul gui
+  install` signs the app with a local certificate of this Mac (kept in
+  `~/.config/unlaw/signing/`), so these permissions survive updates.
+- **Panels** are forms a command describes for itself; results show in the panel, actions
+  started from the palette or a hotkey end with a notification.
+
+It is the `menubar` feature (in the installer's checklist, on by default): `install.sh`
+and `ul update` build it and install `/Applications/Unlaw.app` (or `~/Applications`)
+with a login job, `ul features remove menubar` or `ul remove` delete it.
+
+```bash
+ul gui              # installed? running?
+ul gui install      # (re)build Unlaw.app and start it at login
+ul gui config       # hotkeys, menu bar items, theme (app.toml)
+ul gui check        # validate app.toml and every command's app.toml
+ul gui stop | start | uninstall
+```
+
+Settings live in `~/.config/unlaw/app.toml`; shared settings (storage, apps, desk,
+awake...) stay in `config.toml`, which the app reads like the terminal does.
+
+```toml
+[hotkeys]
+palette = "ctrl+space"
+
+[[hotkey]]               # more hotkeys: open a panel, a window, run, or an action
+keys = "ctrl+alt+a"
+command = "awake"
+action = "2h"
+
+[menubar]
+items = ["sys", "awake", "desk"]
+sys = ["cpu", "memory"]  # cpu, memory, pressure, gpu, network, battery, power
+show_status = true
+
+[look]
+theme = "auto"           # auto, light, dark
+dock = true              # false: menu bar only, no Dock icon (needs an app restart)
+```
+
+**Timers in the Clock app.** `ul timer clock setup` adds two shortcuts ("Unlaw Timer",
+"Unlaw Alarm"; Shortcuts asks once). After that `ul timer 10m --clock` and
+`ul timer at 7:30 --clock`, or the Timer panel's "In the Clock app", start a real Clock
+timer or alarm that rings with Clock's sound. macOS offers the Clock app only through
+Shortcuts, so this is the way in.
+
+**Your commands in the app.** Any command appears in the palette and can be pinned with no
+extra work. To give it a panel, actions or live menu bar text, put an `app.toml` next to its
+`main.py`; the app only reads that file, it never runs a command to learn what it is.
+Commands that only make sense in a terminal (they work in the current folder like `git`, `py`,
+`zip`, or change Unlaw itself like `version`, `venv`, `config`) are not shown in the app; a
+command says so with `where = "terminal"`. `ul skills show app-integration` prints the full
+format; a short example:
+
+```toml
+# commands/pomo/app.toml
+title = "Pomodoro"
+icon = "clock"
+
+[[action]]
+id = "start"
+label = "Start 25 minutes"
+args = ["start", "25m"]
+
+[status]                 # live text while pinned: runs `ul pomo status --json`
+args = ["status", "--json"]
+every = 5
+text = "{left|clock}"
+when = "running"
+otherwise = "idle"
+```
+
+**Downloaded app.** `scripts/make-app-zip.sh` builds `dist/Unlaw-<version>-arm64.zip`:
+Unlaw.app with the command line inside. Started on a Mac without `ul`, it installs `ul`,
+`ule` and the rest into `~/.local/bin` (never over existing files), sets up the shell and
+the agent skill. The app is signed ad hoc (there is no Apple Developer ID), so the first
+start of a downloaded copy needs System Settings > Privacy & Security > Open Anyway; a copy
+built by the installer opens as is.
+
 ## Main commands
 
 ```bash
@@ -909,7 +1028,11 @@ ul clip search invoice        # items containing every word
 ul clip copy 3                # back onto the clipboard; also show N, rm N, clear [--yes]
 ul clip pause                 # ignore copies for now; resume, status
 ```
-Text only, up to 100 KB per item, duplicates move to the top, `clip.max_items` (200) items.
+Text up to 100 KB per item, duplicates move to the top, `clip.max_items` (200) items.
+Pictures (screenshots, copied images, saved as PNG) and copied files (a copy of each, up to
+200 MB) are kept as files in `<storage.root>/clip/files/`; only the newest `clip.max_files`
+(15) of them stay, older ones are deleted with their entries (0 keeps none). `ul clip show N`
+prints the saved file's path, `copy N` puts the picture or the file back on the clipboard.
 Copies that apps mark concealed, transient or auto-generated (password managers) are never stored.
 The history is plain text (file mode 0600) in `<storage.root>/clip/`; if `storage.root` sits in a synced
 folder (iCloud, Dropbox, a vault) it syncs too. `pause` before copying secrets that an app does not mark;
@@ -919,7 +1042,7 @@ the background helper pasteboard access), `ul clip status` shows the newest item
 (`clip/watch.log`); macOS gives no direct way to ask whether access is denied.
 
 ### ul sys
-Computer stats without root: `ul sys` shows model, chip, macOS, uptime, CPU, GPU, memory (app, wired, compressed, swap, pressure), disks, battery (charge, cycles, condition, max capacity) and the top 5 processes. `ul sys cpu|gpu|mem|disk|battery|top` shows one part, `--json` gives stable keys with numbers, `--watch [seconds]` refreshes in place (Ctrl+C to quit). A tool that is missing or fails shows as n/a. Colors only on a terminal (NO_COLOR turns them off).
+Computer stats without root, read straight from macOS (the kernel's CPU and memory counters, sysctl, IOKit; the sources Activity Monitor uses): `ul sys` shows model, chip, macOS, uptime, thermal state, CPU with every performance and efficiency core, GPU (and the memory it holds), memory (app, wired, compressed, swap, pressure), network speed, disk reads and writes, disks, battery (charge, cycles, condition, max capacity, what the Mac draws in watts) and the top 5 processes. `ul sys cpu|gpu|mem|net|io|disk|battery|top` shows one part, `--json` gives stable keys with numbers, `--watch [seconds]` refreshes in place (Ctrl+C to quit). A tool that is missing or fails shows as n/a. Colors only on a terminal (NO_COLOR turns them off).
 
 ### ul claude
 
@@ -935,6 +1058,7 @@ ul tg                             # open Telegram
 ul obsidian                       # open Obsidian
 ul gpt                            # open ChatGPT
 ul browser                        # open the configured start page
+ul browser example.com            # open a link (http/https; https:// is added)
 ul steam                          # open Steam
 ul minecraft                      # open Prism Launcher
 ul music
@@ -1192,11 +1316,17 @@ ul config set agent.users.123456789 read
 ## Agent skills
 
 `ul skills install` writes an Agent Skill (`SKILL.md`) that teaches
-coding agents (Codex, Claude Code and others) to use `ul`.
+coding agents to use `ul`, write their own commands (never touching Unlaw itself)
+and describe them for Unlaw.app. The installer and `ul update` run it every time.
+`~/.agents/skills/unlaw` is read by Codex, OpenCode, Gemini CLI, Kimi Code and Copilot
+CLI; Claude Code (and Cursor, which reads its folder) gets a link in `~/.claude/skills`
+when `~/.claude` exists; the old Kimi CLI gets one in `~/.kimi/skills` only when there is
+no `~/.claude` (it reads that folder too, and would list the skill twice). When the
+agent folder is itself a symlink (dotfiles), the link is absolute.
 
 ```bash
-ul skills install               # ~/.agents/skills/unlaw
-ul skills install --claude      # plus a link in ~/.claude/skills
+ul skills install               # ~/.agents/skills/unlaw and links for the agents found
+ul skills install --claude      # the Claude Code link even without ~/.claude
 ul skills install --project     # ./.agents/skills/unlaw in the current project
 ul skills list
 ul skills show desk             # one command's reference page

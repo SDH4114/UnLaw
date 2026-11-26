@@ -1,5 +1,7 @@
 title = "Desk"
 icon = "board"
+# Shown inside the app's main window; [open] is how the page is served.
+section = "board"
 
 [open]
 args = ["--no-open"]
@@ -9,6 +11,7 @@ args = ["--no-open"]
 id = "text"
 type = "text"
 label = "New card"
+required = true
 placeholder = "Call the bank @tomorrow"
 
 [[panel.button]]

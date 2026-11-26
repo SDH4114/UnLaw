@@ -296,6 +296,7 @@ const CHECKS: &[(&str, Kind, &[&str])] = &[
     ("games.difficulty", Kind::Str, &["easy", "hard", "normal"]),
     ("timer.sound", Kind::Bool, &[]),
     ("clip.max_items", Kind::Int, &[]),
+    ("clip.max_files", Kind::Int, &[]),
     ("clip.interval", Kind::Number, &[]),
     ("weather.city", Kind::Str, &[]),
     ("weather.units", Kind::Str, &["imperial", "metric"]),

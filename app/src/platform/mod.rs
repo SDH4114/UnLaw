@@ -9,7 +9,11 @@ pub use macos::*;
 
 /// `'text'` for a POSIX shell: the terminal runs a typed command line.
 pub fn shell_quote(word: &str) -> String {
-    if !word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric() || "-_./=:@,+%".contains(c)) {
+    // A leading `=` is zsh's command-path expansion (`=ls`), so such a word is quoted.
+    if !word.is_empty()
+        && !word.starts_with('=')
+        && word.chars().all(|c| c.is_ascii_alphanumeric() || "-_./=:@,+%".contains(c))
+    {
         return word.to_string();
     }
     format!("'{}'", word.replace('\'', r"'\''"))
@@ -25,6 +29,8 @@ mod tests {
         assert_eq!(shell_quote("/Users/a b/ul"), "'/Users/a b/ul'");
         assert_eq!(shell_quote("it's"), r"'it'\''s'");
         assert_eq!(shell_quote(""), "''");
+        assert_eq!(shell_quote("=x"), "'=x'");
+        assert_eq!(shell_quote("--at=9:00"), "--at=9:00");
         assert_eq!(shell_quote("$(rm)"), "'$(rm)'");
     }
 }

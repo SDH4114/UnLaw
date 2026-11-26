@@ -27,9 +27,18 @@ FAKE_OSASCRIPT = """import json, os, sys
 d = os.environ["FAKE_DIR"]
 open(d + "/osascript.log", "a").write(json.dumps(sys.argv[1:]) + "\\n")
 open(d + "/osascript.ppid", "w").write(str(os.getppid()))
+if sys.argv[-1] in ("image", "file"):  # COPY_FILE_SCRIPT: put a saved picture/file on the pasteboard
+    print("ok")
+    raise SystemExit(0)
 feed = d + "/feed.jsonl"
 if os.path.exists(feed):
     for line in open(feed):
+        item = json.loads(line) if line.strip().startswith("{") else None
+        if item and "image_from" in item:  # what the real helper does: a PNG in the incoming folder
+            import shutil
+            item["image"] = os.path.join(sys.argv[-1], str(item["count"]) + ".png")
+            shutil.copyfile(item.pop("image_from"), item["image"])
+            line = json.dumps(item) + "\\n"
         sys.stdout.write(line)
         sys.stdout.flush()
 code = d + "/osascript_exit"
@@ -608,7 +617,7 @@ class AuditTests(ClipBase):
     def test_status_json_is_stable(self) -> None:
         status = json.loads(self.ok("clip", "status", "--json").stdout)
         self.assertEqual(
-            sorted(status), ["history", "items", "log", "log_bytes", "newest", "paused", "watcher"]
+            sorted(status), ["files", "history", "items", "log", "log_bytes", "max_files", "newest", "paused", "watcher"]
         )
         self.assertEqual((status["watcher"], status["paused"], status["items"], status["newest"]), ("off", False, 0, None))
         self.ok("clip", "on")
@@ -634,6 +643,83 @@ class AuditTests(ClipBase):
         self.assertEqual(missing.returncode, 2)
         self.assertIn("no item with id", missing.stderr)
 
+
+
+
+PNG_2X3 = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x02\x00\x00\x00\x03\x08\x02\x00\x00\x00"
+    + b"\x00" * 16
+)
+
+
+class FileItemTests(ClipBase):
+    """Pictures and copied files are kept as files; only the newest clip.max_files of them."""
+
+    def items(self) -> list[dict]:
+        return json.loads(self.history_path.read_text(encoding="utf-8"))["items"]
+
+    def files(self) -> list[str]:
+        folder = self.unlaw / "data" / "clip" / "files"
+        return sorted(path.name for path in folder.iterdir()) if folder.exists() else []
+
+    def make(self, name: str, data: bytes) -> str:
+        path = self.root / "src" / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(data)
+        return str(path)
+
+    def test_a_picture_is_kept_as_a_png_file(self) -> None:
+        source = self.make("shot.png", PNG_2X3)
+        self.watch({"count": 1, "types": ["public.png", "public.tiff"], "text": None, "image_from": source})
+        [item] = self.items()
+        self.assertEqual((item["kind"], item["text"], item["size"]), ("image", "Image 2×3", len(PNG_2X3)))
+        self.assertEqual(self.files(), [item["file"]])
+        saved = self.unlaw / "data" / "clip" / "files" / item["file"]
+        self.assertEqual(saved.read_bytes(), PNG_2X3)
+        self.assertEqual(stat.S_IMODE(saved.stat().st_mode), 0o600)
+        self.assertEqual(list((self.unlaw / "data" / "clip" / "incoming").iterdir()), [])
+
+    def test_copied_files_are_copied_once_and_recopies_move_to_the_top(self) -> None:
+        report = self.make("report.pdf", b"%PDF-1 report")
+        notes = self.make("notes.txt", b"notes")
+        self.watch(
+            {"count": 1, "types": ["public.file-url", TEXT], "text": "report.pdf", "files": [report]},
+            {"count": 2, "types": ["public.file-url", TEXT], "text": "notes.txt", "files": [notes]},
+            {"count": 3, "types": ["public.file-url", TEXT], "text": "report.pdf", "files": [report]},
+        )
+        self.assertEqual([item["name"] for item in self.items()], ["report.pdf", "notes.txt"])
+        self.assertEqual([item["kind"] for item in self.items()], ["file", "file"])
+        self.assertEqual(len(self.files()), 2)
+        listed = json.loads(self.ok("clip", "list", "--json").stdout)
+        self.assertTrue(listed[0]["file"].endswith(".pdf") and Path(listed[0]["file"]).read_bytes() == b"%PDF-1 report")
+        self.assertIn("[file] report.pdf", self.ok("clip", "list").stdout)
+
+    def test_only_the_newest_max_files_are_kept_and_the_rest_deleted(self) -> None:
+        self.ok("config", "set", "clip.max_files", "2")
+        paths = [self.make(f"f{index}.txt", f"file {index}".encode()) for index in range(4)]
+        self.watch(
+            entry("some text", count=1),
+            *({"count": index + 2, "types": ["public.file-url"], "text": None, "files": [path]} for index, path in enumerate(paths)),
+        )
+        self.assertEqual([item.get("name", item["text"]) for item in self.items()], ["f3.txt", "f2.txt", "some text"])
+        self.assertEqual(len(self.files()), 2)
+
+    def test_a_private_picture_is_never_written(self) -> None:
+        source = self.make("secret.png", PNG_2X3)
+        self.watch({"count": 1, "types": ["public.png", "org.nspasteboard.ConcealedType"], "text": None, "image_from": source})
+        self.assertFalse(self.history_path.exists())
+        self.assertEqual(list((self.unlaw / "data" / "clip" / "incoming").iterdir()), [])
+
+    def test_copy_puts_a_file_back_and_rm_deletes_its_copy(self) -> None:
+        report = self.make("report.pdf", b"%PDF-1 report")
+        self.watch({"count": 1, "types": ["public.file-url"], "text": None, "files": [report]})
+        self.assertIn("Copied: [file] report.pdf", self.ok("clip", "copy", "1").stdout)
+        call = self.jlog("osascript.log")[-1]
+        self.assertEqual(call[-1], "file")
+        self.assertTrue(call[-2].endswith(".pdf"))
+        self.assertIn("/clip/files/", self.ok("clip", "show", "1").stdout)
+        self.ok("clip", "rm", "1")
+        self.assertEqual(self.files(), [])
 
 if __name__ == "__main__":
     unittest.main()

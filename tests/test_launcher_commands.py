@@ -175,12 +175,24 @@ class CurlInstallerTests(unittest.TestCase):
         ]
         self.assertEqual(
             self.cargo_calls(root),
-            [[*common, "--no-default-features", "--features", "lm,agent,capture,game", "unlaw"], [*common, "ule"]],
+            [[*common, "--no-default-features", "--features", "lm,agent,capture,game", "unlaw"], [*common, "ule"], [*common, "unlaw-app"]],
         )
         self.assertEqual((root / "ul.txt").read_text().splitlines(),
-                         ["features", "set", "--no-build", "all", "==", "doctor", "--fix", "=="])
+                         ["features", "set", "--no-build", "all", "==", "doctor", "--fix", "==", "skills", "install", "==", "gui", "install", "=="])
         self.assertIn("Installing the core and: all", result.stdout)
         self.assertFalse((root / "uv.txt").exists())
+
+    def test_a_failed_app_build_still_sets_up_the_shell(self) -> None:
+        def prepare(root: Path) -> None:
+            cargo = root / "bin" / "cargo"
+            text = cargo.read_text()
+            cargo.write_text(text.replace("while [", 'case " $* " in *" unlaw-app "*) exit 3;; esac\nwhile [', 1))
+
+        result, root = self._install(uv_has_unlaw=False, prepare=prepare)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Unlaw.app could not be built", result.stderr)
+        calls = (root / "ul.txt").read_text().splitlines()
+        self.assertEqual(calls, ["features", "set", "--no-build", "all", "==", "doctor", "--fix", "==", "skills", "install", "=="])
 
     def test_reinstalling_keeps_the_existing_choice_without_asking(self) -> None:
         def prepare(root: Path) -> None:
@@ -193,7 +205,7 @@ class CurlInstallerTests(unittest.TestCase):
         self.assertIn("keeping its features", result.stdout)
         self.assertEqual(self.cargo_calls(root)[0][-4:], ["--no-default-features", "--features", "game", "unlaw"])
         self.assertEqual((root / "ul.txt").read_text().splitlines(),
-                         ["features", "set", "--no-build", "yt", "game", "==", "doctor", "--fix", "=="])
+                         ["features", "set", "--no-build", "yt", "game", "==", "doctor", "--fix", "==", "skills", "install", "=="])
 
     def test_installer_takes_features_from_the_environment(self) -> None:
         result, root = self._install(uv_has_unlaw=False, features="yt agent")
@@ -202,13 +214,13 @@ class CurlInstallerTests(unittest.TestCase):
         self.assertEqual(unlaw[-4:], ["--no-default-features", "--features", "lm,agent", "unlaw"])
         self.assertEqual(ule[-1], "ule")
         self.assertEqual((root / "ul.txt").read_text().splitlines(),
-                         ["features", "set", "--no-build", "lm", "agent", "yt", "==", "doctor", "--fix", "=="])
+                         ["features", "set", "--no-build", "lm", "agent", "yt", "==", "doctor", "--fix", "==", "skills", "install", "=="])
         result, root = self._install(uv_has_unlaw=False, features="music")
         self.assertEqual(self.cargo_calls(root)[0][-2:], ["--no-default-features", "unlaw"])
         result, root = self._install(uv_has_unlaw=False, features="none")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((root / "ul.txt").read_text().splitlines(),
-                         ["features", "set", "--no-build", "none", "==", "doctor", "--fix", "=="])
+                         ["features", "set", "--no-build", "none", "==", "doctor", "--fix", "==", "skills", "install", "=="])
         result, root = self._install(uv_has_unlaw=False, features="nope")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("nope", result.stderr)

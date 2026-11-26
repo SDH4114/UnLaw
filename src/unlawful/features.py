@@ -35,6 +35,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("zed", "Development", "Open the current folder in your editor"),
     ("awake", "System", "Keep the Mac awake for a time, until a time or while a command runs; lid closed too"),
     ("sys", "System", "Computer stats: CPU, GPU, RAM, disk, battery and charge cycles"),
+    ("menubar", "System", "Unlaw.app: menu bar items, hotkeys and a command palette for every command"),
     ("mac", "System", "Control macOS apps through macos-harness"),
     ("steam", "System", "Open Steam"),
     ("minecraft", "System", "Open Prism Launcher"),

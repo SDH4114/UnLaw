@@ -54,6 +54,7 @@ FEATURES = [
     ("zed", "Development", "Open the current folder in your editor"),
     ("awake", "System", "Keep the Mac awake for a time, until a time or while a command runs; lid closed too"),
     ("sys", "System", "Computer stats: CPU, GPU, RAM, disk, battery and charge cycles"),
+    ("menubar", "System", "Unlaw.app: menu bar items, hotkeys and a command palette for every command"),
     ("mac", "System", "Control macOS apps through macos-harness"),
     ("steam", "System", "Open Steam"),
     ("minecraft", "System", "Open Prism Launcher"),
@@ -228,6 +229,19 @@ export CARGO_TARGET_DIR
 UNLAW_PYTHON="$python" cargo install --locked --force --git "$repository" --root "$root" \
     --no-default-features ${cargo_features:+--features "$cargo_features"} unlaw
 UNLAW_PYTHON="$python" cargo install --locked --force --git "$repository" --root "$root" ule
+# Unlaw.app (feature menubar): its own package, so ul never links the window libraries.
+case " $selection " in
+    *" all "* | *" menubar "*) with_gui=yes ;;
+    *) with_gui=no ;;
+esac
+# Optional and heavy (a web view): a failed build must not stop the shell setup
+# below, without which `ul` looks hung (macOS has its own /usr/bin/ul).
+if [ "$with_gui" = yes ]; then
+    if ! UNLAW_PYTHON="$python" cargo install --locked --force --git "$repository" --root "$root" unlaw-app; then
+        echo "Unlaw installer: Unlaw.app could not be built; the command line is installed. Retry later with: ul update --force" >&2
+        with_gui=no
+    fi
+fi
 # shellcheck disable=SC2086 # the selection is a list of words
 "$root/bin/ul" features set --no-build $selection
 
@@ -250,6 +264,9 @@ fi
 # how to use ul and write commands; `ul update` refreshes it.
 if ! "$root/bin/ul" skills install; then
     echo "Unlaw installer: the agent skill was not installed (run: ul skills install)." >&2
+fi
+if [ "$with_gui" = yes ] && ! "$root/bin/ul" gui install; then
+    echo "Unlaw installer: Unlaw.app was not installed (run: ul gui install)." >&2
 fi
 echo "Installed Unlaw into $root/bin. Change features later: ul features."
 ready=no

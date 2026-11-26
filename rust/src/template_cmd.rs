@@ -866,11 +866,39 @@ fn remove(args: &[String]) -> i32 {
     }
 }
 
+/// One template for `ul template list --json` (Unlaw.app's Templates part).
+fn template_json(template: &Template) -> JsonValue {
+    let windows: Vec<JsonValue> = template
+        .windows
+        .iter()
+        .map(|window| {
+            json!({
+                "app": window.app,
+                "kind": match window.kind() { workspace::Kind::App => "app", workspace::Kind::Terminal => "terminal", workspace::Kind::Browser => "browser" },
+                "open": window.open,
+                "place": place_text(window),
+                "frame": window.frame.as_ref().map(|frame| [frame.x, frame.y, frame.w, frame.h]),
+                "screen": window.screen,
+                "details": window_details(window),
+                "tabs": window.tabs.iter().map(|tab| tab.panes.iter().map(|pane| json!({"dir": pane.dir, "run": pane.run, "split": pane.split})).collect::<Vec<_>>()).collect::<Vec<_>>(),
+                "urls": window.urls,
+            })
+        })
+        .collect();
+    json!({"name": template.name, "path": tilde(&template.path), "focus": template.focus, "legacy": template.legacy, "windows": windows})
+}
+
 pub fn list(args: &[String]) -> i32 {
-    if !args.is_empty() {
-        return usage("Usage: ul templates");
+    let as_json = args.iter().any(|arg| arg == "--json");
+    if args.iter().any(|arg| arg != "--json") {
+        return usage("Usage: ul templates [--json]");
     }
     match workspace::discover() {
+        Ok(templates) if as_json => {
+            let items: Vec<JsonValue> = templates.values().map(template_json).collect();
+            println!("{}", JsonValue::Array(items));
+            0
+        }
         Ok(templates) => {
             let width = templates.keys().map(|name| name.chars().count()).max().unwrap_or(0);
             for (name, template) in &templates {

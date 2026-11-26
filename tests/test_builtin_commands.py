@@ -373,7 +373,12 @@ class LauncherBuiltinTests(CoreTestCase):
         self.ok("config", "set", "apps.browser_url", "https://example.com/start")
         self.ok("browser")
         self.assertEqual(self.calls(log), [["https://www.google.com/"], ["https://example.com/start"]])
-        self.assertEqual(self.ul("browser", "extra").returncode, 2)
+        self.ok("browser", "github.com/SDH4114/UnLaw")
+        self.assertEqual(self.calls(log)[-1], ["https://github.com/SDH4114/UnLaw"])
+        for bad in (["extra", "words"], ["-a"], ["file:///etc/hosts"], ["hello"]):
+            with self.subTest(args=bad):
+                self.assertEqual(self.ul("browser", *bad).returncode, 2)
+        self.assertEqual(len(self.calls(log)), 3, "refused links open nothing")
         self.assertIn("apps.browser_url", self.ok("browser", "-h").stdout)
 
     def test_open_failures_pass_through(self) -> None:

@@ -508,6 +508,17 @@ urls = ["https://docs.rs"]
         self.assertIn("already in use", result.stderr)
         self.assertFalse(self.manifest("doctor").exists())
 
+    def test_list_json_describes_every_window(self) -> None:
+        self.write("env", self.V2)
+        [item] = json.loads(self.ok("template", "list", "--json").stdout)
+        self.assertEqual((item["name"], item["path"], item["legacy"]), ("env", "~/giti/app", False))
+        kinds = [(window["app"], window["kind"]) for window in item["windows"]]
+        self.assertEqual(kinds, [("Zed", "app"), ("Ghostty", "terminal"), ("browser", "browser")])
+        ghostty = item["windows"][1]
+        self.assertTrue(ghostty["tabs"] and all("dir" in pane for pane in ghostty["tabs"][0]))
+        self.assertEqual(json.loads(self.ok("templates", "--json").stdout), [item])
+        self.assertEqual(self.ul("template", "list", "--yaml").returncode, 2)
+
     def test_show_rm_and_list(self) -> None:
         self.write("env", self.V2)
         self.save_template("old", self.project, "obsidian", True)

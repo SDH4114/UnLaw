@@ -64,18 +64,27 @@ Usage: ul timer <duration> [label...]   Start a timer in the background
        ul timer [list] [--json]         Running timers with the time left
        ul timer cancel ID|--all         Stop one timer or all of them
        ul timer wait <duration> [label...]   Count down here (Ctrl+C cancels)
+       ul timer clock setup | status    Timers and alarms in the macOS Clock app
   <duration>   30s, 5m, 1h30m or bare minutes (25); at most 7 days
+  --clock      Start it in the Clock app instead (a real Clock timer or alarm: it
+               shows in Clock and rings with its sound). Needs `clock setup` once.
 A timer runs as a detached process, so you can close the terminal. When it ends a
 notification appears (with a sound unless timer.sound is false). `wait` shows the
 countdown on one line and notifies too. Labels must not contain control characters.
 State: storage.root/runtime/timers.json. Timers do not survive a logout or restart:
 the next `ul timer` reports each one once on stderr as lost (not yet due) or missed.
-Needs: macOS `osascript` for the notification.
+Clock: macOS has no command for the Clock app, only Shortcuts. `clock setup` builds
+two shortcuts, "Unlaw Timer" and "Unlaw Alarm", signs them (`shortcuts sign`) and
+opens them; Shortcuts asks once whether to add them. `--clock` then runs them with
+`shortcuts run`. Clock timers take no label; an alarm keeps its label as the name.
+Needs: macOS `osascript` for the notification; `shortcuts` for --clock.
 Settings: timer.sound (true/false), storage.root.
 Examples:
   ul timer 25m write report
   ul timer at 18:30 leave
   ul timer wait 90s tea
+  ul timer 10m --clock
+  ul timer at 7:30 wake up --clock
   ul timer cancel 2
 ''',
     "clip": '''Clipboard history in the background: list, search and copy again.
@@ -91,8 +100,11 @@ Usage: ul clip [list [N] [--json]]
   clear       Delete all items after a y/N question (--yes skips it)
   on / off    Install / remove the background watcher (LaunchAgent com.unlaw.clip); off keeps the history
   pause       The watcher keeps running but ignores copies until `resume`
-Text only (no images or files), at most 100 KB per item, duplicates move to the top, at most
-clip.max_items items (default 200); clip.interval (default 1 s) is how often the pasteboard is checked.
+Text (at most 100 KB per item), pictures (screenshots, "Copy image") and copied files (up to
+200 MB each; folders are skipped) are kept; pictures and files as copies in <storage.root>/clip/files/,
+and only the newest clip.max_files of them (default 15), older ones are deleted. Duplicates move to
+the top, at most clip.max_items items (default 200); clip.interval (default 1 s) is how often the
+pasteboard is checked. copy puts a picture or file back as itself; show prints its path.
 Privacy: items marked concealed, transient or auto-generated (password managers set these) are
 never stored. The history is plain text (file mode 0600) in <storage.root>/clip/ and syncs if that
 sits in iCloud/Dropbox; use pause for secrets an app does not mark. Needs macOS osascript; if copies
@@ -118,21 +130,25 @@ Examples:
   ul weather New York --days 7 --units imperial
   ul weather --json
 ''',
-    "sys": '''Computer stats: CPU, GPU, RAM, disk, battery and charge cycles.
-Usage: ul sys [cpu|gpu|mem|disk|battery|top] [--json] [--watch [seconds]]
+    "sys": '''Computer stats: CPU per core, GPU, RAM, network, disk, battery and power.
+Usage: ul sys [cpu|gpu|mem|net|io|disk|battery|top] [--json] [--watch [seconds]]
   (none)         One-screen summary of everything below
-  cpu            Usage (user/system), load average, performance/efficiency cores
-  gpu            GPU utilization (Apple Silicon)
-  mem            Used (app, wired, compressed), swap, memory pressure
+  cpu            Usage (user/system), every core (performance and efficiency), load average
+  gpu            GPU utilization and the memory it holds (Apple Silicon)
+  mem            Used (app, wired, compressed), swap, memory pressure (like Activity Monitor)
+  net            Download and upload speed now, totals since start-up
+  io             Disk reads and writes per second
   disk           Mounted volumes: used, free, a bar
-  battery        Charge, time left, cycles, condition, max capacity (laptops only)
-  top            Top 5 processes by CPU and by memory
+  battery        Charge, time left, cycles, condition, max capacity, what the Mac draws (W)
+  top            Top 5 processes by CPU and by memory, number of processes
 Options:
   --json             Machine-readable output: stable keys, numbers, null for n/a
   --watch [seconds]  Refresh in place (default 2); Ctrl+C exits
 Notes:
-  CPU takes two samples, about 1.3 s. A tool that is missing or fails shows as n/a.
-  Everything is read-only and needs no sudo; CPU and fan temperatures would, so they are left out.
+  Numbers come straight from macOS: the kernel's CPU ticks and memory counters, sysctl,
+  IOKit (GPU, battery, disks) and the thermal state, the sources Activity Monitor uses.
+  CPU, network and disk speed are measured over 0.5 s. A part that cannot be read shows as n/a.
+  Read-only, no sudo; CPU and fan temperatures would need it, so they are left out.
   Colors only on a terminal; NO_COLOR turns them off.
 Examples:
   ul sys

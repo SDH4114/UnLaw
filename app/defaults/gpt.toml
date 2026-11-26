@@ -2,6 +2,6 @@ title = "ChatGPT"
 icon = "chat"
 
 [[action]]
-id = "open"
+id = "launch"
 label = "Open"
 args = []

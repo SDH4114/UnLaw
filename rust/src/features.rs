@@ -254,10 +254,24 @@ pub fn apply(current: &[&str], next: &[&'static str], no_build: bool) -> i32 {
     // A launchd job (agent, awake schedules, clip watcher) would keep calling a removed command.
     let gone: Vec<&str> = removed.iter().copied().filter(|name| !kept.contains(name)).collect();
     crate::remove::remove_command_jobs(&gone, "unlaw features");
+    // Unlaw.app is no command folder: it goes and comes with its feature.
+    if removed.contains(&crate::gui::FEATURE) {
+        match crate::gui::uninstall() {
+            Ok(true) => println!("Removed Unlaw.app and its login job."),
+            Ok(false) => {}
+            Err(error) => eprintln!("unlaw features: Could not remove Unlaw.app: {error}"),
+        }
+        crate::gui::remove_built_app();
+    }
+    let app_missing = next.contains(&crate::gui::FEATURE) && crate::gui::app_binary().is_none();
+    // ul-app already built: nothing to compile, so --no-build still sets the app up.
+    if added.contains(&crate::gui::FEATURE) && !app_missing {
+        crate::gui::install(true);
+    }
     for name in kept {
         println!("Kept commands/{name}: you edited it. Delete the folder to remove it.");
     }
-    if !needs_rebuild(next) {
+    if !needs_rebuild(next) && !app_missing {
         return 0;
     }
     if no_build {
@@ -266,7 +280,11 @@ pub fn apply(current: &[&str], next: &[&'static str], no_build: bool) -> i32 {
         return 0;
     }
     let built = cargo_features(next);
-    println!("Rebuilding ul with: {}.", if built.is_empty() { "the core only".to_string() } else { built.join(", ") });
+    println!(
+        "Rebuilding ul with: {}{}.",
+        if built.is_empty() { "the core only".to_string() } else { built.join(", ") },
+        if next.contains(&crate::gui::FEATURE) { ", and Unlaw.app" } else { "" }
+    );
     let code = update::rebuild();
     if code != 0 {
         eprintln!("unlaw features: the choice is saved; `ul update` builds it from the newest commit.");

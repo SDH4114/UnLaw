@@ -12,7 +12,7 @@ Global options:
 
 /// System commands of `ul --help`, by topic; a test keeps every one listed.
 const SECTIONS: &[(&str, &[&str])] = &[
-    ("Install and update", &["update", "reinstall", "remove", "features", "doctor", "version"]),
+    ("Install and update", &["update", "reinstall", "remove", "features", "gui", "doctor", "version"]),
     ("Configuration", &["config", "edit", "init", "completion", "skills"]),
     ("Commands and projects", &["commands", "list", "which", "create", "template", "templates", "venv"]),
 ];
@@ -71,6 +71,33 @@ Run `ul commands search` to download more, `ul create command <name>` to write o
 }
 
 pub const SYSTEM_HELP: &[(&str, &str)] = &[
+    (
+        "gui",
+        "Unlaw.app: menu bar items, global hotkeys and a command palette for every command.
+Usage:
+  ul gui [status]              Whether Unlaw.app is installed and running
+  ul gui install [--no-start]  Build Unlaw.app from the installed ul-app into /Applications
+                               (~/Applications when that is not writable) and start it at login
+  ul gui start | stop          Start it now / stop it until the next login
+  ul gui config                Edit its settings (app.toml: hotkeys, menu bar items, theme)
+  ul gui check                 Validate app.toml and every command's app.toml
+  ul gui uninstall             Stop it and delete Unlaw.app and its login job
+The app runs every command through ul (same config, aliases and timeouts). Ctrl+Space
+opens the palette (Enter runs, Tab opens a command's panel, Cmd+Enter runs it in the
+terminal, Cmd+P pins it to the menu bar). Pinned commands show live text when their
+app.toml has a [status] (awake: time left, sys: CPU and memory); desk opens in a window.
+A command describes how it looks in the app in commands/<name>/app.toml next to its
+entry file: `ul skills show app-integration`. Shared settings stay in config.toml.
+It comes with the `menubar` feature: install.sh and `ul update` build it (package
+unlaw-app) and run `ul gui install`; `ul features remove menubar` and `ul remove` delete it. The app is
+signed ad hoc (no Apple Developer ID), so a downloaded copy needs one Open Anyway in
+System Settings > Privacy & Security; a built one opens as is.
+Job: com.unlaw.gui (~/Library/LaunchAgents), log: storage.root/runtime/gui.log.
+Examples:
+  ul gui install
+  ul gui config
+",
+    ),
     (
         "commands",
         "List available system commands, installed commands and aliases.
@@ -291,7 +318,7 @@ Usage:
   ul template edit <name>             Edit the TOML (creates a starter if missing)
   ul template show <name>             Show what it opens
   ul template rm <name> [--yes]       Delete it
-  ul template list                    Same as ul templates
+  ul template list [--json]           Same as ul templates (--json: every window, for Unlaw.app)
   ul <name> [--focus|--no-focus] [--dry-run]
 save reads every visible window (apps, frames, Ghostty tabs and their folders,
 the default browser's tabs when it is scriptable: Safari, Chromium browsers),

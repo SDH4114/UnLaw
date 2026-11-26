@@ -1,4 +1,5 @@
 title = "Archives"
 icon = "archive"
-# Prompts, a terminal UI or a folder of its own: it runs in your terminal.
+# Works in the folder you are in, or is a terminal tool: the app does not show it.
+where = "terminal"
 terminal = true

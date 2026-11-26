@@ -2,7 +2,7 @@ title = "Music"
 icon = "music"
 
 [[action]]
-id = "open"
+id = "launch"
 label = "Open Spotify"
 args = []
 

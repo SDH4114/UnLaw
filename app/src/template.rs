@@ -13,6 +13,8 @@ pub struct StatusText {
     pub text: String,
     /// `on`, `off` or `warn`, when the command or `when` says so.
     pub state: Option<String>,
+    /// The icon for this state (`status.icon` / `status.otherwise_icon`), when the description sets one.
+    pub icon: Option<String>,
 }
 
 fn lookup<'a>(json: &'a Value, path: &str) -> Option<&'a Value> {
@@ -52,20 +54,29 @@ pub fn clock(seconds: f64) -> String {
     }
 }
 
+/// A JSON number, or a string holding one (`"50"`), as some commands print them.
+fn as_number(value: &Value) -> Option<f64> {
+    value.as_f64().or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+}
+
 fn filtered(value: &Value, filter: &str) -> Result<String, String> {
     if filter.is_empty() {
         return Ok(plain(value));
     }
-    if !["int", "pct", "clock", "gb"].contains(&filter) {
-        return Err(format!("unknown filter |{filter} (int, pct, clock, gb)"));
+    if !["int", "pct", "clock", "gb", "speed"].contains(&filter) {
+        return Err(format!("unknown filter |{filter} (int, pct, clock, gb, speed)"));
     }
-    let Some(number) = value.as_f64().or_else(|| value.as_str().and_then(|text| text.trim().parse().ok())) else {
+    let Some(number) = as_number(value) else {
         return Ok(if value.is_null() { "–".into() } else { plain(value) });
     };
     Ok(match filter {
         "pct" => format!("{}%", number.round() as i64),
         "clock" => clock(number),
-        "gb" => format!("{:.1} GB", number / 1e9),
+        // 1024^3, the way macOS (Activity Monitor, About This Mac) counts memory "GB".
+        "gb" => format!("{:.1} GB", number / 1_073_741_824.0),
+        // Bytes per second, short enough for the menu bar.
+        "speed" if number < 1_000_000.0 => format!("{} KB/s", (number / 1000.0).round() as i64),
+        "speed" => format!("{:.1} MB/s", number / 1_000_000.0),
         _ => format!("{}", number.round() as i64),
     })
 }
@@ -94,7 +105,22 @@ pub fn render(text: &str, json: &Value) -> Result<String, String> {
         if path.is_empty() || path.contains('{') {
             return Err(format!("bad placeholder {{{inner}}}"));
         }
-        match lookup(json, path) {
+        // `{used/total}`: the first value as a percent of the second.
+        let ratio;
+        let found = match path.split_once('/') {
+            Some((part, whole)) => {
+                let number = |path: &str| lookup(json, path.trim()).and_then(as_number);
+                ratio = match (number(part), number(whole)) {
+                    (Some(part), Some(whole)) if whole != 0.0 => {
+                        serde_json::Number::from_f64(part / whole * 100.0).map(Value::Number)
+                    }
+                    _ => None,
+                };
+                ratio.as_ref()
+            }
+            None => lookup(json, path),
+        };
+        match found {
             Some(value) => out.push_str(&filtered(value, filter)?),
             None => {
                 filtered(&Value::Null, filter)?;
@@ -134,13 +160,17 @@ pub fn status_text(status: &Status, stdout: &str) -> StatusText {
     let json: Option<Value> = serde_json::from_str(stdout.trim()).ok().filter(Value::is_object);
     let Some(json) = json else {
         let line = stdout.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("");
-        return StatusText { text: clean(line), state: None };
+        return StatusText { text: clean(line), state: None, icon: None };
     };
     let state = json.get("state").and_then(Value::as_str).filter(|state| ["on", "off", "warn"].contains(state));
     if let Some(when) = &status.when {
         if !truthy(lookup(&json, when)) {
             let text = status.otherwise.clone().unwrap_or_default();
-            return StatusText { text: clean(&text), state: Some(state.unwrap_or("off").to_string()) };
+            return StatusText {
+                text: clean(&text),
+                state: Some(state.unwrap_or("off").to_string()),
+                icon: status.otherwise_icon.clone(),
+            };
         }
     }
     let text = match &status.text {
@@ -148,7 +178,7 @@ pub fn status_text(status: &Status, stdout: &str) -> StatusText {
         None => json.get("text").map(plain).unwrap_or_default(),
     };
     let default_state = status.when.as_ref().map(|_| "on");
-    StatusText { text: clean(&text), state: state.or(default_state).map(str::to_string) }
+    StatusText { text: clean(&text), state: state.or(default_state).map(str::to_string), icon: status.icon.clone() }
 }
 
 #[cfg(test)]
@@ -163,20 +193,37 @@ mod tests {
             text: text.map(Into::into),
             when: when.map(Into::into),
             otherwise: otherwise.map(Into::into),
+            icon: None,
+            otherwise_icon: None,
         }
+    }
+
+    #[test]
+    fn awake_is_a_full_cup_or_an_empty_one() {
+        let s = Status {
+            text: Some(String::new()),
+            otherwise: Some(String::new()),
+            icon: Some("cup-hot".into()),
+            otherwise_icon: Some("cup".into()),
+            ..status(None, Some("active"), None)
+        };
+        let on = status_text(&s, r#"{"active": true, "remaining_seconds": 5040}"#);
+        assert_eq!((on.text.as_str(), on.icon.as_deref()), ("", Some("cup-hot")));
+        let off = status_text(&s, r#"{"active": false}"#);
+        assert_eq!((off.text.as_str(), off.icon.as_deref()), ("", Some("cup")));
     }
 
     #[test]
     fn awake_shows_time_left_or_off() {
         let s = status(Some("{remaining_seconds|clock}"), Some("active"), Some("off"));
         let on = status_text(&s, r#"{"active": true, "remaining_seconds": 5040}"#);
-        assert_eq!(on, StatusText { text: "1:24".into(), state: Some("on".into()) });
+        assert_eq!(on, StatusText { text: "1:24".into(), state: Some("on".into()), icon: None });
         let short = status_text(&s, r#"{"active": true, "remaining_seconds": 125}"#);
         assert_eq!(short.text, "2:05");
         let forever = status_text(&s, r#"{"active": true, "remaining_seconds": null}"#);
         assert_eq!(forever.text, "–");
         let off = status_text(&s, r#"{"active": false, "remaining_seconds": null}"#);
-        assert_eq!(off, StatusText { text: "off".into(), state: Some("off".into()) });
+        assert_eq!(off, StatusText { text: "off".into(), state: Some("off".into()), icon: None });
     }
 
     #[test]
@@ -185,12 +232,23 @@ mod tests {
             json!({"cpu": {"usage_percent": 14.6}, "memory": {"used_bytes": 14657470464u64}, "list": [{"n": 2.5}]});
         assert_eq!(
             render("CPU {cpu.usage_percent|int}% · {memory.used_bytes|gb}", &json).unwrap(),
-            "CPU 15% · 14.7 GB"
+            "CPU 15% · 13.7 GB"
         );
+        let memory = json!({"memory": {"used_bytes": 13_778_000_000u64, "total_bytes": 19_327_352_832u64, "zero": 0}});
+        assert_eq!(render("RAM {memory.used_bytes/memory.total_bytes|pct}", &memory).unwrap(), "RAM 71%");
+        assert_eq!(render("{a/b|pct}", &json!({"a": "50", "b": "100"})).unwrap(), "50%", "numbers as text count too");
+        assert_eq!(render("{memory.used_bytes / memory.total_bytes|int}", &memory).unwrap(), "71");
+        assert_eq!(
+            render("{memory.used_bytes/memory.zero|pct} {memory.nope/memory.total_bytes}", &memory).unwrap(),
+            "– –"
+        );
+        assert_eq!(render("{memory.total_bytes|gb}", &memory).unwrap(), "18.0 GB", "18 GB like About This Mac");
         assert_eq!(render("{cpu.usage_percent|pct} {list.0.n} {nope} {{x}}", &json).unwrap(), "15% 2.5 – {x}");
         assert!(render("{cpu.usage_percent|weird}", &json).unwrap_err().contains("unknown filter"));
         assert!(render("{nope|weird}", &json).is_err(), "a bad filter is an error even without a value");
         assert!(render("{open", &json).is_err());
+        let net = json!({"down": 2_480_000, "up": 640});
+        assert_eq!(render("{down|speed} {up|speed}", &net).unwrap(), "2.5 MB/s 1 KB/s");
     }
 
     #[test]
@@ -199,7 +257,7 @@ mod tests {
         assert_eq!(status_text(&s, "\n  42 cards \u{1b}[31m\nmore").text, "42 cards [31m");
         assert_eq!(
             status_text(&s, r#"{"text": "hi", "state": "warn"}"#),
-            StatusText { text: "hi".into(), state: Some("warn".into()) }
+            StatusText { text: "hi".into(), state: Some("warn".into()), icon: None }
         );
         assert_eq!(status_text(&s, r#"{"text": "x", "state": "evil"}"#).state, None);
         assert_eq!(status_text(&s, "").text, "");

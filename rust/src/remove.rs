@@ -19,7 +19,7 @@ use crate::update;
 use crate::util::{home, is_executable, which};
 
 /// What `cargo install` puts into `<root>/bin` for both packages.
-const BINARIES: [&str; 6] = ["ul", "unlaw", "ula", "unlawagent", "ul-rec", "ule"];
+const BINARIES: [&str; 7] = ["ul", "unlaw", "ula", "unlawagent", "ul-rec", "ule", "ul-app"];
 /// The launchd job of `ula setup` (agent.py `LABEL`).
 const AGENT_LABEL: &str = "com.unlaw.agent";
 /// The launchd job of `ul awake schedule` (awake.py `JOB_LABEL`).
@@ -300,6 +300,10 @@ fn remove_everything(yes: bool) -> i32 {
             println!("  - {what} ({label})");
         }
     }
+    let app = crate::gui::installed_bundle();
+    if let Some(bundle) = &app {
+        println!("  - {} and its login job ({})", bundle.display(), crate::gui::LABEL);
+    }
     if shell_block.is_some() {
         println!("  - the shell integration block in ~/.zshrc");
     }
@@ -334,6 +338,9 @@ fn remove_everything(yes: bool) -> i32 {
             report(what.into(), remove_launchd_job(&job_plist(label), label).map(|_| ()));
         }
     }
+    if app.is_some() || exists(&crate::gui::plist_path()) {
+        report("Unlaw.app and its login job".into(), crate::gui::uninstall().map(|_| ()));
+    }
     if !skill_installs.is_empty() {
         report("the agent skill".into(), skills::remove_all());
     }
@@ -364,7 +371,7 @@ fn remove_everything(yes: bool) -> i32 {
     if !binaries.is_empty() {
         // cargo also forgets the packages; whatever it leaves is deleted by hand.
         if let Some(cargo) = update::cargo().or_else(|| which("cargo")) {
-            for package in ["unlaw", "ule"] {
+            for package in ["unlaw", "ule", crate::gui::PACKAGE] {
                 let _ = Command::new(&cargo)
                     .args(["uninstall", "--quiet", "--root"])
                     .arg(&root)

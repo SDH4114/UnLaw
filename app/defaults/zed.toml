@@ -1,7 +1,9 @@
 title = "Editor"
+# Opens the folder you are in: from the app that would be your home folder.
+where = "terminal"
 icon = "code"
 
 [[action]]
-id = "open"
+id = "launch"
 label = "Open"
 args = []

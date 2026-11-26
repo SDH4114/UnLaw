@@ -224,7 +224,11 @@ fn install_commands(cargo: &Path, root: &Path, source: &Source, rev: Option<&str
         command.push(name.into());
         command
     };
-    vec![package("unlaw"), package("ule")]
+    let mut packages = vec![package("unlaw"), package("ule")];
+    if selection.contains(&crate::gui::FEATURE) {
+        packages.push(package(crate::gui::PACKAGE));
+    }
+    packages
 }
 
 fn install(source: &Source, rev: Option<&str>) -> i32 {
@@ -237,6 +241,9 @@ fn install(source: &Source, rev: Option<&str>) -> i32 {
     let config = config::load().ok();
     let python = commands::python(config.as_ref());
     let root = install_root();
+    // ule or Unlaw.app failing leaves a working ul: the skill refresh still runs.
+    let mut partial = None;
+    let mut app_failed = false;
     for command in install_commands(&cargo, &root, source, rev, &selection()) {
         println!("Updating Unlaw {VERSION}: {}", shell_join(&command));
         let mut process = Command::new(&command[0]);
@@ -258,11 +265,14 @@ fn install(source: &Source, rev: Option<&str>) -> i32 {
             }
         };
         if !status.success() {
-            if command.last().is_some_and(|package| package == "ule") {
-                eprintln!("unlaw update: unlaw was installed, but ule installation failed; run `ul update --force` to retry.");
-            } else {
-                eprintln!("unlaw update: cargo install failed; the installed version was not changed.");
+            if command.last().is_some_and(|package| package == "ule" || package == crate::gui::PACKAGE) {
+                let package = command.last().map(String::as_str).unwrap_or("ule");
+                eprintln!("unlaw update: unlaw was installed, but {package} installation failed; run `ul update --force` to retry.");
+                partial = Some(status.code().unwrap_or(1));
+                app_failed |= command.last().is_some_and(|package| package == crate::gui::PACKAGE);
+                continue;
             }
+            eprintln!("unlaw update: cargo install failed; the installed version was not changed.");
             return status.code().unwrap_or(1);
         }
     }
@@ -274,19 +284,33 @@ fn install(source: &Source, rev: Option<&str>) -> i32 {
         .filter(|output| output.status.success())
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
         .unwrap_or_else(|| "Unlaw (unknown version)".into());
-    println!("Updated to {version} in {}.", root.join("bin").display());
+    if partial.is_some() {
+        // The failure line above scrolls away: say it again where it is read.
+        println!("Updated ul to {version} in {}, but not everything was built (see above).", root.join("bin").display());
+    } else {
+        println!("Updated to {version} in {}.", root.join("bin").display());
+    }
     println!("Unchanged default commands are upgraded on the next run; edited ones are kept.");
-    after_install(&installed);
-    0
+    after_install(&installed, &root, app_failed);
+    partial.unwrap_or(0)
 }
 
 /// Steps the new binary runs after every install: the agent skill (written for
 /// every AI agent found on this Mac), so agents learn the new release at once.
 /// A failure here never fails the update; the binary itself is already in place.
-fn after_install(installed: &Path) {
+/// Unlaw.app is rebuilt from the new ul-app and restarted, when it was built.
+fn after_install(installed: &Path, root: &Path, app_failed: bool) {
     match Command::new(installed).args(["skills", "install"]).status() {
         Ok(status) if status.success() => {}
         _ => eprintln!("unlaw update: the agent skill was not refreshed; run `ul skills install`."),
+    }
+    // After a failed unlaw-app build the ul-app there is the old one: keep the
+    // running app as it is rather than wrap the old program in a new bundle.
+    if !app_failed && selection().contains(&crate::gui::FEATURE) && is_executable(&root.join("bin").join(crate::gui::BINARY)) {
+        match Command::new(installed).args(["gui", "install"]).status() {
+            Ok(status) if status.success() => {}
+            _ => eprintln!("unlaw update: Unlaw.app was not refreshed; run `ul gui install`."),
+        }
     }
 }
 
@@ -319,7 +343,8 @@ pub fn run(args: &[String]) -> i32 {
     let root = install_root();
     // Nothing to do when this build is the published commit with the chosen
     // features and ule is installed too.
-    if !options.force && !COMMIT.is_empty() && root.join("bin").join("ule").is_file() && !features::needs_rebuild(&selection()) {
+    let app_missing = selection().contains(&crate::gui::FEATURE) && !root.join("bin").join(crate::gui::BINARY).is_file();
+    if !options.force && !COMMIT.is_empty() && root.join("bin").join("ule").is_file() && !app_missing && !features::needs_rebuild(&selection()) {
         if let Some(latest) = remote_commit(&repository(), &options.source) {
             if latest == COMMIT {
                 println!("Unlaw {VERSION} ({COMMIT}) is up to date. `ul update --force` reinstalls anyway.");

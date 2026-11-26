@@ -1,5 +1,7 @@
 title = "Awake"
 icon = "cup"
+# The app draws this panel itself (durations, until a time, screen and lid, schedules).
+view = "awake"
 
 [[action]]
 id = "1h"
@@ -33,6 +35,7 @@ default = "1h"
 id = "until"
 type = "time"
 label = "Or until"
+required = true
 
 [[panel.field]]
 id = "display"
@@ -60,6 +63,14 @@ args = ["off"]
 [status]
 args = ["status", "--json"]
 every = 10
-text = "{remaining_seconds|clock}"
+# No text in the menu bar: an empty cup when off, a full steaming cup while awake.
+text = ""
 when = "active"
-otherwise = "off"
+otherwise = ""
+icon = "cup-hot"
+otherwise_icon = "cup"
+
+# Left click on the cup switches it like Caffeine and KeepingYouAwake; right click opens the panel.
+[toggle]
+start = "on"
+stop = "off"

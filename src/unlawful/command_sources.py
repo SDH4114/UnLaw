@@ -369,6 +369,26 @@ LEGACY_SOURCE_HASHES["desk"].add("48f1487d908b6df268d658a9137bb9f2faa3dedd590157
 LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("5ad640becd9dc1d413d0a4a03a39c62cabc9d1ca3135553354865c73f5f6b1a2")
 # Desk seed of the 3.14.0 Reminders build (7af1328, installed on the maintainer machine), before the Canvas tab.
 LEGACY_SOURCE_HASHES["desk"].add("9ccc7b80ec554df971227a24b05411ec420ea7398d713cec26948c3915d645e3")
+# Dev builds of 3.24.0 installed on the maintainer machine (main window, Clock timers, native sys).
+for _name, _source, _normalized in (
+    ("desk", "b64a34a1f4d4653826b0634845473068f13e22aca510eab1a2610cacc53dabcb", "3fbaaccfa42bf69d17b4aeeb889fe671b0d55771c0541ac8c917e6c299bf39e1"),
+    ("sys", "8ab85281d31262d0889bbd58370d62d01534269a9f3795ebef517a71cc587a8e", "b16ed1463458a8052cee5f35e7d4360888744ac3a1acda0caf4b2007ff0a692a"),
+    ("timer", "4594015a39a475ff7bfd584f02de34bef327898074f6e5d9ef1e4ad9dce61a91", "8883c028f76b84058528212edabac56242f921edddb4a0c5e200170a3266bf07"),
+):
+    LEGACY_SOURCE_HASHES.setdefault(_name, set()).add(_source)
+    LEGACY_NORMALIZED_HASHES.setdefault(_name, set()).add(_normalized)
+# Official clip seed of release 3.22.0 (ac24843, also the copy on the maintainer machine), before images and files.
+LEGACY_SOURCE_HASHES.setdefault("clip", set()).add("f7b620624a7baacc000c9f9399909cff7a887733dc61a959567791c6d0caa277")
+LEGACY_NORMALIZED_HASHES.setdefault("clip", set()).add("c77ec2cb71975989b88131a6fe78d69282ce26b843bac47a54254b8404d10812")
+# Official sys seed of release 3.22.0 (ac2008e, also on the maintainer machine), before the native readings.
+LEGACY_SOURCE_HASHES.setdefault("sys", set()).add("789e61901dc1490ccb46d390c3a6bcc40af0083be170e53e51b0581ac5513836")
+LEGACY_NORMALIZED_HASHES.setdefault("sys", set()).add("c263ef96bb7433cc8bb57f828290b573cd98c43f4237bb679be2d17021829c5c")
+# Official timer seed of release 3.22.0 (3f567db, also the copy on the maintainer machine), before the Clock app timers.
+LEGACY_SOURCE_HASHES.setdefault("timer", set()).add("876bd5db8671597e3a40f1f217b84cc8931b763d7458167ca154a6480f8269bd")
+LEGACY_NORMALIZED_HASHES.setdefault("timer", set()).add("9738a5b12656dfdeb2a6518a4ed5347f552905e7d8c913c043f9ccb4ea312349")
+# Official desk seed of release 3.22.0 (bb51607, also the copy on the maintainer machine), before the graphite look shared with Unlaw.app.
+LEGACY_SOURCE_HASHES["desk"].add("0dfa925a99da2e3161ce258a86d0154d1ae8eedcbd5a0e7604da5c962eae97b8")
+LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("e204d79ef729bcd6fd99f88b8d479c31ed0ed4b364800ef2c0713994af5839f9")
 # Official music seed of release 3.19.5 (1863dbc), before the help example changed to "Take Me Out".
 LEGACY_SOURCE_HASHES["music"].add("7ddb2ec061fb9d90ea239256a403d34b9c6bee7e9a9c33639d4ee75858889aa3")
 LEGACY_NORMALIZED_HASHES.setdefault("music", set()).add("bba4ef2fdded4ebba575299a3bfd8eb91ed93bd61152ebdb03deeafe015889d1")
@@ -589,7 +609,7 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
         },
     },
     "awake": {"storage": {"root": "data"}},
-    "clip": {"storage": {"root": "data"}, "clip": {"max_items": 200, "interval": 1.0}},
+    "clip": {"storage": {"root": "data"}, "clip": {"max_items": 200, "max_files": 15, "interval": 1.0}},
     "timer": {"storage": {"root": "data"}, "timer": {"sound": True}},
     "weather": {"weather": {"city": "", "units": "metric"}},
     "capture": {

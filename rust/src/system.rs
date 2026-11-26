@@ -1005,6 +1005,10 @@ fn doctor_checks() -> Vec<Check> {
             Check { name: "Features", available: wanted == built, required: false, detail }
         },
         Check { name: "Storage", available: storage.is_dir(), required: false, detail: storage.display().to_string() },
+        {
+            let (running, detail) = crate::gui::status();
+            Check { name: "Unlaw.app", available: running, required: false, detail }
+        },
         python,
         tool("uv", "uv", "optional; Python falls back to venv"),
         tool("Git", "git", "needed by Git workflows and --git"),

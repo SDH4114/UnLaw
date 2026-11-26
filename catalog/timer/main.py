@@ -2,7 +2,7 @@
 """Countdown timers and alarms with macOS notifications."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Countdown timers and alarms with macOS notifications.\nUsage: ul timer <duration> [label...]   Start a timer in the background\n       ul timer at HH:MM [label...]     Alarm at that time (tomorrow if it has passed)\n       ul timer [list] [--json]         Running timers with the time left\n       ul timer cancel ID|--all         Stop one timer or all of them\n       ul timer wait <duration> [label...]   Count down here (Ctrl+C cancels)\n  <duration>   30s, 5m, 1h30m or bare minutes (25); at most 7 days\nA timer runs as a detached process, so you can close the terminal. When it ends a\nnotification appears (with a sound unless timer.sound is false). `wait` shows the\ncountdown on one line and notifies too. Labels must not contain control characters.\nState: storage.root/runtime/timers.json. Timers do not survive a logout or restart:\nthe next `ul timer` reports each one once on stderr as lost (not yet due) or missed.\nNeeds: macOS `osascript` for the notification.\nSettings: timer.sound (true/false), storage.root.\nExamples:\n  ul timer 25m write report\n  ul timer at 18:30 leave\n  ul timer wait 90s tea\n  ul timer cancel 2\n'
+COMMAND_HELP = 'Countdown timers and alarms with macOS notifications.\nUsage: ul timer <duration> [label...]   Start a timer in the background\n       ul timer at HH:MM [label...]     Alarm at that time (tomorrow if it has passed)\n       ul timer [list] [--json]         Running timers with the time left\n       ul timer cancel ID|--all         Stop one timer or all of them\n       ul timer wait <duration> [label...]   Count down here (Ctrl+C cancels)\n       ul timer clock setup | status    Timers and alarms in the macOS Clock app\n  <duration>   30s, 5m, 1h30m or bare minutes (25); at most 7 days\n  --clock      Start it in the Clock app instead (a real Clock timer or alarm: it\n               shows in Clock and rings with its sound). Needs `clock setup` once.\nA timer runs as a detached process, so you can close the terminal. When it ends a\nnotification appears (with a sound unless timer.sound is false). `wait` shows the\ncountdown on one line and notifies too. Labels must not contain control characters.\nState: storage.root/runtime/timers.json. Timers do not survive a logout or restart:\nthe next `ul timer` reports each one once on stderr as lost (not yet due) or missed.\nClock: macOS has no command for the Clock app, only Shortcuts. `clock setup` builds\ntwo shortcuts, "Unlaw Timer" and "Unlaw Alarm", signs them (`shortcuts sign`) and\nopens them; Shortcuts asks once whether to add them. `--clock` then runs them with\n`shortcuts run`. Clock timers take no label; an alarm keeps its label as the name.\nNeeds: macOS `osascript` for the notification; `shortcuts` for --clock.\nSettings: timer.sound (true/false), storage.root.\nExamples:\n  ul timer 25m write report\n  ul timer at 18:30 leave\n  ul timer wait 90s tea\n  ul timer 10m --clock\n  ul timer at 7:30 wake up --clock\n  ul timer cancel 2\n'
 
 import copy
 import os
@@ -50,6 +50,7 @@ def storage_path(*parts: str) -> Path:
 import fcntl
 import json
 import os
+import plistlib
 import re
 import subprocess
 import sys
@@ -87,6 +88,9 @@ DURATION = re.compile(r"(?:([0-9]{1,9})h)?(?:([0-9]{1,9})m)?(?:([0-9]{1,9})s)?")
 CLOCK = re.compile(r"([0-9]{1,2}):([0-9]{2})")
 CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 SELF = os.path.abspath(__file__)
+CLOCK_TIMER = "Unlaw Timer"
+CLOCK_ALARM = "Unlaw Alarm"
+SHORTCUTS_TIMEOUT = 30
 NOTIFY_TITLE = "Timer"
 NOTIFY_DEFAULT = "Time is up"
 SOUND = "Glass"
@@ -400,6 +404,201 @@ def sound_enabled() -> bool:
         return True
 
 
+# ---------------------------------------------------------------- Clock app
+#
+# macOS gives the Clock app no command line and no public API; its timers and alarms
+# are only reachable as Shortcuts actions (the same ones Siri uses). `clock setup`
+# writes two small shortcuts, signs them and opens them so Shortcuts asks to add
+# them; `--clock` runs them with `shortcuts run NAME -i FILE`, the input being the
+# seconds (timer) or "HH:MM|label" (alarm). Action and parameter ids were read from
+# the system's Shortcuts tool database (macOS 26/27).
+
+
+def _uuid() -> str:
+    import uuid
+
+    return str(uuid.uuid4()).upper()
+
+
+def _output(name: str, uid: str) -> dict:
+    return {"OutputName": name, "OutputUUID": uid, "Type": "ActionOutput"}
+
+
+def _attachment(value: dict) -> dict:
+    return {"Value": value, "WFSerializationType": "WFTextTokenAttachment"}
+
+
+def _token_string(value: dict) -> dict:
+    # One variable as the whole text (U+FFFC marks where it goes).
+    return {"Value": {"attachmentsByRange": {"{0, 1}": value}, "string": "\ufffc"}, "WFSerializationType": "WFTextTokenString"}
+
+
+def _workflow(actions: list[dict], glyph: int) -> dict:
+    return {
+        "WFWorkflowActions": actions,
+        "WFWorkflowClientVersion": "2700",
+        "WFWorkflowMinimumClientVersion": 900,
+        "WFWorkflowMinimumClientVersionString": "900",
+        "WFWorkflowIcon": {"WFWorkflowIconStartColor": 4271458815, "WFWorkflowIconGlyphNumber": glyph},
+        "WFWorkflowImportQuestions": [],
+        "WFWorkflowInputContentItemClasses": ["WFStringContentItem", "WFGenericFileContentItem"],
+        "WFWorkflowOutputContentItemClasses": [],
+        "WFWorkflowTypes": [],
+        "WFWorkflowHasShortcutInputVariables": True,
+        "WFQuickActionSurfaces": [],
+    }
+
+
+def timer_shortcut() -> dict:
+    """Shortcut input = seconds -> a Clock timer of that length."""
+    numbers = _uuid()
+    return _workflow(
+        [
+            {
+                "WFWorkflowActionIdentifier": "is.workflow.actions.detect.number",
+                "WFWorkflowActionParameters": {"UUID": numbers, "WFInput": _attachment({"Type": "ExtensionInput"})},
+            },
+            {
+                "WFWorkflowActionIdentifier": "is.workflow.actions.timer.start",
+                "WFWorkflowActionParameters": {
+                    "UUID": _uuid(),
+                    "WFDuration": {
+                        "Value": {"Magnitude": _output("Numbers", numbers), "Unit": "sec"},
+                        "WFSerializationType": "WFQuantityFieldValue",
+                    },
+                },
+            },
+        ],
+        59511,
+    )
+
+
+def alarm_shortcut() -> dict:
+    """Shortcut input = "HH:MM|label" -> a Clock alarm at that time, named label."""
+    split, first, dates, last = _uuid(), _uuid(), _uuid(), _uuid()
+    return _workflow(
+        [
+            {
+                "WFWorkflowActionIdentifier": "is.workflow.actions.text.split",
+                "WFWorkflowActionParameters": {
+                    "UUID": split,
+                    "text": _attachment({"Type": "ExtensionInput"}),
+                    "WFTextSeparator": "Custom",
+                    "WFTextCustomSeparator": "|",
+                },
+            },
+            {
+                "WFWorkflowActionIdentifier": "is.workflow.actions.getitemfromlist",
+                "WFWorkflowActionParameters": {
+                    "UUID": first,
+                    "WFInput": _attachment(_output("Split Text", split)),
+                    "WFItemSpecifier": "First Item",
+                },
+            },
+            {
+                "WFWorkflowActionIdentifier": "is.workflow.actions.detect.date",
+                "WFWorkflowActionParameters": {"UUID": dates, "WFInput": _attachment(_output("Item from List", first))},
+            },
+            {
+                "WFWorkflowActionIdentifier": "is.workflow.actions.getitemfromlist",
+                "WFWorkflowActionParameters": {
+                    "UUID": last,
+                    "WFInput": _attachment(_output("Split Text", split)),
+                    "WFItemSpecifier": "Last Item",
+                },
+            },
+            {
+                "WFWorkflowActionIdentifier": "com.apple.mobiletimer-framework.MobileTimerIntents.MTCreateAlarmIntent",
+                "WFWorkflowActionParameters": {
+                    "UUID": _uuid(),
+                    "ShowWhenRun": False,
+                    "dateComponents": _token_string(_output("Dates", dates)),
+                    "name": _token_string(_output("Item from List", last)),
+                },
+            },
+        ],
+        59446,
+    )
+
+
+def _shortcuts(args: list[str], stdin_text: str | None = None) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(
+            ["shortcuts", *args],
+            input=stdin_text,
+            stdin=None if stdin_text is not None else subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=SHORTCUTS_TIMEOUT,
+            check=False,
+        )
+    except FileNotFoundError as error:
+        raise TimerError("the `shortcuts` command is missing (macOS 12 or later)", 1) from error
+    except subprocess.TimeoutExpired as error:
+        raise TimerError("`shortcuts` did not answer in time", 1) from error
+
+
+def clock_shortcuts() -> set[str]:
+    """Which of the two Unlaw shortcuts the Shortcuts app has."""
+    listed = _shortcuts(["list"])
+    if listed.returncode != 0:
+        raise TimerError(f"`shortcuts list` failed: {listed.stderr.strip()[:200]}", 1)
+    names = {line.strip() for line in listed.stdout.splitlines()}
+    return names & {CLOCK_TIMER, CLOCK_ALARM}
+
+
+def clock_setup() -> int:
+    present = clock_shortcuts()
+    folder = storage_path("timer")
+    folder.mkdir(parents=True, exist_ok=True)
+    opened = []
+    for name, build in ((CLOCK_TIMER, timer_shortcut), (CLOCK_ALARM, alarm_shortcut)):
+        if name in present:
+            print(f"{name}: already in Shortcuts")
+            continue
+        with tempfile.TemporaryDirectory(dir=folder) as work:
+            unsigned = Path(work) / "unsigned.shortcut"
+            unsigned.write_bytes(plistlib.dumps(build(), fmt=plistlib.FMT_BINARY))
+            signed = folder / f"{name}.shortcut"
+            signed.unlink(missing_ok=True)
+            result = _shortcuts(["sign", "--mode", "people-who-know-me", "--input", str(unsigned), "--output", str(signed)])
+            if result.returncode != 0 or not signed.is_file():
+                raise TimerError(f"`shortcuts sign` failed: {(result.stderr or result.stdout).strip()[:200]}", 1)
+        subprocess.run(["open", str(signed)], stdin=subprocess.DEVNULL, capture_output=True, check=False, timeout=15)
+        opened.append(name)
+    if opened:
+        print("Shortcuts opened " + " and ".join(f'"{name}"' for name in opened) + ": click Add Shortcut for each.")
+        print("Then: ul timer 10m --clock, ul timer at 7:30 --clock")
+    else:
+        print("Clock timers and alarms are ready: ul timer 10m --clock")
+    return 0
+
+
+def clock_status(as_json: bool) -> int:
+    present = clock_shortcuts()
+    info = {"timer": CLOCK_TIMER in present, "alarm": CLOCK_ALARM in present}
+    if as_json:
+        print(json.dumps(info))
+    else:
+        for key, name in (("timer", CLOCK_TIMER), ("alarm", CLOCK_ALARM)):
+            print(f"{name}: {'ready' if info[key] else 'missing (ul timer clock setup)'}")
+    return 0
+
+
+def run_clock(name: str, text: str) -> None:
+    """`shortcuts run NAME` with `text` as its input."""
+    if name not in clock_shortcuts():
+        raise TimerError(f'the "{name}" shortcut is missing: run `ul timer clock setup` once', 1)
+    folder = storage_path("runtime")
+    folder.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", dir=folder, prefix=".clock-", suffix=".txt", encoding="utf-8") as handle:
+        handle.write(text)
+        handle.flush()
+        result = _shortcuts(["run", name, "--input-path", handle.name])
+    if result.returncode != 0:
+        raise TimerError(f"the Clock app did not take it: {(result.stderr or result.stdout).strip()[:200]}", 1)
+
+
 # ---------------------------------------------------------------- commands
 
 
@@ -571,6 +770,18 @@ def _dispatch(args: list[str]) -> int:
         if any(word != "--json" for word in rest):
             raise TimerError("use: ul timer list [--json]")
         return show_list("--json" in rest)
+    if args[0] == "clock":
+        rest = args[1:]
+        if rest == ["setup"]:
+            return clock_setup()
+        if rest[:1] == ["status"] and all(word == "--json" for word in rest[1:]):
+            return clock_status("--json" in rest)
+        raise TimerError("use: ul timer clock setup | status [--json]")
+    clock = "--clock" in args
+    if clock:
+        args = [word for word in args if word != "--clock"]
+        if not args or args[0] in ("list", "cancel", "wait", "--json"):
+            raise TimerError("--clock goes with a duration or `at HH:MM`")
     if args[0] == "cancel":
         return cancel(args[1:])
     if args[0] == "wait":
@@ -581,10 +792,20 @@ def _dispatch(args: list[str]) -> int:
         if len(args) < 2:
             raise TimerError("use: ul timer at HH:MM [label...]")
         label = clean_label(args[2:])
-        start("alarm", parse_alarm(args[1], time.time()), label)
+        end = parse_alarm(args[1], time.time())
+        if clock:
+            # "|" separates the time from the label in the shortcut's input.
+            run_clock(CLOCK_ALARM, f"{_local(end).strftime('%H:%M')}|{label.replace('|', '/') or 'Unlaw'}")
+            print(f"Clock alarm set for {format_end(end, time.time())}" + (f" - {label}" if label else ""))
+            return 0
+        start("alarm", end, label)
         return 0
     seconds = parse_duration(args[0])
     label = clean_label(args[1:])
+    if clock:
+        run_clock(CLOCK_TIMER, str(seconds))
+        print(f"Clock timer started: {format_span(seconds)}" + (" (Clock timers take no label)" if label else ""))
+        return 0
     start("duration", time.time() + seconds, label)
     return 0
 

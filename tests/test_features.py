@@ -41,9 +41,10 @@ class FeatureListTests(unittest.TestCase):
         self.assertEqual(namespace["CORE"], features.CORE)
         self.assertEqual(namespace["REQUIRES"], features.REQUIRES)
         self.assertEqual(namespace["CARGO"], features.CARGO)
-        self.assertEqual(len(features.FEATURES), 27)
+        self.assertEqual(len(features.FEATURES), 28)
         self.assertEqual(set(DEFAULT_COMMAND_NAMES), SEEDED)
-        self.assertEqual(set(features.NAMES) - set(features.CARGO), SEEDED - {"agent", "capture"})
+        # menubar is Unlaw.app, a package of its own: neither a seed nor a cargo feature of ul.
+        self.assertEqual(set(features.NAMES) - set(features.CARGO) - {"menubar"}, SEEDED - {"agent", "capture"})
 
     def run_chooser(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run([sys.executable, "-I", "-c", chooser_source(), *args], capture_output=True, text=True, check=False)
@@ -152,7 +153,7 @@ class FeatureListTests(unittest.TestCase):
         self.assertIn("Core (always)", text)
         selection, cargo = self.result(text)
         self.assertEqual(cargo, "capture,game")
-        self.assertEqual(selection, "gpt claude yt music lofi netflix capture desk obsidian work timer clip weather git py rust cpp zed awake sys mac steam minecraft game")
+        self.assertEqual(selection, "gpt claude yt music lofi netflix capture desk obsidian work timer clip weather git py rust cpp zed awake sys menubar mac steam minecraft game")
         code, _ = self.interactive([b"q"])
         self.assertEqual(code, 1)
         code, text = self.interactive([b"a", b" ", b"\r"])
@@ -280,7 +281,9 @@ class FeatureCommandTests(CoreTestCase):
         self.assertIn("still built in until `ul update`", self.ok("features").stdout)
         rebuilt = self.ok("features", "remove", "agent")
         self.assertIn("Rebuilding ul with: lm, capture", rebuilt.stdout)
-        unlaw, ule = self.calls(log)
+        # Unlaw.app (menubar) is still chosen, so its package is rebuilt at the same commit too.
+        unlaw, ule, app = self.calls(log)
+        self.assertEqual(app[-1], "unlaw-app")
         self.assertEqual(unlaw[-4:], ["--root", str(self.home / ".local"), "--no-default-features", "--features", "lm,capture", "unlaw"][-4:])
         self.assertIn("--features", unlaw)
         self.assertEqual(ule[-1], "ule")

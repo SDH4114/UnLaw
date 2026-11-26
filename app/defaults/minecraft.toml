@@ -2,6 +2,6 @@ title = "Minecraft"
 icon = "game"
 
 [[action]]
-id = "open"
+id = "launch"
 label = "Open"
 args = []

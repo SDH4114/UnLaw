@@ -1,5 +1,7 @@
 title = "Clipboard"
 icon = "clipboard"
+# The history as a list in the app: search, click to copy again.
+section = "clipboard"
 
 [[action]]
 id = "list"

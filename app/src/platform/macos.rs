@@ -13,6 +13,8 @@ use tray_icon::TrayIcon;
 fn symbol(icon: &str) -> &'static str {
     match icon {
         "cup" => "cup.and.saucer",
+        // A full cup with steam: awake is keeping the Mac up.
+        "cup-hot" => "cup.and.heat.waves.fill",
         "cpu" => "cpu",
         "board" => "rectangle.split.3x1",
         "clock" => "timer",
@@ -50,6 +52,30 @@ pub fn set_symbol(tray: &TrayIcon, icon: &str) {
         image.setTemplate(true);
         button.setImage(Some(&image));
         button.setImagePosition(NSCellImagePosition::ImageLeft);
+        // tray-icon catches clicks in a view sized to the button when its title or
+        // icon changes through tray-icon. An image set here widens the button but
+        // not that view: an item with no title (the desk, an idle awake) had a
+        // zero-wide click area and ignored every click. Setting the same title
+        // again makes tray-icon size the view to the button.
+        let title = button.title().to_string();
+        tray.set_title(Some(title));
+    }
+}
+
+/// In the Dock (a regular app with its window) or only in the menu bar. The
+/// window's close button takes Unlaw out of the Dock; it keeps running above.
+pub fn set_in_dock(visible: bool) {
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let app = NSApplication::sharedApplication(mtm);
+    let policy =
+        if visible { NSApplicationActivationPolicy::Regular } else { NSApplicationActivationPolicy::Accessory };
+    if app.activationPolicy() != policy {
+        app.setActivationPolicy(policy);
+    }
+    if visible {
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
     }
 }
 
@@ -60,12 +86,16 @@ end run";
 /// A notification; the texts are arguments of the script, never part of it.
 pub fn notify(title: &str, text: &str) {
     let text = if text.trim().is_empty() { "Done." } else { text };
-    let _ = Command::new("/usr/bin/osascript")
-        .args(["-e", NOTIFY, "--", title, text])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
+    detached(Command::new("/usr/bin/osascript").args(["-e", NOTIFY, "--", title, text]));
+}
+
+/// Start a helper without waiting for it; a thread reaps it, so a long-running
+/// menu bar app collects no zombies.
+fn detached(command: &mut Command) {
+    let child = command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+    if let Ok(mut child) = child {
+        std::thread::spawn(move || child.wait());
+    }
 }
 
 const TERMINAL: &str = "on run argv
@@ -86,6 +116,11 @@ fn ghostty() -> Option<&'static str> {
 /// Terminal; Ghostty closes the window when the command ends, so it is wrapped
 /// to wait for Return.
 pub fn open_terminal(ul: &Path, args: &[String]) -> Result<(), String> {
+    // Terminal.app types the line into an interactive shell, whose line editor
+    // acts on control characters even inside quotes.
+    if args.iter().any(|arg| arg.chars().any(char::is_control)) {
+        return Err("a value contains control characters".into());
+    }
     let line: Vec<String> = std::iter::once(ul.to_string_lossy().into_owned())
         .chain(args.iter().cloned())
         .map(|w| super::shell_quote(&w))
@@ -117,11 +152,11 @@ pub fn open_terminal(ul: &Path, args: &[String]) -> Result<(), String> {
 /// A web link in the default browser (http and https only).
 pub fn open_link(url: &str) {
     if url.starts_with("https://") || url.starts_with("http://") {
-        let _ = Command::new("/usr/bin/open").arg(url).stdin(Stdio::null()).spawn();
+        detached(Command::new("/usr/bin/open").arg(url));
     }
 }
 
 /// A text file in the default text editor.
 pub fn open_text(path: &Path) {
-    let _ = Command::new("/usr/bin/open").arg("-t").arg(path).stdin(Stdio::null()).spawn();
+    detached(Command::new("/usr/bin/open").arg("-t").arg(path));
 }

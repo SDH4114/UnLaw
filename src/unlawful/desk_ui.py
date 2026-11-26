@@ -14,8 +14,8 @@ _PAGE = r"""<!DOCTYPE html>
 <link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Crect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%23fff%22/%3E%3Cpath d=%22M15 18V36a7.5 7.5 0 0 0 15 0V18M38.5 18V43.5H52.5%22 fill=%22none%22 stroke=%22%23f5a300%22 stroke-width=%227%22/%3E%3C/svg%3E" data-light="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Crect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%23fff%22/%3E%3Cpath d=%22M15 18V36a7.5 7.5 0 0 0 15 0V18M38.5 18V43.5H52.5%22 fill=%22none%22 stroke=%22%23f5a300%22 stroke-width=%227%22/%3E%3C/svg%3E" data-dark="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Crect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%230b0b0a%22/%3E%3Cpath d=%22M15 18V36a7.5 7.5 0 0 0 15 0V18M38.5 18V43.5H52.5%22 fill=%22none%22 stroke=%22%23f5a300%22 stroke-width=%227%22/%3E%3C/svg%3E">
 <style>
 :root {
-  --bg: #fbfaf7; --panel: #ffffff; --column: #f3f1eb; --sunken: #eae7df; --text: #17150f; --muted: #77716a;
-  --line: #e8e4db; --accent: #ffc21a; --accent-ink: #9a5b00; --accent-soft: #fff2c7; --on-accent: #17150f;
+  --bg: #f5f5f7; --panel: #ffffff; --column: #ececee; --sunken: #e3e3e6; --text: #1d1d1f; --muted: #6e6e73;
+  --line: #dcdce0; --accent: #e8a530; --accent-ink: #9c5f00; --accent-soft: #fbefd5; --on-accent: #1d1d1f;
   --energy: #ff7a1a; --energy-ink: #c2500a; --danger: #e5484d; --ok: #2f9e5b; --warn: #d97706;
   --shadow: 0 1px 2px rgba(40,30,10,.05), 0 1px 1px rgba(40,30,10,.03);
   --lift: 0 4px 10px rgba(40,30,10,.07), 0 14px 32px rgba(40,30,10,.09);
@@ -26,8 +26,8 @@ _PAGE = r"""<!DOCTYPE html>
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0b0b0a; --panel: #171715; --column: #121211; --sunken: #1f1e1b; --text: #f5f2ea; --muted: #9b958a;
-  --line: #282622; --accent: #ffc933; --accent-ink: #ffc933; --accent-soft: #3a2f10; --on-accent: #17150f;
+  --bg: #1c1c1e; --panel: #2a2a2d; --column: #232325; --sunken: #313134; --text: #f2f2f4; --muted: #9b9ba1;
+  --line: #38383c; --accent: #e9ae45; --accent-ink: #f2c46b; --accent-soft: #3a3122; --on-accent: #1d1d1f;
   --energy: #ff8a33; --energy-ink: #ff9d57; --danger: #ff6b5e; --ok: #4fc581; --warn: #ffb02e;
   --shadow: 0 1px 2px rgba(0,0,0,.45);
   --lift: 0 6px 14px rgba(0,0,0,.5), 0 18px 40px rgba(0,0,0,.4);
@@ -40,8 +40,9 @@ button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; border: 1px solid var(--line); background: var(--panel); border-radius: var(--r); padding: 5px 11px; transition: background .14s, border-color .14s, color .14s, box-shadow .14s, transform .14s; }
 button:hover { border-color: var(--accent); }
 button:disabled { opacity: .45; cursor: default; transform: none; }
-button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
-button.primary:hover { filter: brightness(1.05); }
+/* A tint, not a solid yellow block (the same as Unlaw.app's primary buttons). */
+button.primary { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent-ink); font-weight: 600; }
+button.primary:hover { background: color-mix(in srgb, var(--accent) 26%, var(--panel)); }
 button.ghost { border-color: transparent; background: transparent; color: var(--muted); }
 button.ghost:hover { background: var(--column); color: var(--text); }
 button.icon { width: 32px; height: 32px; padding: 0; display: inline-grid; place-items: center; }
@@ -92,7 +93,7 @@ header > :not(.tabs) { margin-bottom: 8px; }
 .timer.short .bar i, .timer.long .bar i { background: var(--ok); }
 .timer .linked { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
 .timer button { padding: 2px 10px; border-radius: 5px; }
-.timer #play { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600; }
+.timer #play { background: var(--accent-soft); color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 45%, transparent); font-weight: 600; }
 .actions-bar { display: flex; gap: 2px; }
 
 .toolbar { display: flex; align-items: center; gap: 10px; padding: 12px 16px 0; flex-wrap: wrap; }
@@ -350,6 +351,8 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width
 .cvempty { position: absolute; inset: 0; display: none; place-content: center; justify-items: center; gap: 10px; color: var(--muted); }
 .cvbar .cvadd { margin-left: auto; }
 .cvbar .cvadd button { gap: 5px; color: var(--text); font-weight: 600; padding: 4px 9px; }
+.embed header .brand, .embed #tabs { display: none; }
+.embed[data-view="canvas"] header, .embed[data-view="studio"] header { display: none; }
 .cvstage.dropping::after { content: "Drop files to pin them here"; position: absolute; inset: 10px; display: grid; place-items: center; border: 3px dashed var(--accent); border-radius: 14px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent-ink); font-weight: 700; font-size: 18px; pointer-events: none; z-index: 4; }
 </style>
 </head>
@@ -408,6 +411,11 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
+// Inside Unlaw.app each part (Board, Today, Canvas, Studio) is its own item in the
+// app's sidebar: the page hides its tabs and the app switches the part.
+if (params.get("embed") === "1") sessionStorage.setItem("desk-embed", "1");
+const EMBED = sessionStorage.getItem("desk-embed") === "1";
+if (EMBED) document.documentElement.classList.add("embed");
 if (params.get("token")) {
   sessionStorage.setItem("desk-token", params.get("token"));
   history.replaceState(null, "", location.pathname + location.hash);
@@ -822,6 +830,7 @@ function drawMostFocused(node) {
 
 function render() {
   const main = $("main");
+  document.documentElement.dataset.view = state.view;
   for (const button of $("tabs").children) button.classList.toggle("on", button.dataset.view === state.view);
   $("toolbar").classList.toggle("hidden", ["games", "studio", "canvas"].includes(state.view));
   const filter = $("filter");
@@ -848,7 +857,8 @@ function setView(view) {
   if (state.view === "studio") leaveStudio();
   if (state.view === "canvas") leaveCanvas();
   state.view = view;
-  localStorage.setItem("desk-view", view);
+  // The app chooses the part; the browser desk keeps its own last view.
+  if (!EMBED) localStorage.setItem("desk-view", view);
   history.replaceState(null, "", location.pathname + "#" + view);
   render();
 }
@@ -5583,7 +5593,7 @@ document.addEventListener("keydown", (event) => {
   if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.key === "?") { $("help").classList.toggle("on"); return; }
   if (state.view === "canvas") {
-    if (event.key >= "1" && event.key <= "5") setView(VIEWS[Number(event.key) - 1]);
+    if (!EMBED && event.key >= "1" && event.key <= "5") setView(VIEWS[Number(event.key) - 1]);
     return;
   }
   if (event.key === "/") { event.preventDefault(); if (state.view === "games") setView("board"); $("search").focus(); }
@@ -5593,8 +5603,11 @@ document.addEventListener("keydown", (event) => {
     else { if (state.view !== "board") setView("board"); document.querySelector(".add input")?.focus(); }
   }
   else if (event.key === " ") { event.preventDefault(); togglePlay(); }
-  else if (event.key >= "1" && event.key <= "5") setView(VIEWS[Number(event.key) - 1]);
+  else if (!EMBED && event.key >= "1" && event.key <= "5") setView(VIEWS[Number(event.key) - 1]);
 });
+
+// Unlaw.app calls this when another desk part is picked in its sidebar.
+window.deskEmbedView = (view) => { if (VIEWS.includes(view) && view !== "games") setView(view); };
 
 // ---- start ----
 async function start() {

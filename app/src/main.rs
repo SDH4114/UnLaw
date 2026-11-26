@@ -18,8 +18,13 @@ commands/<name>/app.toml (`ul skills show app-integration`).
 
 fn check() -> i32 {
     let mut problems = Vec::new();
+    let mut app_settings = settings::parse(settings::DEFAULT).0;
     match std::fs::read_to_string(settings::path()) {
-        Ok(text) => problems.extend(settings::parse(&text).1),
+        Ok(text) => {
+            let (found, warnings) = settings::parse(&text);
+            problems.extend(warnings);
+            app_settings = found;
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => problems.push(format!("{}: {error}", settings::path().display())),
     }
@@ -28,7 +33,11 @@ fn check() -> i32 {
         Some(ul) => {
             let outcome = runner::run(&ul, &["commands".into(), "--json".into()], Duration::from_secs(30));
             match spec::parse_records(&outcome.stdout) {
-                Ok(records) if outcome.ok() => problems.extend(spec::check_all(&records)),
+                Ok(records) if outcome.ok() => {
+                    problems.extend(spec::check_all(&records));
+                    let specs: Vec<spec::Spec> = records.iter().map(|record| spec::for_record(record).0).collect();
+                    problems.extend(spec::settings_problems(&app_settings, &specs));
+                }
                 Ok(_) => problems.push(format!("ul commands --json: {}", outcome.summary(3))),
                 Err(error) => problems.push(error),
             }
@@ -45,6 +54,28 @@ fn check() -> i32 {
     }
 }
 
+/// `ul gui config` on a fresh install: the default app.toml, never over a file.
+fn write_settings() -> i32 {
+    let path = settings::path();
+    if let Some(folder) = path.parent() {
+        let _ = std::fs::create_dir_all(folder);
+    }
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(mut file) => match std::io::Write::write_all(&mut file, settings::DEFAULT.as_bytes()) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("ul-app: {}: {error}", path.display());
+                1
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => 0,
+        Err(error) => {
+            eprintln!("ul-app: {}: {error}", path.display());
+            1
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
@@ -57,6 +88,7 @@ fn main() {
             0
         }
         ["--check"] => check(),
+        ["--write-settings"] => write_settings(),
         // Finder passes -psn_... to apps started by double click on old macOS.
         [] => gui::run(),
         [first, ..] if first.starts_with("-psn_") => gui::run(),

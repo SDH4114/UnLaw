@@ -24,7 +24,7 @@
   {
    "name": "clip",
    "summary": "Clipboard history in the background: list, search and copy again.",
-   "sha256": "f7b620624a7baacc000c9f9399909cff7a887733dc61a959567791c6d0caa277"
+   "sha256": "3d36c3f0570d85e06fb1196bd815c1484b36fc85a13c1fbd08e961acdc616eca"
   },
   {
    "name": "cpp",
@@ -34,7 +34,7 @@
   {
    "name": "desk",
    "summary": "Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser.",
-   "sha256": "0dfa925a99da2e3161ce258a86d0154d1ae8eedcbd5a0e7604da5c962eae97b8"
+   "sha256": "70ca692485e10c7383a6682e1e7aa5784ce09cefe907f01902c89e32319b0920"
   },
   {
    "name": "git",
@@ -93,8 +93,8 @@
   },
   {
    "name": "sys",
-   "summary": "Computer stats: CPU, GPU, RAM, disk, battery and charge cycles.",
-   "sha256": "789e61901dc1490ccb46d390c3a6bcc40af0083be170e53e51b0581ac5513836"
+   "summary": "Computer stats: CPU per core, GPU, RAM, network, disk, battery and power.",
+   "sha256": "8ab85281d31262d0889bbd58370d62d01534269a9f3795ebef517a71cc587a8e"
   },
   {
    "name": "tg",
@@ -104,7 +104,7 @@
   {
    "name": "timer",
    "summary": "Countdown timers and alarms with macOS notifications.",
-   "sha256": "876bd5db8671597e3a40f1f217b84cc8931b763d7458167ca154a6480f8269bd"
+   "sha256": "4594015a39a475ff7bfd584f02de34bef327898074f6e5d9ef1e4ad9dce61a91"
   },
   {
    "name": "weather",

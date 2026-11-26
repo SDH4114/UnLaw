@@ -111,7 +111,7 @@ class ConfigTests(unittest.TestCase):
 
         expected = {
             "awake": {"storage": {"root": "data"}},
-            "clip": {"storage": {"root": "data"}, "clip": {"max_items": 200, "interval": 1.0}},
+            "clip": {"storage": {"root": "data"}, "clip": {"max_items": 200, "max_files": 15, "interval": 1.0}},
             "timer": {"storage": {"root": "data"}, "timer": {"sound": True}},
             "weather": {"weather": {"city": "", "units": "metric"}},
             "capture": {

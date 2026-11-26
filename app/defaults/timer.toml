@@ -7,6 +7,11 @@ label = "Running timers"
 args = ["list"]
 
 [[action]]
+id = "clock-setup"
+label = "Use the Clock app (once)"
+args = ["clock", "setup"]
+
+[[action]]
 id = "cancel-all"
 label = "Cancel every timer"
 args = ["cancel", "--all"]
@@ -15,9 +20,16 @@ confirm = "Cancel every running timer?"
 [panel]
 [[panel.field]]
 id = "dur"
+required = true
 type = "duration"
-label = "In"
+label = "Timer for"
 default = "25m"
+
+[[panel.field]]
+id = "at"
+required = true
+type = "time"
+label = "Alarm at"
 
 [[panel.field]]
 id = "label"
@@ -25,6 +37,16 @@ type = "text"
 label = "Label"
 placeholder = "Tea"
 
+[[panel.field]]
+id = "clock"
+type = "toggle"
+label = "In the Clock app (rings with its sound)"
+default = true
+
 [[panel.button]]
-label = "Start"
-args = ["{dur}", "{label}"]
+label = "Start timer"
+args = ["{dur}", "{label}", "{clock?--clock}"]
+
+[[panel.button]]
+label = "Set alarm"
+args = ["at", "{at}", "{label}", "{clock?--clock}"]

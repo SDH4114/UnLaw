@@ -92,6 +92,20 @@ pub fn parse(text: &str) -> Result<Hotkey, String> {
     Ok(hotkey)
 }
 
+impl Hotkey {
+    /// The app.toml spelling (`ctrl+alt+a`), which `parse` reads back.
+    pub fn text(&self) -> String {
+        let mut words: Vec<&str> = Vec::new();
+        for (on, word) in [(self.ctrl, "ctrl"), (self.alt, "alt"), (self.shift, "shift"), (self.cmd, "cmd")] {
+            if on {
+                words.push(word);
+            }
+        }
+        words.push(&self.key);
+        words.join("+")
+    }
+}
+
 impl std::fmt::Display for Hotkey {
     /// `⌃⌥A`, the way macOS menus show it.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -110,6 +124,23 @@ impl std::fmt::Display for Hotkey {
             "down" => "↓".to_string(),
             "left" => "←".to_string(),
             "right" => "→".to_string(),
+            "backspace" => "⌫".to_string(),
+            "delete" => "⌦".to_string(),
+            "home" => "↖".to_string(),
+            "end" => "↘".to_string(),
+            "pageup" => "⇞".to_string(),
+            "pagedown" => "⇟".to_string(),
+            "comma" => ",".to_string(),
+            "period" => ".".to_string(),
+            "slash" => "/".to_string(),
+            "semicolon" => ";".to_string(),
+            "quote" => "'".to_string(),
+            "minus" => "-".to_string(),
+            "equal" => "=".to_string(),
+            "backquote" => "`".to_string(),
+            "bracketleft" => "[".to_string(),
+            "bracketright" => "]".to_string(),
+            "backslash" => "\\".to_string(),
             other => other.to_ascii_uppercase(),
         };
         write!(f, "{out}{key}")
@@ -128,6 +159,15 @@ mod tests {
         assert_eq!(parse("cmd + shift + k").unwrap().to_string(), "⇧⌘K");
         assert_eq!(parse("option+return").unwrap().key, "enter");
         assert_eq!(parse("ctrl+alt+/").unwrap().key, "slash");
+        assert_eq!(parse("cmd+,").unwrap().to_string(), "⌘,");
+        assert_eq!(parse("ctrl+backspace").unwrap().to_string(), "⌃⌫");
+        assert_eq!(parse("cmd+bracketleft").unwrap().to_string(), "⌘[");
+        assert_eq!(parse("f5").unwrap().to_string(), "F5");
+        // Every named key shows as something short, never its spelled-out name.
+        for name in NAMED {
+            let shown = parse(&format!("ctrl+{name}")).unwrap().to_string();
+            assert!(shown.chars().count() <= 6, "{name} shows as {shown}");
+        }
         assert_eq!(parse("f5").unwrap().key, "f5");
         assert_eq!(parse("shift+f12").unwrap().key, "f12");
     }

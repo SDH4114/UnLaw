@@ -11,6 +11,7 @@ import os
 import plistlib
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -47,7 +48,13 @@ if tool == "sysctl":
     key = args[-1]
     emit("swapusage.txt" if key == "vm.swapusage" else "sysctl_" + key.replace(".", "_") + ".txt")
 if tool == "ioreg":
-    emit("ioreg_battery.plist" if "AppleSmartBattery" in args else "ioreg_gpu.txt")
+    if "AppleSmartBattery" in args:
+        emit("ioreg_battery.plist")
+    if "IOBlockStorageDriver" in args:
+        emit("ioreg_block.plist")
+    if "IOPlatformDevice" in args:
+        emit("ioreg_clusters.plist")
+    emit("ioreg_gpu.txt")
 if tool == "system_profiler":
     emit("system_profiler_power.json" if "SPPowerDataType" in args else "system_profiler_hardware.json")
 if tool == "sw_vers":
@@ -64,6 +71,7 @@ ALL_TOOLS = (
     "ioreg",
     "system_profiler",
     "sw_vers",
+    "netstat",
 )
 NOW = 1793399528 + 11 * 86400 + 12 * 3600 + 5 * 60
 
@@ -98,6 +106,8 @@ class FakeToolsCase(unittest.TestCase):
                 "PATH": str(self.bin),
                 "FAKE_FIXTURES": str(FIXTURES),
                 "FAKE_OVERRIDE": str(self.override),
+                # The kernel readings would show this Mac, not the fixtures.
+                "UNLAW_SYS_NATIVE": "0",
             },
         )
         env.start()
@@ -544,7 +554,7 @@ class JsonTests(FakeToolsCase):
         self.assertEqual(code, 0)
         data = json.loads(out)
         self.assertEqual(
-            set(data), {"system", "cpu", "gpu", "memory", "disk", "battery", "top"}
+            set(data), {"system", "cpu", "gpu", "memory", "network", "io", "disk", "battery", "top"}
         )
         self.assertEqual(
             set(data["cpu"]),
@@ -555,6 +565,9 @@ class JsonTests(FakeToolsCase):
                 "idle_percent",
                 "cores",
                 "load_average",
+                "per_core",
+                "performance_percent",
+                "efficiency_percent",
             },
         )
         self.assertEqual(
@@ -562,6 +575,7 @@ class JsonTests(FakeToolsCase):
             {
                 "total_bytes", "used_bytes", "app_bytes", "wired_bytes", "compressed_bytes", "cached_bytes",
                 "free_bytes", "swap_total_bytes", "swap_used_bytes", "pressure", "pressure_level",
+                "available_percent", "pressure_percent", "pageouts", "swapouts",
             },
         )  # fmt: skip
         self.assertEqual(
@@ -580,13 +594,14 @@ class JsonTests(FakeToolsCase):
             {
                 "present", "percent", "state", "charging", "plugged_in", "time_remaining_minutes", "cycle_count",
                 "condition", "max_capacity_percent", "design_capacity_mah", "max_capacity_mah", "temperature_c",
+                "system_power_watts", "battery_power_watts", "adapter_watts", "voltage_v", "amperage_ma",
             },
         )  # fmt: skip
         self.assertEqual(
             set(data["top"]["cpu"][0]), {"pid", "name", "cpu_percent", "memory_bytes"}
         )
         self.assertEqual(
-            set(data["system"]), {"model", "identifier", "chip", "os", "uptime_seconds"}
+            set(data["system"]), {"model", "identifier", "chip", "os", "uptime_seconds", "thermal"}
         )
         for value in (
             data["cpu"]["usage_percent"],
@@ -747,6 +762,108 @@ class CommandRunTests(CoreTestCase):
         result = self.ok("sys")
         self.assertIn("n/a", result.stdout)
         self.assertEqual(result.stderr, "")
+
+
+class NewReadingTests(unittest.TestCase):
+    def test_netstat_counts_physical_interfaces_only(self) -> None:
+        counters = sysinfo.parse_netstat(fixture("netstat.txt"))
+        self.assertEqual(counters, {"en5": (0, 0), "en0": (6577013087, 854798546)})
+
+    def test_block_statistics_are_summed_over_disks(self) -> None:
+        stats = sysinfo.parse_block_stats((FIXTURES / "ioreg_block.plist").read_bytes())
+        self.assertEqual(stats, (304195792896, 177738604544, 9000000, 5000000))
+        self.assertIsNone(sysinfo.parse_block_stats(b"not a plist"))
+        self.assertIsNone(sysinfo.parse_block_stats(plistlib.dumps([{"IOClass": "x"}])))
+
+    def test_core_kinds_follow_the_logical_cpu_ids(self) -> None:
+        kinds = sysinfo.parse_cluster_types((FIXTURES / "ioreg_clusters.plist").read_bytes())
+        self.assertEqual(kinds, ["E"] * 6 + ["P"] * 6)
+        gap = plistlib.dumps([{"cluster-type": b"P\0", "logical-cpu-id": 1}])
+        self.assertIsNone(sysinfo.parse_cluster_types(gap), "cpu 0 missing")
+
+    def test_core_usage_handles_wrapping_counters(self) -> None:
+        before = [(2**32 - 10, 0, 100, 0), (0, 0, 0, 0)]
+        after = [(30, 10, 140, 0), (0, 0, 0, 0)]
+        busy, idle = sysinfo.core_usage(before, after)
+        self.assertEqual(busy["ticks"], 40 + 10 + 40)
+        self.assertAlmostEqual(busy["busy"], 100 * 50 / 90)
+        self.assertEqual(idle["busy"], 0.0)
+
+    def test_rates_never_go_negative(self) -> None:
+        self.assertEqual(sysinfo.per_second([100, 50], [300, 10], 0.5), [400.0, 0.0])
+        self.assertEqual(sysinfo.per_second([1], [2], 0), [0.0])
+
+    def test_battery_power_from_the_power_telemetry(self) -> None:
+        data = plistlib.loads((FIXTURES / "ioreg_battery.plist").read_bytes())[0]
+        data.update(
+            ExternalConnected=False,
+            IsCharging=False,
+            Voltage=12402,
+            Amperage=-334,
+            PowerTelemetryData={"SystemLoad": 7539, "BatteryPower": -7539, "SystemPowerIn": 0},
+            AdapterDetails={"FamilyCode": 0},
+        )
+        battery = sysinfo.parse_battery(plistlib.dumps([data]), None)
+        self.assertEqual(battery["system_power_watts"], 7.54)
+        self.assertEqual(battery["battery_power_watts"], -7.54)
+        self.assertEqual((battery["voltage_v"], battery["amperage_ma"], battery["adapter_watts"]), (12.4, -334, None))
+        data.update(ExternalConnected=True, PowerTelemetryData={"SystemLoad": 9000, "SystemPowerIn": 21000}, AdapterDetails={"Watts": 96})
+        plugged = sysinfo.parse_battery(plistlib.dumps([data]), None)
+        self.assertEqual((plugged["system_power_watts"], plugged["adapter_watts"]), (21.0, 96))
+
+
+class NewSectionTests(FakeToolsCase):
+    def test_network_and_disk_activity_from_two_readings(self) -> None:
+        data = sysinfo.collect(("network", "io", "cpu"))
+        self.assertEqual(data["network"]["download_bytes_per_sec"], 0)
+        self.assertEqual(data["network"]["received_bytes"], 6577013087)
+        self.assertEqual(data["network"]["interfaces"], ["en0"])
+        self.assertEqual(data["io"]["read_bytes"], 304195792896)
+        self.assertEqual(data["io"]["write_bytes_per_sec"], 0)
+        self.assertIsNone(data["cpu"]["per_core"], "top has no per-core numbers")
+
+    def test_text_shows_network_and_disk_activity(self) -> None:
+        code, out, _ = self.run_main("net")
+        self.assertEqual(code, 0)
+        self.assertIn("Network", out)
+        self.assertIn("received 6.6 GB", out)
+        code, out, _ = self.run_main("io")
+        self.assertIn("Disk I/O", out)
+
+    def test_missing_netstat_is_n_a(self) -> None:
+        (self.bin / "netstat").unlink()
+        self.assertIsNone(sysinfo.collect(("network",))["network"])
+
+
+@unittest.skipUnless(sys.platform == "darwin", "reads this Mac's kernel counters")
+class NativeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        env = mock.patch.dict(os.environ, {"UNLAW_SYS_NATIVE": "1"})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_cpu_ticks_give_a_share_per_core(self) -> None:
+        cpu = sysinfo.native_cpu()
+        self.assertIsNotNone(cpu)
+        self.assertEqual(len(cpu["cores"]), os.cpu_count())
+        for share in cpu["cores"] + [cpu["user"], cpu["system"], cpu["idle"]]:
+            self.assertGreaterEqual(share, 0.0)
+            self.assertLessEqual(share, 100.0)
+
+    def test_memory_counters_add_up(self) -> None:
+        vm = sysinfo.native_vm()
+        self.assertIsNotNone(vm)
+        total = sysinfo.sysctl_int("hw.memsize")
+        memory = sysinfo.memory_info(vm, total, sysinfo.native_swap(), 1, sysinfo.native_int("kern.memorystatus_level"))
+        self.assertGreater(memory["used_bytes"], 0)
+        self.assertLess(memory["used_bytes"], total)
+        self.assertTrue(0 <= memory["available_percent"] <= 100)
+
+    def test_system_readings(self) -> None:
+        system = sysinfo.collect_system(time.time())
+        self.assertIn(system["thermal"], ("nominal", "fair", "serious", "critical"))
+        self.assertGreater(system["uptime_seconds"], 0)
+        self.assertTrue(system["os"].startswith("macOS "))
 
 
 if __name__ == "__main__":

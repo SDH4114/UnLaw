@@ -1,5 +1,9 @@
 title = "System"
 icon = "cpu"
+# The menu bar item opens a live popover with a tab per part (view); the palette and
+# the main window open the full System section.
+section = "system"
+view = "system"
 
 [[action]]
 id = "top"
@@ -18,5 +22,7 @@ args = ["disk"]
 
 [status]
 args = ["--json"]
-every = 5
-text = "CPU {cpu.usage_percent|int}% · {memory.used_bytes|gb}"
+# `ul sys --json` reads every section (~0.6 s of CPU each time), so not more often than every 10 s.
+every = 10
+# Memory as a share of all of it, like Activity Monitor's memory used / physical memory.
+text = "CPU {cpu.usage_percent|int}% · RAM {memory.used_bytes/memory.total_bytes|pct}"

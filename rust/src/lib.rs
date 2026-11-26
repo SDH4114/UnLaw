@@ -13,6 +13,7 @@ mod config;
 mod config_cmd;
 mod editor;
 mod features;
+mod gui;
 mod help;
 mod layout;
 mod remove;
@@ -54,6 +55,7 @@ fn system(name: &str, args: &[String]) -> Option<i32> {
         "doctor" => system::doctor(args),
         "edit" => editor::run(args),
         "features" => features::run(args),
+        "gui" => gui::run(args),
         "init" => system::init(args),
         "list" => system::list_all(args),
         "reinstall" => remove::reinstall(args),

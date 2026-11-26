@@ -48,6 +48,17 @@ class SkillsTests(CoreTestCase):
         self.ok("skills", "remove")
         self.assertFalse(claude.exists() or claude.is_symlink())
 
+    def test_a_symlinked_agent_folder_gets_a_link_that_works(self) -> None:
+        # ~/.claude kept in a dotfiles folder: `../../.agents` from there is elsewhere.
+        dotfiles = self.root / "dotfiles" / "claude"
+        dotfiles.mkdir(parents=True)
+        (self.home / ".claude").symlink_to(dotfiles)
+        self.ok("skills", "install")
+        link = self.home / ".claude" / "skills" / "unlaw"
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(link.resolve(), self.skill().resolve())
+        self.assertTrue((link / "SKILL.md").is_file())
+
     def test_kimi_gets_a_link_without_claude(self) -> None:
         (self.home / ".kimi").mkdir()
         self.ok("skills", "install")
@@ -59,10 +70,13 @@ class SkillsTests(CoreTestCase):
         foreign = self.home / ".claude" / "skills" / "unlaw"
         foreign.mkdir(parents=True)
         result = self.ul("skills", "install")
-        self.assertEqual(result.returncode, 1)
+        # Found by itself: a note, the install still succeeds (the skill is written).
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("was not replaced", result.stderr)
         self.assertTrue(foreign.is_dir() and not foreign.is_symlink())
         self.assertTrue((self.skill() / "SKILL.md").is_file(), "the main copy is still written")
+        # Asked for with --claude, the link is required.
+        self.assertEqual(self.ul("skills", "install", "--claude").returncode, 1)
 
     def test_app_integration_page_is_shipped(self) -> None:
         self.ok("skills", "install")

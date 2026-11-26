@@ -1,0 +1,8 @@
+Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll
+lo0        16384 <Link#1>                        314121     0  357156890   314121     0  357156890     0
+lo0        16384 127           127.0.0.1         314121     -  357156890   314121     -  357156890     -
+en5        1500  <Link#8>    aa:bb:cc:dd:ee:01        0     0          0        0     0          0     0
+bridge0    1500  <Link#15>   aa:bb:cc:dd:ee:02        0     0          0        0     0          0     0
+en0        1500  <Link#14>   aa:bb:cc:dd:ee:03  5657000     0 6577013087  1971566     0  854798546     0
+en0        1500  192.168.1     192.168.1.20     5657000     - 6577013087  1971566     - 854798546     -
+utun0      1500  <Link#18>                            0     0          0        1     0         80     0

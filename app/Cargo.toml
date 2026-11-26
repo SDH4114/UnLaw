@@ -1,6 +1,6 @@
 [package]
 name = "unlaw-app"
-version = "3.22.0"
+version = "4.0.0"
 edition = "2021"
 description = "Unlaw.app: menu bar items, global hotkeys and a command palette for ul"
 license = "MIT"
@@ -29,4 +29,4 @@ window-vibrancy = "0.8"
 # Menu bar symbols (SF Symbols) on the status items tray-icon creates.
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSGeometry"] }
-objc2-app-kit = { version = "0.3", features = ["NSImage", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSControl", "NSView", "NSResponder", "NSCell"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplication", "NSImage", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSControl", "NSView", "NSResponder", "NSCell"] }

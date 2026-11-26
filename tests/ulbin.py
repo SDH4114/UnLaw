@@ -50,6 +50,8 @@ class CoreTestCase(unittest.TestCase):
             "PATH": f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}",
             # ul-rec sits next to a built ul and would record this Mac.
             "UNLAW_CAPTURE_REC": "off",
+            # ul-app sits next to a built ul too: `ul gui` writes its bundle here, never to /Applications.
+            "UNLAW_GUI_APPS": str(self.root / "Applications"),
         }
         for key in ("VISUAL", "EDITOR"):
             self.env.pop(key, None)
@@ -57,6 +59,8 @@ class CoreTestCase(unittest.TestCase):
         self.tool("security", "#!/bin/sh\nexit 44\n")
         # Nor are real windows read or moved; template tests install their own osascript.
         self.tool("osascript", "#!/bin/sh\necho 'osascript is not available in tests' >&2\nexit 45\n")
+        # Nor is a real launchd job (Unlaw.app, the agent...) loaded or stopped; tests that care log their own.
+        self.tool("launchctl", "#!/bin/sh\nexit 0\n")
 
     def ul(
         self,

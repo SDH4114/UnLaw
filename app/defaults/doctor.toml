@@ -1,0 +1,14 @@
+title = "Health check"
+icon = "gear"
+summary = "Is Unlaw set up right: config, tools, shell, Unlaw.app"
+
+[[action]]
+id = "check"
+label = "Check Unlaw"
+args = []
+
+[[action]]
+id = "fix"
+label = "Fix what can be fixed"
+args = ["--fix"]
+confirm = "Fix the PATH line, shell integration and other supported problems?"

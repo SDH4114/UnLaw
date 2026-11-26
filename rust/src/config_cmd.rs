@@ -77,6 +77,15 @@ fn action(name: &str, rest: &[String]) -> Result<Option<i32>, ConfigError> {
                 return Ok(Some(2));
             }
             println!("Configuration is valid: {}", config_file().display());
+            // app.toml and the commands' app.toml belong to Unlaw.app: their problems
+            // are shown here but do not fail this check, which is about config.toml
+            // (ule runs it after every save of that file). `ul gui check` fails on them.
+            if let Some(app) = crate::gui::app_binary() {
+                let checked = std::process::Command::new(app).arg("--check").status();
+                if !checked.is_ok_and(|status| status.success()) {
+                    eprintln!("Unlaw.app settings have problems (above); `ul gui check` checks them alone.");
+                }
+            }
         }
         ("reset", rest) => {
             if rest != ["--yes"] {

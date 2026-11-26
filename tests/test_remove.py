@@ -228,7 +228,7 @@ class RemoveTests(CoreTestCase):
         self.assertEqual(sorted(bootouts), ["com.unlaw.agent", "com.unlaw.awake", "com.unlaw.clip"])
         self.assertIn("awake schedules", result.stdout)
         self.assertIn("clipboard history", result.stdout)
-        self.assertEqual([call[0] for call in self.calls(self.cargo)], ["uninstall", "uninstall"])
+        self.assertEqual([call[0] for call in self.calls(self.cargo)], ["uninstall", "uninstall", "uninstall"])
 
 
 class ReinstallTests(CoreTestCase):

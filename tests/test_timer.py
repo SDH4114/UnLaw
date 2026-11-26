@@ -354,5 +354,79 @@ class TimerTests(TimerBase):
         self.assertEqual(self.state_path().read_text(encoding="utf-8"), "{nope")
 
 
+# A fake `shortcuts`: `list` prints the names in shortcuts.txt, `sign` copies the
+# file (after checking it is a binary plist), `run` logs its name and input text.
+FAKE_SHORTCUTS = """import json, os, plistlib, shutil, sys
+fake = os.environ["FAKE_DIR"]
+args = sys.argv[1:]
+open(fake + "/shortcuts.log", "a").write(json.dumps(args) + "\\n")
+if args[0] == "list":
+    path = fake + "/shortcuts.txt"
+    print(open(path).read() if os.path.exists(path) else "", end="")
+elif args[0] == "sign":
+    source, target = args[args.index("--input") + 1], args[args.index("--output") + 1]
+    plistlib.load(open(source, "rb"))
+    shutil.copy(source, target)
+elif args[0] == "run":
+    text = open(args[args.index("--input-path") + 1]).read()
+    open(fake + "/clock.log", "a").write(json.dumps([args[1], text]) + "\\n")
+    sys.exit(int(os.environ.get("FAKE_RUN_EXIT", "0")))
+"""
+
+
+class ClockTests(TimerBase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.tool("shortcuts", f"#!{sys.executable}\n{FAKE_SHORTCUTS}")
+        self.tool("open", f"#!{sys.executable}\nimport os, sys\nopen(os.environ['FAKE_DIR'] + '/open.log', 'a').write(sys.argv[1] + '\\n')\n")
+
+    def have(self, *names: str) -> None:
+        (self.fake / "shortcuts.txt").write_text("".join(f"{name}\n" for name in ["Other", *names]), encoding="utf-8")
+
+    def clock_runs(self) -> list[list[str]]:
+        log = self.fake / "clock.log"
+        return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
+
+    def test_setup_builds_signs_and_opens_the_missing_shortcuts(self) -> None:
+        self.have("Unlaw Timer")
+        result = self.ok("timer", "clock", "setup")
+        self.assertIn("already in Shortcuts", result.stdout)
+        opened = (self.fake / "open.log").read_text(encoding="utf-8").splitlines()
+        self.assertEqual([Path(path).name for path in opened], ["Unlaw Alarm.shortcut"])
+        import plistlib
+
+        workflow = plistlib.loads(Path(opened[0]).read_bytes())
+        ids = [action["WFWorkflowActionIdentifier"] for action in workflow["WFWorkflowActions"]]
+        self.assertEqual(ids[-1], "com.apple.mobiletimer-framework.MobileTimerIntents.MTCreateAlarmIntent")
+        self.have("Unlaw Timer", "Unlaw Alarm")
+        self.assertIn("ready", self.ok("timer", "clock", "setup").stdout)
+        self.assertEqual(json.loads(self.ok("timer", "clock", "status", "--json").stdout), {"timer": True, "alarm": True})
+
+    def test_clock_timer_and_alarm_go_to_the_shortcuts(self) -> None:
+        self.have("Unlaw Timer", "Unlaw Alarm")
+        self.ok("timer", "1h30m", "--clock")
+        self.ok("timer", "at", "7:05", "wake", "up", "--clock")
+        self.assertEqual(self.clock_runs(), [["Unlaw Timer", "5400"], ["Unlaw Alarm", "07:05|wake up"]])
+        self.assertEqual(self.entries(), [], "no background process of our own")
+
+    def test_clock_without_setup_says_what_to_do(self) -> None:
+        self.have()
+        result = self.ul("timer", "5m", "--clock")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("clock setup", result.stderr)
+        self.assertEqual(self.clock_runs(), [])
+
+    def test_clock_refuses_list_and_wait(self) -> None:
+        for args in (["list", "--clock"], ["wait", "5m", "--clock"]):
+            self.assertEqual(self.ul("timer", *args).returncode, 2, args)
+
+    def test_a_clock_failure_is_reported(self) -> None:
+        self.have("Unlaw Timer")
+        self.env["FAKE_RUN_EXIT"] = "1"
+        result = self.ul("timer", "5m", "--clock")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Clock app did not take it", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -385,6 +385,12 @@ fn link_points_to(link: &Path, target: &Path) -> bool {
     }
 }
 
+/// Whether `destination`, read from inside `folder`, reaches `target`.
+fn link_points_to_with(folder: &Path, destination: &Path, target: &Path) -> bool {
+    let real = folder.canonicalize().unwrap_or_else(|_| folder.to_path_buf());
+    real.join(destination).canonicalize().ok() == target.canonicalize().ok()
+}
+
 fn link_claude(link: &Path, target: &Path, place: &Place) -> Result<(), String> {
     if link_points_to(link, target) {
         return Ok(());
@@ -396,14 +402,17 @@ fn link_claude(link: &Path, target: &Path, place: &Place) -> Result<(), String> 
         ));
     }
     // Relative inside a project, so the link survives moving or cloning it.
-    let destination = match place {
-        Place::Path(_) => target.to_path_buf(),
-        Place::Home | Place::Project => PathBuf::from("../../.agents/skills").join(SKILL),
-    };
     let parent = link.parent().unwrap_or(Path::new("."));
-    fs::create_dir_all(parent)
-        .and_then(|_| symlink(&destination, link))
-        .map_err(|error| format!("Could not link {}: {error}", link.display()))
+    fs::create_dir_all(parent).map_err(|error| format!("Could not link {}: {error}", link.display()))?;
+    let relative = PathBuf::from("../../.agents/skills").join(SKILL);
+    // A relative link counts from where the folder really is: with ~/.claude or
+    // its skills folder a symlink (dotfiles), `../..` lands elsewhere, so then
+    // the link is absolute.
+    let destination = match place {
+        Place::Home | Place::Project if link_points_to_with(parent, &relative, target) => relative,
+        _ => target.to_path_buf(),
+    };
+    symlink(&destination, link).map_err(|error| format!("Could not link {}: {error}", link.display()))
 }
 
 /// Links for the agents installed on this Mac (see `AGENT_LINKS`).
@@ -471,10 +480,14 @@ fn install(args: &[String], config: &Config) -> i32 {
                     links.push(link);
                 }
             }
-            Err(message) => {
+            // A link asked for with --claude must work; one added because an agent
+            // was found is a note when the user already has a folder there: the
+            // skill itself is written, and install.sh/ul update must not say it failed.
+            Err(message) if options.claude => {
                 eprintln!("unlaw skills: {message}");
                 code = 1;
             }
+            Err(message) => eprintln!("unlaw skills: note: {message}"),
         }
     }
     manifest.installs.retain(|install| install.path != target);

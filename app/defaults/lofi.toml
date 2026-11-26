@@ -2,6 +2,6 @@ title = "Lofi"
 icon = "music"
 
 [[action]]
-id = "open"
+id = "launch"
 label = "Open"
 args = []

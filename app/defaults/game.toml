@@ -1,4 +1,4 @@
 title = "Arcade"
 icon = "game"
-# Prompts, a terminal UI or a folder of its own: it runs in your terminal.
-terminal = true
+# Played in the app's own window (the games come from `ul game --stream`).
+section = "games"

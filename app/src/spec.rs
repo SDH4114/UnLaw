@@ -25,6 +25,7 @@ pub const MIN_EVERY: u64 = 2;
 pub const ICONS: &[&str] = &[
     "command",
     "cup",
+    "cup-hot",
     "cpu",
     "board",
     "clock",
@@ -60,6 +61,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("clip", include_str!("../defaults/clip.toml")),
     ("cpp", include_str!("../defaults/cpp.toml")),
     ("desk", include_str!("../defaults/desk.toml")),
+    ("doctor", include_str!("../defaults/doctor.toml")),
     ("game", include_str!("../defaults/game.toml")),
     ("git", include_str!("../defaults/git.toml")),
     ("gpt", include_str!("../defaults/gpt.toml")),
@@ -144,6 +146,8 @@ pub struct Field {
     pub options: Vec<String>,
     pub default: Value,
     pub placeholder: Option<String>,
+    /// The buttons do not run while it is empty.
+    pub required: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -159,6 +163,9 @@ pub struct Status {
     pub text: Option<String>,
     pub when: Option<String>,
     pub otherwise: Option<String>,
+    /// Menu bar icon while `when` holds / while it does not (names from ICONS).
+    pub icon: Option<String>,
+    pub otherwise_icon: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -173,6 +180,19 @@ pub struct Spec {
     pub icon: String,
     pub summary: String,
     pub terminal: bool,
+    /// False for `where = "terminal"`: the command is only for the terminal
+    /// (it works in a folder, prints for scripts, or changes Unlaw itself), so
+    /// the app neither lists nor pins it.
+    pub in_app: bool,
+    /// A part of the app's main window that shows this command (`section =
+    /// "system"`): opening the command opens that part instead of a panel.
+    pub section: Option<String>,
+    /// A panel of its own instead of the form built from fields (`view =
+    /// "awake"`); only the command it was made for may use it (`VIEWS`).
+    pub view: Option<String>,
+    /// A left click on the menu bar item runs `stop` while the status says on,
+    /// else `start` (KeepingYouAwake, Caffeine); a right click opens the panel.
+    pub toggle: Option<Toggle>,
     pub actions: Vec<Action>,
     pub panel: Option<Panel>,
     pub status: Option<Status>,
@@ -318,6 +338,12 @@ impl<'a> Reader<'a> {
 fn action(what: String, table: &Table, needs_id: bool) -> Result<Action, String> {
     let mut reader = Reader::new(what.clone(), table);
     let id = match reader.string("id")? {
+        // A hotkey's `action = "panel" | "open" | "run"` means those, so an action can't be named so.
+        Some(id) if needs_id && ["panel", "open", "run"].contains(&id.as_str()) => {
+            return Err(format!(
+                "{what}.id {id:?} is reserved (panel, open and run mean the panel, the window and a plain run)"
+            ))
+        }
         Some(id) => id_ok(&format!("{what}.id"), &id)?,
         None if needs_id => return Err(format!("{what} needs an id")),
         None => String::new(),
@@ -339,6 +365,7 @@ fn field(what: String, table: &Table) -> Result<Field, String> {
     let label = reader.string("label")?.unwrap_or_else(|| id.clone());
     let options = reader.strings("options", MAX_OPTIONS)?.unwrap_or_default();
     let placeholder = reader.string("placeholder")?;
+    let required = reader.bool("required")?.unwrap_or(false);
     let default = match (kind, reader.value("default")?) {
         (FieldKind::Toggle, None) => Value::Bool(false),
         (FieldKind::Toggle, Some(Toml::Boolean(on))) => Value::Bool(*on.value()),
@@ -365,7 +392,10 @@ fn field(what: String, table: &Table) -> Result<Field, String> {
             return Err(format!("{what}.default {text:?} is not one of its options"));
         }
     }
-    Ok(Field { id, kind, label, options, default, placeholder })
+    if required && kind == FieldKind::Toggle {
+        return Err(format!("{what}: a toggle cannot be required"));
+    }
+    Ok(Field { id, kind, label, options, default, placeholder, required })
 }
 
 /// An action without a panel has no values: braces must be written `{{`.
@@ -377,7 +407,33 @@ fn fixed_args(what: &str, args: &[String]) -> Result<(), String> {
     }
 }
 
+/// The menu bar item's left click: one action to start, one to stop.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Toggle {
+    pub start: String,
+    pub stop: String,
+}
+
+/// Panels drawn by the app itself, each for one command (view, command): the
+/// page asks for data and actions by name and Rust builds every argv (views.rs).
+pub const VIEWS: &[(&str, &str)] = &[("awake", "awake"), ("system", "sys")];
+
+/// Parts of the main window a command may open (`section = "..."`).
+pub const SECTIONS: &[&str] =
+    &["templates", "system", "clipboard", "games", "board", "today", "canvas", "studio", "desk", "timer"];
+
 /// Parse an `app.toml` for command `name`.
+impl Spec {
+    /// The one thing to do when a command has no form and a single action that
+    /// needs no confirmation (ChatGPT's "Open"): opening it just runs that.
+    pub fn only_action(&self) -> Option<&Action> {
+        match (&self.panel, self.actions.as_slice()) {
+            (None, [action]) if action.confirm.is_none() => Some(action),
+            _ => None,
+        }
+    }
+}
+
 pub fn parse(name: &str, text: &str) -> Result<Spec, String> {
     let document: DocumentMut = text.parse().map_err(|error: toml_edit::TomlError| error.message().to_string())?;
     let mut top = Reader::new("app", document.as_table());
@@ -388,6 +444,28 @@ pub fn parse(name: &str, text: &str) -> Result<Spec, String> {
     }
     let summary = top.string("summary")?.unwrap_or_default();
     let terminal = top.bool("terminal")?.unwrap_or(false);
+    let in_app = match top.string("where")?.as_deref() {
+        None | Some("both") => true,
+        Some("terminal") => false,
+        Some(other) => return Err(format!("where = {other:?} must be \"both\" or \"terminal\"")),
+    };
+    let section = top.string("section")?;
+    if let Some(section) = &section {
+        if !SECTIONS.contains(&section.as_str()) {
+            return Err(format!("section {section:?} is not one of: {}", SECTIONS.join(", ")));
+        }
+    }
+    let view = top.string("view")?;
+    if let Some(view) = &view {
+        match VIEWS.iter().find(|(known, _)| known == view) {
+            None => {
+                let names: Vec<&str> = VIEWS.iter().map(|(known, _)| *known).collect();
+                return Err(format!("view {view:?} is not one of: {}", names.join(", ")));
+            }
+            Some((_, owner)) if *owner != name => return Err(format!("view {view:?} is only for ul {owner}")),
+            Some(_) => {}
+        }
+    }
     let mut actions = Vec::new();
     for (index, table) in top.tables("action", MAX_ACTIONS)?.into_iter().enumerate() {
         let what = format!("action[{}]", index + 1);
@@ -444,8 +522,33 @@ pub fn parse(name: &str, text: &str) -> Result<Spec, String> {
             }
             let when = reader.string("when")?;
             let otherwise = reader.string("otherwise")?;
+            let icon = reader.string("icon")?;
+            let otherwise_icon = reader.string("otherwise_icon")?;
+            for (key, value) in [("icon", &icon), ("otherwise_icon", &otherwise_icon)] {
+                if let Some(name) = value.as_deref().filter(|name| !ICONS.contains(name)) {
+                    return Err(format!("status.{key}: unknown icon {name:?}"));
+                }
+            }
             reader.done()?;
-            Some(Status { args, every: every as u64, text, when, otherwise })
+            Some(Status { args, every: every as u64, text, when, otherwise, icon, otherwise_icon })
+        }
+    };
+    let toggle = match top.table("toggle")? {
+        None => None,
+        Some(table) => {
+            let mut reader = Reader::new("toggle", table);
+            let start = reader.string("start")?.ok_or("toggle needs start (an action id)")?;
+            let stop = reader.string("stop")?.ok_or("toggle needs stop (an action id)")?;
+            reader.done()?;
+            for id in [&start, &stop] {
+                if !actions.iter().any(|action: &Action| &action.id == id) {
+                    return Err(format!("toggle: no [[action]] has the id {id:?}"));
+                }
+            }
+            if status.is_none() {
+                return Err("toggle needs a [status] to know whether it is on".into());
+            }
+            Some(Toggle { start, stop })
         }
     };
     let open = match top.table("open")? {
@@ -465,6 +568,10 @@ pub fn parse(name: &str, text: &str) -> Result<Spec, String> {
         icon,
         summary,
         terminal,
+        in_app,
+        section,
+        view,
+        toggle,
         actions,
         panel,
         status,
@@ -481,6 +588,10 @@ pub fn plain(name: &str, summary: &str) -> Spec {
         icon: "command".into(),
         summary: summary.to_string(),
         terminal: false,
+        in_app: true,
+        section: None,
+        view: None,
+        toggle: None,
         actions: Vec::new(),
         panel: None,
         status: None,
@@ -518,9 +629,13 @@ pub fn for_record(record: &Record) -> (Spec, Option<String>) {
             Err(error) => problem = Some(format!("{}: {error}", file.display())),
         }
     }
-    let mut spec = shipped(&record.name)
-        .and_then(|text| parse(&record.name, text).ok())
-        .unwrap_or_else(|| plain(&record.name, &record.summary));
+    let mut spec = shipped(&record.name).and_then(|text| parse(&record.name, text).ok()).unwrap_or_else(|| {
+        let mut spec = plain(&record.name, &record.summary);
+        // Unlaw's own commands (version, venv, config, update...) belong to the
+        // terminal unless the app ships a description for one.
+        spec.in_app = record.source != "system";
+        spec
+    });
     if spec.summary.is_empty() {
         spec.summary = record.summary.clone();
     }
@@ -539,6 +654,55 @@ fn read_file(file: &Path) -> Result<Option<String>, String> {
 /// Check every sidecar of the given commands (`ul-app --check`).
 pub fn check_all(records: &[Record]) -> Vec<String> {
     records.iter().filter_map(|record| for_record(record).1).collect()
+}
+
+/// What app.toml names that the app cannot do: a command that is not installed
+/// or is terminal-only (menu bar items, hotkeys), a hotkey action id the command
+/// does not have, a window for a command that has none.
+pub fn settings_problems(settings: &crate::settings::Settings, specs: &[Spec]) -> Vec<String> {
+    use crate::settings::Target;
+    let mut problems: Vec<String> = Vec::new();
+    // A menu bar item whose command is not installed (a feature left out; the
+    // default items are sys, awake and desk) simply does not show: not a problem.
+    let mut named = |name: &str, place: &str| -> Option<Spec> {
+        let found = specs.iter().find(|spec| spec.name == name);
+        let problem = match found {
+            None if place == "menubar" => return None,
+            None => format!("app.toml {place}: no command named `{name}`"),
+            Some(spec) if !spec.in_app => {
+                format!("app.toml {place}: `{name}` is a terminal command; the app does not show it")
+            }
+            Some(spec) => return Some(spec.clone()),
+        };
+        if !problems.contains(&problem) {
+            problems.push(problem);
+        }
+        None
+    };
+    for name in &settings.menubar {
+        named(name, "menubar");
+    }
+    let mut more = Vec::new();
+    for binding in &settings.bindings {
+        let place = format!("hotkey {}", binding.hotkey);
+        let Some(spec) = named(&binding.command, &place) else { continue };
+        match &binding.target {
+            Target::Action(id) if !spec.actions.iter().any(|action| &action.id == id) => {
+                let ids: Vec<&str> = spec.actions.iter().map(|action| action.id.as_str()).collect();
+                more.push(format!(
+                    "app.toml {place}: `{}` has no action {id:?} (it has: {})",
+                    spec.name,
+                    ids.join(", ")
+                ));
+            }
+            Target::Open if spec.open.is_none() => {
+                more.push(format!("app.toml {place}: `{}` opens no window", spec.name))
+            }
+            _ => {}
+        }
+    }
+    problems.extend(more);
+    problems
 }
 
 /// The panel's starting values.
@@ -578,8 +742,21 @@ pub fn values_from(json: &Json, spec: &Spec) -> Result<BTreeMap<String, Value>, 
     Ok(values)
 }
 
+/// A required field the button uses but that is empty ("Video link is empty").
+/// Only the button's own fields count: Search may run while Download needs a link.
+pub fn missing(panel: &Panel, button: &Action, values: &BTreeMap<String, Value>) -> Option<String> {
+    let used = args::ids(&button.args).unwrap_or_default();
+    panel
+        .fields
+        .iter()
+        .find(|field| field.required && used.contains(&field.id) && !values.get(&field.id).is_some_and(Value::truthy))
+        .map(|field| format!("{} is empty", field.label))
+}
+
 fn action_json(action: &Action) -> Json {
-    json!({"id": action.id, "label": action.label, "confirm": action.confirm})
+    // `fields`: which fields the button uses (Enter in a field runs its button), never the args.
+    let fields = args::ids(&action.args).unwrap_or_default();
+    json!({"id": action.id, "label": action.label, "confirm": action.confirm, "fields": fields})
 }
 
 /// What the page needs to draw a command (no argument templates: the page sends
@@ -591,6 +768,8 @@ pub fn to_json(spec: &Spec) -> Json {
         "icon": spec.icon,
         "summary": spec.summary,
         "terminal": spec.terminal,
+        "section": spec.section,
+        "view": spec.view,
         "actions": spec.actions.iter().map(action_json).collect::<Vec<_>>(),
         "panel": spec.panel.as_ref().map(|panel| json!({
             "fields": panel.fields.iter().map(|field| json!({
@@ -599,6 +778,7 @@ pub fn to_json(spec: &Spec) -> Json {
                 "label": field.label,
                 "options": field.options,
                 "placeholder": field.placeholder,
+                "required": field.required,
                 "default": match &field.default { Value::Bool(on) => json!(on), Value::Text(text) => json!(text) },
             })).collect::<Vec<_>>(),
             "buttons": panel.buttons.iter().map(action_json).collect::<Vec<_>>(),
@@ -611,6 +791,22 @@ pub fn to_json(spec: &Spec) -> Json {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_single_plain_action_runs_at_once() {
+        let one =
+            parse("gpt", "title = \"ChatGPT\"\n[[action]]\nid = \"launch\"\nlabel = \"Open\"\nargs = []\n").unwrap();
+        assert_eq!(one.only_action().map(|action| action.id.as_str()), Some("launch"));
+        let asks = parse("x", "[[action]]\nid = \"a\"\nlabel = \"A\"\nargs = []\nconfirm = \"Sure?\"\n").unwrap();
+        assert!(asks.only_action().is_none(), "a confirmation needs the panel");
+        assert!(parse("awake", AWAKE).unwrap().only_action().is_none(), "a form needs the panel");
+        let two = parse(
+            "x",
+            "[[action]]\nid = \"a\"\nlabel = \"A\"\nargs = []\n[[action]]\nid = \"b\"\nlabel = \"B\"\nargs = []\n",
+        )
+        .unwrap();
+        assert!(two.only_action().is_none());
+    }
 
     const AWAKE: &str = r#"
 title = "Awake"
@@ -695,6 +891,64 @@ otherwise = "off"
     }
 
     #[test]
+    fn terminal_commands_stay_out_of_the_app() {
+        let record = |name: &str, source: &str| Record {
+            name: name.into(),
+            source: source.into(),
+            path: None,
+            summary: String::new(),
+        };
+        // Unlaw's own commands are terminal-only unless the app describes one.
+        assert!(!for_record(&record("version", "system")).0.in_app);
+        assert!(!for_record(&record("venv", "system")).0.in_app);
+        assert!(for_record(&record("doctor", "system")).0.in_app);
+        // A user command without app.toml is in the app; shipped ones say where.
+        assert!(for_record(&record("hello", "config")).0.in_app);
+        for (name, in_app) in
+            [("git", false), ("py", false), ("zip", false), ("lm", false), ("awake", true), ("agent", true)]
+        {
+            assert_eq!(for_record(&record(name, "config")).0.in_app, in_app, "{name}");
+        }
+        assert!(!parse("x", "where = \"terminal\"").unwrap().in_app);
+        assert_eq!(parse("x", "section = \"system\"").unwrap().section.as_deref(), Some("system"));
+        assert!(parse("x", "section = \"kitchen\"").unwrap_err().contains("not one of"));
+        assert!(parse("x", "[[action]]\nid = \"open\"\nlabel = \"Open\"\nargs = []\n")
+            .unwrap_err()
+            .contains("reserved"));
+        assert!(parse("x", "where = \"both\"").unwrap().in_app);
+        assert!(parse("x", "where = \"app\"").unwrap_err().contains("both"));
+        let specs = vec![for_record(&record("git", "config")).0, for_record(&record("awake", "config")).0];
+        let (settings, warnings) = crate::settings::parse(
+            "[menubar]\nitems = [\"awake\", \"git\", \"nope\"]\n\n[[hotkey]]\nkeys = \"ctrl+alt+g\"\ncommand = \"git\"\n\n\
+             [[hotkey]]\nkeys = \"ctrl+alt+a\"\ncommand = \"awake\"\naction = \"3h\"\n\n[[hotkey]]\nkeys = \"ctrl+alt+b\"\ncommand = \"awake\"\naction = \"2h\"\n",
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let problems = settings_problems(&settings, &specs);
+        assert_eq!(problems.len(), 3, "{problems:?} (a missing `nope` in the menu bar is fine)");
+        assert!(problems[0].contains("menubar: `git` is a terminal command"));
+        assert!(problems[1].contains("hotkey ⌃⌥G: `git` is a terminal command"));
+        assert!(problems[2].contains("no action \"3h\" (it has: 1h, 2h, on, off)"), "2h is fine");
+        let (hotkey, _) = crate::settings::parse("[[hotkey]]\nkeys = \"ctrl+alt+n\"\ncommand = \"nope\"\n");
+        assert!(settings_problems(&hotkey, &specs).iter().any(|problem| problem.contains("no command named `nope`")));
+    }
+
+    #[test]
+    fn a_view_belongs_to_its_command_and_a_toggle_names_actions() {
+        assert_eq!(parse("awake", "view = \"awake\"").unwrap().view.as_deref(), Some("awake"));
+        assert!(parse("other", "view = \"awake\"").unwrap_err().contains("only for ul awake"));
+        assert!(parse("sys", "view = \"kitchen\"").unwrap_err().contains("not one of"));
+        let actions = "[[action]]\nid = \"on\"\nlabel = \"On\"\nargs = [\"on\"]\n[[action]]\nid = \"off\"\nlabel = \"Off\"\nargs = [\"off\"]\n";
+        let status = "[status]\nargs = [\"status\"]\n";
+        let spec = parse("x", &format!("{actions}{status}[toggle]\nstart = \"on\"\nstop = \"off\"\n")).unwrap();
+        assert_eq!(spec.toggle, Some(Toggle { start: "on".into(), stop: "off".into() }));
+        assert!(parse("x", &format!("{actions}{status}[toggle]\nstart = \"on\"\nstop = \"nope\"\n"))
+            .unwrap_err()
+            .contains("nope"));
+        assert!(parse("x", &format!("{actions}[toggle]\nstart = \"on\"\nstop = \"off\"\n"))
+            .unwrap_err()
+            .contains("[status]"));
+    }
+    #[test]
     fn sidecar_wins_and_a_broken_one_falls_back() {
         let folder = std::env::temp_dir().join(format!("unlaw-app-spec-{}", std::process::id()));
         let commands = folder.join("awake");
@@ -742,6 +996,17 @@ otherwise = "off"
         let long = serde_json::json!({"dur": "x".repeat(MAX_VALUE + 1)});
         assert!(values_from(&long, &spec).unwrap_err().contains("longer"));
         assert!(values_from(&serde_json::json!({}), &plain("x", "")).is_err());
+        let shipped = |name: &str| parse(name, shipped(name).unwrap()).unwrap();
+        let yt = shipped("yt");
+        let panel = yt.panel.as_ref().unwrap();
+        let empty = values_from(&serde_json::json!({"url": "  ", "query": "lofi"}), &yt).unwrap();
+        let download = panel.buttons.iter().find(|button| button.label == "Download video").unwrap();
+        let search = panel.buttons.iter().find(|button| button.label == "Search").unwrap();
+        assert_eq!(missing(panel, download, &empty).as_deref(), Some("Video link is empty"));
+        assert_eq!(missing(panel, search, &empty), None, "Search does not need the link");
+        let link = values_from(&serde_json::json!({"url": "https://youtu.be/x"}), &yt).unwrap();
+        assert_eq!(missing(panel, download, &link), None);
+        assert!(parse("x", "[panel]\n[[panel.field]]\nid = \"on\"\ntype = \"toggle\"\nrequired = true\n[[panel.button]]\nlabel = \"Go\"\nargs = []\n").is_err());
     }
 
     #[test]
