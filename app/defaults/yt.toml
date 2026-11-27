@@ -1,46 +1,41 @@
 title = "YouTube"
 icon = "play"
-
-[[action]]
-id = "launch"
-label = "Open YouTube"
-args = []
+brand = "youtube"
+# In the palette the buttons are rows in this order: Search, Open YouTube, then one
+# Download row per "Save as" choice; the typed text goes into the chosen row.
 
 [panel]
 [[panel.field]]
-id = "url"
-required = true
-type = "text"
-label = "Video link"
-placeholder = "https://www.youtube.com/watch?v=..."
-
-[[panel.button]]
-label = "Download video"
-args = ["download", "{url}"]
-
-[[panel.button]]
-label = "Download MP3"
-args = ["download", "{url}", "--audio"]
-
-[[panel.button]]
-label = "Podcast MP3"
-args = ["download", "{url}", "--podcast"]
-
-[[panel.button]]
-label = "Subtitles"
-args = ["download", "{url}", "--sub"]
-
-[[panel.button]]
-label = "Video, MP3 and subtitles"
-args = ["download", "{url}", "--full"]
-
-[[panel.field]]
 id = "query"
 type = "text"
-label = "Search YouTube"
+label = "What to find"
 placeholder = "lofi hip hop"
 required = true
 
 [[panel.button]]
 label = "Search"
 args = ["{query}"]
+
+[[panel.button]]
+label = "Open YouTube"
+args = []
+
+[[panel.field]]
+id = "url"
+required = true
+type = "text"
+label = "Video link"
+placeholder = "Paste a YouTube link"
+
+[[panel.field]]
+id = "what"
+type = "choice"
+label = "Save as"
+options = ["Video", "MP3", "Podcast", "Subtitles", "All"]
+# What each choice adds to `ul yt download <link>`: All = video, MP3 and subtitles.
+values = ["", "--audio", "--podcast", "--sub", "--full"]
+default = "Video"
+
+[[panel.button]]
+label = "Download"
+args = ["download", "{url}", "{what}"]

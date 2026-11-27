@@ -13,6 +13,9 @@ use std::time::{Duration, Instant};
 
 /// Output kept per stream; the rest is read and dropped so the child never blocks.
 pub const MAX_OUTPUT: usize = 64 * 1024;
+/// For JSON lists the app reads whole (`ul clip list 500 --json` passed 64 KB with
+/// a few dozen copied texts, and a cut list does not parse).
+pub const MAX_LIST_OUTPUT: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Outcome {
@@ -101,6 +104,7 @@ fn command(program: &Path, args: &[String]) -> Command {
 
 /// Output read by a background thread, up to `MAX_OUTPUT` bytes.
 struct Collected {
+    cap: usize,
     kept: Arc<Mutex<Vec<u8>>>,
     done: mpsc::Receiver<()>,
 }
@@ -114,14 +118,14 @@ impl Collected {
         let kept = self.kept.lock().map(|kept| kept.clone()).unwrap_or_default();
         let mut text = String::from_utf8_lossy(&kept).into_owned();
         // The cap may cut a character in two; drop the broken end.
-        if kept.len() >= MAX_OUTPUT && text.ends_with('\u{FFFD}') {
+        if kept.len() >= self.cap && text.ends_with('\u{FFFD}') {
             text.pop();
         }
         text
     }
 }
 
-fn collect(mut stream: impl Read + Send + 'static) -> Collected {
+fn collect(mut stream: impl Read + Send + 'static, cap: usize) -> Collected {
     let kept = Arc::new(Mutex::new(Vec::new()));
     let (sender, done) = mpsc::channel();
     let shared = kept.clone();
@@ -132,13 +136,13 @@ fn collect(mut stream: impl Read + Send + 'static) -> Collected {
                 break;
             }
             if let Ok(mut kept) = shared.lock() {
-                let room = MAX_OUTPUT.saturating_sub(kept.len());
+                let room = cap.saturating_sub(kept.len());
                 kept.extend_from_slice(&buffer[..read.min(room)]);
             }
         }
         let _ = sender.send(());
     });
-    Collected { kept, done }
+    Collected { cap, kept, done }
 }
 
 /// How long the output readers get after the command has ended.
@@ -198,6 +202,11 @@ pub fn stop_group(child: &mut Child, grace: Duration) {
 
 /// Run to the end, or stop it after `timeout`.
 pub fn run(program: &Path, args: &[String], timeout: Duration) -> Outcome {
+    run_capped(program, args, timeout, MAX_OUTPUT)
+}
+
+/// `run` keeping up to `cap` bytes of each stream (`MAX_LIST_OUTPUT` for JSON lists).
+pub fn run_capped(program: &Path, args: &[String], timeout: Duration, cap: usize) -> Outcome {
     let mut child = match command(program, args).spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -209,8 +218,8 @@ pub fn run(program: &Path, args: &[String], timeout: Duration) -> Outcome {
             }
         }
     };
-    let stdout = collect(child.stdout.take().expect("piped"));
-    let stderr = collect(child.stderr.take().expect("piped"));
+    let stdout = collect(child.stdout.take().expect("piped"), cap);
+    let stderr = collect(child.stderr.take().expect("piped"), MAX_OUTPUT);
     let deadline = Instant::now() + timeout;
     let mut timed_out = false;
     while !exited(&child) {
@@ -280,7 +289,7 @@ pub fn local_url(line: &str) -> Option<String> {
 pub fn serve(program: &Path, args: &[String], wait: Duration) -> Result<(Child, String), String> {
     let mut child = command(program, args).spawn().map_err(|error| format!("could not start: {error}"))?;
     let stdout = child.stdout.take().expect("piped");
-    let stderr = collect(child.stderr.take().expect("piped"));
+    let stderr = collect(child.stderr.take().expect("piped"), MAX_OUTPUT);
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let mut sent = false;
@@ -381,6 +390,13 @@ mod tests {
         let (program, args) = sh("head -c 1000000 /dev/zero | tr '\\0' x");
         let outcome = run(&program, &args, Duration::from_secs(10));
         assert_eq!((outcome.code, outcome.stdout.len()), (Some(0), MAX_OUTPUT));
+    }
+
+    #[test]
+    fn a_list_keeps_more_than_the_normal_cap() {
+        let (program, args) = sh("head -c 100000 /dev/zero | tr '\\0' x");
+        let outcome = run_capped(&program, &args, Duration::from_secs(10), MAX_LIST_OUTPUT);
+        assert_eq!((outcome.code, outcome.stdout.len()), (Some(0), 100_000));
     }
 
     #[test]

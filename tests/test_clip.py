@@ -356,6 +356,16 @@ class ListTests(ClipBase):
             json.loads(self.ok("clip", "--json").stdout)[3]["text"], "alpha one"
         )
 
+    def test_list_short_cuts_long_texts_for_the_app(self) -> None:
+        self.fill("x" * 5000, "short one")
+        data = json.loads(self.ok("clip", "list", "--json", "--short").stdout)
+        self.assertEqual(data[0]["text"], "short one")
+        self.assertNotIn("clipped", data[0])
+        self.assertEqual(len(data[1]["text"]), 2000)
+        self.assertTrue(data[1]["clipped"])
+        full = json.loads(self.ok("clip", "list", "--json").stdout)
+        self.assertEqual(len(full[1]["text"]), 5000, "without --short the text stays whole")
+
     def test_an_empty_history(self) -> None:
         self.ok("clip", "clear", "--yes")
         self.assertIn("empty", self.ok("clip").stdout.lower())

@@ -743,8 +743,17 @@ def _numbered(items: list[dict]) -> list[tuple[int, dict]]:
     return list(enumerate(items, 1))
 
 
-def _record(n: int, item: dict) -> dict:
-    record = {"n": n, "id": item_key(item), "text": item["text"], "time": item["time"], "kind": item.get("kind", "text")}
+# `list --short`: what a list shows of each text. Unlaw.app reads 500 items at once, and full
+# texts (up to 100 KB each) made that answer too big to read whole.
+SHORT_TEXT = 2000
+
+
+def _record(n: int, item: dict, short: bool = False) -> dict:
+    text = item["text"]
+    record = {"n": n, "id": item_key(item), "text": text[:SHORT_TEXT] if short else text, "time": item["time"],
+              "kind": item.get("kind", "text")}
+    if short and len(text) > SHORT_TEXT:
+        record["clipped"] = True
     if item.get("kind"):
         record.update(file=str(files_dir() / item["file"]), name=item["name"], size=item["size"])
     return record
@@ -766,20 +775,20 @@ def _size(count: int) -> str:
     return f"{count} GB"
 
 
-def _print_items(pairs: list[tuple[int, dict]], as_json: bool) -> None:
+def _print_items(pairs: list[tuple[int, dict]], as_json: bool, short: bool = False) -> None:
     if as_json:
-        print(json.dumps([_record(n, item) for n, item in pairs], ensure_ascii=False))
+        print(json.dumps([_record(n, item, short) for n, item in pairs], ensure_ascii=False))
     else:
         for n, item in pairs:
             print(f"{n:>3}  {_when(item)}  {_shown(item)}")
 
 
-def list_items(limit: int | None, as_json: bool) -> int:
+def list_items(limit: int | None, as_json: bool, short: bool = False) -> int:
     pairs = _numbered(_read())
     if not pairs and not as_json:
         print("The clipboard history is empty (`ul clip on` starts recording).")
         return 0
-    _print_items(pairs[: limit if limit is not None else DEFAULT_LIST], as_json)
+    _print_items(pairs[: limit if limit is not None else DEFAULT_LIST], as_json, short)
     return 0
 
 
@@ -968,9 +977,9 @@ def _dispatch(args: list[str]) -> int:
         _no_arguments(rest)
         return watch()
     if action == "list":
-        words, flags = _split(rest, {"--json"})
+        words, flags = _split(rest, {"--json", "--short"})
         if len(words) > 1:
-            raise ClipError("use: ul clip list [N] [--json]", 2)
+            raise ClipError("use: ul clip list [N] [--json] [--short]", 2)
         limit = None
         if words:
             try:
@@ -979,7 +988,7 @@ def _dispatch(args: list[str]) -> int:
                 raise ClipError(f"not a number: {words[0]!r}", 2) from None
             if limit < 1:
                 raise ClipError("N must be at least 1", 2)
-        return list_items(limit, "--json" in flags)
+        return list_items(limit, "--json" in flags, "--short" in flags)
     if action == "--json":
         return list_items(None, True)
     if action == "search":

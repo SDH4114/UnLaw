@@ -114,9 +114,9 @@ class CreateCommandScaffoldTests(CoreTestCase):
 
     def test_a_removed_default_command_name_stays_reserved(self) -> None:
         self.ok("init")
-        self.ok("remove", "music", "--yes")
-        self.assertEqual(self.ul("create", "command", "music").returncode, 2)
-        self.assertFalse((self.folder("music") / "AGENTS.md").exists())
+        self.ok("remove", "spotify", "--yes")
+        self.assertEqual(self.ul("create", "command", "spotify").returncode, 2)
+        self.assertFalse((self.folder("spotify") / "AGENTS.md").exists())
 
     def test_rust_commands_get_the_same_files(self) -> None:
         if shutil.which("cargo") is None:

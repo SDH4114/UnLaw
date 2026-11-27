@@ -21,6 +21,7 @@ palette = "ctrl+space"
 # More hotkeys: one [[hotkey]] each.
 # command = a command name; action = "panel" (default: its form or menu),
 # "open" (its page window), "run" (run it), or an action id from its app.toml.
+# Or template = "name" instead of command: opens that saved template's windows.
 # [[hotkey]]
 # keys = "ctrl+alt+a"
 # command = "awake"
@@ -49,6 +50,19 @@ pub enum Target {
     Open,
     Run,
     Action(String),
+    /// `template = "name"`: starts that template (`ul _template-launch name`).
+    Template(String),
+}
+
+/// The `command` of a hotkey that starts a template (its `action` is the template's name
+/// on the Settings page; in app.toml it is written `template = "name"`).
+pub const TEMPLATE: &str = "template";
+
+/// A template name `ul template` saves: letters, digits, `-_.`, not starting with `-` or `.`.
+pub fn template_name_ok(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && !name.starts_with(['-', '.'])
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -97,6 +111,26 @@ pub fn sys_template(chosen: &[String]) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
+/// The `ul sys` parts the chosen readings need, so the menu bar reads only those
+/// (`ul sys cpu memory --json` costs a fraction of every part: no system_profiler, ps, disks).
+pub fn sys_sections(chosen: &[String]) -> Vec<&'static str> {
+    let mut sections = Vec::new();
+    for (id, _, _) in SYS_METRICS {
+        if !chosen.iter().any(|item| item == id) {
+            continue;
+        }
+        let section = match *id {
+            "memory" | "pressure" => "memory",
+            "power" => "battery",
+            other => other,
+        };
+        if !sections.contains(&section) {
+            sections.push(section);
+        }
+    }
+    sections
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub palette: Option<Hotkey>,
@@ -123,6 +157,28 @@ pub fn config_dir() -> PathBuf {
 
 pub fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+}
+
+/// A menu bar item that opens one application (`app:Safari`): pinned from Open app.
+pub const APP_PIN: &str = "app:";
+
+/// The application of an `app:` item: its name as `ul app` takes it.
+pub fn pinned_app(item: &str) -> Option<&str> {
+    item.strip_prefix(APP_PIN).filter(|name| app_name_ok(name))
+}
+
+/// An application's name: printable, no folder separators, not an option.
+pub fn app_name_ok(name: &str) -> bool {
+    (1..=80).contains(&name.chars().count())
+        && !name.starts_with(['-', '.', ' '])
+        && !name.ends_with(' ')
+        && !name.contains('/')
+        && !name.chars().any(char::is_control)
+}
+
+/// A command name or an `app:` item.
+pub fn menubar_item_ok(item: &str) -> bool {
+    command_name_ok(item) || pinned_app(item).is_some()
 }
 
 fn command_name_ok(name: &str) -> bool {
@@ -198,8 +254,35 @@ fn parse_document(document: &DocumentMut, warnings: &mut Vec<String>) -> (Settin
         for (index, table) in array.iter().enumerate() {
             let what = format!("{FILE}: hotkey[{}]", index + 1);
             let get = |key: &str| table.get(key).and_then(Item::as_str).map(str::to_string);
-            if let Some((key, _)) = table.iter().find(|(key, _)| !["keys", "command", "action"].contains(key)) {
+            if let Some((key, _)) =
+                table.iter().find(|(key, _)| !["keys", "command", "action", "template"].contains(key))
+            {
                 warnings.push(format!("{what}: unknown key {key}"));
+                continue;
+            }
+            if let Some(template) = get("template") {
+                let Some(keys) = get("keys") else {
+                    warnings.push(format!("{what}: needs keys"));
+                    continue;
+                };
+                if !template_name_ok(&template) {
+                    warnings.push(format!("{what}: {template:?} is not a template name"));
+                    continue;
+                }
+                match hotkey::parse(&keys) {
+                    Ok(hotkey)
+                        if settings.palette.as_ref() == Some(&hotkey)
+                            || settings.bindings.iter().any(|binding| binding.hotkey == hotkey) =>
+                    {
+                        warnings.push(format!("{what}: {keys} is already used"));
+                    }
+                    Ok(hotkey) => settings.bindings.push(Binding {
+                        hotkey,
+                        command: TEMPLATE.into(),
+                        target: Target::Template(template),
+                    }),
+                    Err(error) => warnings.push(format!("{what}: {error}")),
+                }
                 continue;
             }
             let (Some(keys), Some(command)) = (get("keys"), get("command")) else {
@@ -238,7 +321,7 @@ fn parse_document(document: &DocumentMut, warnings: &mut Vec<String>) -> (Settin
                         settings.menubar.clear();
                         for value in items.iter() {
                             match value.as_str() {
-                                Some(name) if command_name_ok(name) => {
+                                Some(name) if menubar_item_ok(name) => {
                                     if !settings.menubar.iter().any(|item| item == name) {
                                         settings.menubar.push(name.to_string());
                                     }
@@ -314,7 +397,7 @@ fn target_word(target: &Target) -> String {
         Target::Panel => "panel".into(),
         Target::Open => "open".into(),
         Target::Run => "run".into(),
-        Target::Action(id) => id.clone(),
+        Target::Action(id) | Target::Template(id) => id.clone(),
     }
 }
 
@@ -341,8 +424,12 @@ impl Form {
 /// a value would be skipped on reading, so what the page shows is what applies.
 pub fn apply(text: &str, form: &Form) -> Result<String, String> {
     let mut document: DocumentMut = text.parse().map_err(|error: toml_edit::TomlError| error.message().to_string())?;
-    let palette = hotkey::parse(&form.palette).map_err(|error| format!("Palette key: {error}"))?;
-    let mut used = vec![palette.clone()];
+    // An empty palette key is "off" (as `parse` reads it), not an error: a Settings save with it off used to fail.
+    let palette = match form.palette.trim() {
+        "" => None,
+        keys => Some(hotkey::parse(keys).map_err(|error| format!("Palette key: {error}"))?),
+    };
+    let mut used: Vec<Hotkey> = palette.iter().cloned().collect();
     let mut tables = toml_edit::ArrayOfTables::new();
     for (index, (keys, command, action)) in form.hotkeys.iter().enumerate() {
         let what = format!("Hotkey {}", index + 1);
@@ -351,6 +438,16 @@ pub fn apply(text: &str, form: &Form) -> Result<String, String> {
             return Err(format!("{what}: {} is already used", key));
         }
         used.push(key.clone());
+        if command == TEMPLATE {
+            if !template_name_ok(action) {
+                return Err(format!("{what}: choose a template"));
+            }
+            let mut table = toml_edit::Table::new();
+            table.insert("keys", toml_edit::value(key.text()));
+            table.insert("template", toml_edit::value(action.as_str()));
+            tables.push(table);
+            continue;
+        }
         if !command_name_ok(command) {
             return Err(format!("{what}: choose a command"));
         }
@@ -365,7 +462,7 @@ pub fn apply(text: &str, form: &Form) -> Result<String, String> {
         }
         tables.push(table);
     }
-    if let Some(name) = form.menubar.iter().find(|name| !command_name_ok(name)) {
+    if let Some(name) = form.menubar.iter().find(|name| !menubar_item_ok(name)) {
         return Err(format!("{name:?} is not a command name"));
     }
     if let Some(id) = form.sys.iter().find(|id| !SYS_METRICS.iter().any(|(known, _, _)| known == id)) {
@@ -382,7 +479,7 @@ pub fn apply(text: &str, form: &Form) -> Result<String, String> {
         Ok(())
     };
     table(&mut document, "hotkeys")?;
-    document["hotkeys"]["palette"] = toml_edit::value(palette.text());
+    document["hotkeys"]["palette"] = toml_edit::value(palette.as_ref().map(Hotkey::text).unwrap_or_default());
     if tables.is_empty() {
         document.remove("hotkey");
     } else {
@@ -431,7 +528,7 @@ fn items_array(document: &mut DocumentMut) -> Result<&mut Array, String> {
 
 /// Add `name` to the menu bar, keeping comments and everything else.
 pub fn pin(text: &str, name: &str) -> Result<String, String> {
-    if !command_name_ok(name) {
+    if !menubar_item_ok(name) {
         return Err(format!("{name:?} is not a command name"));
     }
     let mut document: DocumentMut = text.parse().map_err(|error: toml_edit::TomlError| error.message().to_string())?;
@@ -456,6 +553,28 @@ mod tests {
 
     fn form() -> Form {
         Form::of(&parse(DEFAULT).0)
+    }
+
+    #[test]
+    fn an_application_can_be_pinned() {
+        let text = pin(DEFAULT, "app:Visual Studio Code").unwrap();
+        let (settings, warnings) = parse(&text);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(settings.menubar.iter().any(|item| item == "app:Visual Studio Code"));
+        assert_eq!(pinned_app("app:Safari"), Some("Safari"));
+        for bad in ["app:", "app:-a", "app:../x", "app:a\nb", "app:.hidden"] {
+            assert!(pin(DEFAULT, bad).is_err(), "{bad}");
+        }
+        assert_eq!(pinned_app("sys"), None);
+    }
+
+    #[test]
+    fn the_menu_bar_reads_only_the_sys_parts_it_shows() {
+        let chosen = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+        assert_eq!(sys_sections(&chosen(&["cpu", "memory"])), ["cpu", "memory"]);
+        assert_eq!(sys_sections(&chosen(&["pressure", "memory", "power", "battery"])), ["memory", "battery"]);
+        assert_eq!(sys_sections(&chosen(&["network", "gpu"])), ["gpu", "network"]);
+        assert!(sys_sections(&[]).is_empty());
     }
 
     #[test]
@@ -501,6 +620,20 @@ mod tests {
             apply(DEFAULT, &changed).unwrap_err()
         };
         assert!(bad(|form| form.palette = "space".into()).contains("modifier"));
+        // The palette key turned off ("") still saves.
+        let off = parse("hotkeys = { palette = \"\" }\n");
+        let text = apply("hotkeys = { palette = \"\" }\n", &Form::of(&off.0)).unwrap();
+        assert_eq!(parse(&text).0.palette, None);
+        // A shortcut that starts a template is written `template = "name"` and read back.
+        let mut with_template = Form::of(&parse(DEFAULT).0);
+        with_template.hotkeys.push(("ctrl+alt+w".into(), TEMPLATE.into(), "work".into()));
+        let text = apply(DEFAULT, &with_template).unwrap();
+        assert!(text.contains("template = \"work\""), "{text}");
+        let (read, warnings) = parse(&text);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(read.bindings.last().unwrap().target, Target::Template("work".into()));
+        with_template.hotkeys.last_mut().unwrap().2 = "../x".into();
+        assert!(apply(DEFAULT, &with_template).unwrap_err().contains("choose a template"));
         assert!(bad(|form| form.hotkeys = vec![("ctrl+space".into(), "sys".into(), "panel".into())])
             .contains("already used"));
         assert!(bad(|form| form.hotkeys = vec![("ctrl+b".into(), "".into(), "panel".into())]).contains("command"));

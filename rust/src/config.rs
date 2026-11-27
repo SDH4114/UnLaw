@@ -307,6 +307,7 @@ const CHECKS: &[(&str, Kind, &[&str])] = &[
     ("apps.editor", Kind::Str, &[]),
     ("apps.spotify_autoplay_delay", Kind::Number, &[]),
     ("apps.browser_url", Kind::Str, &[]),
+    ("apps.search_url", Kind::Str, &[]),
     ("apps.lofi_url", Kind::Str, &[]),
     ("apps.youtube_url", Kind::Str, &[]),
     ("telegram.chat_id", Kind::Str, &[]),

@@ -14,7 +14,6 @@ use tao::platform::macos::WindowBuilderExtMacOS;
 use super::*;
 
 const HOME_SIZE: (f64, f64) = (1120.0, 740.0);
-const SYS_EVERY: Duration = Duration::from_secs(2);
 const CLIP_EVERY: Duration = Duration::from_secs(2);
 const TEMPLATES_EVERY: Duration = Duration::from_secs(4);
 /// Page name of the desk shown inside the main window (for `on_page_left`).
@@ -56,6 +55,9 @@ pub(super) struct DeskView {
     opened: Option<Instant>,
 }
 
+/// How often opening the main window asks GitHub for a newer Unlaw.
+const UPDATE_EVERY: Duration = Duration::from_secs(600);
+
 /// The main window state that lives in `App`.
 #[derive(Default)]
 pub(super) struct HomeState {
@@ -66,10 +68,16 @@ pub(super) struct HomeState {
     next_game: u64,
     desk: Option<DeskView>,
     desk_opening: bool,
+    /// `ul sys --json --watch 2`: one process for the System part and the system popover.
+    sys_feed: Option<SysFeed>,
+    next_feed: u64,
     /// Where the page's content area is, in points of the window.
     desk_area: Option<(f64, f64, f64, f64)>,
     /// look.dock as it was when the app started (a change needs a restart).
     pub dock: bool,
+    /// The last `ul update --check --json` answer and when it was asked.
+    pub update: Option<Json>,
+    update_asked: Option<std::time::Instant>,
 }
 
 impl HomeState {
@@ -78,7 +86,18 @@ impl HomeState {
     }
 }
 
-pub(super) fn home_window(target: &EventLoopWindowTarget<UserEvent>, proxy: &EventLoopProxy<UserEvent>) -> Glass {
+/// The running `ul sys --json --watch 2` and its newest reading. One process
+/// answers every 2 s with deltas from its last round, where starting `ul sys --json`
+/// each time cost ~400 ms of CPU (Python, the 0.5 s samples, every tool twice).
+pub(super) struct SysFeed {
+    id: u64,
+    child: Child,
+    latest: Option<Json>,
+}
+
+const SYS_WATCH_SECONDS: &str = "2";
+
+pub(super) fn home_window(target: &EventLoopWindowTarget<UserEvent>) -> Glass {
     let window = WindowBuilder::new()
         .with_title("Unlaw")
         .with_inner_size(LogicalSize::new(HOME_SIZE.0, HOME_SIZE.1))
@@ -90,6 +109,12 @@ pub(super) fn home_window(target: &EventLoopWindowTarget<UserEvent>, proxy: &Eve
         .with_fullsize_content_view(true)
         .build(target)
         .expect("a window");
+    // The page loads when the window is first shown (`ensure_page`).
+    Glass { window, webview: None, ready: false, pending: Vec::new(), hidden_since: None }
+}
+
+/// The main window's page with its blur (see `page_for`).
+pub(super) fn home_webview(window: &Window, proxy: &EventLoopProxy<UserEvent>) -> WebView {
     let ipc = proxy.clone();
     let webview = WebViewBuilder::new()
         .with_transparent(true)
@@ -105,13 +130,13 @@ pub(super) fn home_window(target: &EventLoopWindowTarget<UserEvent>, proxy: &Eve
         })
         .with_navigation_handler(|url| url.starts_with("ulapp://"))
         .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
-        .build(&window)
+        .build(window)
         .expect("a web view");
     #[cfg(target_os = "macos")]
     {
         use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
         if let Err(error) = apply_vibrancy(
-            &window,
+            window,
             NSVisualEffectMaterial::Sidebar,
             Some(NSVisualEffectState::FollowsWindowActiveState),
             None,
@@ -119,7 +144,7 @@ pub(super) fn home_window(target: &EventLoopWindowTarget<UserEvent>, proxy: &Eve
             eprintln!("ul-app: no glass for the main window: {error}");
         }
     }
-    Glass { window, webview, ready: false, pending: Vec::new() }
+    webview
 }
 
 /// clip.max_files from config.toml (15 when unset), for the Settings page.
@@ -254,16 +279,10 @@ pub(super) fn clip_args(action: &str, id: Option<&str>) -> Option<Vec<String>> {
     Some(argv)
 }
 
-fn read_sys(ul: &Path) -> Json {
-    let outcome = runner::run(ul, &["sys".into(), "--json".into()], Duration::from_secs(20));
-    match serde_json::from_str::<Json>(&outcome.stdout) {
-        Ok(data) if outcome.ok() => json!({"type": "sys", "data": data}),
-        _ => json!({"type": "sys", "error": outcome.summary(3)}),
-    }
-}
-
 fn read_templates(ul: &Path) -> Json {
-    let outcome = runner::run(ul, &["template".into(), "list".into(), "--json".into()], LIST_TIMEOUT);
+    // Every window, tab and URL of every template: well past 64 KB with a few big browser snapshots.
+    let argv = ["template", "list", "--json"].map(String::from);
+    let outcome = runner::run_capped(ul, &argv, LIST_TIMEOUT, runner::MAX_LIST_OUTPUT);
     match serde_json::from_str::<Json>(&outcome.stdout) {
         Ok(items) if outcome.ok() && items.is_array() => json!({"type": "templates", "items": items}),
         _ => json!({"type": "templates", "error": outcome.summary(3)}),
@@ -279,18 +298,59 @@ pub(super) fn template_name(name: &str) -> Option<&str> {
 }
 
 fn read_clip(ul: &Path) -> Json {
-    let list = runner::run(ul, &["clip".into(), "list".into(), "500".into(), "--json".into()], LIST_TIMEOUT);
-    let status = runner::run(ul, &["clip".into(), "status".into(), "--json".into()], LIST_TIMEOUT);
+    let argv = ["clip", "list", "500", "--json", "--short"].map(String::from);
+    let list = runner::run_capped(ul, &argv, LIST_TIMEOUT, runner::MAX_LIST_OUTPUT);
+    let status = read_clip_status(ul);
     let items = serde_json::from_str::<Json>(&list.stdout).ok().filter(|_| list.ok()).filter(Json::is_array);
-    let status = serde_json::from_str::<Json>(&status.stdout).ok().filter(|_| status.ok());
     match items {
         Some(items) => json!({"type": "clip", "items": items, "status": status}),
         None => json!({"type": "clip", "error": list.summary(3), "status": status}),
     }
 }
 
+fn read_clip_status(ul: &Path) -> Option<Json> {
+    let status = runner::run(ul, &["clip".into(), "status".into(), "--json".into()], LIST_TIMEOUT);
+    serde_json::from_str::<Json>(&status.stdout).ok().filter(|_| status.ok())
+}
+
+/// What the Clipboard part looks at every 2 s before it runs `ul clip`: the history
+/// file's size and time and the pause marker. The list (and the status, at most every
+/// CLIP_STATUS_EVERY) is read again only when they change, so an idle part starts no
+/// process at all (two Python runs every 2 s cost ~150 ms of CPU).
+#[derive(Default)]
+pub(super) struct ClipWatch {
+    stamp: Option<(Option<(u64, SystemTime)>, bool)>,
+    status_at: Option<Instant>,
+}
+
+const CLIP_STATUS_EVERY: Duration = Duration::from_secs(10);
+
+fn clip_stamp(dir: &Path) -> (Option<(u64, SystemTime)>, bool) {
+    let history =
+        fs::metadata(dir.join("history.json")).ok().and_then(|meta| Some((meta.len(), meta.modified().ok()?)));
+    (history, dir.join("paused").exists())
+}
+
+impl ClipWatch {
+    /// The message to send now, if anything changed.
+    pub(super) fn read(&mut self, ul: &Path, dir: &Path) -> Option<Json> {
+        let stamp = clip_stamp(dir);
+        if self.stamp.as_ref() != Some(&stamp) {
+            self.stamp = Some(stamp);
+            self.status_at = Some(Instant::now());
+            return Some(read_clip(ul));
+        }
+        if self.status_at.is_none_or(|at| at.elapsed() >= CLIP_STATUS_EVERY) {
+            self.status_at = Some(Instant::now());
+            return read_clip_status(ul).map(|status| json!({"type": "clip", "status": status}));
+        }
+        None
+    }
+}
+
 impl App {
     pub(super) fn show_home(&mut self, section: Option<&str>) {
+        self.ensure_page(View::Home);
         self.palette.window.set_visible(false);
         self.panel.window.set_visible(false);
         if let Some(section) = section.map(canonical) {
@@ -310,6 +370,34 @@ impl App {
         self.home.window.set_minimized(false);
         self.home.window.set_focus();
         self.place_desk();
+        self.check_update();
+    }
+
+    /// Ask GitHub whether a newer Unlaw is out, each time the window opens (at most
+    /// every 10 minutes): the page then shows an Update button by the version.
+    fn check_update(&mut self) {
+        if self.home_state.update_asked.is_some_and(|asked| asked.elapsed() < UPDATE_EVERY) {
+            return;
+        }
+        let Some(ul) = self.ul.clone() else { return };
+        self.home_state.update_asked = Some(std::time::Instant::now());
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            let argv = ["update", "--check", "--json"].map(String::from);
+            let outcome = runner::run(&ul, &argv, Duration::from_secs(60));
+            let Some(answer) =
+                serde_json::from_str::<Json>(outcome.stdout.trim()).ok().filter(|answer| answer["ok"] == true)
+            else {
+                return; // offline or GitHub unreachable: no button, nothing to say
+            };
+            let message = json!({
+                "type": "update",
+                "update": answer["update"].as_bool() == Some(true),
+                "latest": answer["latest"].as_str().unwrap_or(""),
+                "message": answer["message"].as_str().unwrap_or(""),
+            });
+            let _ = proxy.send_event(UserEvent::Home(message));
+        });
     }
 
     /// The window closed (it only hides): pollers and the game stop; the desk
@@ -337,9 +425,17 @@ impl App {
         self.home_state.section = section.to_string();
         self.home_state.poll.fetch_add(1, Ordering::SeqCst);
         match section {
-            "system" => self.poll(read_sys, SYS_EVERY),
-            "clipboard" => self.poll(read_clip, CLIP_EVERY),
-            "templates" => self.poll(read_templates, TEMPLATES_EVERY),
+            "system" => {
+                self.ensure_sys_feed();
+                if let Some(data) = self.home_state.sys_feed.as_ref().and_then(|feed| feed.latest.clone()) {
+                    self.send(View::Home, json!({"type": "sys", "data": data}));
+                }
+            }
+            "clipboard" => {
+                let (mut watch, dir) = (ClipWatch::default(), storage_root().join("clip"));
+                self.poll(move |ul| watch.read(ul, &dir), CLIP_EVERY);
+            }
+            "templates" => self.poll(|ul| Some(read_templates(ul)), TEMPLATES_EVERY),
             part if DESK_PARTS.contains(&part) => {
                 if let Some(desk) = &self.home_state.desk {
                     let _ = desk
@@ -348,13 +444,23 @@ impl App {
                 }
                 self.ensure_desk();
             }
+            // Shortcuts may start a template: the page lists the saved ones (read once).
+            "settings" => {
+                if let Some(ul) = self.ul.clone() {
+                    let proxy = self.proxy.clone();
+                    thread::spawn(move || {
+                        let _ = proxy.send_event(UserEvent::Home(read_templates(&ul)));
+                    });
+                }
+            }
             _ => {}
         }
         self.place_desk();
     }
 
-    /// Runs `read` now and then every `every` until the part changes.
-    fn poll(&self, read: fn(&Path) -> Json, every: Duration) {
+    /// Runs `read` now and then every `every` until the part changes; `read` answers
+    /// None when there is nothing new to send.
+    fn poll(&self, mut read: impl FnMut(&Path) -> Option<Json> + Send + 'static, every: Duration) {
         let Some(ul) = self.ul.clone() else {
             self.send_later(json!({"type": "sys", "error": "ul was not found"}));
             return;
@@ -364,8 +470,13 @@ impl App {
         let proxy = self.proxy.clone();
         thread::spawn(move || loop {
             let message = read(&ul);
-            if generation.load(Ordering::SeqCst) != mine || proxy.send_event(UserEvent::Home(message)).is_err() {
+            if generation.load(Ordering::SeqCst) != mine {
                 return;
+            }
+            if let Some(message) = message {
+                if proxy.send_event(UserEvent::Home(message)).is_err() {
+                    return;
+                }
             }
             let until = Instant::now() + every;
             while Instant::now() < until {
@@ -408,6 +519,9 @@ impl App {
     /// Page requests of the main window; true when `op` was one of them.
     pub(super) fn on_home_op(&mut self, op: &str, message: &Json) -> bool {
         match op {
+            // The Update button: `ul update` in a terminal, where the build shows (it
+            // restarts this app when it is done).
+            "update" => self.terminal("update", Vec::new()),
             "section" => {
                 let section = message["section"].as_str().unwrap_or("commands").to_string();
                 self.set_section(&section);
@@ -445,7 +559,11 @@ impl App {
                 thread::spawn(move || {
                     let outcome = runner::run(&ul, &argv, Duration::from_secs(30));
                     if !outcome.ok() {
-                        platform::notify("Clipboard", &outcome.summary(3));
+                        let _ = proxy.send_event(UserEvent::Toast {
+                            title: "Clipboard".into(),
+                            text: outcome.summary(2),
+                            ok: false,
+                        });
                     }
                     if on_off {
                         // The watcher needs a moment to write its first state.
@@ -465,8 +583,10 @@ impl App {
                 let argv: Vec<String> = if op == "template-rm" {
                     vec!["template".into(), "rm".into(), name.clone(), "--yes".into()]
                 } else {
-                    // Open keeps the template's own `focus`; Focus asks for it.
-                    let mut argv = vec![name.clone()];
+                    // Open keeps the template's own `focus`; Focus asks for it. `_template-launch`
+                    // starts the template only: `ul <name>` would run a command of that name
+                    // (a hand-made templates/projects/update.toml would have run `ul update`).
+                    let mut argv = vec!["_template-launch".to_string(), name.clone()];
                     if message["focus"].as_bool() == Some(true) {
                         argv.push("--focus".into());
                     }
@@ -557,7 +677,13 @@ impl App {
 
     fn start_game(&mut self, game: Option<&str>, level: &str, rows: i64, cols: i64) {
         self.stop_game(None);
-        let Some(ul) = self.ul.clone() else { return };
+        let Some(ul) = self.ul.clone() else {
+            self.send(
+                View::Home,
+                json!({"type": "game-ended", "id": 0, "error": "Could not start: ul was not found."}),
+            );
+            return;
+        };
         let mut argv = vec!["game".to_string(), "--stream".into(), "--size".into(), format!("{rows}x{cols}")];
         if let Some(game) = game {
             argv.push(game.into());
@@ -747,6 +873,128 @@ impl App {
         }
     }
 
+    /// The main window's page was unloaded: its desk view goes with it and the
+    /// desk server stops (off the UI thread); the next desk part starts it again.
+    pub(super) fn unload_desk(&mut self) {
+        self.home_state.desk_area = None;
+        if let Some(desk) = self.home_state.desk.take() {
+            drop(desk.webview);
+            let mut child = desk.child;
+            thread::spawn(move || runner::stop_group(&mut child, Duration::from_secs(5)));
+        }
+    }
+
+    /// Starts the shared `ul sys` watch unless it runs.
+    pub(super) fn ensure_sys_feed(&mut self) {
+        if let Some(feed) = self.home_state.sys_feed.as_mut() {
+            if matches!(feed.child.try_wait(), Ok(None)) {
+                return;
+            }
+            self.home_state.sys_feed = None;
+        }
+        let Some(ul) = self.ul.clone() else {
+            self.send(View::Home, json!({"type": "sys", "error": "ul was not found"}));
+            return;
+        };
+        let spawned = Command::new(&ul)
+            .args(["sys", "--json", "--watch", SYS_WATCH_SECONDS])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .env("UNLAW_APP", "1")
+            .env("NO_COLOR", "1")
+            .process_group(0)
+            .spawn();
+        let mut child = match spawned {
+            Ok(child) => child,
+            Err(error) => {
+                self.send(View::Home, json!({"type": "sys", "error": format!("ul sys did not start: {error}")}));
+                return;
+            }
+        };
+        self.home_state.next_feed += 1;
+        let id = self.home_state.next_feed;
+        let proxy = self.proxy.clone();
+        if let Some(stdout) = child.stdout.take() {
+            thread::spawn(move || {
+                let mut reader = BufReader::new(stdout);
+                let mut line = Vec::new();
+                // A round is a few KB; a line far longer than that is not ul sys.
+                while matches!(reader.by_ref().take(1 << 20).read_until(b'\n', &mut line), Ok(read) if read > 0) {
+                    if let Ok(data) = serde_json::from_slice::<Json>(&line) {
+                        if data.is_object() && proxy.send_event(UserEvent::SysData { id, data: Some(data) }).is_err() {
+                            return;
+                        }
+                    }
+                    line.clear();
+                }
+                let _ = proxy.send_event(UserEvent::SysData { id, data: None });
+            });
+        }
+        self.home_state.sys_feed = Some(SysFeed { id, child, latest: None });
+    }
+
+    /// The feed's newest round, if it has one.
+    pub(super) fn sys_latest(&self) -> Option<Json> {
+        self.home_state.sys_feed.as_ref().and_then(|feed| feed.latest.clone())
+    }
+
+    /// Who reads the feed now: the System part on screen, or the system popover.
+    fn sys_feed_wanted(&self) -> bool {
+        let home = self.home.window.is_visible() && self.home_state.section == "system";
+        let popover = self.panel.window.is_visible()
+            && self
+                .panel_for
+                .as_ref()
+                .and_then(|name| self.specs.get(name))
+                .is_some_and(|(spec, _)| spec.view.as_deref() == Some("system"));
+        home || popover
+    }
+
+    /// Stops the feed nobody reads (called every 2 s).
+    pub(super) fn stop_unused_sys_feed(&mut self) {
+        if self.home_state.sys_feed.is_none() || self.sys_feed_wanted() {
+            return;
+        }
+        if let Some(mut feed) = self.home_state.sys_feed.take() {
+            debug("stopping ul sys --watch");
+            thread::spawn(move || runner::stop_group(&mut feed.child, Duration::from_secs(2)));
+        }
+    }
+
+    /// A round of the feed (None: it ended): to the System part and the popover on screen.
+    pub(super) fn on_sys_data(&mut self, id: u64, data: Option<Json>) {
+        if self.home_state.sys_feed.as_ref().map(|feed| feed.id) != Some(id) {
+            return;
+        }
+        let Some(data) = data else {
+            // The watch ended by itself: reap it, or it stays a zombie until the app quits.
+            if let Some(mut feed) = self.home_state.sys_feed.take() {
+                thread::spawn(move || {
+                    let _ = feed.child.wait();
+                });
+            }
+            if self.home_state.section == "system" {
+                self.send(View::Home, json!({"type": "sys", "error": "ul sys stopped; open the part again."}));
+            }
+            return;
+        };
+        if let Some(feed) = self.home_state.sys_feed.as_mut() {
+            feed.latest = Some(data.clone());
+        }
+        if self.home.window.is_visible() && self.home_state.section == "system" {
+            self.send(View::Home, json!({"type": "sys", "data": data}));
+        }
+        if let Some(name) = self.panel_for.clone().filter(|_| self.panel.window.is_visible()) {
+            if self.specs.get(&name).is_some_and(|(spec, _)| spec.view.as_deref() == Some("system")) {
+                self.send(
+                    View::Panel,
+                    json!({"type": "view-data", "name": name, "data": {"sys": data}, "error": null}),
+                );
+            }
+        }
+    }
+
     /// Children to stop when the app quits.
     pub(super) fn home_children(&mut self) -> Vec<Child> {
         let mut children = Vec::new();
@@ -757,6 +1005,9 @@ impl App {
         if let Some(desk) = self.home_state.desk.take() {
             drop(desk.webview);
             children.push(desk.child);
+        }
+        if let Some(feed) = self.home_state.sys_feed.take() {
+            children.push(feed.child);
         }
         children
     }
@@ -788,6 +1039,20 @@ fn settings_form(value: &Json) -> settings::Form {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_clipboard_part_reads_ul_clip_only_after_a_change() {
+        let dir = std::env::temp_dir().join(format!("ul-app-clip-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let first = clip_stamp(&dir);
+        fs::write(dir.join("history.json"), "[]").unwrap();
+        let second = clip_stamp(&dir);
+        assert_ne!(first, second);
+        assert_eq!(second, clip_stamp(&dir));
+        fs::write(dir.join("paused"), "").unwrap();
+        assert_ne!(second, clip_stamp(&dir));
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn template_names_are_checked() {

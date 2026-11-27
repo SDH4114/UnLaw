@@ -11,7 +11,7 @@
 use std::io;
 use std::sync::LazyLock;
 
-use crate::assets::{FEATURE_CORE, FEATURE_LIST, FEATURE_RETIRED};
+use crate::assets::{FEATURE_CORE, FEATURE_LIST, FEATURE_RENAMED, FEATURE_RETIRED};
 use crate::checklist::{self, Entry};
 use crate::config::{self, Config, Value};
 use crate::help::print_if_requested;
@@ -71,8 +71,11 @@ pub fn needs_rebuild(selection: &[&str]) -> bool {
 /// Expand `all`, add what the chosen features need; `FEATURES` order.
 pub fn resolve<S: AsRef<str>>(names: &[S]) -> Vec<&'static str> {
     let all = names.iter().any(|name| name.as_ref() == "all");
+    // A renamed feature's old name (`music`) selects the new one (`spotify`).
+    let current = |name: &str| FEATURE_RENAMED.iter().find(|(old, _)| *old == name).map_or(name, |(_, new)| *new).to_string();
+    let names: Vec<String> = names.iter().map(|name| current(name.as_ref())).collect();
     let mut chosen: Vec<&'static str> =
-        FEATURES.iter().filter(|feature| all || names.iter().any(|name| name.as_ref() == feature.name)).map(|feature| feature.name).collect();
+        FEATURES.iter().filter(|feature| all || names.iter().any(|name| name == feature.name)).map(|feature| feature.name).collect();
     let mut index = 0;
     while index < chosen.len() {
         for required in find(chosen[index]).map(|feature| feature.requires).unwrap_or(&[]) {
@@ -265,19 +268,18 @@ pub fn apply(current: &[&str], next: &[&'static str], no_build: bool) -> i32 {
     }
     let app_missing = next.contains(&crate::gui::FEATURE) && crate::gui::app_binary().is_none();
     // ul-app already built: nothing to compile, so --no-build still sets the app up.
-    if added.contains(&crate::gui::FEATURE) && !app_missing {
-        crate::gui::install(true);
-    }
+    // A failed app install (bundle or login job) is the command's failure too.
+    let app_failed = added.contains(&crate::gui::FEATURE) && !app_missing && crate::gui::install(true) != 0;
     for name in kept {
         println!("Kept commands/{name}: you edited it. Delete the folder to remove it.");
     }
     if !needs_rebuild(next) && !app_missing {
-        return 0;
+        return i32::from(app_failed);
     }
     if no_build {
         let built = cargo_features(next);
         println!("Run `ul update` to rebuild ul with: {}.", if built.is_empty() { "the core only".to_string() } else { built.join(", ") });
-        return 0;
+        return i32::from(app_failed);
     }
     let built = cargo_features(next);
     println!(
@@ -357,6 +359,7 @@ mod tests {
         assert_eq!(resolve(&["agent", "yt"]), vec!["lm", "agent", "yt"]);
         assert_eq!(resolve::<&str>(&[]), Vec::<&str>::new());
         assert_eq!(resolve(&["none"]), Vec::<&str>::new());
+        assert_eq!(resolve(&["music"]), vec!["spotify"]);
         assert_eq!(unknown_names(&["none", "all", "yt", "x"], true), vec!["x"]);
         assert_eq!(unknown_names(&["none"], false), vec!["none"]);
         assert_eq!(cargo_features(&resolve(&["agent", "yt"])), vec!["lm", "agent"]);

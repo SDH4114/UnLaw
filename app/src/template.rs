@@ -63,13 +63,15 @@ fn filtered(value: &Value, filter: &str) -> Result<String, String> {
     if filter.is_empty() {
         return Ok(plain(value));
     }
-    if !["int", "pct", "clock", "gb", "speed"].contains(&filter) {
-        return Err(format!("unknown filter |{filter} (int, pct, clock, gb, speed)"));
+    if !["int", "pct", "clock", "gb", "speed", "weather"].contains(&filter) {
+        return Err(format!("unknown filter |{filter} (int, pct, clock, gb, speed, weather)"));
     }
     let Some(number) = as_number(value) else {
         return Ok(if value.is_null() { "–".into() } else { plain(value) });
     };
     Ok(match filter {
+        // A WMO weather code (Open-Meteo, `ul weather --json`) as a menu bar icon name.
+        "weather" => weather_icon(number as i64).into(),
         "pct" => format!("{}%", number.round() as i64),
         "clock" => clock(number),
         // 1024^3, the way macOS (Activity Monitor, About This Mac) counts memory "GB".
@@ -79,6 +81,20 @@ fn filtered(value: &Value, filter: &str) -> Result<String, String> {
         "speed" => format!("{:.1} MB/s", number / 1_000_000.0),
         _ => format!("{}", number.round() as i64),
     })
+}
+
+/// The icon of a WMO weather code, the same groups as the weather view's (views.js `wxIcon`).
+pub fn weather_icon(code: i64) -> &'static str {
+    match code {
+        0 => "sun",
+        1 | 2 => "cloudsun",
+        3 => "overcast",
+        45 | 48 => "fog",
+        71..=77 | 85 | 86 => "snow",
+        95..=99 => "storm",
+        51..=67 | 80..=82 => "rain",
+        _ => "cloud",
+    }
 }
 
 /// Fill `text` from `json`. A missing value shows as `–`.
@@ -178,7 +194,11 @@ pub fn status_text(status: &Status, stdout: &str) -> StatusText {
         None => json.get("text").map(plain).unwrap_or_default(),
     };
     let default_state = status.when.as_ref().map(|_| "on");
-    StatusText { text: clean(&text), state: state.or(default_state).map(str::to_string), icon: status.icon.clone() }
+    let icon = match &status.icon {
+        Some(template) if template.contains('{') => render(template, &json).ok().filter(|name| name != "–"),
+        other => other.clone(),
+    };
+    StatusText { text: clean(&text), state: state.or(default_state).map(str::to_string), icon }
 }
 
 #[cfg(test)]
@@ -279,4 +299,18 @@ mod tests {
         assert_eq!(clock(-5.0), "0:00");
         assert_eq!(clock(86400.0 * 7.0), "168:00");
     }
+
+    #[test]
+    fn the_weather_shows_its_sky_and_temperature() {
+        let spec = crate::spec::parse("weather", include_str!("../defaults/weather.toml")).unwrap();
+        let status = spec.status.unwrap();
+        let reading = r#"{"current": {"weather_code": 61, "temperature": 12.6}}"#;
+        let shown = status_text(&status, reading);
+        assert_eq!((shown.text.as_str(), shown.icon.as_deref()), ("13°", Some("rain")));
+        let clear = status_text(&status, r#"{"current": {"weather_code": 0, "temperature": -0.4}}"#);
+        assert_eq!((clear.text.as_str(), clear.icon.as_deref()), ("0°", Some("sun")));
+        // No reading (no city yet): the description's own icon stays.
+        assert_eq!(status_text(&status, "{}").icon, None);
+    }
+
 }

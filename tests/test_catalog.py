@@ -50,10 +50,10 @@ class CatalogCommandTests(CoreTestCase):
         self.ok("init")
         listing = self.ok("commands", "search").stdout
         self.assertRegex(listing, r"installed\s+yt\s+Open YouTube")
-        self.assertRegex(listing, r"\n\s+music\s+Open Spotify")
+        self.assertRegex(listing, r"\n\s+spotify\s+Open Spotify")
         self.assertIn("Download: ul commands get", listing)
         filtered = self.ok("commands", "search", "spotify", "--list").stdout
-        self.assertIn("music", filtered)
+        self.assertIn("spotify", filtered)
         self.assertNotIn("yt ", filtered)
         self.assertIn("No command in the catalog matches", self.ok("commands", "search", "zzzz").stdout)
         self.assertIn("ul commands search", self.ok("commands", "search", "--help").stdout)
@@ -64,14 +64,14 @@ class CatalogCommandTests(CoreTestCase):
         self.ok("init")
         mine = self.unlaw / "commands" / "yt" / "main.py"
         mine.write_text(mine.read_text() + "# mine\n")
-        result = self.ok("commands", "get", "music", "yt")
-        self.assertIn("Downloaded music", result.stdout)
+        result = self.ok("commands", "get", "spotify", "yt")
+        self.assertIn("Downloaded spotify", result.stdout)
         self.assertIn("commands/yt already exists; not overwritten", result.stdout)
         self.assertTrue(mine.read_text().endswith("# mine\n"))
-        self.assertEqual((self.unlaw / "commands" / "music" / "main.py").read_bytes(), (CATALOG / "music" / "main.py").read_bytes())
-        self.assertIn('features = ["yt", "music"]', (self.unlaw / "config.toml").read_text())
+        self.assertEqual((self.unlaw / "commands" / "spotify" / "main.py").read_bytes(), (CATALOG / "spotify" / "main.py").read_bytes())
+        self.assertIn('features = ["yt", "spotify"]', (self.unlaw / "config.toml").read_text())
         self.ok("init")
-        self.assertTrue((self.unlaw / "commands" / "music" / "main.py").exists(), "a downloaded feature stays")
+        self.assertTrue((self.unlaw / "commands" / "spotify" / "main.py").exists(), "a downloaded feature stays")
         self.assertIn("installed*", self.ok("commands", "search", "--list").stdout)
 
     def test_get_explains_built_in_and_unknown_names(self) -> None:
@@ -85,7 +85,7 @@ class CatalogCommandTests(CoreTestCase):
     def test_folder_created_during_download_is_not_overwritten(self) -> None:
         self.choose("yt")
         self.ok("init")
-        script = self.unlaw / "commands/music/main.py"
+        script = self.unlaw / "commands/spotify/main.py"
         self.tool("curl", f"#!{sys.executable}\nimport pathlib, sys\n"
                   f"catalog = pathlib.Path({str(CATALOG)!r})\n"
                   "if sys.argv[-1].endswith('index.json'):\n"
@@ -94,23 +94,23 @@ class CatalogCommandTests(CoreTestCase):
                   f"    dest = pathlib.Path({str(script)!r})\n"
                   "    dest.parent.mkdir(parents=True)\n"
                   "    dest.write_text('# mine\\n')\n"
-                  "    sys.stdout.buffer.write((catalog / 'music/main.py').read_bytes())\n")
-        result = self.ul("commands", "get", "music")
+                  "    sys.stdout.buffer.write((catalog / 'spotify/main.py').read_bytes())\n")
+        result = self.ul("commands", "get", "spotify")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(script.read_text(), "# mine\n")
 
     def test_checksum_mismatch_writes_nothing(self) -> None:
         bad = self.root / "bad-catalog"
-        (bad / "music").mkdir(parents=True)
-        (bad / "music" / "main.py").write_text("print('tampered')\n")
-        index = {"format": 1, "commands": [{"name": "music", "summary": "x", "sha256": "0" * 64}]}
+        (bad / "spotify").mkdir(parents=True)
+        (bad / "spotify" / "main.py").write_text("print('tampered')\n")
+        index = {"format": 1, "commands": [{"name": "spotify", "summary": "x", "sha256": "0" * 64}]}
         (bad / "index.json").write_text(json.dumps(index))
         self.choose("yt")
         self.ok("init")
-        result = self.ul("commands", "get", "music", env={"UNLAW_CATALOG_URL": bad.as_uri()})
+        result = self.ul("commands", "get", "spotify", env={"UNLAW_CATALOG_URL": bad.as_uri()})
         self.assertEqual(result.returncode, 1)
         self.assertIn("does not match the catalog checksum", result.stderr)
-        self.assertFalse((self.unlaw / "commands" / "music").exists())
+        self.assertFalse((self.unlaw / "commands" / "spotify").exists())
 
     def test_an_unreachable_catalog_is_an_error(self) -> None:
         self.ok("init")

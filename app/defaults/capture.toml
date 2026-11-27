@@ -26,6 +26,16 @@ id = "stop"
 label = "Stop recording"
 args = ["stop"]
 
+[[action]]
+id = "folder"
+label = "Open the captures folder"
+args = ["folder"]
+
+[[action]]
+id = "last"
+label = "Show the latest capture in Finder"
+args = ["last", "--reveal"]
+
 [status]
 args = ["status", "--json"]
 every = 3

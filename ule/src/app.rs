@@ -114,6 +114,21 @@ fn catch_termination() {
     }
 }
 
+/// The terminal was closed (its window, an ssh drop): poll reports a hang-up on it. A
+/// live terminal never does; crossterm itself only sees endless empty reads.
+fn terminal_hung_up() -> bool {
+    [0, 1].into_iter().any(|fd| {
+        // SAFETY: isatty and a zero-timeout poll on our own standard descriptors.
+        unsafe {
+            if libc::isatty(fd) != 1 {
+                return false;
+            }
+            let mut entry = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+            libc::poll(&mut entry, 1, 0) == 1 && entry.revents & libc::POLLHUP != 0
+        }
+    })
+}
+
 fn terminated() -> Option<i32> {
     match TERMINATED.load(std::sync::atomic::Ordering::SeqCst) {
         0 => None,
@@ -238,6 +253,10 @@ fn event_loop(ed: &mut Editor, screen: &mut Screen, renderer: &mut Terminal) -> 
     loop {
         if terminated().is_some() {
             return Ok(());
+        }
+        if terminal_hung_up() {
+            // run() then keeps unsaved buffers as recovery copies.
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "the terminal was closed"));
         }
         let surface = crate::ui::draw(ed);
         renderer.draw(&surface, &mut out)?;

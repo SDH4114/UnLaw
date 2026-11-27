@@ -1,5 +1,6 @@
 title = "Steam"
 icon = "game"
+brand = "steam"
 
 [[action]]
 id = "launch"

@@ -18,7 +18,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("gpt", "AI", "Open the ChatGPT app"),
     ("claude", "AI", "Open the Claude app"),
     ("yt", "Media", "YouTube: search, download video, MP3, podcasts, subtitles"),
-    ("music", "Media", "Spotify: open it or play a track"),
+    ("spotify", "Media", "Spotify: open it or play a track"),
     ("lofi", "Media", "Open the lofi website"),
     ("netflix", "Media", "Open Netflix"),
     ("capture", "Media", "Screenshots and screen, camera and microphone recording"),
@@ -46,12 +46,14 @@ CARGO = ("lm", "agent", "game", "capture")
 REQUIRES: dict[str, tuple[str, ...]] = {"agent": ("lm",)}
 NAMES = tuple(name for name, _, _ in FEATURES)
 # Features of earlier releases: still accepted in core.features, never installed.
-RETIRED = ("todo",)
+RETIRED = ("todo", "music")
+# Features that were renamed: an old name in core.features selects the new one.
+RENAMED: dict[str, str] = {"music": "spotify"}
 
 
 def resolve(names: list[str] | tuple[str, ...]) -> list[str]:
     """Expand "all" (and "none"), add requirements; FEATURES order."""
-    chosen = set(NAMES if "all" in names else names)
+    chosen = set(NAMES if "all" in names else (RENAMED.get(name, name) for name in names))
     for name in list(chosen):
         chosen.update(REQUIRES.get(name, ()))
     return [name for name in NAMES if name in chosen]

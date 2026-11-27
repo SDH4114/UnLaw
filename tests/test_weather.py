@@ -131,6 +131,12 @@ class WeatherTests(WeatherBase):
             3,
         )
 
+    def test_a_cyrillic_city_is_looked_up_in_russian(self) -> None:
+        self.ok("weather", "Москва")
+        geo = self.asked("/geo")[0]
+        self.assertEqual(geo["query"]["name"], ["Москва"])
+        self.assertEqual(geo["query"]["language"], ["ru"])
+
     def test_requests_use_the_documented_parameters(self) -> None:
         self.ok("weather", "New", "York", "--days", "5")
         geo = self.asked("/geo")[0]

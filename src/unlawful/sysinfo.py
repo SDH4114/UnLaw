@@ -9,9 +9,11 @@ import plistlib
 import re
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from xml.parsers.expat import ExpatError
 
 from unlawful.command_help import COMMAND_HELP
@@ -32,7 +34,7 @@ SECTION_NAMES = {
     "batt": "battery",
     "top": "top",
 }
-USAGE = "Usage: ul sys [cpu|gpu|mem|net|io|disk|battery|top] [--json] [--watch [seconds]]  (ul sys --help)"
+USAGE = "Usage: ul sys [cpu|gpu|mem|net|io|disk|battery|top ...] [--json] [--watch [seconds]]  (ul sys --help)"
 DEFAULT_WATCH = 2.0
 MAX_WATCH = 3600.0
 BAR_WIDTH = 20
@@ -43,6 +45,8 @@ PRESSURE_NAMES = {1: "normal", 2: "warning", 4: "critical"}
 THERMAL_NAMES = {0: "nominal", 1: "fair", 2: "serious", 3: "critical"}
 # Seconds between the two readings of the CPU tick, network and disk counters (they run side by side).
 SAMPLE = 0.5
+# How long the battery health from system_profiler is kept (it changes over weeks; one call costs ~50 ms of CPU).
+POWER_CACHE_SECONDS = 600.0
 # Interfaces that are tunnels, bridges or Apple's peer-to-peer links, not the Mac's connection.
 VIRTUAL_INTERFACES = ("lo", "utun", "awdl", "llw", "bridge", "gif", "stf", "anpi", "ap", "ipsec", "vmenet", "pktap")
 # Mounts that are implementation details of macOS, simulators or installers, not drives a person uses.
@@ -202,6 +206,110 @@ def thermal_state() -> str | None:
         return THERMAL_NAMES.get(send_long(info, objc.sel_registerName(b"thermalState")))
     except (OSError, AttributeError, TypeError):
         return None
+
+
+def boot_time() -> int | None:
+    raw = native_sysctl("kern.boottime")
+    if raw is not None and len(raw) >= 8:
+        return int.from_bytes(raw[:8], "little")  # struct timeval: seconds first
+    text = sysctl_text("kern.boottime")
+    return parse_boot_time(text) if text else None
+
+
+# ---------------------------------------------------------------- cache and watch state
+#
+# What does not change while the Mac runs (model, chip, core kinds) is read once per
+# boot, the battery health from system_profiler once per POWER_CACHE_SECONDS: those
+# tools cost ~100 ms of CPU, and Unlaw.app's menu bar asks every 10 s. They are kept in
+# memory and in $UNLAW_STORAGE/runtime/sys-cache-2.json; a damaged file is just read again.
+# Only with the native readings, so the fixture tests (UNLAW_SYS_NATIVE=0) always read
+# their fake tools.
+
+_MEMO: dict[str, tuple[float, object]] = {}
+_CACHE_LOCK = threading.Lock()
+
+
+def cache_file() -> Path | None:
+    root = os.environ.get("UNLAW_STORAGE")
+    if not root or native() is None:
+        return None
+    runtime = Path(root) / "runtime"
+    # sys-cache.json of earlier 4.0.0 builds held the serial number and hardware UUIDs
+    # (world-readable): removed, never read again.
+    try:
+        (runtime / "sys-cache.json").unlink()
+    except OSError:
+        pass
+    return runtime / "sys-cache-2.json"
+
+
+# Keys of sys-cache-2.json; anything else found there is dropped on the next write.
+CACHE_KEYS = {"hardware_names", "core_kinds", "power"}
+
+
+def cached(key: str, make: Callable[[], object], ttl: float | None = None) -> object:
+    """make() through the cache; ttl None = for this boot. A failed reading (None) is not kept."""
+    if native() is None:
+        return make()
+    now = time.time()
+    with _CACHE_LOCK:
+        hit = _MEMO.get(key)
+        if hit is not None and (ttl is None or now - hit[0] < ttl):
+            return hit[1]
+        path = cache_file()
+        boot = boot_time() if path is not None else None
+        stored: dict = {}
+        if path is not None and boot is not None:
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                stored = loaded if isinstance(loaded, dict) and loaded.get("boot") == boot else {}
+            except (OSError, ValueError):
+                stored = {}
+            entry = stored.get(key)
+            if isinstance(entry, dict) and isinstance(entry.get("time"), (int, float)) and "value" in entry:
+                if ttl is None or 0 <= now - entry["time"] < ttl:
+                    _MEMO[key] = (entry["time"], entry["value"])
+                    return entry["value"]
+    value = make()
+    if value is None:
+        return None
+    with _CACHE_LOCK:
+        _MEMO[key] = (now, value)
+        if path is not None and boot is not None:
+            # Read again: another thread may have stored its key while make() ran.
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                stored = loaded if isinstance(loaded, dict) and loaded.get("boot") == boot else {}
+            except (OSError, ValueError):
+                stored = {}
+            # Only current keys are kept (an older build cached the whole hardware answer).
+            stored = {name: entry for name, entry in stored.items() if name in CACHE_KEYS}
+            stored = {**stored, "boot": boot, key: {"time": now, "value": value}}
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
+                descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    handle.write(json.dumps(stored))
+                os.replace(temporary, path)
+            except OSError:
+                pass
+    return value
+
+
+# In --watch mode each reading of the tick, network and disk counters is kept, so the
+# next round measures from it instead of sleeping SAMPLE and reading twice.
+_LAST: dict[str, tuple[float, object]] = {}
+_KEEP = False
+
+
+def previous(key: str) -> tuple[float, object] | None:
+    return _LAST.get(key) if _KEEP else None
+
+
+def remember(key: str, value: object) -> None:
+    if _KEEP:
+        _LAST[key] = (time.monotonic(), value)
 
 
 # ---------------------------------------------------------------- running tools
@@ -629,22 +737,47 @@ def parse_battery(raw: bytes, profiler: str | None) -> dict | None:
 # ---------------------------------------------------------------- collectors
 
 
-def collect_system(now: float) -> dict:
-    hardware: dict = {}
+def read_hardware() -> dict | None:
     text = tool_text(["system_profiler", "SPHardwareDataType", "-json"])
     try:
         hardware = json.loads(text or "")["SPHardwareDataType"][0]
     except (ValueError, KeyError, IndexError, TypeError):
+        return None
+    if not isinstance(hardware, dict):
+        return None
+    # Only what is shown: the full answer holds the serial number and hardware UUIDs, which must
+    # never land in a cache file (storage.root may be synced).
+    return {key: hardware[key] for key in HARDWARE_KEYS if isinstance(hardware.get(key), str)}
+
+
+HARDWARE_KEYS = ("machine_name", "machine_model", "chip_type")
+
+
+def without_serials(text: str | None) -> str | None:
+    """system_profiler JSON without serial numbers (the battery's): it goes into the cache file."""
+    try:
+        data = json.loads(text or "")
+    except ValueError:
+        return None
+
+    def scrub(value: object) -> object:
+        if isinstance(value, dict):
+            return {key: scrub(item) for key, item in value.items() if "serial" not in key.lower()}
+        if isinstance(value, list):
+            return [scrub(item) for item in value]
+        return value
+
+    return json.dumps(scrub(data))
+
+
+def collect_system(now: float) -> dict:
+    hardware = cached("hardware_names", read_hardware)
+    if not isinstance(hardware, dict):
         hardware = {}
     version = platform.mac_ver()[0] if native() is not None else None
     if not version:
         version = tool_text(["sw_vers", "-productVersion"])
-    raw_boot = native_sysctl("kern.boottime")
-    if raw_boot is not None and len(raw_boot) >= 8:
-        boot: int | None = int.from_bytes(raw_boot[:8], "little")  # struct timeval: seconds first
-    else:
-        boot_text = sysctl_text("kern.boottime")
-        boot = parse_boot_time(boot_text) if boot_text else None
+    boot = boot_time()
     return {
         "thermal": thermal_state(),
         "model": hardware.get("machine_name"),
@@ -655,20 +788,30 @@ def collect_system(now: float) -> dict:
     }
 
 
-def core_kinds() -> list[str] | None:
+def read_core_kinds() -> list[str] | None:
     raw = run_tool(["ioreg", "-rlc", "IOPlatformDevice", "-k", "cluster-type", "-a"])
     return parse_cluster_types(raw) if raw else None
 
 
+def core_kinds() -> list[str] | None:
+    kinds = cached("core_kinds", read_core_kinds)
+    return kinds if isinstance(kinds, list) else None
+
+
 def native_cpu() -> dict | None:
     """Busy share per core over SAMPLE seconds, from the kernel's tick counters (what Activity Monitor reads)."""
-    before = cpu_ticks()
-    if before is None:
-        return None
-    time.sleep(SAMPLE)
+    last = previous("cpu")
+    if last is not None:
+        before = last[1]
+    else:
+        before = cpu_ticks()
+        if before is None:
+            return None
+        time.sleep(SAMPLE)
     after = cpu_ticks()
-    if after is None or len(after) != len(before):
+    if after is None or len(after) != len(before):  # type: ignore[arg-type]
         return None
+    remember("cpu", after)
     cores = core_usage(before, after)
     ticks = sum(core["ticks"] for core in cores) or 1
     user = sum(core["user"] * core["ticks"] for core in cores) / ticks
@@ -747,15 +890,21 @@ def collect_memory() -> dict | None:
 
 
 def collect_network() -> dict | None:
-    """Download and upload speed over SAMPLE seconds, summed over the physical interfaces."""
-    first = tool_text(["netstat", "-ibn"])
-    if first is None:
-        return None
-    started = time.monotonic()
-    time.sleep(SAMPLE)
+    """Download and upload speed over SAMPLE seconds (or since the last round of --watch), summed over the physical interfaces."""
+    last = previous("network")
+    if last is not None:
+        started, before = last[0], last[1]
+    else:
+        first = tool_text(["netstat", "-ibn"])
+        if first is None:
+            return None
+        started, before = time.monotonic(), parse_netstat(first)
+        time.sleep(SAMPLE)
     second = tool_text(["netstat", "-ibn"])
     elapsed = time.monotonic() - started
-    before, after = parse_netstat(first), parse_netstat(second or "")
+    after = parse_netstat(second or "")
+    if after:
+        remember("network", after)
     names = sorted(set(before) & set(after))
     if not names:
         return None
@@ -778,17 +927,22 @@ def collect_network() -> dict | None:
 def collect_io() -> dict | None:
     """Disk reads and writes over SAMPLE seconds, from the block storage drivers' own counters."""
     command = ["ioreg", "-r", "-c", "IOBlockStorageDriver", "-a"]
-    first = run_tool(command)
-    before = parse_block_stats(first) if first else None
-    if before is None:
-        return None
-    started = time.monotonic()
-    time.sleep(SAMPLE)
+    last = previous("io")
+    if last is not None:
+        started, before = last[0], last[1]
+    else:
+        first = run_tool(command)
+        before = parse_block_stats(first) if first else None
+        if before is None:
+            return None
+        started = time.monotonic()
+        time.sleep(SAMPLE)
     second = run_tool(command)
     after = parse_block_stats(second) if second else None
     if after is None:
         return None
-    read, write, reads, writes = per_second(before, after, time.monotonic() - started)
+    remember("io", after)
+    read, write, reads, writes = per_second(before, after, time.monotonic() - started)  # type: ignore[arg-type]
     return {
         "read_bytes_per_sec": round(read),
         "write_bytes_per_sec": round(write),
@@ -811,9 +965,12 @@ def collect_battery() -> dict | None:
         return None
     if not raw.strip():
         return {"present": False}
-    return parse_battery(
-        raw, tool_text(["system_profiler", "SPPowerDataType", "-json"])
+    profiler = cached(
+        "power",
+        lambda: without_serials(tool_text(["system_profiler", "SPPowerDataType", "-json"])),
+        POWER_CACHE_SECONDS,
     )
+    return parse_battery(raw, profiler if isinstance(profiler, str) else None)
 
 
 def collect_top() -> dict | None:
@@ -1172,9 +1329,9 @@ def is_number(text: str) -> bool:
     return True
 
 
-def parse_args(args: Sequence[str]) -> tuple[str | None, bool, float | None]:
-    """(section, json, watch interval); section None means everything."""
-    section: str | None = None
+def parse_args(args: Sequence[str]) -> tuple[tuple[str, ...] | None, bool, float | None]:
+    """(sections, json, watch interval); sections None means everything. Several sections may be named."""
+    sections: list[str] = []
     as_json = False
     interval: float | None = None
     items = list(args)
@@ -1194,16 +1351,19 @@ def parse_args(args: Sequence[str]) -> tuple[str | None, bool, float | None]:
         elif arg.startswith("-"):
             raise UsageError(f"unknown option {arg}")
         elif arg in SECTION_NAMES:
-            if section is not None:
-                raise UsageError("only one section at a time")
-            section = SECTION_NAMES[arg]
+            if SECTION_NAMES[arg] not in sections:
+                sections.append(SECTION_NAMES[arg])
         else:
             raise UsageError(f"unknown section {arg!r}")
-    return section, as_json, interval
+    return (tuple(sections) or None), as_json, interval
 
 
 def watch(sections: Sequence[str], as_json: bool, interval: float) -> int:
-    """Redraw in place until Ctrl+C. JSON mode prints one object per line instead of redrawing."""
+    """Redraw in place until Ctrl+C. JSON mode prints one object per line instead of redrawing.
+    Each round measures CPU, network and disks from the round before (`previous`), so after
+    the first one nothing sleeps and every counter is read once."""
+    global _KEEP
+    _KEEP = True
     out = sys.stdout
     color = use_color(out)
     redraw = color and not as_json
@@ -1227,6 +1387,11 @@ def watch(sections: Sequence[str], as_json: bool, interval: float) -> int:
             time.sleep(max(interval - (time.monotonic() - started), 0.0))
     except KeyboardInterrupt:
         pass
+    except BrokenPipeError:
+        # The reader went away (Unlaw.app left the System part): end quietly, and keep
+        # Python's own flush at exit from reporting the same closed pipe.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), out.fileno())
+        return 0
     finally:
         if redraw:
             out.write("\x1b[?25h\n")
@@ -1240,11 +1405,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(COMMAND_HELP["sys"], end="")
         return 0
     try:
-        section, as_json, interval = parse_args(args)
+        chosen, as_json, interval = parse_args(args)
     except UsageError as error:
         print(f"ul sys: {error}\n{USAGE}", file=sys.stderr)
         return 2
-    sections = SECTIONS if section is None else (section,)
+    sections = SECTIONS if chosen is None else chosen
     if interval is not None:
         return watch(sections, as_json, interval)
     data = collect(sections)

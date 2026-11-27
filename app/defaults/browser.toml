@@ -1,19 +1,14 @@
 title = "Browser"
 icon = "globe"
-summary = "Open a link, or your homepage"
+summary = "Open a link, search the web, or open your homepage"
 
 [panel]
 [[panel.field]]
 id = "url"
 type = "text"
-label = "Link"
-placeholder = "github.com/... (empty: your homepage)"
+label = "Link or search"
+placeholder = "Search"
 
 [[panel.button]]
 label = "Open"
 args = ["{url}"]
-
-[[action]]
-id = "home"
-label = "Open the homepage"
-args = []

@@ -11,16 +11,19 @@ Usage: ul app <application>
 Example: ul app \"Visual Studio Code\"
 ";
 
-pub const BROWSER_HELP: &str = "Open a link, or the configured homepage, in your default browser.
-Usage: ul browser [link]
+pub const BROWSER_HELP: &str = "Open a link, search the web, or open the configured homepage in your default browser.
+Usage: ul browser [link | words...]
   (none)   Open apps.browser_url (default https://www.google.com/)
   link     An http(s) address; without a scheme https:// is added (github.com/x)
            Other schemes (file:, javascript:, ...) are refused.
-Setting: apps.browser_url
+  words    Anything else is searched: apps.search_url + the words
+           (default https://www.google.com/search?q=)
+Settings: apps.browser_url, apps.search_url
 Examples:
   ul browser
   ul browser github.com/SDH4114/UnLaw
-  ul config set apps.browser_url \"https://www.google.com/\"
+  ul browser rust borrow checker
+  ul config set apps.search_url \"https://duckduckgo.com/?q=\"
 ";
 
 /// An http(s) URL from what the user typed: `example.com/x` gets `https://`.
@@ -80,26 +83,61 @@ pub fn browser(args: &[String], config: &Config) -> i32 {
         print!("{BROWSER_HELP}");
         return 0;
     }
-    match args {
-        [] => open("browser", &[config.string("apps.browser_url")]),
-        [text] => match web_link(text) {
-            Ok(link) => open("browser", &[link]),
-            Err(error) => {
-                eprintln!("ul browser: {error}");
-                eprintln!("Usage: ul browser [link]");
-                2
-            }
-        },
-        _ => {
-            eprintln!("Usage: ul browser [link]  (one link, no spaces)");
+    if args.is_empty() {
+        return open("browser", &[config.string("apps.browser_url")]);
+    }
+    if let [text] = args {
+        if let Ok(link) = web_link(text) {
+            return open("browser", &[link]);
+        }
+    }
+    match search_link(&args.join(" "), &config.string("apps.search_url")) {
+        Ok(link) => open("browser", &[link]),
+        Err(error) => {
+            eprintln!("ul browser: {error}");
+            eprintln!("Usage: ul browser [link | words...]");
             2
         }
     }
 }
 
+/// `apps.search_url` + the words, percent-encoded. Refuses what looks like an
+/// option or another scheme (`-a`, `file:///etc/hosts`), and a search address
+/// that is not http(s), so `open` only ever gets a web page.
+fn search_link(words: &str, search_url: &str) -> Result<String, String> {
+    let words = words.trim();
+    let lower = words.to_ascii_lowercase();
+    if words.is_empty() || words.starts_with('-') || words.chars().any(char::is_control) {
+        return Err(format!("not a link or a search: {words:?}"));
+    }
+    if lower.contains("://") || ["javascript:", "file:", "data:"].iter().any(|scheme| lower.starts_with(scheme)) {
+        return Err(format!("only http and https links open: {words}"));
+    }
+    let base = web_link(search_url).map_err(|_| format!("apps.search_url is not an http(s) address: {search_url:?}"))?;
+    let mut query = String::new();
+    for byte in words.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => query.push(byte as char),
+            _ => query.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    Ok(format!("{base}{query}"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::web_link;
+    use super::{search_link, web_link};
+
+    #[test]
+    fn words_are_searched_and_options_or_schemes_are_not() {
+        let google = "https://www.google.com/search?q=";
+        assert_eq!(search_link("rust borrow checker", google).unwrap(), "https://www.google.com/search?q=rust%20borrow%20checker");
+        assert_eq!(search_link("кофе & tea", google).unwrap(), "https://www.google.com/search?q=%D0%BA%D0%BE%D1%84%D0%B5%20%26%20tea");
+        for bad in ["-a", "file:///etc/hosts", "javascript:alert(1)", "", "x\ny"] {
+            assert!(search_link(bad, google).is_err(), "{bad}");
+        }
+        assert!(search_link("hello", "file:///x?q=").is_err());
+    }
 
     #[test]
     fn links_get_a_scheme_and_others_are_refused() {

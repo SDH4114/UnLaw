@@ -19,7 +19,7 @@ from ulbin import CoreTestCase  # noqa: E402
 
 SEEDED = {
     "agent", "awake", "capture", "claude", "clip", "cpp", "desk", "git", "gpt", "lofi", "mac", "minecraft",
-    "music", "netflix", "obsidian", "py", "rust", "steam", "sys", "tg", "timer", "weather", "work", "yt", "zed",
+    "spotify", "netflix", "obsidian", "py", "rust", "steam", "sys", "tg", "timer", "weather", "work", "yt", "zed",
 }
 
 
@@ -91,10 +91,10 @@ class FeatureListTests(unittest.TestCase):
     def test_presets_resolve_requirements_and_cargo_features(self) -> None:
         self.assertEqual(self.run_chooser("--preset", "agent,yt").stdout, "lm agent yt\nlm,agent\n")
         self.assertEqual(self.run_chooser("--preset", "all").stdout, "all\nlm,agent,capture,game\n")
-        self.assertEqual(self.run_chooser("--preset", "music").stdout, "music\n\n")
+        self.assertEqual(self.run_chooser("--preset", "spotify").stdout, "spotify\n\n")
         self.assertEqual(self.run_chooser("--preset", "none").stdout, "none\n\n")
         self.assertEqual(self.run_chooser("--all").stdout, "all\nlm,agent,capture,game\n")
-        for bad in ("music nope", " "):
+        for bad in ("spotify nope", " "):
             result = self.run_chooser("--preset", bad)
             self.assertEqual(result.returncode, 2, bad)
 
@@ -153,7 +153,7 @@ class FeatureListTests(unittest.TestCase):
         self.assertIn("Core (always)", text)
         selection, cargo = self.result(text)
         self.assertEqual(cargo, "capture,game")
-        self.assertEqual(selection, "gpt claude yt music lofi netflix capture desk obsidian work timer clip weather git py rust cpp zed awake sys menubar mac steam minecraft game")
+        self.assertEqual(selection, "gpt claude yt spotify lofi netflix capture desk obsidian work timer clip weather git py rust cpp zed awake sys menubar mac steam minecraft game")
         code, _ = self.interactive([b"q"])
         self.assertEqual(code, 1)
         code, text = self.interactive([b"a", b" ", b"\r"])
@@ -181,12 +181,12 @@ class FeatureCommandTests(CoreTestCase):
         self.choose("yt")
         self.ok("init")
         self.assertEqual(self.seeded(), {"yt"})
-        result = self.ul("music")
+        result = self.ul("spotify")
         self.assertEqual(result.returncode, 2)
-        self.assertIn("music is not installed. Add it: ul features add music", result.stderr)
+        self.assertIn("spotify is not installed. Add it: ul features add spotify", result.stderr)
         listing = self.ok("features").stdout
         self.assertIn("[x] yt", listing)
-        self.assertIn("[ ] music", listing)
+        self.assertIn("[ ] spotify", listing)
         self.assertIn("Core (always installed)", listing)
 
     def test_default_is_everything(self) -> None:
@@ -197,17 +197,17 @@ class FeatureCommandTests(CoreTestCase):
     def test_add_and_remove_seed_and_keep_edits(self) -> None:
         self.choose("yt")
         self.ok("init")
-        added = self.ok("features", "add", "music", "lofi")
-        self.assertIn("Added: music, lofi", added.stdout)
+        added = self.ok("features", "add", "spotify", "lofi")
+        self.assertIn("Added: spotify, lofi", added.stdout)
         self.assertIn("Rebuilding ul with: the core only", added.stdout, "this test binary has game, lm and agent")
-        self.assertEqual(self.seeded(), {"yt", "music", "lofi"})
-        self.assertIn('features = ["yt", "music", "lofi"]', (self.unlaw / "config.toml").read_text())
+        self.assertEqual(self.seeded(), {"yt", "spotify", "lofi"})
+        self.assertIn('features = ["yt", "spotify", "lofi"]', (self.unlaw / "config.toml").read_text())
         script = self.unlaw / "commands" / "yt" / "main.py"
         script.write_text(script.read_text() + "# mine\n")
-        removed = self.ok("features", "remove", "yt", "music")
+        removed = self.ok("features", "remove", "yt", "spotify")
         self.assertIn("Kept commands/yt: you edited it", removed.stdout)
         self.assertEqual(self.seeded(), {"yt", "lofi"})
-        self.assertFalse((self.unlaw / "commands" / "music").exists())
+        self.assertFalse((self.unlaw / "commands" / "spotify").exists())
         self.ok("init")
         self.assertEqual(self.seeded(), {"yt", "lofi"}, "removed seeds do not come back")
 
@@ -239,9 +239,9 @@ class FeatureCommandTests(CoreTestCase):
         self.assertEqual(self.seeded(), set())
 
     def test_linked_commands_are_never_migrated_or_removed(self) -> None:
-        self.choose("music")
+        self.choose("spotify")
         self.ok("init")
-        script = self.unlaw / "commands/music/main.py"
+        script = self.unlaw / "commands/spotify/main.py"
         external = self.root / "external"
         external.mkdir()
         original = script.read_bytes()
@@ -254,8 +254,8 @@ class FeatureCommandTests(CoreTestCase):
         self.assertTrue(script.parent.is_symlink())
 
     def test_dangling_seed_link_is_not_followed(self) -> None:
-        self.choose("music")
-        directory = self.unlaw / "commands/music"
+        self.choose("spotify")
+        directory = self.unlaw / "commands/spotify"
         directory.mkdir(parents=True)
         target = self.root / "missing.py"
         (directory / "main.py").symlink_to(target)
@@ -292,7 +292,7 @@ class FeatureCommandTests(CoreTestCase):
             self.assertEqual(unlaw[unlaw.index("--rev") + 1], commit)
 
     def test_update_builds_only_chosen_cargo_features(self) -> None:
-        self.choose("yt", "music")
+        self.choose("yt", "spotify")
         log = self.cargo_log
         self.ok("update", "--force")
         unlaw, ule = self.calls(log)

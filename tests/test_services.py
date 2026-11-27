@@ -334,6 +334,12 @@ class TelegramTests(ServiceTestCase):
             self.assertEqual(telegram.main([]), 0)
         self.assertEqual(self.lines(self.open_log), ["-a|Telegram"])
 
+    def test_open_works_without_a_terminal(self) -> None:
+        # Unlaw.app runs commands with an empty stdin; `open` must not read it as a message.
+        with patch.object(sys, "stdin", io.StringIO("")):
+            self.assertEqual(telegram.main(["open"]), 0)
+        self.assertEqual(self.lines(self.open_log), ["-a|Telegram"])
+
 
 
 class HarnessTests(ServiceTestCase):

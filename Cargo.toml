@@ -49,7 +49,9 @@ agent = []
 capture = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-core-foundation", "dep:objc2-core-media", "dep:objc2-av-foundation", "dep:objc2-screen-capture-kit", "dep:block2"]
 
 [dependencies]
-crossterm = { version = "0.28", default-features = false, features = ["events", "bracketed-paste"] }
+# use-dev-tty: crossterm's other unix event source (poll + read). The default (mio) one spins
+# forever on a closed terminal, so a full-screen program never returned to notice it.
+crossterm = { version = "0.28", default-features = false, features = ["events", "bracketed-paste", "use-dev-tty"] }
 libc = "0.2"
 serde_json = "1"
 sha2 = "0.10"

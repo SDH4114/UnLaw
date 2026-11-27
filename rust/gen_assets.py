@@ -53,7 +53,7 @@ def main() -> int:
         command_source,
     )
     from unlawful.config import DEFAULT_COMMAND_NAMES, DEFAULT_CONFIG, serialize_config
-    from unlawful.features import CARGO, CORE, FEATURES, REQUIRES, RETIRED
+    from unlawful.features import CARGO, CORE, FEATURES, RENAMED, REQUIRES, RETIRED
 
     seeds = output / "seeds"
     seeds.mkdir(parents=True, exist_ok=True)
@@ -88,6 +88,9 @@ def main() -> int:
     lines.append(f"pub const FEATURE_CORE: &str = {json.dumps(CORE)};")
     lines.append("/// Features of earlier releases, accepted in core.features and ignored.")
     lines.append(f"pub const FEATURE_RETIRED: &[&str] = &[{', '.join(json.dumps(name) for name in RETIRED)}];")
+    lines.append("/// Renamed features: (old name, new name); the old name selects the new feature.")
+    renamed = ", ".join(f"({json.dumps(old)}, {json.dumps(new)})" for old, new in RENAMED.items())
+    lines.append(f"pub const FEATURE_RENAMED: &[(&str, &str)] = &[{renamed}];")
     lines.append("/// (name, group, summary, cargo feature, seeded command, requirements) from src/unlawful/features.py.")
     lines.append("pub type FeatureRow = (&'static str, &'static str, &'static str, bool, bool, &'static [&'static str]);")
     lines.append("pub const FEATURE_LIST: &[FeatureRow] = &[")

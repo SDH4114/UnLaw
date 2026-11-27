@@ -36,7 +36,7 @@ use unlaw_app::views;
 use crate::platform;
 
 mod home;
-use home::{home_window, HomeState, HOME_DESK};
+use home::{HomeState, HOME_DESK};
 
 const PAGE: &str = include_str!("../ui/index.html");
 const CSS: &str = include_str!("../ui/app.css");
@@ -48,6 +48,9 @@ const HOME_CSS: &str = include_str!("../ui/home.css");
 const HOME_JS: &str = include_str!("../ui/home.js");
 const PALETTE_SIZE: (f64, f64) = (680.0, 460.0);
 const PANEL_WIDTH: f64 = 360.0;
+const TOAST_WIDTH: f64 = 340.0;
+/// How long a note stays (a failure a little longer: it has more to read).
+const TOAST_SECONDS: (u64, u64) = (3, 6);
 const PANEL_MAX_WIDTH: f64 = 760.0;
 
 /// A panel's normal width: the app's own views are laid out for theirs.
@@ -69,6 +72,9 @@ enum View {
     Panel,
     /// The main window (Dock icon): Commands, System, Clipboard, Games, Desk.
     Home,
+    /// A small note in the screen's top-right corner ("Copied", an error), instead of
+    /// macOS notifications: one look everywhere, gone by itself, never takes the focus.
+    Toast,
 }
 
 impl View {
@@ -77,6 +83,7 @@ impl View {
             View::Palette => "palette",
             View::Panel => "panel",
             View::Home => "home",
+            View::Toast => "toast",
         }
     }
 }
@@ -95,6 +102,9 @@ enum UserEvent {
         outcome: Outcome,
         /// Started by a toggle click: no notification when it worked.
         quiet: bool,
+        /// Started from the palette's inline input: a short answer is a notification,
+        /// a long one or a failure opens the command's panel with it.
+        quick: bool,
     },
     Served {
         name: String,
@@ -110,6 +120,16 @@ enum UserEvent {
     Terminate,
     /// A message for the main window's page.
     Home(Json),
+    /// A message for the palette's page (the clipboard history it lists).
+    Palette(Json),
+    /// A note from a worker thread (`App::toast`).
+    Toast {
+        title: String,
+        text: String,
+        ok: bool,
+    },
+    /// The note's time is up (its generation: a newer note stays).
+    ToastHide(u64),
     /// A view panel's reads (`views::reads`) or the end of its action.
     Panel {
         name: String,
@@ -120,6 +140,13 @@ enum UserEvent {
     GameEnded {
         id: u64,
         error: Option<String>,
+    },
+    /// Files dropped on the palette (full paths, which a page never gets).
+    Dropped(Vec<PathBuf>),
+    /// A round of `ul sys --json --watch` (None: the watch ended).
+    SysData {
+        id: u64,
+        data: Option<Json>,
     },
     /// `ul desk` for the main window is serving (or failed to start).
     DeskServed(Result<(Child, String), String>),
@@ -140,6 +167,8 @@ enum From {
     Elsewhere,
     /// The menu bar item's own switch: the icon is the answer, a notification only on failure.
     Toggle,
+    /// The palette's inline input (`Spec::quick`).
+    Quick,
 }
 
 struct Page {
@@ -154,11 +183,20 @@ struct Page {
 
 struct Glass {
     window: Window,
-    webview: WebView,
+    /// None while unloaded: the panel and the main window give their WebKit
+    /// process back once hidden for a while (`unload_hidden`) and load again
+    /// when shown (`ensure_page`). The palette keeps its page, so Ctrl+Space is instant.
+    webview: Option<WebView>,
     ready: bool,
     /// Messages sent before the page loaded; delivered once it says ready.
     pending: Vec<Json>,
+    /// Since when the window has been hidden with its page loaded.
+    hidden_since: Option<Instant>,
 }
+
+/// How long a hidden panel or main window keeps its page before it is unloaded:
+/// long enough that reopening it soon after is instant.
+const UNLOAD_AFTER: Duration = Duration::from_secs(30);
 
 enum HotkeyJob {
     Palette,
@@ -176,6 +214,8 @@ struct App {
     statuses: HashMap<String, StatusText>,
     generation: Arc<AtomicU64>,
     palette: Glass,
+    /// The palette's inline input is open: it stays when another app takes the focus.
+    palette_keep: bool,
     panel: Glass,
     panel_for: Option<String>,
     pages: HashMap<String, Page>,
@@ -205,6 +245,11 @@ struct App {
     own_write: Option<SystemTime>,
     home: Glass,
     home_state: HomeState,
+    toast: Glass,
+    /// Counts notes shown: a timer hides only its own note, not a newer one.
+    toast_generation: u64,
+    /// What a click on the note opens: the command's panel with the whole output.
+    toast_more: Option<(String, bool, String)>,
     /// The app menu (Unlaw, Edit, View, Window) while Unlaw is in the Dock.
     app_menu: Option<Menu>,
 }
@@ -223,7 +268,57 @@ fn content(path: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
+/// `%20` and friends in a URL path, as UTF-8 (None when it is not).
+fn percent_decoded(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = text.get(index + 1..index + 3)?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// `ulapp://localhost/appicon/<Name>.png`: an installed application's icon (the
+/// command tiles and palette rows of app launchers), made once and kept.
+fn serve_app_icon(file: &str) -> Response<Cow<'static, [u8]>> {
+    static CACHE: std::sync::Mutex<Option<HashMap<String, Option<Vec<u8>>>>> = std::sync::Mutex::new(None);
+    let missing = || {
+        Response::builder()
+            .status(404)
+            .body(Cow::Borrowed(&b""[..]))
+            .unwrap_or_else(|_| Response::new(Cow::Borrowed(&b""[..])))
+    };
+    let Some(name) = file.strip_suffix(".png").and_then(percent_decoded).filter(|name| settings::app_name_ok(name))
+    else {
+        return missing();
+    };
+    let mut cache = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let cache = cache.get_or_insert_with(HashMap::new);
+    #[cfg(target_os = "macos")]
+    let png = cache.entry(name.clone()).or_insert_with(|| platform::app_icon_png(&name, 64.0)).clone();
+    #[cfg(not(target_os = "macos"))]
+    let png: Option<Vec<u8>> = None;
+    match png {
+        Some(png) => Response::builder()
+            .header(CONTENT_TYPE, "image/png")
+            .body(Cow::Owned(png))
+            .unwrap_or_else(|_| Response::new(Cow::Borrowed(&b""[..]))),
+        None => missing(),
+    }
+}
+
 fn serve_asset(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
+    if let Some(file) = request.uri().path().strip_prefix("/appicon/") {
+        return serve_app_icon(file);
+    }
     match content(request.uri().path()) {
         Some((body, kind)) => Response::builder()
             .header(CONTENT_TYPE, kind)
@@ -240,9 +335,14 @@ fn glass(target: &EventLoopWindowTarget<UserEvent>, proxy: &EventLoopProxy<UserE
     let size = match view {
         View::Palette => LogicalSize::new(PALETTE_SIZE.0, PALETTE_SIZE.1),
         View::Panel | View::Home => LogicalSize::new(PANEL_WIDTH, 300.0),
+        View::Toast => LogicalSize::new(TOAST_WIDTH, 64.0),
     };
     let window = WindowBuilder::new()
-        .with_title(if view == View::Palette { "Unlaw" } else { "Unlaw panel" })
+        .with_title(match view {
+            View::Palette => "Unlaw",
+            View::Toast => "Unlaw note",
+            _ => "Unlaw panel",
+        })
         .with_decorations(false)
         .with_transparent(true)
         .with_resizable(false)
@@ -251,7 +351,19 @@ fn glass(target: &EventLoopWindowTarget<UserEvent>, proxy: &EventLoopProxy<UserE
         .with_inner_size(size)
         .build(target)
         .expect("a window");
+    // Only the palette loads its page at start; the panel loads on first use.
+    let webview = (view == View::Palette).then(|| page_for(&window, proxy, view));
+    Glass { window, webview, ready: false, pending: Vec::new(), hidden_since: None }
+}
+
+/// The web view of a glass window, with its blur. Built after the window
+/// exists and again whenever an unloaded window is shown.
+fn page_for(window: &Window, proxy: &EventLoopProxy<UserEvent>, view: View) -> WebView {
+    if view == View::Home {
+        return home::home_webview(window, proxy);
+    }
     let ipc = proxy.clone();
+    let drop_proxy = proxy.clone();
     let webview = WebViewBuilder::new()
         .with_transparent(true)
         .with_custom_protocol("ulapp".into(), |_, request| serve_asset(request))
@@ -264,21 +376,30 @@ fn glass(target: &EventLoopWindowTarget<UserEvent>, proxy: &EventLoopProxy<UserE
         })
         .with_navigation_handler(|url| url.starts_with("ulapp://"))
         .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
+        .with_drag_drop_handler(move |event| match event {
+            // Only the palette takes files (paths for its inline input); a drop never navigates.
+            wry::DragDropEvent::Drop { paths, .. } if view == View::Palette => {
+                let _ = drop_proxy.send_event(UserEvent::Dropped(paths));
+                true
+            }
+            wry::DragDropEvent::Drop { .. } => true,
+            _ => false,
+        })
         .with_accept_first_mouse(true)
-        .build(&window)
+        .build(window)
         .expect("a web view");
     // After the web view: wry makes its own content view, which would drop a
-    // blur view added before it.
+    // blur view added before it (and a rebuilt page gets a new content view).
     #[cfg(target_os = "macos")]
     {
         use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
         let material =
             if view == View::Palette { NSVisualEffectMaterial::HudWindow } else { NSVisualEffectMaterial::Popover };
-        if let Err(error) = apply_vibrancy(&window, material, Some(NSVisualEffectState::Active), Some(14.0)) {
+        if let Err(error) = apply_vibrancy(window, material, Some(NSVisualEffectState::Active), Some(14.0)) {
             eprintln!("ul-app: no glass for the {}: {error}", view.name());
         }
     }
-    Glass { window, webview, ready: false, pending: Vec::new() }
+    webview
 }
 
 fn code_for(key: &str) -> Option<Code> {
@@ -371,16 +492,64 @@ fn modified(path: &Path) -> Option<SystemTime> {
 }
 
 impl App {
-    fn send(&mut self, view: View, message: Json) {
-        let glass = match view {
+    fn glass_mut(&mut self, view: View) -> &mut Glass {
+        match view {
             View::Palette => &mut self.palette,
             View::Panel => &mut self.panel,
             View::Home => &mut self.home,
-        };
-        if glass.ready {
-            let _ = glass.webview.evaluate_script(&format!("window.ul.receive({message})"));
-        } else if glass.pending.len() < 64 {
-            glass.pending.push(message);
+            View::Toast => &mut self.toast,
+        }
+    }
+
+    fn send(&mut self, view: View, message: Json) {
+        let glass = self.glass_mut(view);
+        match (&glass.webview, glass.ready) {
+            (Some(webview), true) => {
+                let _ = webview.evaluate_script(&format!("window.ul.receive({message})"));
+            }
+            (Some(_), false) if glass.pending.len() < 64 => glass.pending.push(message),
+            // No page: it gets everything it needs in `init` when it loads again.
+            _ => {}
+        }
+    }
+
+    /// Loads the window's page if it was unloaded (or never loaded); call before showing it.
+    fn ensure_page(&mut self, view: View) {
+        let proxy = self.proxy.clone();
+        let glass = self.glass_mut(view);
+        glass.hidden_since = None;
+        if glass.webview.is_none() {
+            debug(&format!("loading the {} page", view.name()));
+            glass.ready = false;
+            glass.pending.clear();
+            glass.webview = Some(page_for(&glass.window, &proxy, view));
+        }
+    }
+
+    /// Unloads the pages of the panel and the main window hidden for
+    /// `UNLOAD_AFTER`: each page is a WebKit process of 20-45 MB.
+    fn unload_hidden(&mut self) {
+        for view in [View::Panel, View::Home, View::Toast] {
+            let glass = self.glass_mut(view);
+            if glass.window.is_visible() || glass.webview.is_none() {
+                glass.hidden_since = None;
+                continue;
+            }
+            let since = *glass.hidden_since.get_or_insert_with(Instant::now);
+            if since.elapsed() < UNLOAD_AFTER {
+                continue;
+            }
+            debug(&format!("unloading the hidden {} page", view.name()));
+            glass.webview = None;
+            glass.ready = false;
+            glass.pending.clear();
+            glass.hidden_since = None;
+            if view == View::Home {
+                // The desk view lives in the main window's content view, which goes with the page.
+                self.unload_desk();
+            } else {
+                self.panel_for = None;
+            }
         }
     }
 
@@ -455,6 +624,9 @@ impl App {
                 let mut item = spec::to_json(spec);
                 item["pinned"] = json!(self.settings.menubar.contains(&spec.name));
                 item["panel"] = json!(spec.panel.is_some());
+                // Counts for `panelAddsMore` (Tab opens the panel only when it shows more than the inline input).
+                item["fields"] = json!(spec.panel.as_ref().map_or(0, |panel| panel.fields.len()));
+                item["buttons"] = json!(spec.panel.as_ref().map_or(0, |panel| panel.buttons.len()));
                 // Takes a typed link (`ul browser <link>`): the palette offers "Open link".
                 item["link"] =
                     json!(spec.panel.as_ref().is_some_and(|panel| panel.fields.iter().any(|field| field.id == "url")));
@@ -546,6 +718,23 @@ impl App {
                 .ok();
         }
         for name in self.settings.menubar.clone().iter().rev() {
+            // An application pinned from Open app: its own icon, a click opens it.
+            if let Some(app) = settings::pinned_app(name) {
+                let tray = TrayIconBuilder::new()
+                    .with_id(name.as_str())
+                    .with_tooltip(app)
+                    .with_menu_on_left_click(false)
+                    .with_menu_on_right_click(false)
+                    .build();
+                if let Ok(tray) = tray {
+                    #[cfg(target_os = "macos")]
+                    if !platform::set_app_icon(&tray, app) {
+                        platform::set_symbol(&tray, "app");
+                    }
+                    self.trays.push((name.clone(), tray));
+                }
+                continue;
+            }
             let Some((spec, _)) = self.specs.get(name).filter(|(spec, _)| spec.in_app) else { continue };
             let title = self.statuses.get(name).map(|status| status.text.clone()).unwrap_or_default();
             let tray = TrayIconBuilder::new()
@@ -556,9 +745,15 @@ impl App {
                 .with_menu_on_right_click(false)
                 .build();
             if let Ok(tray) = tray {
-                let icon = self.statuses.get(name).and_then(|status| status.icon.clone()).unwrap_or(spec.icon.clone());
+                let reading = self.statuses.get(name).and_then(|status| status.icon.clone());
+                let icon = reading.clone().unwrap_or(spec.icon.clone());
+                // ChatGPT, Telegram, Spotify...: the app's own icon in colour when it is installed.
                 #[cfg(target_os = "macos")]
-                platform::set_symbol(&tray, &icon);
+                if !(reading.is_none()
+                    && spec.app_icon.as_deref().is_some_and(|app| platform::set_app_icon(&tray, app)))
+                {
+                    platform::set_symbol(&tray, &icon);
+                }
                 self.trays.push((name.clone(), tray));
             }
         }
@@ -575,7 +770,13 @@ impl App {
         let Some((Spec { status: Some(status), in_app: true, .. }, _)) = self.specs.get(name) else { return None };
         let mut status = status.clone();
         if name == "sys" {
+            // Only the parts the chosen readings use; none chosen = the icon alone, nothing to read.
+            let sections = settings::sys_sections(&self.settings.sys);
+            if sections.is_empty() {
+                return None;
+            }
             status.text = Some(settings::sys_template(&self.settings.sys).unwrap_or_default());
+            status.args = sections.iter().map(|section| section.to_string()).chain(["--json".to_string()]).collect();
         }
         Some(status)
     }
@@ -626,7 +827,12 @@ impl App {
         let changed = self.statuses.get(&name) != Some(&text);
         if let (true, Some((_, tray))) = (changed, self.trays.iter().find(|(pinned, _)| *pinned == name)) {
             tray.set_title(Some(&text.text));
-            let icon = text.icon.clone().or_else(|| self.specs.get(&name).map(|(spec, _)| spec.icon.clone()));
+            // A command with its app's icon keeps it unless the reading names an icon.
+            let app_icon = self.specs.get(&name).and_then(|(spec, _)| spec.app_icon.clone());
+            let icon = match (&text.icon, app_icon) {
+                (None, Some(_)) => None,
+                _ => text.icon.clone().or_else(|| self.specs.get(&name).map(|(spec, _)| spec.icon.clone())),
+            };
             #[cfg(target_os = "macos")]
             if let Some(icon) = icon {
                 platform::set_symbol(tray, &icon);
@@ -644,6 +850,10 @@ impl App {
     fn on_tray(&mut self, event: TrayIconEvent) {
         debug(&format!("tray {event:?}"));
         let TrayIconEvent::Click { id, rect, button, button_state: MouseButtonState::Up, .. } = event else { return };
+        if let Some(app) = settings::pinned_app(&id.0).map(str::to_string) {
+            self.run("app", vec![app], "Open", From::Elsewhere);
+            return;
+        }
         let Some(name) = id.0.strip_prefix("cmd:").map(str::to_string) else { return };
         let Some((spec, _)) = self.specs.get(&name) else { return };
         let opens = spec.open.is_some() && button == MouseButton::Left;
@@ -673,7 +883,7 @@ impl App {
         } else if let Some(id) = spec.only_action().map(|action| action.id.clone()) {
             self.run_action(&name, &id, From::Elsewhere);
         } else {
-            self.show_panel(&name, Some(anchor));
+            self.open_panel(&name, Some(anchor));
         }
     }
 
@@ -751,10 +961,19 @@ impl App {
                     self.show_palette();
                 }
             }
+            HotkeyJob::Command(_, Target::Template(template)) => {
+                let template = template.clone();
+                self.launch_template(&template);
+            }
             HotkeyJob::Command(name, target) => {
                 let (name, target) = (name.clone(), target.clone());
                 if self.specs.get(&name).is_some_and(|(spec, _)| !spec.in_app) {
-                    platform::notify("Unlaw", &format!("ul {name} is a terminal command; run it in your terminal."));
+                    self.toast(
+                        "Unlaw",
+                        &format!("ul {name} is a terminal command; run it in your terminal."),
+                        false,
+                        None,
+                    );
                     return;
                 }
                 let section = self.specs.get(&name).and_then(|(spec, _)| spec.section.clone());
@@ -765,11 +984,12 @@ impl App {
                             let id = action.id.clone();
                             self.run_action(&name, &id, From::Elsewhere)
                         }
-                        None => self.show_panel(&name, None),
+                        None => self.open_panel(&name, None),
                     },
                     Target::Open => self.open_page(&name),
                     Target::Run => self.run(&name, Vec::new(), &name, From::Elsewhere),
                     Target::Action(id) => self.run_action(&name, &id, From::Elsewhere),
+                    Target::Template(_) => {}
                 }
             }
         }
@@ -777,7 +997,128 @@ impl App {
 
     // ---------- windows ----------
 
+    /// The clipboard history for the palette's list (newest first, like `ul clip list`).
+    fn palette_clips(&self) {
+        let Some(ul) = self.ul.clone() else { return };
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            let argv = ["clip", "list", "200", "--json", "--short"].map(String::from);
+            let outcome = runner::run_capped(&ul, &argv, Duration::from_secs(10), runner::MAX_LIST_OUTPUT);
+            let items =
+                serde_json::from_str::<Json>(&outcome.stdout).ok().filter(|_| outcome.ok()).filter(Json::is_array);
+            let message = match items {
+                Some(items) => json!({"type": "clip-history", "items": items}),
+                None => json!({"type": "clip-history", "items": [], "error": outcome.summary(3)}),
+            };
+            let _ = proxy.send_event(UserEvent::Palette(message));
+        });
+    }
+
+    /// What the user opens (menu bar item, hotkey, tile, palette): a panel whose every
+    /// part is a palette row is not shown; the palette lists the command's functions.
+    fn open_panel(&mut self, name: &str, anchor: Option<(PhysicalPosition<f64>, PhysicalSize<u32>)>) {
+        let Some((spec, _)) = self.specs.get(name).cloned() else { return };
+        // A part of the main window (Arcade, Desk) opens there, never as a one-button panel.
+        if let (None, Some(section)) = (&spec.view, spec.section.clone()) {
+            self.palette.window.set_visible(false);
+            self.show_home(Some(&section));
+            return;
+        }
+        // A panel that would hold one button says nothing: do what it would do.
+        if spec.view.is_none() && spec.panel.is_none() {
+            if let Some(id) = spec.only_action().map(|action| action.id.clone()) {
+                self.palette.window.set_visible(false);
+                self.run_action(name, &id, From::Elsewhere); // ChatGPT, Lofi, Steam: open it
+                return;
+            }
+            if spec.actions.is_empty() {
+                self.run(name, Vec::new(), "Run", From::Elsewhere);
+                return;
+            }
+        }
+        if spec.palette_covers() {
+            self.panel.window.set_visible(false);
+            self.show_palette();
+            self.send(View::Palette, json!({"type": "functions", "name": name}));
+            return;
+        }
+        self.show_panel(name, anchor);
+    }
+
+    /// Start a template from a hotkey or the palette: `ul _template-launch`, which starts
+    /// the template only (never a command of that name). A note says how it went.
+    fn launch_template(&mut self, name: &str) {
+        if !settings::template_name_ok(name) {
+            return;
+        }
+        let Some(ul) = self.ul.clone() else { return };
+        self.palette.window.set_visible(false);
+        let (proxy, name) = (self.proxy.clone(), name.to_string());
+        thread::spawn(move || {
+            let outcome = runner::run(&ul, &["_template-launch".into(), name.clone()], Duration::from_secs(90));
+            let text = if outcome.ok() { "Opened".to_string() } else { outcome.summary(2) };
+            let _ = proxy.send_event(UserEvent::Toast { title: format!("Template {name}"), text, ok: outcome.ok() });
+        });
+    }
+
+    /// Template names for the palette (it lists them as rows), read when it opens.
+    fn send_templates_to_palette(&self) {
+        let Some(ul) = self.ul.clone() else { return };
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            let argv = ["template", "list", "--json"].map(String::from);
+            let outcome = runner::run_capped(&ul, &argv, Duration::from_secs(10), runner::MAX_LIST_OUTPUT);
+            let items: Vec<Json> = serde_json::from_str::<Json>(&outcome.stdout)
+                .ok()
+                .and_then(|list| list.as_array().cloned())
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|item| {
+                    let name = item["name"].as_str().filter(|name| settings::template_name_ok(name))?;
+                    Some(json!({"name": name, "path": item["path"], "focus": item["focus"]}))
+                })
+                .collect();
+            let _ = proxy.send_event(UserEvent::Palette(json!({"type": "templates", "items": items})));
+        });
+    }
+
+    /// The command's panel showing a run's whole output.
+    fn show_panel_result(&mut self, name: &str, ok: bool, text: &str) {
+        self.show_panel(name, None);
+        self.send(View::Panel, json!({"type": "result", "name": name, "ok": ok, "text": text}));
+    }
+
+    /// A short note in the top-right corner of the screen under the cursor: the title,
+    /// the first line of `text` (two at most), green or red. `more` = (command, ok, whole
+    /// output): a click on the note opens the command's panel with all of it.
+    fn toast(&mut self, title: &str, text: &str, ok: bool, more: Option<(String, String)>) {
+        self.ensure_page(View::Toast);
+        let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+        let shown = lines.iter().take(2).copied().collect::<Vec<_>>().join("\n");
+        let longer = lines.len() > 2 || shown.chars().count() > 160;
+        self.toast_more = more.filter(|_| longer || !ok).map(|(name, all)| (name, ok, all));
+        self.toast_generation += 1;
+        let window = &self.toast.window;
+        if let Some(screen) = screen_under_cursor(window) {
+            // Below the menu bar, at the right edge, where macOS shows its own notes.
+            let x = screen.x + screen.width - TOAST_WIDTH - 12.0;
+            window.set_outer_position(LogicalPosition::new(x, screen.y + 38.0));
+        }
+        self.send(
+            View::Toast,
+            json!({"type": "toast", "title": title, "text": shown, "ok": ok, "more": self.toast_more.is_some()}),
+        );
+        platform::show_without_focus(&self.toast.window);
+        let (proxy, generation) = (self.proxy.clone(), self.toast_generation);
+        let seconds = if ok { TOAST_SECONDS.0 } else { TOAST_SECONDS.1 } + u64::from(self.toast_more.is_some());
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(seconds));
+            let _ = proxy.send_event(UserEvent::ToastHide(generation));
+        });
+    }
+
     fn show_palette(&mut self) {
+        self.palette_keep = false;
         self.panel.window.set_visible(false);
         self.end_drag();
         let window = &self.palette.window;
@@ -792,10 +1133,12 @@ impl App {
         self.send(View::Palette, json!({"type": "reset"}));
         // New or removed commands since the last look; ul answers in ~10 ms.
         self.reload_commands();
+        self.send_templates_to_palette();
     }
 
     fn show_panel(&mut self, name: &str, anchor: Option<(PhysicalPosition<f64>, PhysicalSize<u32>)>) {
         let Some((spec, problem)) = self.specs.get(name).cloned() else { return };
+        self.ensure_page(View::Panel);
         self.palette.window.set_visible(false);
         self.panel_for = Some(name.to_string());
         self.end_drag();
@@ -881,7 +1224,7 @@ impl App {
         let (mut child, url) = match result {
             Ok(served) => served,
             Err(error) => {
-                platform::notify(&title, &format!("Could not open: {error}"));
+                self.toast(&title, &format!("Could not open: {error}"), false, None);
                 return;
             }
         };
@@ -894,7 +1237,7 @@ impl App {
             Ok(window) => window,
             Err(error) => {
                 runner::stop_group(&mut child, Duration::from_secs(3));
-                platform::notify(&title, &error.to_string());
+                self.toast(&title, &error.to_string(), false, None);
                 return;
             }
         };
@@ -906,7 +1249,7 @@ impl App {
             }
             Err(error) => {
                 runner::stop_group(&mut child, Duration::from_secs(3));
-                platform::notify(&title, &error.to_string());
+                self.toast(&title, &error.to_string(), false, None);
             }
         }
     }
@@ -951,7 +1294,7 @@ impl App {
         let path = settings::path();
         if !path.exists() {
             if let Err(error) = write_settings(settings::DEFAULT) {
-                platform::notify("Unlaw", &format!("Could not create {}: {error}", path.display()));
+                self.toast("Unlaw", &format!("Could not create {}: {error}", path.display()), false, None);
                 return;
             }
         }
@@ -978,14 +1321,87 @@ impl App {
         }
         let argv = command_line(name, &args);
         if self.running.contains(&argv) {
-            return; // the same run is still going (a double click, a repeated hotkey)
+            // The same run is still going (a double click, a repeated hotkey). A panel showing
+            // "label…" gets an answer now: the first run may be a quiet toggle that never reports.
+            if from == From::Panel {
+                self.send(View::Panel, json!({"type": "result", "name": name, "ok": true, "text": "Already running."}));
+            }
+            return;
         }
         self.running.push(argv.clone());
         let (proxy, name, label) = (self.proxy.clone(), name.to_string(), format!("{title}: {label}"));
         thread::spawn(move || {
             let outcome = runner::run(&ul, &argv, ACTION_TIMEOUT);
-            let _ = proxy.send_event(UserEvent::Finished { name, label, argv, outcome, quiet: from == From::Toggle });
+            let _ = proxy.send_event(UserEvent::Finished {
+                name,
+                label,
+                argv,
+                outcome,
+                quiet: from == From::Toggle,
+                quick: from == From::Quick,
+            });
         });
+    }
+
+    /// The palette's inline input: `value` into the command's quick field, the
+    /// other fields on their defaults, through the same checks as a panel button.
+    /// A palette row of a form (`Spec::choices`): `button` + `fixed` name the row (only
+    /// rows the spec offers are run), `value` is the typed text. Without `button`, the
+    /// command's first input (`name text` typed in the search bar).
+    fn run_quick(&mut self, name: &str, message: &Json) {
+        self.palette_keep = false;
+        let value = message["value"].as_str().unwrap_or("");
+        let Some((spec, _)) = self.specs.get(name).cloned() else { return };
+        let (Some(quick), Some(panel)) = (spec.quick(), spec.panel.as_ref()) else { return };
+        if spec.view.is_some() {
+            // A view (weather) searches in its own panel.
+            self.palette.window.set_visible(false);
+            self.show_panel(name, None);
+            self.send(View::Panel, json!({"type": "view-query", "name": name, "value": value}));
+            return;
+        }
+        let choices = spec.choices();
+        let choice = match message["button"].as_u64() {
+            Some(index) => {
+                let fixed: Vec<(String, String)> = message["fixed"]
+                    .as_object()
+                    .map(|map| {
+                        map.iter().map(|(id, option)| (id.clone(), option.as_str().unwrap_or("").to_string())).collect()
+                    })
+                    .unwrap_or_default();
+                choices.iter().find(|choice| choice.button as u64 == index && choice.fixed == fixed)
+            }
+            None => choices.iter().find(|choice| choice.button == quick.button),
+        };
+        let Some(choice) = choice.cloned() else { return };
+        let mut input = serde_json::Map::new();
+        // Empty text keeps the field's default (the timer's 25m) instead of clearing it.
+        if let (Some(field), false) = (&choice.field, value.trim().is_empty()) {
+            input.insert(field.clone(), json!(value));
+        }
+        for (id, option) in &choice.fixed {
+            input.insert(id.clone(), json!(option));
+        }
+        let button = &panel.buttons[choice.button];
+        let argv = spec::values_from(&Json::Object(input), &spec).and_then(|values| {
+            match spec::missing(panel, button, &values) {
+                Some(problem) => Err(problem),
+                None => args::expand(&button.args, &spec::argument_values(panel, &values)),
+            }
+        });
+        match argv {
+            Ok(argv) => self.run(name, argv, &choice.label, From::Quick),
+            Err(error) => self.send(View::Palette, json!({"type": "quick-error", "text": error})),
+        }
+    }
+
+    /// Dropped files go to the palette page as text for its inline input.
+    fn on_dropped(&mut self, paths: Vec<PathBuf>) {
+        let paths: Vec<String> = paths.iter().filter_map(|path| path.to_str().map(str::to_string)).take(16).collect();
+        if !paths.is_empty() && self.palette.window.is_visible() {
+            self.palette.window.set_focus();
+            self.send(View::Palette, json!({"type": "dropped", "paths": paths}));
+        }
     }
 
     fn run_action(&mut self, name: &str, id: &str, from: From) {
@@ -999,19 +1415,35 @@ impl App {
         self.run(name, action.args, &action.label, from);
     }
 
-    fn on_finished(&mut self, name: String, label: String, argv: Vec<String>, outcome: Outcome, quiet: bool) {
+    fn on_finished(
+        &mut self,
+        name: String,
+        label: String,
+        argv: Vec<String>,
+        outcome: Outcome,
+        quiet: bool,
+        quick: bool,
+    ) {
         self.running.retain(|running| *running != argv);
         // The command's panel, when open, gets the result whoever started the run
         // (it was told the run was busy and disabled its buttons).
+        let text = outcome.summary(40);
+        let long = text.lines().filter(|line| !line.trim().is_empty()).count() > 2 || text.chars().count() > 160;
         if quiet && outcome.ok() {
             // The menu bar icon shows it.
         } else if self.panel.window.is_visible() && self.panel_for.as_deref() == Some(&name) {
-            let text = outcome.summary(40);
             self.send(View::Panel, json!({"type": "result", "name": name, "ok": outcome.ok(), "text": text}));
+        } else if outcome.ok() && long {
+            // A table (top processes, a forecast) is read in the panel, never squeezed into a note.
+            self.show_panel_result(&name, true, &text);
+        } else if outcome.ok() {
+            // Opening an app or a link prints nothing: a quick run then says nothing.
+            if !text.trim().is_empty() || !quick {
+                self.toast(&label, if text.trim().is_empty() { "Done" } else { &text }, true, None);
+            }
         } else {
-            let text = outcome.summary(3);
-            let text = if outcome.ok() { text } else { format!("Failed: {text}") };
-            platform::notify(&label, &text);
+            let first = text.lines().find(|line| !line.trim().is_empty()).unwrap_or("Failed").to_string();
+            self.toast(&label, &first, false, Some((name.clone(), text)));
         }
         // A command that changed something often changes its status too.
         if self.settings.menubar.contains(&name) {
@@ -1026,6 +1458,20 @@ impl App {
         // (opening it again starts the view anew).
         if !self.panel.window.is_visible() || self.panel_for.as_deref() != Some(name) {
             self.send(View::Panel, json!({"type": "view-stop"}));
+            return;
+        }
+        if view == "system" {
+            // The shared watch pushes every round (`on_sys_data`); a popover opened while
+            // it runs gets the newest round at once.
+            let first = std::mem::take(&mut self.view_first);
+            self.ensure_sys_feed();
+            let latest = self.sys_latest();
+            if let (true, Some(data)) = (first, latest) {
+                self.send(
+                    View::Panel,
+                    json!({"type": "view-data", "name": name, "data": {"sys": data}, "error": null}),
+                );
+            }
             return;
         }
         if self.view_reading {
@@ -1066,13 +1512,18 @@ impl App {
             }
         };
         if self.running.contains(&argv) {
+            // The view waits for an answer with its buttons off: never leave it hanging.
+            self.send(View::Panel, json!({"type": "view-done", "name": name, "ok": true, "text": "Already running."}));
             return;
         }
         self.running.push(argv.clone());
         let (name, proxy) = (name.to_string(), self.proxy.clone());
         thread::spawn(move || {
             let outcome = runner::run(&ul, &argv, Duration::from_secs(60));
-            let message = json!({"type": "view-done", "name": name, "ok": outcome.ok(), "text": outcome.summary(6), "argv": argv});
+            // A view that reads (weather's forecast) gets the command's JSON too.
+            let data = serde_json::from_str::<Json>(&outcome.stdout).ok().filter(Json::is_object);
+            let message = json!({"type": "view-done", "name": name, "ok": outcome.ok(), "text": outcome.summary(6),
+                "argv": argv, "json": data});
             let _ = proxy.send_event(UserEvent::Panel { name, message, changed: true });
         });
     }
@@ -1098,9 +1549,10 @@ impl App {
         self.panel.window.set_visible(false);
         let argv = command_line(name, &args);
         // osascript may wait for the Automation permission prompt: never on the UI thread.
+        let proxy = self.proxy.clone();
         thread::spawn(move || {
             if let Err(error) = platform::open_terminal(&ul, &argv) {
-                platform::notify("Unlaw", &error);
+                let _ = proxy.send_event(UserEvent::Toast { title: "Unlaw".into(), text: error, ok: false });
             }
         });
     }
@@ -1190,6 +1642,8 @@ impl App {
     /// closed with a note instead of staying blank.
     fn check_pages(&mut self) {
         self.check_desk();
+        self.unload_hidden();
+        self.stop_unused_sys_feed();
         let ended: Vec<String> = self
             .pages
             .iter_mut()
@@ -1199,13 +1653,21 @@ impl App {
             if let Some(page) = self.pages.remove(&name) {
                 let title = self.specs.get(&name).map(|(spec, _)| spec.title.clone()).unwrap_or_else(|| name.clone());
                 drop(page);
-                platform::notify(&title, "The page stopped; open it again from the menu bar or the palette.");
+                self.toast(&title, "The page stopped; open it again from the menu bar or the palette.", false, None);
             }
         }
     }
 
     fn set_pinned(&mut self, name: &str, pinned: bool) {
-        if pinned && self.specs.get(name).is_some_and(|(spec, _)| !spec.in_app) {
+        // Open app on the menu bar is a shortcut to one app: the palette asks which.
+        if pinned && name == "app" {
+            self.panel.window.set_visible(false);
+            self.show_palette();
+            self.send(View::Palette, json!({"type": "pin-app"}));
+            return;
+        }
+        if pinned && settings::pinned_app(name).is_none() && self.specs.get(name).is_some_and(|(spec, _)| !spec.in_app)
+        {
             return;
         }
         let changed =
@@ -1220,7 +1682,7 @@ impl App {
                 self.send_list();
                 self.send(View::Panel, json!({"type": "pinned", "name": name, "pinned": pinned}));
             }
-            Err(error) => platform::notify("Unlaw", &format!("Could not change app.toml: {error}")),
+            Err(error) => self.toast("Unlaw", &format!("Could not change app.toml: {error}"), false, None),
         }
     }
 
@@ -1232,9 +1694,19 @@ impl App {
             return;
         }
         let name = message["name"].as_str().unwrap_or("").to_string();
-        let from = if view == View::Panel { From::Panel } else { From::Elsewhere };
-        // The page names only commands the app shows: never a terminal-only one.
-        if !name.is_empty() && !self.specs.get(&name).is_some_and(|(spec, _)| spec.in_app) {
+        // The palette asks too: a confirmed action there was answered with a second Enter.
+        let asked = view == View::Palette && op == "action" && message["confirmed"].as_bool() == Some(true);
+        let from = if view == View::Panel || asked { From::Panel } else { From::Elsewhere };
+        // The page names only commands the app shows: never a terminal-only one. Ops that act
+        // on a command need its name (`run` with none would have started `ul ""`).
+        // `app:Safari` is an application pinned from Open app (pin/unpin only).
+        let app_pin = matches!(op, "pin" | "unpin") && settings::pinned_app(&name).is_some();
+        if !name.is_empty() && !app_pin && !self.specs.get(&name).is_some_and(|(spec, _)| spec.in_app) {
+            return;
+        }
+        let needs_name =
+            matches!(op, "run" | "terminal" | "action" | "submit" | "quick" | "panel" | "default" | "pin" | "unpin");
+        if needs_name && name.is_empty() {
             return;
         }
         match op {
@@ -1245,6 +1717,7 @@ impl App {
                 init["type"] = json!("init");
                 init["theme"] = json!(self.theme());
                 init["version"] = json!(env!("CARGO_PKG_VERSION"));
+                init["update"] = self.home_state.update.clone().unwrap_or(Json::Null);
                 init["section"] = json!(self.home_state.section);
                 self.send(view, init);
                 for message in
@@ -1254,7 +1727,7 @@ impl App {
                 }
             }
             "ready" => {
-                let glass = if view == View::Palette { &mut self.palette } else { &mut self.panel };
+                let glass = self.glass_mut(view);
                 glass.ready = true;
                 let pending = std::mem::take(&mut glass.pending);
                 self.send(view, json!({"type": "init", "view": view.name(), "theme": self.theme()}));
@@ -1276,18 +1749,58 @@ impl App {
             }
             "drag" => {
                 self.dragging = Some(view);
-                let window = if view == View::Palette { &self.palette.window } else { &self.panel.window };
+                let window = match view {
+                    View::Palette => &self.palette.window,
+                    View::Home => &self.home.window,
+                    _ => &self.panel.window,
+                };
                 let _ = window.drag_window();
+            }
+            "zoom" if view == View::Home => {
+                let window = &self.home.window;
+                window.set_maximized(!window.is_maximized());
             }
             "hide" => {
                 match view {
-                    View::Palette => self.palette.window.set_visible(false),
+                    View::Palette => {
+                        self.palette_keep = false;
+                        self.palette.window.set_visible(false);
+                    }
                     View::Panel => self.panel.window.set_visible(false),
                     View::Home => self.hide_home(),
+                    View::Toast => self.toast.window.set_visible(false),
                 }
                 self.end_drag();
             }
+            "resize" if view == View::Toast => {
+                let height = message["height"].as_f64().unwrap_or(64.0).clamp(44.0, 160.0);
+                let window = &self.toast.window;
+                let scale = window.scale_factor();
+                let top = window.outer_position().ok().map(|position| position.to_logical::<f64>(scale));
+                window.set_inner_size(LogicalSize::new(TOAST_WIDTH, height));
+                if let Some(top) = top {
+                    window.set_outer_position(LogicalPosition::new(top.x, top.y));
+                }
+            }
+            "toast-click" if view == View::Toast => {
+                self.toast.window.set_visible(false);
+                if let Some((name, ok, text)) = self.toast_more.take() {
+                    self.show_panel(&name, None);
+                    self.send(View::Panel, json!({"type": "result", "name": name, "ok": ok, "text": text}));
+                }
+            }
             "settings" => self.open_settings(),
+            "resize" if view == View::Palette => {
+                // As tall as its rows; the top edge stays where it is (macOS keeps the bottom).
+                let height = message["height"].as_f64().unwrap_or(PALETTE_SIZE.1).clamp(96.0, PALETTE_SIZE.1);
+                let window = &self.palette.window;
+                let scale = window.scale_factor();
+                let top = window.outer_position().ok().map(|position| position.to_logical::<f64>(scale));
+                window.set_inner_size(LogicalSize::new(PALETTE_SIZE.0, height));
+                if let Some(top) = top {
+                    window.set_outer_position(LogicalPosition::new(top.x, top.y));
+                }
+            }
             "resize" if view == View::Panel => {
                 let height = message["height"].as_f64().unwrap_or(300.0).clamp(120.0, 720.0);
                 let window = &self.panel.window;
@@ -1332,7 +1845,7 @@ impl App {
                     self.palette.window.set_visible(false);
                     self.run_action(&name, &id, from);
                 } else if spec.panel.is_some() || !spec.actions.is_empty() {
-                    self.show_panel(&name, None);
+                    self.open_panel(&name, None);
                 } else {
                     self.run(&name, Vec::new(), "Run", from);
                 }
@@ -1358,7 +1871,7 @@ impl App {
                 let argv = spec::values_from(&message["values"], &spec).and_then(|values| {
                     match spec::missing(panel, &button, &values) {
                         Some(problem) => Err(problem),
-                        None => args::expand(&button.args, &values),
+                        None => args::expand(&button.args, &spec::argument_values(panel, &values)),
                     }
                 });
                 match argv {
@@ -1368,7 +1881,29 @@ impl App {
                     }
                 }
             }
-            "panel" => self.show_panel(&name, None),
+            "quick" if view == View::Palette => self.run_quick(&name, &message),
+            // The palette stays on screen while its inline input waits (a file dragged from Finder).
+            "clip-history" if view == View::Palette => self.palette_clips(),
+            "clip-copy" if view == View::Palette => {
+                // Copy a history item again by its id (checked by clip_args), then get out of the way.
+                let Some(argv) = home::clip_args("copy", message["id"].as_str()) else { return };
+                let Some(ul) = self.ul.clone() else { return };
+                self.palette_keep = false;
+                self.palette.window.set_visible(false);
+                let proxy = self.proxy.clone();
+                thread::spawn(move || {
+                    let outcome = runner::run(&ul, &argv, Duration::from_secs(30));
+                    let (text, ok) =
+                        if outcome.ok() { ("Copied".to_string(), true) } else { (outcome.summary(2), false) };
+                    let _ = proxy.send_event(UserEvent::Toast { title: "Clipboard".into(), text, ok });
+                });
+            }
+            "template-launch" if view == View::Palette => {
+                let template = message["template"].as_str().unwrap_or("").to_string();
+                self.launch_template(&template);
+            }
+            "keep" if view == View::Palette => self.palette_keep = message["on"].as_bool() == Some(true),
+            "panel" => self.open_panel(&name, None),
             "open" => self.open_page(&name),
             "terminal" => self.terminal(&name, Vec::new()),
             "pin" => self.set_pinned(&name, true),
@@ -1407,15 +1942,17 @@ impl App {
         match result {
             Ok(copied) => {
                 self.ul = runner::find_ul();
-                platform::notify(
+                self.toast(
                     "Unlaw",
                     &format!(
                         "The command line is installed in ~/.local/bin ({}). Open a new terminal and run: ul",
                         copied.join(", ")
                     ),
+                    true,
+                    None,
                 );
             }
-            Err(error) => platform::notify("Unlaw", &format!("Could not install the command line: {error}")),
+            Err(error) => self.toast("Unlaw", &format!("Could not install the command line: {error}"), false, None),
         }
         self.reload_commands();
     }
@@ -1445,6 +1982,7 @@ impl App {
         let position = position.to_logical::<f64>(scale);
         match view {
             View::Palette => self.places.palette = Some((position.x, position.y)),
+            View::Toast => {}
             View::Panel | View::Home => {
                 // Kept as the left edge of a normal-width panel on the same center line.
                 let width = window.inner_size().to_logical::<f64>(scale).width;
@@ -1543,6 +2081,7 @@ fn page_builder(url: &str, proxy: EventLoopProxy<UserEvent>, page_name: String) 
     // itself went elsewhere is told by the page-load handler, which sees the
     // main frame only; that link opens in the browser and the page comes back.
     let inside = page_origin(url);
+    let note = proxy.clone();
     WebViewBuilder::new()
         .with_url(url)
         .with_navigation_handler(|next| {
@@ -1561,8 +2100,9 @@ fn page_builder(url: &str, proxy: EventLoopProxy<UserEvent>, page_name: String) 
             let downloads = settings::home().join("Downloads");
             path.parent() == Some(downloads.as_path())
         })
-        .with_download_completed_handler(|_, _, ok| {
-            platform::notify("Unlaw", if ok { "Saved to Downloads." } else { "The download failed." });
+        .with_download_completed_handler(move |_, _, ok| {
+            let text = if ok { "Saved to Downloads." } else { "The download failed." };
+            let _ = note.send_event(UserEvent::Toast { title: "Download".into(), text: text.into(), ok });
         })
         .with_new_window_req_handler(|next, _| {
             // Only from a click (WebKit asks for a user gesture to open a window).
@@ -1757,6 +2297,7 @@ pub fn run() -> i32 {
                     statuses: HashMap::new(),
                     generation: Arc::new(AtomicU64::new(0)),
                     palette: glass(target, &proxy, View::Palette),
+                    palette_keep: false,
                     panel: glass(target, &proxy, View::Panel),
                     panel_for: None,
                     pages: HashMap::new(),
@@ -1775,9 +2316,12 @@ pub fn run() -> i32 {
                     view_reading: false,
                     shown: Vec::new(),
                     own_write: None,
-                    home: home_window(target, &proxy),
+                    home: home::home_window(target),
                     home_state: HomeState::new(dock),
                     app_menu: None,
+                    toast: glass(target, &proxy, View::Toast),
+                    toast_generation: 0,
+                    toast_more: None,
                 };
                 if dock {
                     state.build_app_menu();
@@ -1800,13 +2344,28 @@ pub fn run() -> i32 {
                 match user {
                     UserEvent::Loaded(result) => state.on_loaded(result),
                     UserEvent::Status { name, generation, text } => state.on_status(name, generation, text),
-                    UserEvent::Finished { name, label, argv, outcome, quiet } => {
-                        state.on_finished(name, label, argv, outcome, quiet)
+                    UserEvent::Finished { name, label, argv, outcome, quiet, quick } => {
+                        state.on_finished(name, label, argv, outcome, quiet, quick)
                     }
+                    UserEvent::Dropped(paths) => state.on_dropped(paths),
                     UserEvent::Served { name, result } => state.on_served(target, name, result),
                     UserEvent::PageLeft { name, url } => state.on_page_left(&name, &url),
-                    UserEvent::Home(message) => state.send(View::Home, message),
+                    UserEvent::Home(message) => {
+                        // Kept for a page loaded again later (`init` carries it).
+                        if message["type"] == "update" {
+                            state.home_state.update = Some(message.clone());
+                        }
+                        state.send(View::Home, message)
+                    }
+                    UserEvent::Palette(message) => state.send(View::Palette, message),
+                    UserEvent::Toast { title, text, ok } => state.toast(&title, &text, ok, None),
+                    UserEvent::ToastHide(generation) => {
+                        if generation == state.toast_generation {
+                            state.toast.window.set_visible(false);
+                        }
+                    }
                     UserEvent::Panel { name, message, changed } => state.on_panel_data(&name, message, changed),
+                    UserEvent::SysData { id, data } => state.on_sys_data(id, data),
                     UserEvent::GameEnded { id, error } => state.on_game_ended(id, error),
                     UserEvent::DeskServed(result) => state.on_desk_served(result),
                     UserEvent::Ipc(view, body) => state.on_ipc(view, body),
@@ -1840,7 +2399,7 @@ pub fn run() -> i32 {
                 match event {
                     WindowEvent::Moved(_) => state.on_moved(window_id),
                     // Like Spotlight and a menu bar popover: clicking elsewhere closes them.
-                    WindowEvent::Focused(false) if window_id == state.palette.window.id() => {
+                    WindowEvent::Focused(false) if window_id == state.palette.window.id() && !state.palette_keep => {
                         state.palette.window.set_visible(false);
                         state.end_drag();
                     }

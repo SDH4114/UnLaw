@@ -34,7 +34,7 @@ The core is always installed: `ul`/`unlaw`, the `ule` editor, system commands,
 | Group | Features |
 |---|---|
 | AI | `lm` (local models), `agent` (needs `lm`; adds `ula`), `tg`, `gpt`, `claude` |
-| Media | `yt`, `music`, `lofi`, `netflix`, `capture` |
+| Media | `yt`, `spotify`, `lofi`, `netflix`, `capture` |
 | Productivity | `desk`, `obsidian`, `work`, `timer`, `clip`, `weather` |
 | Development | `git`, `py`, `rust`, `cpp`, `zed` |
 | System | `awake`, `sys`, `mac`, `steam`, `minecraft` |
@@ -97,7 +97,7 @@ waits for `y`; `--yes` skips the question):
 
 ```bash
 ul reinstall               # clean build of main, default settings and default commands
-ul remove music            # delete commands/music (a default one also leaves core.features)
+ul remove spotify          # delete commands/spotify (a default one also leaves core.features)
 ul remove                  # uninstall Unlaw and delete its files
 ```
 
@@ -168,6 +168,10 @@ config and aliases.
     live status, how many clipboard pictures and files to keep, appearance, Dock icon. Changes apply at once and are written to `app.toml`
     with its comments kept.
 
+  The panel and the main window give their memory back: 30 s after they are hidden their
+  page is unloaded (each is a WebKit process of 20-45 MB) and loads again when shown; only
+  the palette stays loaded so Ctrl+Space opens at once.
+
   Closing the window takes Unlaw out of the Dock; it keeps running in the menu bar (with
   its hotkeys) until you quit it with ⌘Q or the UL menu. Started at login it waits in the
   menu bar; opening Unlaw.app brings the window and the Dock icon back. A command with a single
@@ -175,7 +179,20 @@ config and aliases.
 
 - **Ctrl+Space** opens the command palette: type to search commands and their actions,
   Enter runs, Tab opens the command's panel, Cmd+Enter runs it in the terminal, Cmd+P pins
-  it to the menu bar, Cmd+, opens the settings.
+  it to the menu bar, Cmd+, opens the settings. Commands that take one thing (Open app,
+  Browser, Telegram, Weather, Timer, Music, YouTube) ask for it right in the search bar:
+  Enter on the command, type, Enter; or type it all at once (`tg hello`, `app Safari`,
+  `weather Paris`). Drop a file on the palette to send it with Telegram. Commands typed
+  with the Russian layout on are found too. Clipboard lists everything saved: type to
+  filter, Enter copies it again. Saved templates show up by name (or all of them under
+  "Templates"); Enter opens their windows. Results come as a small note in the screen's corner (a click on a failed one
+  shows the whole output); a long output opens in the command's panel.
+- The main window: drag its top strip to move it, double-click it to fill the screen and
+  back. An Update button appears beside the version when GitHub has a newer Unlaw.
+- Pin Open app to get a menu bar icon for one app (the palette asks which). Pinned Weather
+  shows the sky and the temperature.
+- A shortcut can open a template: Settings, Add a shortcut, "A template", its name
+  (in app.toml: `[[hotkey]] keys = "ctrl+alt+w"` and `template = "science"`).
 - **Pinned commands** sit in the menu bar: `awake` is an empty cup, or a full steaming one
   while the Mac is kept awake; a click switches it (until you turn it off), a right click
   opens its panel (one-click durations, until a time with a countdown, screen on, lid
@@ -275,7 +292,7 @@ ul commands --describe          # one-line descriptions (without running command
 ul commands --json              # machine-readable JSON
 ul commands search              # the command catalog on GitHub (checklist on a terminal)
 ul commands search youtube      # filter by name and description; --list only prints
-ul commands get yt music        # download commands that are not installed yet
+ul commands get yt spotify      # download commands that are not installed yet
 ul templates                    # saved templates (working environments)
 ul list                         # templates first, then commands
 ul which git                    # where a command comes from
@@ -487,6 +504,7 @@ spotify = "Spotify"
 editor = "auto"          # auto = Zed, VS Code, Cursor or Sublime Text (first installed), else Finder
 spotify_autoplay_delay = 2.0
 browser_url = "https://www.google.com/"
+search_url = "https://www.google.com/search?q="   # ul browser <words>: the words go after it
 lofi_url = "https://lofi-engine.vercel.app/"
 youtube_url = "https://www.youtube.com/"
 
@@ -1042,7 +1060,7 @@ the background helper pasteboard access), `ul clip status` shows the newest item
 (`clip/watch.log`); macOS gives no direct way to ask whether access is denied.
 
 ### ul sys
-Computer stats without root, read straight from macOS (the kernel's CPU and memory counters, sysctl, IOKit; the sources Activity Monitor uses): `ul sys` shows model, chip, macOS, uptime, thermal state, CPU with every performance and efficiency core, GPU (and the memory it holds), memory (app, wired, compressed, swap, pressure), network speed, disk reads and writes, disks, battery (charge, cycles, condition, max capacity, what the Mac draws in watts) and the top 5 processes. `ul sys cpu|gpu|mem|net|io|disk|battery|top` shows one part, `--json` gives stable keys with numbers, `--watch [seconds]` refreshes in place (Ctrl+C to quit). A tool that is missing or fails shows as n/a. Colors only on a terminal (NO_COLOR turns them off).
+Computer stats without root, read straight from macOS (the kernel's CPU and memory counters, sysctl, IOKit; the sources Activity Monitor uses): `ul sys` shows model, chip, macOS, uptime, thermal state, CPU with every performance and efficiency core, GPU (and the memory it holds), memory (app, wired, compressed, swap, pressure), network speed, disk reads and writes, disks, battery (charge, cycles, condition, max capacity, what the Mac draws in watts) and the top 5 processes. `ul sys cpu|gpu|mem|net|io|disk|battery|top` shows one part (or several: `ul sys cpu mem`), `--json` gives stable keys with numbers, `--watch [seconds]` refreshes in place (Ctrl+C to quit; with `--json` one line per round, each measured from the round before, so after the first nothing waits). Model, chip and core kinds are read once per boot and the battery health every 10 minutes (`<storage.root>/runtime/sys-cache-2.json`, model names only, readable by you alone), so a call costs a fraction of the first. A tool that is missing or fails shows as n/a. Colors only on a terminal (NO_COLOR turns them off).
 
 ### ul claude
 
@@ -1059,10 +1077,11 @@ ul obsidian                       # open Obsidian
 ul gpt                            # open ChatGPT
 ul browser                        # open the configured start page
 ul browser example.com            # open a link (http/https; https:// is added)
+ul browser rust borrow checker    # anything else is a web search (apps.search_url)
 ul steam                          # open Steam
 ul minecraft                      # open Prism Launcher
-ul music
-ul music "Killer Queen"           # search and play the first result in Spotify
+ul spotify
+ul spotify "Killer Queen"           # search and play the first result in Spotify
 ul work                            # Lofi Engine + current folder in the editor
 ul yt                              # open the YouTube home page
 ul yt "omarchy linux"             # YouTube search in the browser
@@ -1076,7 +1095,7 @@ ul yt --help                      # all options and examples
 ```
 
 Auto-playing a Spotify result requires the Accessibility permission for the
-terminal. Without the Spotify app, `ul music` opens the web player
+terminal. Without the Spotify app, `ul spotify` opens the web player
 (open.spotify.com) and searches there.
 
 The `ul browser` start page is set in the config:

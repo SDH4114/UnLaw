@@ -16,7 +16,9 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
-crossterm = { version = "0.28", default-features = false, features = ["events", "bracketed-paste"] }
+# use-dev-tty: crossterm's other unix event source (poll + read). The default (mio) one spins
+# forever on a closed terminal, so a full-screen program never returned to notice it.
+crossterm = { version = "0.28", default-features = false, features = ["events", "bracketed-paste", "use-dev-tty"] }
 libc = "0.2"
 regex = "1"
 serde_json = "1"

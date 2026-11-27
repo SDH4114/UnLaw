@@ -2903,6 +2903,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             _print(items, as_json, text)
             return 0
+        if action == "folder":
+            # The folder with every screenshot, recording and project, in Finder.
+            if rest:
+                raise CaptureError(f"unexpected argument: {rest[0]}")
+            root = storage_path("captures")
+            root.mkdir(parents=True, exist_ok=True)
+            return subprocess.run(["open", str(root)], check=False).returncode
         if action in {"last", "open", "reveal"}:
             if action == "last" and _flag(rest, "--reveal"):
                 action = "reveal"

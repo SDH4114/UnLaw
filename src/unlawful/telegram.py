@@ -336,7 +336,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args == ["setup"]:
             return _setup()
-        if not args and sys.stdin.isatty():
+        # `open` for callers without a terminal (Unlaw.app): there an empty stdin is a message to send.
+        if args == ["open"] or (not args and sys.stdin.isatty()):
             return subprocess.run(["open", "-a", "Telegram"], check=False).returncode
         client, settings = _client()
         chat_id = settings["chat_id"]

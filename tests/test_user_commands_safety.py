@@ -127,15 +127,15 @@ class UserWorkSafetyTests(CoreTestCase):
         self.assert_untouched()
 
     def test_removing_another_command_and_the_catalog(self) -> None:
-        self.ok("remove", "music", "--yes")
+        self.ok("remove", "spotify", "--yes")
         catalog = HERE.parent / "catalog"
         self.ok(
             "commands",
             "get",
-            "music",
+            "spotify",
             env={"UNLAW_CATALOG_URL": catalog.as_uri() + "/"},
         )
-        self.assertTrue((self.unlaw / "commands" / "music" / "main.py").is_file())
+        self.assertTrue((self.unlaw / "commands" / "spotify" / "main.py").is_file())
         self.assert_untouched()
 
     def test_reinstall(self) -> None:

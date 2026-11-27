@@ -23,6 +23,8 @@ pub fn reads(view: &str, first: bool) -> Vec<(&'static str, Vec<String>)> {
             list
         }
         "system" => vec![("sys", argv(&["sys", "--json"]))],
+        // The default city once on opening; a search is an action (`forecast`).
+        "weather" if first => vec![("weather", argv(&["weather", "--days", WEATHER_DAYS, "--json"]))],
         _ => Vec::new(),
     }
 }
@@ -64,6 +66,19 @@ pub fn act(view: &str, request: &Json) -> Result<Vec<String>, String> {
                 vec!["awake".into(), "schedule".into(), "add".into(), format!("{from}-{to}"), "--days".into(), days];
             Ok(with_flags(argv, request))
         }
+        ("weather", "forecast") => {
+            let city = request["city"].as_str().unwrap_or("").trim();
+            if city.chars().count() > 80 || city.starts_with('-') || city.chars().any(char::is_control) {
+                return Err(format!("not a city name: {city:?}"));
+            }
+            let days = request["days"].as_u64().filter(|days| (1..=16).contains(days)).ok_or("days must be 1-16")?;
+            let mut argv = vec!["weather".to_string()];
+            if !city.is_empty() {
+                argv.push(city.to_string());
+            }
+            argv.extend(["--days".to_string(), days.to_string(), "--json".to_string()]);
+            Ok(argv)
+        }
         ("awake", "schedule-rm") => {
             let id = request["id"].as_u64().filter(|id| (1..=1_000_000).contains(id)).ok_or("no schedule id")?;
             Ok(vec!["awake".into(), "schedule".into(), "rm".into(), id.to_string()])
@@ -71,6 +86,9 @@ pub fn act(view: &str, request: &Json) -> Result<Vec<String>, String> {
         _ => Err(format!("{view} cannot {what:?}")),
     }
 }
+
+/// Days the weather view shows when it opens.
+const WEATHER_DAYS: &str = "7";
 
 fn text(request: &Json, key: &str) -> Result<String, String> {
     request[key].as_str().map(str::to_string).ok_or_else(|| format!("{key} is missing"))
@@ -89,16 +107,20 @@ fn with_flags(mut argv: Vec<String>, request: &Json) -> Vec<String> {
 
 /// 30m, 2h, 90m: what the chips send (at most a week, like `ul awake`).
 fn is_span(span: &str) -> bool {
-    let (number, unit) = span.split_at(span.len().saturating_sub(1));
+    // ASCII first: split_at on a multi-byte last character panicked ("1é").
+    if !span.is_ascii() || span.len() < 2 || span.len() > 6 {
+        return false;
+    }
+    let (number, unit) = span.split_at(span.len() - 1);
+    if !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
+    }
     let minutes = match (number.parse::<u64>(), unit) {
         (Ok(count), "m") => count,
         (Ok(count), "h") => count * 60,
         _ => return false,
     };
-    !number.is_empty()
-        && number.len() <= 5
-        && number.bytes().all(|byte| byte.is_ascii_digit())
-        && (1..=7 * 24 * 60).contains(&minutes)
+    (1..=7 * 24 * 60).contains(&minutes)
 }
 
 /// HH:MM on a 24-hour clock.
@@ -141,7 +163,7 @@ mod tests {
         let until = act("awake", &json!({"do": "until", "time": "21:30", "date": "2026-11-25"})).unwrap();
         assert_eq!(words(&until), "awake until 2026-11-25 21:30");
         assert_eq!(words(&act("awake", &json!({"do": "stop"})).unwrap()), "awake off");
-        for span in ["0m", "2d", "-1h", "1h --lid", "", "169h", "on;rm"] {
+        for span in ["0m", "2d", "-1h", "1h --lid", "", "169h", "on;rm", "1é", "99999999999999999999h"] {
             assert!(act("awake", &json!({"do": "start", "span": span})).is_err(), "{span}");
         }
         for time in ["24:00", "9:30", "21:60", "--lid", "aa:bb"] {
@@ -162,6 +184,26 @@ mod tests {
         assert_eq!(words(&act("awake", &json!({"do": "schedule-rm", "id": 3})).unwrap()), "awake schedule rm 3");
         assert!(act("awake", &json!({"do": "schedule-rm", "id": "--all"})).is_err());
         assert!(act("system", &json!({"do": "stop"})).is_err());
+    }
+
+    #[test]
+    fn weather_searches_take_a_checked_city_and_days() {
+        let forecast = |request: Json| act("weather", &request).map(|argv| words(&argv));
+        assert_eq!(
+            forecast(json!({"do": "forecast", "city": "New York", "days": 3})).unwrap(),
+            "weather New York --days 3 --json"
+        );
+        assert_eq!(forecast(json!({"do": "forecast", "city": " ", "days": 7})).unwrap(), "weather --days 7 --json");
+        for bad in [
+            json!({"do": "forecast", "city": "--units", "days": 3}),
+            json!({"do": "forecast", "city": "Baku", "days": 40}),
+            json!({"do": "forecast", "city": "Baku"}),
+            json!({"do": "forecast", "city": "a\nb", "days": 3}),
+        ] {
+            assert!(forecast(bad.clone()).is_err(), "{bad}");
+        }
+        assert_eq!(reads("weather", true)[0].1, vec!["weather", "--days", "7", "--json"]);
+        assert!(reads("weather", false).is_empty());
     }
 
     #[test]

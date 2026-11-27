@@ -1,5 +1,6 @@
 title = "Minecraft"
 icon = "game"
+brand = "minecraft"
 
 [[action]]
 id = "launch"

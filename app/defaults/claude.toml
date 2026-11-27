@@ -1,5 +1,6 @@
 title = "Claude"
 icon = "spark"
+brand = "claude"
 
 [[action]]
 id = "launch"

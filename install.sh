@@ -37,7 +37,7 @@ FEATURES = [
     ("gpt", "AI", "Open the ChatGPT app"),
     ("claude", "AI", "Open the Claude app"),
     ("yt", "Media", "YouTube: search, download video, MP3, podcasts, subtitles"),
-    ("music", "Media", "Spotify: open it or play a track"),
+    ("spotify", "Media", "Spotify: open it or play a track"),
     ("lofi", "Media", "Open the lofi website"),
     ("netflix", "Media", "Open Netflix"),
     ("capture", "Media", "Screenshots and screen, camera and microphone recording"),

@@ -215,7 +215,7 @@ class CurlInstallerTests(unittest.TestCase):
         self.assertEqual(ule[-1], "ule")
         self.assertEqual((root / "ul.txt").read_text().splitlines(),
                          ["features", "set", "--no-build", "lm", "agent", "yt", "==", "doctor", "--fix", "==", "skills", "install", "=="])
-        result, root = self._install(uv_has_unlaw=False, features="music")
+        result, root = self._install(uv_has_unlaw=False, features="spotify")
         self.assertEqual(self.cargo_calls(root)[0][-2:], ["--no-default-features", "unlaw"])
         result, root = self._install(uv_has_unlaw=False, features="none")
         self.assertEqual(result.returncode, 0, result.stderr)

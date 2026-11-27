@@ -1,5 +1,6 @@
 title = "Obsidian"
 icon = "folder"
+brand = "obsidian"
 
 [[action]]
 id = "launch"

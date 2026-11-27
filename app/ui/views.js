@@ -13,13 +13,19 @@ function viewOpen(spec) {
   Object.assign(viewState, { name: spec.name, view: spec.view, data: null, error: "", note: "", busy: false });
   VIEWS[spec.view].render();
   viewRead();
-  viewState.timer = setInterval(viewRead, VIEWS[spec.view].every);
+  // every 0: read once (the weather asks again only when searched).
+  if (VIEWS[spec.view].every) viewState.timer = setInterval(viewRead, VIEWS[spec.view].every);
 }
 
 function viewClose() {
   clearInterval(viewState.timer);
   clearInterval(viewState.tick);
   viewState.timer = viewState.tick = 0;
+  // A closed view must not own the keys of the next panel (← → turned a Timer panel
+  // into the old System view) nor reopen with its schedule form or search held.
+  viewState.view = "";
+  viewState.adding = false;
+  viewState.focusSearch = false;
 }
 
 function viewRead() { send({ op: "view-data", name: viewState.name }); }
@@ -43,12 +49,19 @@ function viewReceive(message) {
   } else if (message.type === "view-done") {
     viewState.busy = false;
     viewState.note = message.ok ? "" : (message.text || "Failed.").trim();
-    viewRead();
+    // A view that reads (the weather) gets its answer with the action.
+    if (message.ok && message.json) viewState.data = Object.assign(viewState.data || {}, { [viewState.view]: message.json });
+    else viewRead();
+  } else if (message.type === "view-query") {
+    // Typed in the palette ("weather Paris"): search it here.
+    if (VIEWS[viewState.view].query) VIEWS[viewState.view].query(message.value || "");
+    return;
   }
   VIEWS[viewState.view].render();
 }
 
 function viewHolding() {
+  if (VIEWS[viewState.view].holding) return VIEWS[viewState.view].holding();
   const active = document.activeElement;
   return viewState.adding || (active && active.closest(".view") && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName));
 }
@@ -516,7 +529,108 @@ document.addEventListener("keydown", (event) => {
   svGo(next);
 });
 
+// ---------- Weather ----------
+// `ul weather --json`: the default city when the panel opens, a search as the
+// `forecast` action (views.rs checks the city and the days). Drawn like a phone's
+// weather: the place and the temperature now, then a row per day with its range.
+
+const WX_DAYS = [3, 7, 14];
+let wxDays = Number(stored("weather-days", "7")) || 7;
+let wxCity = "";
+
+// Open-Meteo weather codes (WMO) -> an icon.
+function wxIcon(code) {
+  if (code == null) return "cloud";
+  if (code === 0) return "sun";
+  if (code <= 2) return "cloudsun";
+  if (code === 3) return "cloud";
+  if (code === 45 || code === 48) return "fog";
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return "snow";
+  if (code >= 95) return "storm";
+  return "rain";
+}
+
+function wxDegrees(value) {
+  return value == null ? "–" : `${Math.round(value)}°`;
+}
+
+function wxDay(date, index) {
+  if (index === 0) return "Today";
+  if (index === 1) return "Tomorrow";
+  const day = new Date(`${date}T12:00`);
+  return isNaN(day) ? date : day.toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
+}
+
+function wxClock(iso) {
+  return iso && iso.includes("T") ? iso.split("T")[1].slice(0, 5) : "";
+}
+
+function wxSearch(city) {
+  wxCity = city.trim();
+  viewAct("forecast", { city: wxCity, days: wxDays });
+}
+
+function wxRender() {
+  const data = viewState.data && viewState.data.weather;
+  const place = data && data.location;
+  const units = (data && data.unit_labels) || {};
+  const days = el("div", { class: "seg compact", role: "radiogroup", "aria-label": "Days" }, ...WX_DAYS.map((count) =>
+    el("button", { class: count === wxDays ? "on" : "", role: "radio", "aria-checked": String(count === wxDays), text: `${count} d`,
+      onclick: () => { wxDays = count; store("weather-days", String(count)); wxSearch(wxCity); } })));
+  const input = el("input", { type: "search", placeholder: "Search a city", spellcheck: "false", autocomplete: "off", "aria-label": "City" });
+  input.value = wxCity;
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); wxSearch(input.value); }
+  });
+  const search = el("div", { class: "wxsearch" }, icon("search"), input, viewState.busy ? el("i", { class: "spinner" }) : null);
+  const head = viewHead(place ? place.name : "Weather", place ? [place.admin1, place.country].filter(Boolean).join(", ") : "Reading the forecast…", days);
+  const parts = [head, search, viewProblem()];
+  if (data && data.current) {
+    const now = data.current;
+    parts.push(el("div", { class: "wxnow" },
+      el("div", { class: "wxglyph" }, icon(wxIcon(now.weather_code))),
+      el("div", { class: "wxtemp", text: wxDegrees(now.temperature) }),
+      el("div", { class: "wxsay" },
+        el("b", { text: now.summary || "" }),
+        el("span", { text: `Feels like ${wxDegrees(now.apparent_temperature)}` }))));
+    const today = (data.daily || [])[0] || {};
+    parts.push(el("div", { class: "svstats" },
+      svStat("Humidity", now.humidity == null ? "–" : `${now.humidity}%`),
+      svStat("Wind", now.wind_speed == null ? "–" : `${Math.round(now.wind_speed)} ${units.wind_speed || ""}`),
+      svStat("Sun", [wxClock(today.sunrise), wxClock(today.sunset)].filter(Boolean).join(" – ") || "–")));
+  }
+  const daily = (data && data.daily) || [];
+  if (daily.length) {
+    const lows = daily.map((day) => day.temperature_min).filter((value) => value != null);
+    const highs = daily.map((day) => day.temperature_max).filter((value) => value != null);
+    const low = Math.min(...lows), high = Math.max(...highs), span = Math.max(high - low, 1);
+    parts.push(el("div", { class: "wxdays" }, ...daily.map((day, index) => {
+      const from = day.temperature_min == null ? 0 : (day.temperature_min - low) / span * 100;
+      const to = day.temperature_max == null ? 100 : (day.temperature_max - low) / span * 100;
+      const rain = day.precipitation_probability;
+      return el("div", { class: "wxday", title: day.summary || "" },
+        el("span", { class: "name", text: wxDay(day.date, index) }),
+        el("span", { class: "icon" }, icon(wxIcon(day.weather_code))),
+        el("span", { class: "rain", text: rain >= 10 ? `${rain}%` : "" }),
+        el("span", { class: "low", text: wxDegrees(day.temperature_min) }),
+        el("span", { class: "range" }, el("i", { style: `left:${from}%;width:${Math.max(to - from, 4)}%` })),
+        el("span", { class: "high", text: wxDegrees(day.temperature_max) }));
+    })));
+  } else if (!viewState.error && !viewState.note) {
+    parts.push(el("div", { class: "vempty", text: viewState.busy ? "Looking it up…" : "Reading the forecast…" }));
+  }
+  document.body.replaceChildren(el("div", { class: "glass" }, el("div", { class: "view weather" }, ...parts.filter(Boolean))));
+  // Keep the cursor in the field across redraws (the answer arrives while it is focused).
+  if (!data || viewState.focusSearch) { input.focus(); viewState.focusSearch = false; }
+  input.addEventListener("focus", () => { viewState.focusSearch = true; });
+  input.addEventListener("blur", () => { viewState.focusSearch = false; });
+  viewFit(220);
+}
+
 const VIEWS = {
   awake: { every: 5000, width: 340, render: awRender },
   system: { every: 2000, width: 440, render: svRender },
+  // Holds a redraw only while a new city is being typed; the focused empty field must not block the answer.
+  weather: { every: 0, width: 360, render: wxRender, query: wxSearch,
+    holding: () => { const input = document.querySelector(".wxsearch input"); return !!input && input.value.trim() !== wxCity; } },
 };

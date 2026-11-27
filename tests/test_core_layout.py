@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 import sys
 import unittest
 from pathlib import Path
@@ -106,7 +107,7 @@ class LayoutTests(CoreTestCase):
             self.assertEqual(clashes, {}, f"{seed}: one namespace after concatenation")
 
     def test_bootstrap_does_not_overwrite_customized_seed_command(self) -> None:
-        custom = self.command("music", "print('mine')\n")
+        custom = self.command("spotify", "print('mine')\n")
         edited = self.command("yt", command_source("yt") + "\n# My custom change\n")
         self.ok("init")
         self.assertEqual(custom.read_text(), "print('mine')\n")
@@ -214,3 +215,24 @@ class SeedUpgradeTests(CoreTestCase):
         self.assertTrue((todo / "main.py").is_file(), "an edited todo stays")
         self.ok("config", "set", "core.features", '["todo", "desk"]')
         self.ok("config", "check")
+
+    def test_music_became_spotify(self) -> None:
+        """`ul music` was renamed `ul spotify` in 4.0.0: the old seed goes, the feature carries over."""
+        self.ok("version")
+        old = (Path(__file__).parent / "fixtures" / "music-4.0.0.py").read_text(encoding="utf-8")
+        music = self.unlaw / "commands" / "music"
+        music.mkdir()
+        (music / "main.py").write_text(old, encoding="utf-8")
+        self.ok("version")
+        self.assertFalse(music.exists(), "an untouched music seed is removed")
+        self.assertTrue((self.unlaw / "commands" / "spotify" / "main.py").is_file())
+        music.mkdir()
+        (music / "main.py").write_text(old + "\n# mine\n", encoding="utf-8")
+        self.ok("version")
+        self.assertTrue((music / "main.py").is_file(), "an edited music command stays")
+        # A config that chose `music` still gets Spotify.
+        self.ok("config", "set", "core.features", '["music", "yt"]')
+        self.ok("config", "check")
+        shutil.rmtree(self.unlaw / "commands" / "spotify")
+        self.ok("version")
+        self.assertTrue((self.unlaw / "commands" / "spotify" / "main.py").is_file(), "music selects spotify")

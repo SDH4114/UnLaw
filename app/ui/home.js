@@ -35,6 +35,7 @@ function build() {
     el("div", { class: "grow" }),
     el("div", { class: "foot" },
       el("span", { class: "version" }),
+      el("button", { class: "update", hidden: "", title: "", text: "Update", onclick: () => send({ op: "update" }) }),
       el("button", { class: "ghost", "data-section": "settings", title: "⌘,", text: "Settings", onclick: () => go("settings") })));
   const main = el("div", { class: "main" },
     dragArea(el("header", { class: "top" })),
@@ -42,11 +43,36 @@ function build() {
   document.body.replaceChildren(el("div", { class: "app" }, side, main));
 }
 
+// GitHub has a newer Unlaw (`ul update --check --json`, asked when the window opens).
+function showUpdate(answer) {
+  const button = $(".foot .update");
+  if (!button) return;
+  button.hidden = !answer.update;
+  button.title = answer.latest ? `Unlaw ${answer.latest} is out: ${answer.message}` : answer.message || "";
+}
+
+// The top strip works like a title bar: dragging moves the window, a double click
+// zooms it to the screen and back (never full screen, which would make a new Space).
+// The window drag starts only once the mouse moves: started on the press, the native
+// drag loop swallowed the second click and a double click never arrived.
+let pressed = null;
+
 function dragArea(node) {
   node.addEventListener("mousedown", (event) => {
     if (event.button !== 0 || event.target.closest("input, button, select, textarea")) return;
     event.preventDefault();
+    pressed = { x: event.screenX, y: event.screenY };
+  });
+  node.addEventListener("mousemove", (event) => {
+    if (!pressed || !(event.buttons & 1)) { pressed = null; return; }
+    if (Math.abs(event.screenX - pressed.x) + Math.abs(event.screenY - pressed.y) < 3) return;
+    pressed = null;
     send({ op: "drag" });
+  });
+  node.addEventListener("mouseup", () => { pressed = null; });
+  node.addEventListener("dblclick", (event) => {
+    if (event.target.closest("input, button, select, textarea")) return;
+    send({ op: "zoom" });
   });
   return node;
 }
@@ -109,7 +135,7 @@ function drawTiles() {
       onclick: (event) => { event.stopPropagation(); send({ op: item.pinned ? "unpin" : "pin", name: item.name }); } }, icon("pin"));
     const tile = el("div", { class: "tile", role: "button", tabindex: "0", title: `ul ${item.name}`, onclick: () => openCommand(item),
       onkeydown: (event) => { if ((event.key === "Enter" || event.key === " ") && event.target === tile) { event.preventDefault(); openCommand(item); } } },
-      el("div", { class: "glyph" }, icon(item.icon)),
+      el("div", { class: "glyph" }, commandIcon(item)),
       el("div", { class: "what" }, el("b", { text: item.title }), el("span", { text: item.summary || `ul ${item.name}` })),
       pin);
     return tile;
@@ -365,7 +391,13 @@ function renderClipboard() {
   // No subtitle: the bar is full; the tooltip says it.
   header("Clipboard", "", ...tools);
   $(".top h1").title = "Click an item to copy it again" + (status.max_files != null ? `; the last ${status.max_files} images and files are kept (Settings)` : "");
-  if (!$(".clips")) $(".content").replaceChildren(el("div", { class: "clips" }));
+  if (!$(".clips")) $(".content").replaceChildren(el("div", { class: "clipask" }), el("div", { class: "clips" }));
+  const ask = $(".clipask");
+  ask.replaceChildren(...(home.clipConfirm ? [el("div", { class: "tnote bad", role: "alertdialog" }, icon("trash"),
+    el("div", {}, el("b", { text: "Delete the whole clipboard history?" }),
+      el("span", { class: "muted", text: " Texts, pictures and saved files. This cannot be undone." })),
+    el("button", { class: "ghost", text: "Cancel", onclick: () => { home.clipConfirm = false; renderClipboard(); } }),
+    el("button", { class: "danger", text: "Delete all", onclick: () => { home.clipConfirm = false; clip("clear"); renderClipboard(); } }))] : []));
   drawClips();
 }
 
@@ -373,7 +405,7 @@ function clipMatches() {
   const words = (home.clipFilter || "").toLowerCase().split(/\s+/).filter(Boolean);
   const kind = home.clipKind || "all";
   return (home.clip || []).filter((item) => (kind === "all" || (item.kind || "text") === kind)
-    && words.every((word) => (item.text + " " + (item.name || "")).toLowerCase().includes(word)));
+    && words.every((word) => ((item.text || "") + " " + (item.name || "")).toLowerCase().includes(word)));
 }
 
 function ago(time) {
@@ -389,10 +421,12 @@ function ago(time) {
 function drawClips() {
   const box = $(".clips");
   if (!box) return;
-  if (home.clip === null) { box.replaceChildren(el("div", { class: "note", text: home.clipError || "Reading the history…" })); return; }
+  // A note replaces the list: forget its key, or clearing a filter later finds the same key and keeps the note.
+  if (home.clip === null) { delete box.dataset.key; box.replaceChildren(el("div", { class: "note", text: home.clipError || "Reading the history…" })); return; }
   const status = home.clipStatus || {};
   const items = clipMatches();
   if (!items.length) {
+    delete box.dataset.key;
     const off = status.watcher && status.watcher !== "running";
     box.replaceChildren(el("div", { class: "note" },
       el("b", { text: off ? "The history is off" : (home.clip.length ? "Nothing matches" : "Nothing copied yet") }),
@@ -442,8 +476,11 @@ function copyClip(item) {
   setTimeout(() => { if (home.copied === item.id) { home.copied = ""; drawClips(); } }, 1400);
 }
 
+// The page's own confirmation: WKWebView without a UI delegate answers every
+// window.confirm() with false at once, so "Clear…" used to do nothing.
 function clearClips() {
-  if (confirm("Delete the whole clipboard history?")) clip("clear");
+  home.clipConfirm = true;
+  renderClipboard();
 }
 
 function clip(action, id) { send({ op: "clip", action, id: id || null }); }
@@ -803,6 +840,10 @@ function prettyKeys(text) {
   return ["ctrl", "alt", "shift", "cmd"].filter((word) => words.includes(word)).map((word) => signs[word]).join("") + (KEY_SIGNS[key] || key.toUpperCase());
 }
 
+// The window hidden or left while a shortcut is recorded: stop, or the page keeps
+// swallowing keys after Rust has put its own hotkeys back.
+window.addEventListener("blur", () => stopRecording());
+
 function stopRecording() {
   if (!home.recording) return;
   document.removeEventListener("keydown", home.recording.listener, true);
@@ -866,20 +907,32 @@ function toggle(on, change) {
   return box;
 }
 
-function commandSelect(value, change) {
+function commandSelect(value, change, templates = true) {
   const select = el("select");
   select.appendChild(el("option", { value: "", text: "Choose a command" }));
+  // A shortcut may open a saved template (its name is chosen in the next box).
+  if (templates) select.appendChild(el("option", { value: "template", text: "A template (its windows)" }));
   for (const item of [...home.items].sort((a, b) => a.title.localeCompare(b.title))) {
     const option = el("option", { value: item.name, text: `${item.title} (ul ${item.name})` });
     select.appendChild(option);
   }
-  if (value && !home.items.some((item) => item.name === value)) select.appendChild(el("option", { value, text: `ul ${value} (not installed)` }));
+  if (value && value !== "template" && !home.items.some((item) => item.name === value)) select.appendChild(el("option", { value, text: `ul ${value} (not installed)` }));
   select.value = value || "";
   select.addEventListener("change", () => change(select.value));
   return select;
 }
 
 function actionSelect(command, value, change) {
+  if (command === "template") {
+    const select = el("select");
+    const names = (home.templates || []).map((template) => template.name);
+    if (value && !names.includes(value)) names.push(value);
+    select.appendChild(el("option", { value: "", text: names.length ? "Choose a template" : "No templates yet (ul template save)" }));
+    for (const name of names) select.appendChild(el("option", { value: name, text: name }));
+    select.value = value || "";
+    select.addEventListener("change", () => select.value && change(select.value));
+    return select;
+  }
   const item = home.items.find((entry) => entry.name === command);
   const choices = [["panel", item && item.section ? "Open it in Unlaw" : "Open its panel"], ["run", "Run it"]];
   if (item && item.open) choices.push(["open", "Open its page"]);
@@ -908,7 +961,7 @@ function renderSettings() {
     const edit = (change) => savePrefs((next) => change(next.hotkeys[index]));
     hotkeys.appendChild(prefRow("Shortcut " + (index + 1), null,
       recorder(binding.keys, (keys) => edit((item) => { item.keys = keys; })),
-      commandSelect(binding.command, (name) => edit((item) => { item.command = name; item.action = "panel"; })),
+      commandSelect(binding.command, (name) => edit((item) => { item.command = name; item.action = name === "template" ? (home.templates || [])[0]?.name || "" : "panel"; })),
       actionSelect(binding.command, binding.action, (action) => edit((item) => { item.action = action; })),
       el("button", { class: "ghost danger", title: "Remove", text: "Remove", onclick: () => savePrefs((next) => next.hotkeys.splice(index, 1)) })));
   });
@@ -918,9 +971,10 @@ function renderSettings() {
     hotkeys.appendChild(prefRow("New shortcut", "Choose the command",
       recorder(draft.keys, (keys) => { draft.keys = keys; renderSettings(); }),
       commandSelect("", (name) => {
-        if (!name) return;
+        const first = (home.templates || [])[0];
+        if (!name || (name === "template" && !first)) return;
         home.draft = null;
-        savePrefs((next) => next.hotkeys.push({ keys: draft.keys, command: name, action: "panel" }));
+        savePrefs((next) => next.hotkeys.push({ keys: draft.keys, command: name, action: name === "template" ? first.name : "panel" }));
       }),
       el("button", { class: "ghost", text: "Cancel", onclick: () => { home.draft = null; renderSettings(); } })));
   } else {
@@ -929,18 +983,24 @@ function renderSettings() {
 
   const pinned = el("div", { class: "pinned" });
   settings.menubar.forEach((name, index) => {
-    const item = home.items.find((entry) => entry.name === name);
+    const app = name.startsWith("app:") ? name.slice(4) : null;
+    const item = app ? { name, title: app, icon: "app", app_icon: app } : home.items.find((entry) => entry.name === name);
     const move = (by) => savePrefs((next) => { const [taken] = next.menubar.splice(index, 1); next.menubar.splice(index + by, 0, taken); });
     pinned.appendChild(el("div", { class: "pin" },
-      el("span", { class: "glyph" }, icon(item ? item.icon : "command")),
-      el("b", { text: item ? item.title : name }), el("small", { text: item ? `ul ${name}` : `ul ${name} · not installed` }),
+      el("span", { class: "glyph" }, item ? commandIcon(item) : icon("command")),
+      el("b", { text: item ? item.title : name }),
+      el("small", { text: app ? `ul app ${app}` : item ? `ul ${name}` : `ul ${name} · not installed` }),
       el("div", { class: "grow" }),
       el("button", { class: "ghost", title: "Move left", text: "←", disabled: index === 0 ? "" : null, onclick: () => move(-1) }),
       el("button", { class: "ghost", title: "Move right", text: "→", disabled: index === settings.menubar.length - 1 ? "" : null, onclick: () => move(1) }),
       el("button", { class: "ghost danger", text: "Remove", onclick: () => savePrefs((next) => next.menubar.splice(index, 1)) })));
   });
   if (!settings.menubar.length) pinned.appendChild(el("div", { class: "muted", text: "Only the UL menu." }));
-  const adding = commandSelect("", (name) => name && savePrefs((next) => { if (!next.menubar.includes(name)) next.menubar.push(name); }));
+  // Open app asks which application (in the palette); the menu bar takes commands, not templates.
+  const adding = commandSelect("", (name) => {
+    if (name === "app") send({ op: "pin", name: "app" });
+    else if (name) savePrefs((next) => { if (!next.menubar.includes(name)) next.menubar.push(name); });
+  }, false);
   adding.options[0].textContent = "Add to the menu bar…";
   const menubar = el("div", { class: "prefgroup" },
     el("div", { class: "prefrow column" }, el("div", { class: "preflabel" }, el("b", { text: "Shown in the menu bar" }), el("small", { text: "Left to right, next to the UL menu" })), pinned, adding),
@@ -967,7 +1027,7 @@ function renderSettings() {
   count.addEventListener("change", saveCount);
   count.addEventListener("keydown", (event) => { if (event.key === "Enter") count.blur(); });
   const clipboard = el("div", { class: "prefgroup" },
-    prefRow("Images and files to keep", "Pictures and copied files are saved as files; older ones are deleted (0 keeps none)", count));
+    prefRow("Images and files to keep", home.prefsNote || "Pictures and copied files are saved as files; older ones are deleted (0 keeps none)", count));
 
   const files = el("div", { class: "prefgroup" },
     prefRow("Settings file", prefs.path, el("button", { class: "ghost", text: "Open in editor", onclick: () => send({ op: "settings-file" }) })));
@@ -996,11 +1056,15 @@ window.ul = {
         home.version = message.version || "";
         build();
         $(".version").textContent = "Unlaw " + home.version;
+        if (message.update) showUpdate(message.update);
         home.section = "";
         go(message.section || "commands");
         break;
       case "theme":
         applyTheme(message.theme);
+        break;
+      case "update":
+        showUpdate(message);
         break;
       case "list":
         home.items = message.items || [];
@@ -1054,7 +1118,8 @@ window.ul = {
         scheduleDraw();
         break;
       case "game-ended":
-        if (message.id !== arcade.id) break;
+        // A game that never started carries an id the page never saw: still show why it failed.
+        if (message.id !== arcade.id && !(message.error && !arcade.frame)) break;
         arcade.id = 0;
         arcade.frame = null;
         arcade.ended = message.error || "Game closed. Pick another one or play again.";
@@ -1064,6 +1129,7 @@ window.ul = {
         home.templates = message.items || (message.error ? home.templates : []);
         home.templatesError = message.error || "";
         if (home.section === "templates") renderTemplates();
+        if (home.section === "settings" && !home.recording) renderSettings();
         break;
       case "template-done": {
         home.templateBusy = "";
@@ -1076,7 +1142,7 @@ window.ul = {
       }
       case "clip-files":
         if (home.prefs) home.prefs.clip_files = message.count;
-        if (message.error) alert(message.error);
+        home.prefsNote = message.error || "";
         if (home.section === "settings") renderSettings();
         break;
       case "settings":

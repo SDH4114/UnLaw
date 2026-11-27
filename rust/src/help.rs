@@ -124,7 +124,7 @@ Needs curl; UNLAW_CATALOG_URL points at another catalog.
 Examples:
   ul commands --describe
   ul commands search youtube
-  ul commands get yt music
+  ul commands get yt spotify
 ",
     ),
     (
@@ -270,7 +270,7 @@ taken out of core.features so it is not installed again (ul features add
 <command> brings it back). System commands cannot be removed; lm and game are
 built into ul: ul features remove <name>.
 Examples:
-  ul remove music
+  ul remove spotify
   ul remove hello --yes
   ul remove
 ",
@@ -362,7 +362,8 @@ Examples:
     (
         "templates",
         "List saved templates: name, folder and apps.
-Usage: ul templates
+Usage: ul templates [--json]
+  --json   every window, tab, pane and URL of each template (what Unlaw.app reads)
 Details: ul template --help
 Example: ul templates
 ",
@@ -370,9 +371,10 @@ Example: ul templates
     (
         "update",
         "Download and install the newest Unlaw from GitHub.
-Usage: ul update [--check] [--force] [--branch <name>|--tag <name>]
+Usage: ul update [--check [--json]] [--force] [--branch <name>|--tag <name>]
 Options:
   --check            Compare the installed version and commit with GitHub; installs nothing
+  --json             With --check: one JSON line (ok, installed, latest, update, message)
   --force            Reinstall even when the installed commit is the newest
   --branch <name>    Install from a branch instead of main
   --tag <name>       Install a tagged release

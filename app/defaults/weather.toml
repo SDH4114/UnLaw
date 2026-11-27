@@ -1,12 +1,21 @@
 title = "Weather"
 icon = "cloud"
+# The app draws the forecast itself (now, and a row per day); the palette searches a city.
+view = "weather"
+
+# Pinned in the menu bar: the sky now as the icon and the temperature beside it.
+[status]
+args = ["--days", "1", "--json"]
+every = 900
+text = "{current.temperature|int}°"
+icon = "{current.weather_code|weather}"
 
 [panel]
 [[panel.field]]
 id = "city"
 type = "text"
 label = "City"
-placeholder = "weather.city from config.toml"
+placeholder = "Your city, or type another"
 
 [[panel.field]]
 id = "days"

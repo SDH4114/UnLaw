@@ -19,17 +19,17 @@ def _apple_string(value: str) -> str:
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] in {"-h", "--help", "help"}:
-        print(COMMAND_HELP['music'], end="")
+        print(COMMAND_HELP['spotify'], end="")
         return 0
     try:
         settings = load_config()["apps"]
     except ConfigError as error:
-        print(f"unlaw music: {error}", file=sys.stderr)
+        print(f"unlaw spotify: {error}", file=sys.stderr)
         return 2
     application = str(settings["spotify"])
     query = " ".join(args).strip()
     if args and not query:
-        print("Usage: ul music [track]", file=sys.stderr)
+        print("Usage: ul spotify [track]", file=sys.stderr)
         return 2
     try:
         # `open -a` fails at once when the app is not installed; then the web player opens instead.
@@ -38,7 +38,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             url = WEB_PLAYER + (f"search/{quote(query, safe='')}" if query else "")
             return subprocess.run(["open", url], check=False).returncode
     except OSError as error:
-        print(f"unlaw music: {error}", file=sys.stderr)
+        print(f"unlaw spotify: {error}", file=sys.stderr)
         return 1
     if not query:
         return 0
@@ -58,10 +58,10 @@ end tell'''
     try:
         result = subprocess.run(["osascript", "-e", script], check=False)
     except OSError as error:
-        print(f"unlaw music: {error}", file=sys.stderr)
+        print(f"unlaw spotify: {error}", file=sys.stderr)
         return 1
     if result.returncode != 0:
-        print("unlaw music: allow Accessibility control for your terminal to auto-play results.", file=sys.stderr)
+        print("unlaw spotify: allow Accessibility control for your terminal to auto-play results.", file=sys.stderr)
     return result.returncode
 
 

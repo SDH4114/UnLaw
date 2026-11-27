@@ -2,7 +2,7 @@
 """Open Telegram, or send and download messages/files through your bot."""
 from __future__ import annotations
 
-COMMAND_HELP = 'Open Telegram, or send and download messages/files through your bot.\nUsage:\n  ul tg                                  Open Telegram\n  ul tg <message>|send <message-or-file>   Send text or a file\n  ul tg photo|video|file <path>            Send a file with an explicit type\n  ul tg capture                          Send the latest capture\n  ul tg setup                            Configure bot token and chat ID\n  ul tg status                           Check bot configuration\n  ul tg last                             Print recent bot updates\n  ul tg download [directory]              Download files from recent updates\nToken: the macOS Keychain (service telegram.keychain_service); if it has none, a\nTELEGRAM_BOT_TOKEN= line in .env next to config.toml is used. Default downloads:\nstorage.root/telegram/downloads.\nExample: ul tg send "Hello"\n'
+COMMAND_HELP = 'Open Telegram, or send and download messages/files through your bot.\nUsage:\n  ul tg                                  Open Telegram (ul tg open: also without a terminal)\n  ul tg <message>|send <message-or-file>   Send text or a file\n  ul tg photo|video|file <path>            Send a file with an explicit type\n  ul tg capture                          Send the latest capture\n  ul tg setup                            Configure bot token and chat ID\n  ul tg status                           Check bot configuration\n  ul tg last                             Print recent bot updates\n  ul tg download [directory]              Download files from recent updates\nToken: the macOS Keychain (service telegram.keychain_service); if it has none, a\nTELEGRAM_BOT_TOKEN= line in .env next to config.toml is used. Default downloads:\nstorage.root/telegram/downloads.\nExample: ul tg send "Hello"\n'
 
 import copy
 import os
@@ -457,7 +457,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args == ["setup"]:
             return _setup()
-        if not args and sys.stdin.isatty():
+        # `open` for callers without a terminal (Unlaw.app): there an empty stdin is a message to send.
+        if args == ["open"] or (not args and sys.stdin.isatty()):
             return subprocess.run(["open", "-a", "Telegram"], check=False).returncode
         client, settings = _client()
         chat_id = settings["chat_id"]

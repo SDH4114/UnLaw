@@ -55,7 +55,15 @@ kbd { font: 11px/1 var(--font); padding: 2px 5px; border-radius: 4px; background
 .search input { border: none; background: transparent; font-size: 19px; font-weight: 400; padding: 0; box-shadow: none; }
 .search input:focus { border: none; box-shadow: none; outline: none; }
 .search svg.icon { width: 20px; height: 20px; color: var(--muted); }
-.list { flex: 1; overflow-y: auto; padding: 6px; }
+/* The inline input's command, Raycast style: a chip before the field. */
+.search .cmdchip { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 4px 9px 4px 7px; border-radius: 7px; background: var(--accent-soft); color: var(--accent-ink); font-size: 13.5px; font-weight: 600; white-space: nowrap; }
+.search .cmdchip[hidden] { display: none; }
+.search .cmdchip svg.icon { width: 15px; height: 15px; color: inherit; }
+.row .tags .key { font-variant-numeric: tabular-nums; }
+.quick-error { margin: 2px 4px 6px; padding: 7px 10px; border-radius: 8px; color: var(--danger); background: var(--raise); box-shadow: inset 0 0 0 0.5px var(--danger); font-size: 12.5px; }
+.foot .keys { display: flex; gap: 14px; align-items: center; }
+.foot .hint { opacity: .8; }
+.list { flex: 1; overflow-y: auto; padding: 6px; position: relative; }
 .row { display: flex; align-items: center; gap: 11px; padding: 7px 10px; border-radius: 8px; }
 .row .glyph { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; background: var(--raise); color: var(--muted); flex: none; box-shadow: inset 0 0 0 0.5px var(--line); }
 .row .what { flex: 1; min-width: 0; }
@@ -108,6 +116,9 @@ kbd { font: 11px/1 var(--font); padding: 2px 5px; border-radius: 4px; background
 .frow input[type=time], .frow input[type=date] { text-align: right; }
 .frow.toggle { cursor: default; }
 .frow.toggle > label { flex: 1; }
+.frow.inline > label { flex: 0 0 auto; max-width: 38%; }
+.frow.inline input { text-align: left; }
+.frow.inline .go { flex: none; padding: 5px 12px; margin-left: 4px; box-shadow: inset 0 0 0 0.5px var(--line); }
 .frow.stacked { flex-direction: column; align-items: stretch; gap: 8px; padding: 10px 12px; cursor: default; }
 
 /* Segmented control: one track, the chosen segment is a raised neutral chip. */
@@ -285,3 +296,49 @@ canvas.vgraph { width: 100%; display: block; border-radius: 8px; background: var
 .svdisk { display: flex; flex-direction: column; gap: 5px; }
 .svdisk .label { display: flex; justify-content: space-between; font-size: 12.5px; }
 .svdisk .label span { color: var(--muted); }
+
+/* Weather view */
+.seg.compact { flex-wrap: nowrap; }
+.seg.compact button { min-width: 0; padding: 3px 9px; font-size: 12px; white-space: nowrap; flex: none; }
+.wxsearch { display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 9px; background: var(--raise); box-shadow: inset 0 0 0 0.5px var(--line); }
+.wxsearch svg.icon { width: 15px; height: 15px; color: var(--muted); flex: none; }
+.wxsearch input { flex: 1; min-width: 0; border: none; background: transparent; box-shadow: none; padding: 8px 0; }
+.wxsearch input:focus { box-shadow: none; outline: none; }
+.wxnow { display: flex; align-items: center; gap: 14px; padding: 4px 2px; }
+.wxglyph { width: 52px; height: 52px; display: grid; place-items: center; border-radius: 14px; background: var(--accent-soft); color: var(--accent-ink); flex: none; }
+.wxglyph svg.icon { width: 30px; height: 30px; }
+.wxtemp { font-size: 46px; font-weight: 300; letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums; }
+.wxsay { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.wxsay b { font-size: 14px; font-weight: 600; }
+.wxsay span { font-size: 12px; color: var(--muted); }
+.wxdays { display: flex; flex-direction: column; border-radius: 10px; background: var(--raise); box-shadow: inset 0 0 0 0.5px var(--line); padding: 2px 0; }
+.wxday { display: grid; grid-template-columns: 84px 22px 34px 32px 1fr 32px; align-items: center; gap: 6px; padding: 7px 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.wxday + .wxday { border-top: 0.5px solid var(--line); }
+.wxday .name { font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wxday .icon svg.icon { width: 17px; height: 17px; color: var(--muted); display: block; }
+.wxday .rain { font-size: 11px; color: #5b9cf0; }
+.wxday .low { color: var(--muted); text-align: right; }
+.wxday .high { text-align: right; font-weight: 550; }
+.wxday .range { position: relative; height: 4px; border-radius: 99px; background: var(--ring); }
+.wxday .range i { position: absolute; top: 0; bottom: 0; border-radius: 99px; background: linear-gradient(90deg, #6fb4f2, var(--accent)); }
+/* A command's functions: the ↩ shows on the chosen row only. */
+.row.fn:not(.on) .tags .key { visibility: hidden; }
+
+/* The note (toast): one line of title, one or two of text, a colored mark. */
+.toast { height: auto; flex-direction: row; align-items: center; gap: 10px; padding: 10px 12px; cursor: default; border-radius: 12px; }
+.toast .toastmark { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; flex: none; }
+.toast.ok .toastmark { background: color-mix(in srgb, var(--ok, #3fb950) 18%, transparent); color: var(--ok, #3fb950); }
+.toast.bad .toastmark { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+.toast .toastmark svg.icon { width: 15px; height: 15px; }
+.toast .toasttext { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.toast .toasttext b { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toast .toasttext span { font-size: 12px; color: var(--muted); white-space: pre-line; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.toast .toastmore { font-size: 11.5px; color: var(--accent-ink); flex: none; }
+
+/* A logo (an app's own icon or a brand's) fills its tile without the tint behind line icons. */
+.glyph:has(> img.logo) { background: transparent; box-shadow: none; }
+.glyph > img.logo { width: 100%; height: 100%; object-fit: contain; }
+.cmdchip > img.logo { width: 16px; height: 16px; }
+/* Brand marks are filled shapes in the line icons' colour. */
+svg.icon.brand { fill: currentColor; stroke: none; }
+svg.icon.brand path.line { fill: none; stroke: currentColor; }

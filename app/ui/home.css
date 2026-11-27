@@ -222,3 +222,20 @@ input.switch:checked::after { transform: translateX(16px); }
 .tnote button svg.icon { width: 13px; height: 13px; }
 .top button, .top .state { white-space: nowrap; flex: none; }
 .top input[type=search] { min-width: 140px; }
+.clipask:empty { display: none; }
+.clipask { max-width: 920px; margin: 0 auto 10px; }
+.clipask .tnote { align-items: center; }
+.clipask .tnote button.danger, .templates button.danger { background: var(--danger); color: #fff; padding: 5px 12px; }
+.clipask .muted { color: var(--muted); }
+
+/* A logo (an app's own icon or a brand's) fills its tile without the tint behind line icons. */
+.glyph:has(> img.logo) { background: transparent; box-shadow: none; }
+.glyph > img.logo { width: 100%; height: 100%; object-fit: contain; }
+.cmdchip > img.logo { width: 16px; height: 16px; }
+/* Brand marks are filled shapes in the line icons' colour. */
+svg.icon.brand { fill: currentColor; stroke: none; }
+svg.icon.brand path.line { fill: none; stroke: currentColor; }
+
+/* Update, beside the version: only while GitHub has a newer Unlaw. */
+.foot .update { margin: 0 auto 0 8px; padding: 3px 10px; border-radius: 999px; background: var(--accent); color: var(--on-accent, #1b1300); font-weight: 600; font-size: 12px; }
+.foot .update[hidden] { display: none; }

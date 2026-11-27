@@ -50,6 +50,10 @@ pub const ICONS: &[&str] = &[
     "gear",
 ];
 
+/// Logos the pages draw themselves (common.js `BRANDS`): sites without an app.
+pub const BRANDS: &[&str] =
+    &["youtube", "netflix", "telegram", "spotify", "chatgpt", "claude", "steam", "obsidian", "minecraft"];
+
 /// Descriptions of the commands Unlaw ships; a sidecar file overrides one.
 pub const DEFAULTS: &[(&str, &str)] = &[
     ("agent", include_str!("../defaults/agent.toml")),
@@ -69,11 +73,11 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("lofi", include_str!("../defaults/lofi.toml")),
     ("mac", include_str!("../defaults/mac.toml")),
     ("minecraft", include_str!("../defaults/minecraft.toml")),
-    ("music", include_str!("../defaults/music.toml")),
     ("netflix", include_str!("../defaults/netflix.toml")),
     ("obsidian", include_str!("../defaults/obsidian.toml")),
     ("py", include_str!("../defaults/py.toml")),
     ("rust", include_str!("../defaults/rust.toml")),
+    ("spotify", include_str!("../defaults/spotify.toml")),
     ("steam", include_str!("../defaults/steam.toml")),
     ("sys", include_str!("../defaults/sys.toml")),
     ("tg", include_str!("../defaults/tg.toml")),
@@ -144,6 +148,9 @@ pub struct Field {
     pub kind: FieldKind,
     pub label: String,
     pub options: Vec<String>,
+    /// A choice may put other words into argv than it shows: `values[i]` for
+    /// `options[i]` (`"MP3"` -> `"--audio"`, `""` for nothing). Empty = the option itself.
+    pub values: Vec<String>,
     pub default: Value,
     pub placeholder: Option<String>,
     /// The buttons do not run while it is empty.
@@ -178,6 +185,10 @@ pub struct Spec {
     pub name: String,
     pub title: String,
     pub icon: String,
+    /// `app_icon = "Claude"`: the installed application's own icon instead of `icon`.
+    pub app_icon: Option<String>,
+    /// `brand = "youtube"`: a logo the app draws (BRANDS), for sites and missing apps.
+    pub brand: Option<String>,
     pub summary: String,
     pub terminal: bool,
     /// False for `where = "terminal"`: the command is only for the terminal
@@ -364,6 +375,7 @@ fn field(what: String, table: &Table) -> Result<Field, String> {
     })?;
     let label = reader.string("label")?.unwrap_or_else(|| id.clone());
     let options = reader.strings("options", MAX_OPTIONS)?.unwrap_or_default();
+    let values = reader.strings("values", MAX_OPTIONS)?.unwrap_or_default();
     let placeholder = reader.string("placeholder")?;
     let required = reader.bool("required")?.unwrap_or(false);
     let default = match (kind, reader.value("default")?) {
@@ -387,6 +399,9 @@ fn field(what: String, table: &Table) -> Result<Field, String> {
     if kind != FieldKind::Choice && !options.is_empty() {
         return Err(format!("{what}: only a choice has options"));
     }
+    if !values.is_empty() && values.len() != options.len() {
+        return Err(format!("{what}.values needs one value per option ({} options)", options.len()));
+    }
     if let (FieldKind::Choice, Value::Text(text)) = (kind, &default) {
         if !options.contains(text) {
             return Err(format!("{what}.default {text:?} is not one of its options"));
@@ -395,7 +410,7 @@ fn field(what: String, table: &Table) -> Result<Field, String> {
     if required && kind == FieldKind::Toggle {
         return Err(format!("{what}: a toggle cannot be required"));
     }
-    Ok(Field { id, kind, label, options, default, placeholder, required })
+    Ok(Field { id, kind, label, options, values, default, placeholder, required })
 }
 
 /// An action without a panel has no values: braces must be written `{{`.
@@ -416,14 +431,143 @@ pub struct Toggle {
 
 /// Panels drawn by the app itself, each for one command (view, command): the
 /// page asks for data and actions by name and Rust builds every argv (views.rs).
-pub const VIEWS: &[(&str, &str)] = &[("awake", "awake"), ("system", "sys")];
+pub const VIEWS: &[(&str, &str)] = &[("awake", "awake"), ("system", "sys"), ("weather", "weather")];
 
 /// Parts of the main window a command may open (`section = "..."`).
 pub const SECTIONS: &[&str] =
     &["templates", "system", "clipboard", "games", "board", "today", "canvas", "studio", "desk", "timer"];
 
 /// Parse an `app.toml` for command `name`.
+/// The palette's inline input for a command: type into the search bar and Enter
+/// runs `button` with that text as `field` (the rest keep their defaults).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Quick {
+    pub button: usize,
+    pub field: String,
+}
+
+/// One palette row of a form's button (`Spec::choices`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Choice {
+    pub button: usize,
+    /// The typed field the palette's text fills, if the button takes one.
+    pub field: Option<String>,
+    /// Choice fields set by this row: (field id, option label).
+    pub fixed: Vec<(String, String)>,
+    pub label: String,
+}
+
 impl Spec {
+    /// The first button that takes one typed thing: its one required text-like
+    /// field, else its only text-like field, while every other field it uses can
+    /// run on its default. Timer -> "Timer for", Browser -> "Link", Weather -> "City".
+    pub fn quick(&self) -> Option<Quick> {
+        // A command with its own view takes input there; only the weather view searches with it.
+        if self.view.as_deref().is_some_and(|view| view != "weather") {
+            return None;
+        }
+        let panel = self.panel.as_ref()?;
+        let typed = |field: &&Field| matches!(field.kind, FieldKind::Text | FieldKind::Duration | FieldKind::Number);
+        panel.buttons.iter().enumerate().find_map(|(index, button)| {
+            let used = args::ids(&button.args).ok()?;
+            let fields: Vec<&Field> = panel.fields.iter().filter(|field| used.contains(&field.id)).collect();
+            let texts: Vec<&Field> = fields.iter().copied().filter(typed).collect();
+            let required: Vec<&Field> = texts.iter().copied().filter(|field| field.required).collect();
+            let chosen = match (required.as_slice(), texts.as_slice()) {
+                ([one], _) | ([], [one]) => *one,
+                _ => return None,
+            };
+            let others_ready =
+                fields.iter().all(|field| field.id == chosen.id || !field.required || field.default.truthy());
+            others_ready.then(|| Quick { button: index, field: chosen.id.clone() })
+        })
+    }
+
+    /// Every button of the form as palette rows, so the palette can replace the panel:
+    /// the typed text goes into the row's one typed field, and a choice the button uses
+    /// becomes a row per option (YouTube: Download Video, Download MP3, ...). A button
+    /// that needs two typed things, or a field it cannot fill, has no row (the panel has it).
+    pub fn choices(&self) -> Vec<Choice> {
+        let Some(panel) = self.panel.as_ref() else { return Vec::new() };
+        // A view searches with its one input (weather); its days are picked inside the view.
+        if self.view.is_some() {
+            return self
+                .quick()
+                .map(|quick| Choice {
+                    button: quick.button,
+                    field: Some(quick.field),
+                    fixed: Vec::new(),
+                    label: panel.buttons[quick.button].label.clone(),
+                })
+                .into_iter()
+                .collect();
+        }
+        // A time or a date can be typed too ("Set alarm 07:30"); values_from checks it.
+        let typed = |field: &&Field| {
+            matches!(
+                field.kind,
+                FieldKind::Text | FieldKind::Duration | FieldKind::Number | FieldKind::Time | FieldKind::Date
+            )
+        };
+        let mut rows = Vec::new();
+        for (index, button) in panel.buttons.iter().enumerate() {
+            let Ok(used) = args::ids(&button.args) else { continue };
+            let fields: Vec<&Field> = panel.fields.iter().filter(|field| used.contains(&field.id)).collect();
+            let texts: Vec<&Field> = fields.iter().copied().filter(typed).collect();
+            let required: Vec<&Field> = texts.iter().copied().filter(|field| field.required).collect();
+            let input = match (required.as_slice(), texts.as_slice()) {
+                ([one], _) | ([], [one]) => Some(*one),
+                ([], []) => None,
+                _ => continue,
+            };
+            // One choice (2-8 options) is spread into rows; anything else runs on its default.
+            let spread = fields
+                .iter()
+                .copied()
+                .find(|field| field.kind == FieldKind::Choice && (2..=8).contains(&field.options.len()));
+            let ready = fields.iter().all(|field| {
+                input.is_some_and(|input| input.id == field.id)
+                    || spread.is_some_and(|spread| spread.id == field.id)
+                    || !field.required
+                    || field.default.truthy()
+            });
+            if !ready {
+                continue;
+            }
+            let field = input.map(|field| field.id.clone());
+            match spread {
+                Some(choice) => rows.extend(choice.options.iter().map(|option| Choice {
+                    button: index,
+                    field: field.clone(),
+                    fixed: vec![(choice.id.clone(), option.clone())],
+                    label: format!("{} {option}", button.label),
+                })),
+                None => rows.push(Choice { button: index, field, fixed: Vec::new(), label: button.label.clone() }),
+            }
+        }
+        rows
+    }
+
+    /// Everything its panel offers is a palette row (`choices` + actions), so the
+    /// panel is not needed: opening the command lists those rows in the palette
+    /// (an action that asks first is confirmed there with a second Enter).
+    /// Not for a view or a page, or a field no row fills (a toggle, a second
+    /// text such as the timer's label).
+    pub fn palette_covers(&self) -> bool {
+        if self.view.is_some() || self.open.is_some() || self.terminal || !self.in_app {
+            return false;
+        }
+        let Some(panel) = &self.panel else { return self.actions.len() >= 2 };
+        let choices = self.choices();
+        let every_button = (0..panel.buttons.len()).all(|index| choices.iter().any(|choice| choice.button == index));
+        let every_field = panel.fields.iter().all(|field| {
+            choices.iter().any(|choice| {
+                choice.field.as_deref() == Some(field.id.as_str()) || choice.fixed.iter().any(|(id, _)| id == &field.id)
+            })
+        });
+        every_button && every_field
+    }
+
     /// The one thing to do when a command has no form and a single action that
     /// needs no confirmation (ChatGPT's "Open"): opening it just runs that.
     pub fn only_action(&self) -> Option<&Action> {
@@ -441,6 +585,14 @@ pub fn parse(name: &str, text: &str) -> Result<Spec, String> {
     let icon = top.string("icon")?.unwrap_or_else(|| "command".into());
     if !ICONS.contains(&icon.as_str()) {
         return Err(format!("icon {icon:?} is not one of: {}", ICONS.join(", ")));
+    }
+    let app_icon = top.string("app_icon")?;
+    if let Some(app) = app_icon.as_deref().filter(|app| !crate::settings::app_name_ok(app)) {
+        return Err(format!("app_icon {app:?} is not an application name"));
+    }
+    let brand = top.string("brand")?;
+    if let Some(brand) = brand.as_deref().filter(|brand| !BRANDS.contains(brand)) {
+        return Err(format!("brand {brand:?} is not one of: {}", BRANDS.join(", ")));
     }
     let summary = top.string("summary")?.unwrap_or_default();
     let terminal = top.bool("terminal")?.unwrap_or(false);
@@ -525,6 +677,11 @@ pub fn parse(name: &str, text: &str) -> Result<Spec, String> {
             let icon = reader.string("icon")?;
             let otherwise_icon = reader.string("otherwise_icon")?;
             for (key, value) in [("icon", &icon), ("otherwise_icon", &otherwise_icon)] {
+                // `{current.weather_code|weather}`: chosen from the reading (checked like text).
+                if let Some(template) = value.as_deref().filter(|name| name.contains('{')) {
+                    crate::template::render(template, &Json::Null).map_err(|error| format!("status.{key}: {error}"))?;
+                    continue;
+                }
                 if let Some(name) = value.as_deref().filter(|name| !ICONS.contains(name)) {
                     return Err(format!("status.{key}: unknown icon {name:?}"));
                 }
@@ -566,6 +723,8 @@ pub fn parse(name: &str, text: &str) -> Result<Spec, String> {
         name: name.to_string(),
         title,
         icon,
+        app_icon,
+        brand,
         summary,
         terminal,
         in_app,
@@ -586,6 +745,8 @@ pub fn plain(name: &str, summary: &str) -> Spec {
         name: name.to_string(),
         title: name.to_string(),
         icon: "command".into(),
+        app_icon: None,
+        brand: None,
         summary: summary.to_string(),
         terminal: false,
         in_app: true,
@@ -684,6 +845,9 @@ pub fn settings_problems(settings: &crate::settings::Settings, specs: &[Spec]) -
     }
     let mut more = Vec::new();
     for binding in &settings.bindings {
+        if matches!(binding.target, Target::Template(_)) {
+            continue; // a template, not a command (checked when it starts)
+        }
         let place = format!("hotkey {}", binding.hotkey);
         let Some(spec) = named(&binding.command, &place) else { continue };
         match &binding.target {
@@ -733,13 +897,64 @@ pub fn values_from(json: &Json, spec: &Spec) -> Result<BTreeMap<String, Value>, 
             (FieldKind::Choice, Json::String(text)) if !field.options.contains(text) => {
                 return Err(format!("{}: {text:?} is not one of its options", field.label))
             }
-            (_, Json::String(text)) => Value::Text(text.trim().to_string()),
-            (_, Json::Number(number)) => Value::Text(number.to_string()),
+            // A choice is one of its labels, never a bare number that skips the `values` mapping.
+            (FieldKind::Choice, Json::String(text)) => Value::Text(text.clone()),
+            (FieldKind::Choice, _) => {
+                return Err(format!("{}: not a value this field takes (one of its options)", field.label))
+            }
+            (_, Json::String(text)) => Value::Text(checked(field, text.trim())?),
+            (_, Json::Number(number)) => Value::Text(checked(field, &number.to_string())?),
             _ => return Err(format!("{}: not a value this field takes", field.label)),
         };
         values.insert(field.id.clone(), value);
     }
     Ok(values)
+}
+
+/// A typed value as its kind allows. Nothing typed may start with `-`: every value
+/// is one argv element, and `-x` would be read as an option of the command (a
+/// timer label `--all` after `cancel` once cancelled every timer).
+fn checked(field: &Field, text: &str) -> Result<String, String> {
+    if text.is_empty() {
+        return Ok(String::new());
+    }
+    if text.starts_with('-') {
+        return Err(format!("{}: cannot start with -", field.label));
+    }
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    let ok = match field.kind {
+        FieldKind::Number => text.split_once('.').map_or(digits(text), |(whole, part)| digits(whole) && digits(part)),
+        // 25m, 1h30m, 90 (the CLI parses the rest); always starts with a digit, so never a word like `cancel`.
+        FieldKind::Duration => {
+            text.starts_with(|c: char| c.is_ascii_digit())
+                && text.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b':')
+        }
+        FieldKind::Time => text.split_once(':').is_some_and(|(hour, minute)| digits(hour) && digits(minute)),
+        FieldKind::Date => {
+            let parts: Vec<&str> = text.split('-').collect();
+            parts.len() == 3 && parts.iter().all(|part| digits(part))
+        }
+        _ => true,
+    };
+    if ok {
+        Ok(text.to_string())
+    } else {
+        Err(format!("{}: {text:?} is not a {}", field.label, field.kind.name()))
+    }
+}
+
+/// The values as argv takes them: a choice with `values` gives the value of the
+/// chosen option instead of its label.
+pub fn argument_values(panel: &Panel, values: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
+    let mut mapped = values.clone();
+    for field in panel.fields.iter().filter(|field| !field.values.is_empty()) {
+        if let Some(Value::Text(label)) = values.get(&field.id) {
+            if let Some(index) = field.options.iter().position(|option| option == label) {
+                mapped.insert(field.id.clone(), Value::Text(field.values[index].clone()));
+            }
+        }
+    }
+    mapped
 }
 
 /// A required field the button uses but that is empty ("Video link is empty").
@@ -766,6 +981,8 @@ pub fn to_json(spec: &Spec) -> Json {
         "name": spec.name,
         "title": spec.title,
         "icon": spec.icon,
+        "app_icon": spec.app_icon,
+        "brand": spec.brand,
         "summary": spec.summary,
         "terminal": spec.terminal,
         "section": spec.section,
@@ -785,12 +1002,123 @@ pub fn to_json(spec: &Spec) -> Json {
         })),
         "status": spec.status.is_some(),
         "open": spec.open.is_some(),
+        // The palette's inline input (`Spec::quick`): which button and field, and how to ask.
+        "quick": spec.quick().and_then(|quick| {
+            let panel = spec.panel.as_ref()?;
+            let field = panel.fields.iter().find(|field| field.id == quick.field)?;
+            Some(json!({
+                "button": quick.button,
+                "field": field.id,
+                "label": field.label,
+                "placeholder": field.placeholder,
+                "required": field.required,
+                "run": panel.buttons[quick.button].label,
+            }))
+        }),
+        "choices": spec.choices().iter().map(|choice| {
+            let field = choice.field.as_ref().and_then(|id| spec.panel.as_ref()?.fields.iter().find(|field| &field.id == id));
+            json!({
+                "button": choice.button,
+                "label": choice.label,
+                "fixed": choice.fixed.iter().map(|(id, option)| (id.clone(), json!(option))).collect::<serde_json::Map<_, _>>(),
+                "field": field.map(|field| field.id.clone()),
+                "input": field.map(|field| field.label.clone()),
+                "placeholder": field.and_then(|field| field.placeholder.clone()),
+                "required": field.is_some_and(|field| field.required),
+                // What an empty input runs with ("25m"); the palette shows it as the hint.
+                "default": field.and_then(|field| match &field.default {
+                    Value::Text(text) if !text.is_empty() => Some(text.clone()),
+                    _ => None,
+                }),
+            })
+        }).collect::<Vec<_>>(),
+        "covers": spec.palette_covers(),
+        // No form and one action: opening the command runs it, so the palette shows one row.
+        "only": spec.only_action().is_some(),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_palette_asks_for_one_typed_thing() {
+        let quick = |text: &str| parse("x", text).unwrap().quick();
+        // The required text field of the first button that can run with defaults.
+        let timer = "[panel]\n[[panel.field]]\nid = \"dur\"\ntype = \"duration\"\nrequired = true\ndefault = \"25m\"\n\
+            [[panel.field]]\nid = \"label\"\n[[panel.field]]\nid = \"clock\"\ntype = \"toggle\"\n\
+            [[panel.button]]\nlabel = \"Start\"\nargs = [\"{dur}\", \"{label}\", \"{clock?--clock}\"]";
+        assert_eq!(quick(timer), Some(Quick { button: 0, field: "dur".into() }));
+        // The only text field, optional, next to a choice with a default.
+        let weather = "[panel]\n[[panel.field]]\nid = \"city\"\n[[panel.field]]\nid = \"days\"\ntype = \"choice\"\noptions = [\"3\", \"7\"]\n\
+            [[panel.button]]\nlabel = \"Show\"\nargs = [\"{city}\", \"--days\", \"{days}\"]";
+        assert_eq!(quick(weather), Some(Quick { button: 0, field: "city".into() }));
+        // Two optional text fields: nothing to guess.
+        let two = "[panel]\n[[panel.field]]\nid = \"a\"\n[[panel.field]]\nid = \"b\"\n[[panel.button]]\nlabel = \"Go\"\nargs = [\"{a}\", \"{b}\"]";
+        assert_eq!(quick(two), None);
+        // Another required field without a default blocks it.
+        let blocked = "[panel]\n[[panel.field]]\nid = \"a\"\nrequired = true\n[[panel.field]]\nid = \"t\"\ntype = \"time\"\nrequired = true\n\
+            [[panel.button]]\nlabel = \"Go\"\nargs = [\"{a}\", \"{t}\"]";
+        assert_eq!(quick(blocked), None);
+        assert_eq!(quick("title = \"x\""), None);
+    }
+
+    #[test]
+    fn every_button_becomes_palette_rows() {
+        let labels = |name: &str| {
+            let spec = parse(name, shipped(name).unwrap()).unwrap();
+            spec.choices().into_iter().map(|choice| (choice.label, choice.field)).collect::<Vec<_>>()
+        };
+        let url = Some("url".to_string());
+        assert_eq!(
+            labels("yt"),
+            vec![
+                ("Search".to_string(), Some("query".into())),
+                ("Open YouTube".into(), None),
+                ("Download Video".into(), url.clone()),
+                ("Download MP3".into(), url.clone()),
+                ("Download Podcast".into(), url.clone()),
+                ("Download Subtitles".into(), url.clone()),
+                ("Download All".into(), url),
+            ]
+        );
+        let timer = labels("timer");
+        assert_eq!(timer[0], ("Start timer".into(), Some("dur".into())));
+        assert_eq!(timer[1], ("Set alarm".into(), Some("at".into())));
+        assert_eq!(labels("browser"), vec![("Open".to_string(), Some("url".to_string()))]);
+        // A view keeps its one search row (the days are picked in the view).
+        assert_eq!(labels("weather"), vec![("Show".to_string(), Some("city".to_string()))]);
+        let spec = parse("yt", shipped("yt").unwrap()).unwrap();
+        assert_eq!(spec.choices()[3].fixed, vec![("what".to_string(), "MP3".to_string())]);
+    }
+
+    #[test]
+    fn the_palette_replaces_panels_it_fully_covers() {
+        let covers = |name: &str| parse(name, shipped(name).unwrap()).unwrap().palette_covers();
+        // Every button a row, every field filled by the text or a spread choice.
+        assert!(covers("yt") && covers("browser") && covers("tg") && covers("capture") && covers("doctor"));
+        // The timer's label and Clock toggle have no row; a view draws its own panel.
+        assert!(!covers("timer"));
+        assert!(!covers("awake") && !covers("weather") && !covers("sys"));
+    }
+
+    #[test]
+    fn a_choice_can_put_other_words_into_argv() {
+        let text = "[panel]\n[[panel.field]]\nid = \"what\"\ntype = \"choice\"\noptions = [\"Video\", \"MP3\"]\nvalues = [\"\", \"--audio\"]\n\
+            [[panel.button]]\nlabel = \"Go\"\nargs = [\"download\", \"{what}\"]";
+        let spec = parse("yt", text).unwrap();
+        let panel = spec.panel.as_ref().unwrap();
+        let values = values_from(&serde_json::json!({"what": "MP3"}), &spec).unwrap();
+        let argv = args::expand(&panel.buttons[0].args, &argument_values(panel, &values)).unwrap();
+        assert_eq!(argv, ["download", "--audio"]);
+        let values = values_from(&serde_json::json!({"what": "Video"}), &spec).unwrap();
+        assert_eq!(args::expand(&panel.buttons[0].args, &argument_values(panel, &values)).unwrap(), ["download"]);
+        // The page still sends the label; anything else is refused.
+        assert!(values_from(&serde_json::json!({"what": "--audio"}), &spec).is_err());
+        let uneven = text.replace("values = [\"\", \"--audio\"]", "values = [\"\"]");
+        assert!(parse("yt", &uneven).unwrap_err().contains("one value per option"));
+    }
 
     #[test]
     fn a_single_plain_action_runs_at_once() {
@@ -997,10 +1325,29 @@ otherwise = "off"
         assert!(values_from(&long, &spec).unwrap_err().contains("longer"));
         assert!(values_from(&serde_json::json!({}), &plain("x", "")).is_err());
         let shipped = |name: &str| parse(name, shipped(name).unwrap()).unwrap();
+        // Typed values never become options and keep their kind's shape (the timer once ran
+        // `ul timer cancel --all` from Start with dur = "cancel", label = "--all").
+        let timer = shipped("timer");
+        for bad in [
+            serde_json::json!({"dur": "cancel"}),
+            serde_json::json!({"label": "--all"}),
+            serde_json::json!({"dur": "-5m"}),
+            serde_json::json!({"at": "noon"}),
+            serde_json::json!({"at": "-1:00"}),
+        ] {
+            assert!(values_from(&bad, &timer).is_err(), "{bad}");
+        }
+        assert!(
+            values_from(&serde_json::json!({"dur": "1h30m", "at": "07:30", "label": "tea - green"}), &timer).is_ok()
+        );
+        assert!(
+            values_from(&serde_json::json!({"days": 99}), &shipped("weather")).is_err(),
+            "a choice takes a label only"
+        );
         let yt = shipped("yt");
         let panel = yt.panel.as_ref().unwrap();
         let empty = values_from(&serde_json::json!({"url": "  ", "query": "lofi"}), &yt).unwrap();
-        let download = panel.buttons.iter().find(|button| button.label == "Download video").unwrap();
+        let download = panel.buttons.iter().find(|button| button.label == "Download").unwrap();
         let search = panel.buttons.iter().find(|button| button.label == "Search").unwrap();
         assert_eq!(missing(panel, download, &empty).as_deref(), Some("Video link is empty"));
         assert_eq!(missing(panel, search, &empty), None, "Search does not need the link");

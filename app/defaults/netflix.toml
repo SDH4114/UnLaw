@@ -1,5 +1,6 @@
 title = "Netflix"
 icon = "play"
+brand = "netflix"
 
 [[action]]
 id = "launch"

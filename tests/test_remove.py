@@ -43,12 +43,12 @@ class RemoveTests(CoreTestCase):
         self.assertFalse((self.unlaw / "commands" / "hello").exists())
 
     def test_a_default_command_leaves_core_features_and_is_not_seeded_again(self) -> None:
-        self.assertTrue((self.unlaw / "commands" / "music").is_dir())
-        result = self.ok("remove", "music", "--yes")
-        self.assertIn("ul features add music", result.stdout)
+        self.assertTrue((self.unlaw / "commands" / "spotify").is_dir())
+        result = self.ok("remove", "spotify", "--yes")
+        self.assertIn("ul features add spotify", result.stdout)
         self.ok("init")
-        self.assertFalse((self.unlaw / "commands" / "music").exists())
-        self.assertNotIn("music", self.features())
+        self.assertFalse((self.unlaw / "commands" / "spotify").exists())
+        self.assertNotIn("spotify", self.features())
         self.assertIn("yt", self.features())
 
     def awake_job(self) -> Path:
@@ -103,7 +103,7 @@ class RemoveTests(CoreTestCase):
 
     def test_removing_another_command_leaves_the_clip_watcher(self) -> None:
         job = self.clip_job()
-        self.ok("remove", "music", "--yes")
+        self.ok("remove", "spotify", "--yes")
         self.assertTrue(job.exists())
         self.assertEqual(self.calls(self.launchctl), [])
 
@@ -138,7 +138,7 @@ class RemoveTests(CoreTestCase):
 
     def test_removing_another_command_leaves_the_awake_job(self) -> None:
         job = self.awake_job()
-        self.ok("remove", "music", "--yes")
+        self.ok("remove", "spotify", "--yes")
         self.assertTrue(job.exists())
         self.assertEqual(self.calls(self.launchctl), [])
 

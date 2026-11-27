@@ -36,16 +36,19 @@ impl Source {
 #[derive(Debug, PartialEq, Eq)]
 struct Options {
     check: bool,
+    /// `--check --json`: one JSON line for Unlaw.app's Update button.
+    json: bool,
     force: bool,
     source: Source,
 }
 
 fn parse(args: &[String]) -> Result<Options, ()> {
-    let mut options = Options { check: false, force: false, source: Source::Default };
+    let mut options = Options { check: false, json: false, force: false, source: Source::Default };
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--check" if !options.check => options.check = true,
+            "--json" if !options.json => options.json = true,
             "--force" if !options.force => options.force = true,
             "--branch" | "--tag" if options.source == Source::Default => {
                 let name = rest.next().filter(|name| !name.is_empty() && !name.starts_with('-')).ok_or(())?;
@@ -53,6 +56,9 @@ fn parse(args: &[String]) -> Result<Options, ()> {
             }
             _ => return Err(()),
         }
+    }
+    if options.json && !options.check {
+        return Err(());
     }
     Ok(options)
 }
@@ -158,11 +164,31 @@ fn check(options: &Options) -> i32 {
     let latest = match latest_version(&repository, git_ref) {
         Ok(latest) => latest,
         Err((code, message)) => {
-            eprintln!("unlaw update: {message}");
+            if options.json {
+                println!("{}", serde_json::json!({"ok": false, "error": message}));
+            } else {
+                eprintln!("unlaw update: {message}");
+            }
             return code;
         }
     };
     let latest_commit = remote_commit(&repository, &options.source);
+    if options.json {
+        let message = verdict(COMMIT, latest_commit.as_deref(), &latest);
+        println!(
+            "{}",
+            serde_json::json!({
+                "ok": true,
+                "installed": VERSION,
+                "commit": COMMIT,
+                "latest": latest,
+                "latest_commit": latest_commit,
+                "update": message.starts_with("Update available"),
+                "message": message,
+            })
+        );
+        return 0;
+    }
     let installed = if COMMIT.is_empty() { VERSION.to_string() } else { format!("{VERSION} ({COMMIT})") };
     let published = match &latest_commit {
         Some(commit) => format!("{latest} ({commit}, {git_ref})"),
@@ -334,7 +360,7 @@ pub fn run(args: &[String]) -> i32 {
         return 0;
     }
     let Ok(options) = parse(args) else {
-        eprintln!("Usage: ul update [--check] [--force] [--branch <name>|--tag <name>]");
+        eprintln!("Usage: ul update [--check [--json]] [--force] [--branch <name>|--tag <name>]");
         return 2;
     };
     if options.check {
@@ -365,10 +391,12 @@ mod tests {
 
     #[test]
     fn options_parse_strictly() {
-        assert_eq!(parse(&[]), Ok(Options { check: false, force: false, source: Source::Default }));
+        assert_eq!(parse(&[]), Ok(Options { check: false, json: false, force: false, source: Source::Default }));
+        assert_eq!(parse(&words(&["--check", "--json"])).map(|options| options.json), Ok(true));
+        assert!(parse(&words(&["--json"])).is_err());
         assert_eq!(
             parse(&words(&["--check", "--tag", "v3.0.0"])),
-            Ok(Options { check: true, force: false, source: Source::Tag("v3.0.0".into()) })
+            Ok(Options { check: true, json: false, force: false, source: Source::Tag("v3.0.0".into()) })
         );
         assert_eq!(parse(&words(&["--branch", "dev"])).unwrap().source, Source::Branch("dev".into()));
         for bad in [&["--branch"][..], &["--branch", "--check"], &["--tag", "a", "--branch", "b"], &["--check", "--check"], &["now"]] {

@@ -640,7 +640,8 @@ class CommandLineTests(FakeToolsCase):
                 self.assertIn(needle, out)
 
     def test_unknown_section_and_option_are_usage_errors(self) -> None:
-        for args in (("nonsense",), ("--bogus",), ("cpu", "disk")):
+        # Several known sections are fine since 4.0.0 (`ul sys cpu memory`); one unknown among them is not.
+        for args in (("nonsense",), ("--bogus",), ("cpu", "nonsense")):
             code, out, err = self.run_main(*args)
             self.assertEqual(code, 2, args)
             self.assertEqual(out, "")
@@ -661,10 +662,14 @@ class CommandLineTests(FakeToolsCase):
         self.assertEqual(sysinfo.parse_args(["--watch"]), (None, False, 2.0))
         self.assertEqual(sysinfo.parse_args(["--watch", "5"]), (None, False, 5.0))
         self.assertEqual(
-            sysinfo.parse_args(["--watch=0.5", "cpu"]), ("cpu", False, 0.5)
+            sysinfo.parse_args(["--watch=0.5", "cpu"]), (("cpu",), False, 0.5)
         )
         self.assertEqual(
-            sysinfo.parse_args(["--watch", "cpu", "--json"]), ("cpu", True, 2.0)
+            sysinfo.parse_args(["--watch", "cpu", "--json"]), (("cpu",), True, 2.0)
+        )
+        self.assertEqual(
+            sysinfo.parse_args(["cpu", "ram", "memory", "--json"]),
+            (("cpu", "memory"), True, None),
         )
         for bad in (
             ["--watch", "0"],
@@ -836,6 +841,112 @@ class NewSectionTests(FakeToolsCase):
 
 
 @unittest.skipUnless(sys.platform == "darwin", "reads this Mac's kernel counters")
+class CacheAndWatchTests(FakeToolsCase):
+    """Static readings are kept per boot, and --watch measures from the round before."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        storage = tempfile.TemporaryDirectory()
+        self.addCleanup(storage.cleanup)
+        self.storage = Path(storage.name)
+        for name, value in (("_MEMO", {}), ("_LAST", {}), ("_KEEP", False)):
+            patcher = mock.patch.object(sysinfo, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def native_on(self, boot: int = 1000) -> None:
+        env = mock.patch.dict(os.environ, {"UNLAW_SYS_NATIVE": "1", "UNLAW_STORAGE": str(self.storage)})
+        env.start()
+        self.addCleanup(env.stop)
+        patcher = mock.patch.object(sysinfo, "boot_time", return_value=boot)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_reading_is_made_once_per_boot_and_kept_on_disk(self) -> None:
+        self.native_on()
+        calls = []
+        make = lambda: calls.append(1) or {"chip": "M3"}  # noqa: E731
+        self.assertEqual(sysinfo.cached("hardware", make), {"chip": "M3"})
+        self.assertEqual(sysinfo.cached("hardware", make), {"chip": "M3"})
+        self.assertEqual(len(calls), 1)
+        stored = json.loads((self.storage / "runtime" / "sys-cache-2.json").read_text())
+        self.assertEqual(stored["boot"], 1000)
+        sysinfo._MEMO.clear()  # another `ul sys` process
+        self.assertEqual(sysinfo.cached("hardware", make), {"chip": "M3"})
+        self.assertEqual(len(calls), 1)
+        sysinfo._MEMO.clear()
+        with mock.patch.object(sysinfo, "boot_time", return_value=2000):  # after a restart
+            sysinfo.cached("hardware", make)
+        self.assertEqual(len(calls), 2)
+
+    def test_a_timed_reading_expires_and_a_failure_is_not_kept(self) -> None:
+        self.native_on()
+        calls = []
+        sysinfo.cached("power", lambda: calls.append(1) or "text", 600)
+        with mock.patch.object(sysinfo.time, "time", return_value=time.time() + 601):
+            sysinfo.cached("power", lambda: calls.append(1) or "text", 600)
+        self.assertEqual(len(calls), 2)
+        self.assertIsNone(sysinfo.cached("gone", lambda: None))
+        self.assertNotIn("gone", sysinfo._MEMO)
+
+    def test_a_damaged_cache_is_read_again(self) -> None:
+        self.native_on()
+        path = self.storage / "runtime" / "sys-cache-2.json"
+        path.parent.mkdir(parents=True)
+        path.write_text("{not json")
+        self.assertEqual(sysinfo.cached("core_kinds", lambda: ["P", "E"]), ["P", "E"])
+        self.assertEqual(json.loads(path.read_text())["core_kinds"]["value"], ["P", "E"])
+
+    def test_the_cache_holds_no_device_ids_and_only_its_owner_reads_it(self) -> None:
+        self.native_on()
+        path = self.storage / "runtime" / "sys-cache-2.json"
+        path.parent.mkdir(parents=True)
+        # What an earlier build stored: the whole system_profiler answer, serial number included.
+        path.write_text(json.dumps({"boot": 1000, "hardware": {"time": time.time(), "value": {"serial_number": "C02XYZ"}}}))
+        answer = {"SPHardwareDataType": [{"machine_name": "MacBook Pro", "chip_type": "Apple M3 Pro",
+                                          "serial_number": "C02XYZ", "platform_UUID": "1234"}]}
+        with mock.patch.object(sysinfo, "tool_text", return_value=json.dumps(answer)):
+            self.assertEqual(sysinfo.cached("hardware_names", sysinfo.read_hardware),
+                             {"machine_name": "MacBook Pro", "chip_type": "Apple M3 Pro"})
+        self.assertEqual(json.loads(sysinfo.without_serials('{"a": [{"sppower_battery_serial_number": "X", "cycles": 3}]}')),
+                         {"a": [{"cycles": 3}]})
+        old = self.storage / "runtime" / "sys-cache.json"
+        old.write_text('{"serial_number": "C02XYZ"}')
+        sysinfo._MEMO.clear()
+        sysinfo.cached("core_kinds", lambda: ["P"])
+        self.assertFalse(old.exists(), "the old cache with the serial number is deleted")
+        text = path.read_text()
+        self.assertNotIn("C02XYZ", text)
+        self.assertNotIn("1234", text)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_fixture_runs_never_use_the_cache(self) -> None:
+        sysinfo._MEMO["hardware"] = (time.time(), {"machine_name": "Cached"})
+        calls = []
+        self.assertEqual(sysinfo.cached("hardware", lambda: calls.append(1) or {}), {})
+        self.assertEqual(len(calls), 1)
+
+    def test_watch_rounds_read_each_counter_once(self) -> None:
+        sleeps: list[float] = []
+        with mock.patch.object(sysinfo.time, "sleep", side_effect=sleeps.append):
+            sysinfo._KEEP = True
+            first = sysinfo.collect_network()
+            second = sysinfo.collect_network()
+            third = sysinfo.collect_io()
+            fourth = sysinfo.collect_io()
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertIsNotNone(third)
+        self.assertIsNotNone(fourth)
+        # One SAMPLE wait for the first network round and one for the first disk round, none after.
+        self.assertEqual(sleeps, [sysinfo.SAMPLE, sysinfo.SAMPLE])
+
+    def test_several_sections_at_once(self) -> None:
+        code, out, _ = self.run_main("cpu", "memory", "--json")
+        self.assertEqual(code, 0)
+        self.assertEqual(list(json.loads(out)), ["cpu", "memory"])
+
+
 class NativeTests(unittest.TestCase):
     def setUp(self) -> None:
         env = mock.patch.dict(os.environ, {"UNLAW_SYS_NATIVE": "1"})

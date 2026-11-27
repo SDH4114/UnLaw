@@ -1,4 +1,4 @@
-//! macOS: SF Symbols in the menu bar, notifications through osascript (text as
+//! macOS: SF Symbols in the menu bar, notes shown without focus, terminals through osascript (text as
 //! arguments, never inside the script), Terminal/Ghostty, `open`.
 
 use std::path::Path;
@@ -20,6 +20,14 @@ fn symbol(icon: &str) -> &'static str {
         "clock" => "timer",
         "clipboard" => "doc.on.clipboard",
         "cloud" => "cloud.sun",
+        // The weather's own states (`|weather` in a status icon).
+        "sun" => "sun.max",
+        "cloudsun" => "cloud.sun",
+        "overcast" => "cloud",
+        "rain" => "cloud.rain",
+        "snow" => "cloud.snow",
+        "fog" => "cloud.fog",
+        "storm" => "cloud.bolt.rain",
         "music" => "music.note",
         "play" => "play.rectangle",
         "camera" => "camera",
@@ -62,6 +70,66 @@ pub fn set_symbol(tray: &TrayIcon, icon: &str) {
     }
 }
 
+/// Where an application named like `ul app` takes it is installed (`Safari`,
+/// `Prism Launcher`): the usual folders, the first `<name>.app` found.
+pub fn app_path(name: &str) -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+    let folders = [
+        std::path::PathBuf::from("/Applications"),
+        std::path::PathBuf::from("/Applications/Utilities"),
+        std::path::PathBuf::from("/System/Applications"),
+        std::path::PathBuf::from("/System/Applications/Utilities"),
+        home.join("Applications"),
+        std::path::PathBuf::from("/System/Library/CoreServices"),
+    ];
+    let file = format!("{name}.app");
+    folders.iter().map(|folder| folder.join(&file)).find(|path| path.is_dir())
+}
+
+/// An application's own icon (the one Finder and the Dock show), drawn at `points`.
+fn app_image(path: &Path, points: f64) -> Option<objc2::rc::Retained<NSImage>> {
+    use objc2::AllocAnyThread;
+    use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+    let icon = NSWorkspace::sharedWorkspace().iconForFile(&NSString::from_str(path.to_str()?));
+    let size = NSSize::new(points, points);
+    let canvas = NSImage::initWithSize(NSImage::alloc(), size);
+    // Drawn once into a small image: the icon file holds sizes up to 1024 px.
+    #[allow(deprecated)]
+    {
+        canvas.lockFocus();
+        icon.drawInRect(NSRect::new(NSPoint::new(0.0, 0.0), size));
+        canvas.unlockFocus();
+    }
+    Some(canvas)
+}
+
+/// The icon of an installed application as PNG bytes, for the app's pages.
+pub fn app_icon_png(name: &str, points: f64) -> Option<Vec<u8>> {
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep};
+    use objc2_foundation::NSDictionary;
+    let image = app_image(&app_path(name)?, points)?;
+    let tiff = image.TIFFRepresentation()?;
+    let bitmap = NSBitmapImageRep::imageRepWithData(&tiff)?;
+    // SAFETY: an empty properties dictionary is what the method takes for defaults.
+    let png = unsafe { bitmap.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()) }?;
+    Some(png.to_vec())
+}
+
+/// A menu bar item showing an application's icon in colour (a pinned `app:` item).
+pub fn set_app_icon(tray: &TrayIcon, name: &str) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else { return false };
+    let Some(item) = tray.ns_status_item() else { return false };
+    let Some(button) = item.button(mtm) else { return false };
+    let Some(image) = app_path(name).and_then(|path| app_image(&path, 18.0)) else { return false };
+    button.setImage(Some(&image));
+    button.setImagePosition(NSCellImagePosition::ImageLeft);
+    // Same as set_symbol: setting the title again sizes tray-icon's click view.
+    let title = button.title().to_string();
+    tray.set_title(Some(title));
+    true
+}
+
 /// In the Dock (a regular app with its window) or only in the menu bar. The
 /// window's close button takes Unlaw out of the Dock; it keeps running above.
 pub fn set_in_dock(visible: bool) {
@@ -79,14 +147,17 @@ pub fn set_in_dock(visible: bool) {
     }
 }
 
-const NOTIFY: &str = "on run argv
-display notification (item 2 of argv) with title (item 1 of argv)
-end run";
-
-/// A notification; the texts are arguments of the script, never part of it.
-pub fn notify(title: &str, text: &str) {
-    let text = if text.trim().is_empty() { "Done." } else { text };
-    detached(Command::new("/usr/bin/osascript").args(["-e", NOTIFY, "--", title, text]));
+/// Show a window above the others without making it the key window or activating
+/// the app: a note must not take the keyboard from what the user is typing in.
+pub fn show_without_focus(window: &tao::window::Window) {
+    use objc2_app_kit::NSWindow;
+    use tao::platform::macos::WindowExtMacOS;
+    let pointer = window.ns_window() as *const NSWindow;
+    if pointer.is_null() {
+        return;
+    }
+    // SAFETY: tao's NSWindow, alive as long as `window`; called on the main thread.
+    unsafe { (*pointer).orderFrontRegardless() };
 }
 
 /// Start a helper without waiting for it; a thread reaps it, so a long-running

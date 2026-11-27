@@ -299,8 +299,12 @@ pub fn main_with(argv: Vec<String>) -> i32 {
             return 0;
         }
     }
-    // The watcher of `ul clip on` runs for as long as the Mac is logged in; a timeout would only restart it.
-    let background = name == "clip" && rest.first().is_some_and(|word| word == "_watch");
+    // Long-lived by design, so a timeout would only kill them: the watcher of `ul clip on` (runs while
+    // the Mac is logged in), `ul sys --watch` (Unlaw.app's System feed) and the desk page server
+    // (`ul desk` / `ul desk --no-open`, which Unlaw.app shows in its window).
+    let background = (name == "clip" && rest.first().is_some_and(|word| word == "_watch"))
+        || (name == "sys" && rest.iter().any(|word| word == "--watch"))
+        || (name == "desk" && (rest.is_empty() || rest == ["--no-open"]));
     let timeout = if background { 0 } else { config.int("core.command_timeout").max(0) as u64 };
     let options = RunOptions {
         dry_run,

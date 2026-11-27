@@ -88,10 +88,10 @@ Examples:
   ul timer cancel 2
 ''',
     "clip": '''Clipboard history in the background: list, search and copy again.
-Usage: ul clip [list [N] [--json]]
+Usage: ul clip [list [N] [--json] [--short]]
        ul clip search <words...> [--json] | show <n> | copy <n> | rm <n> | clear [--yes]
        ul clip on | off | status [--json] | pause | resume
-  list        Numbered, newest first (default 20 items, one-line previews)
+  list        Newest first (default 20, one-line previews; --short: JSON texts cut at 2000)
   search      Items that contain every word, any case; numbers stay valid for copy/show/rm
   copy <n>    Put item n back on the clipboard (it becomes the newest)
   @<id>       In place of a number for show/copy/rm: the "id" from --json, which stays the
@@ -131,8 +131,8 @@ Examples:
   ul weather --json
 ''',
     "sys": '''Computer stats: CPU per core, GPU, RAM, network, disk, battery and power.
-Usage: ul sys [cpu|gpu|mem|net|io|disk|battery|top] [--json] [--watch [seconds]]
-  (none)         One-screen summary of everything below
+Usage: ul sys [cpu|gpu|mem|net|io|disk|battery|top ...] [--json] [--watch [seconds]]
+  (none)         One-screen summary of everything below; name one or more parts for only those
   cpu            Usage (user/system), every core (performance and efficiency), load average
   gpu            GPU utilization and the memory it holds (Apple Silicon)
   mem            Used (app, wired, compressed), swap, memory pressure (like Activity Monitor)
@@ -143,16 +143,17 @@ Usage: ul sys [cpu|gpu|mem|net|io|disk|battery|top] [--json] [--watch [seconds]]
   top            Top 5 processes by CPU and by memory, number of processes
 Options:
   --json             Machine-readable output: stable keys, numbers, null for n/a
-  --watch [seconds]  Refresh in place (default 2); Ctrl+C exits
+  --watch [seconds]  Refresh in place (default 2); Ctrl+C exits. With --json: one line per round
 Notes:
   Numbers come straight from macOS: the kernel's CPU ticks and memory counters, sysctl,
   IOKit (GPU, battery, disks) and the thermal state, the sources Activity Monitor uses.
-  CPU, network and disk speed are measured over 0.5 s. A part that cannot be read shows as n/a.
+  CPU, network and disk speed: over 0.5 s, with --watch since the last round. Model, chip
+  and battery health are cached (runtime/sys-cache.json). A part that cannot be read is n/a.
   Read-only, no sudo; CPU and fan temperatures would need it, so they are left out.
   Colors only on a terminal; NO_COLOR turns them off.
 Examples:
   ul sys
-  ul sys battery --json
+  ul sys cpu mem --json
   ul sys --watch 5 cpu
 ''',
     "awake": '''Keep the Mac from sleeping for a while, until a time or while something runs; lid closed too.
@@ -191,7 +192,7 @@ Usage: ul capture                 the studio in a terminal (scenes, sources, REC
        ul capture record [screen|camera|audio] [options] [PATH]
        ul capture pause | resume | status | scene N | mark [TEXT] | stop [--force] [--export]
        ul capture projects | project X | export X [options] | setup | doctor | devices [--modes]
-       ul capture list | last | open | reveal | copy | delete | trim | convert | wave
+       ul capture list | last | open | reveal | folder | copy | delete | trim | convert | wave
 Screenshots (shot):
   screen (default) the whole display; area / window let you select with the mouse
   --display N      which display (1 = main; see `devices`)   --delay S  wait S seconds
@@ -250,6 +251,7 @@ Library:
   list [N] [--all] the newest exported files and screenshots with kind, length and size
   last [--reveal]  open the newest capture (or show it in Finder)
   open|reveal X    open a capture, or show it in Finder (X: name, path or `last`)
+  folder           open the captures folder (screenshots, recordings, projects)
   copy X           put a screenshot on the clipboard
   delete X         move a capture or a project to the Trash (only from the capture folders)
   trim X --from T [--to T]   cut a recording exactly (T: seconds or m:ss); keeps the original
@@ -389,13 +391,6 @@ Example: ul mac see Zed
 Usage: ul minecraft
 Example: ul minecraft
 ''',
-    "music": '''Open Spotify, or search for a track and attempt to play it.
-Usage: ul music [track]
-Settings: apps.spotify, apps.spotify_autoplay_delay.
-Autoplay requires Accessibility permission for your terminal.
-Without the Spotify app, opens the Spotify web player (open.spotify.com) instead.
-Example: ul music "Take Me Out"
-''',
     "netflix": '''Open Netflix in your default browser.
 Usage: ul netflix
 Example: ul netflix
@@ -416,13 +411,20 @@ Options: --bin creates an executable (default); --lib creates a library.
 --git initializes Git; default comes from projects.rust.initialize_git.
 Example: ul rust demo --lib --git
 ''',
+    "spotify": '''Open Spotify, or search for a track and play it (was `ul music`).
+Usage: ul spotify [track]
+Settings: apps.spotify, apps.spotify_autoplay_delay.
+Autoplay requires Accessibility permission for your terminal.
+Without the Spotify app, opens the Spotify web player (open.spotify.com) instead.
+Example: ul spotify "Take Me Out"
+''',
     "steam": '''Open the Steam macOS application.
 Usage: ul steam
 Example: ul steam
 ''',
     "tg": '''Open Telegram, or send and download messages/files through your bot.
 Usage:
-  ul tg                                  Open Telegram
+  ul tg                                  Open Telegram (ul tg open: also without a terminal)
   ul tg <message>|send <message-or-file>   Send text or a file
   ul tg photo|video|file <path>            Send a file with an explicit type
   ul tg capture                          Send the latest capture

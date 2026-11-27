@@ -1,0 +1,16 @@
+title = "Spotify"
+icon = "music"
+brand = "spotify"
+summary = "Open Spotify, or type a song to play it"
+# One row in the palette: Enter on an empty line opens Spotify, a typed song plays it.
+
+[panel]
+[[panel.field]]
+id = "track"
+type = "text"
+label = "Song"
+placeholder = "Type a song, or press Enter to open Spotify"
+
+[[panel.button]]
+label = "Open or play"
+args = ["{track}"]

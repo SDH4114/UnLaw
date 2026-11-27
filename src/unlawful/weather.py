@@ -145,10 +145,15 @@ def fetch(base: str, params: dict[str, str]) -> dict:
 # ---------------------------------------------------------------- lookups
 
 
+def geocode_language(city: str) -> str:
+    """The geocoder only finds a Cyrillic name ("Москва") when asked in Russian."""
+    return "ru" if any("\u0400" <= ch <= "\u04ff" for ch in city) else "en"
+
+
 def geocode(city: str) -> dict:
     data = fetch(
         endpoint("UNLAW_WEATHER_GEOCODE_URL", GEOCODE_URL),
-        {"name": city, "count": "1", "language": "en", "format": "json"},
+        {"name": city, "count": "1", "language": geocode_language(city), "format": "json"},
     )
     results = data.get("results")
     if not isinstance(results, list) or not results or not isinstance(results[0], dict):

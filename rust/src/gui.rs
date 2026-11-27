@@ -72,7 +72,7 @@ fn apps_dir() -> PathBuf {
 }
 
 /// Every Unlaw.app of ours: /Applications and ~/Applications can both hold one.
-fn our_bundles() -> Vec<PathBuf> {
+pub fn our_bundles() -> Vec<PathBuf> {
     let mut places = vec![apps_dir().join(BUNDLE)];
     if env::var_os("UNLAW_GUI_APPS").is_none() {
         places.extend([
@@ -298,11 +298,36 @@ const SIGNING_NAME: &str = "Unlaw Local Signing";
 /// same for every build. None (ad-hoc then) when any tool is missing or fails.
 fn signing_keychain() -> Option<PathBuf> {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    use std::os::unix::io::AsRawFd;
     let folder = config_dir().join("signing");
     let keychain = folder.join("unlaw-signing.keychain-db");
     let secret = folder.join("password");
+    // Lines for `security -i` quote the path; one with a quote or a line break is not risked.
+    let keychain_text = keychain.to_str().filter(|text| !text.contains(['"', '\\', '\n', '\r']))?.to_string();
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&folder).ok()?;
+    // Two installs at once (ul update and a manual one) must not delete each other's keychain.
+    let lock = fs::OpenOptions::new().write(true).create(true).truncate(false).mode(0o600).open(folder.join(".lock")).ok()?;
+    // SAFETY: flock on a descriptor we own; released when `lock` is dropped.
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return None;
+    }
+    // The password goes to `security` on stdin, never in argv (ps shows argv to every user).
+    let security = |line: String| -> bool {
+        let Ok(mut child) = Command::new("security")
+            .arg("-i")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            return false;
+        };
+        let wrote = child.stdin.take().is_some_and(|mut stdin| io::Write::write_all(&mut stdin, format!("{line}\n").as_bytes()).is_ok());
+        // `security -i` exits 0 even when the command failed; callers check the result after.
+        child.wait().is_ok_and(|status| status.success()) && wrote
+    };
     let has_identity = |password: &str| {
-        quiet(Command::new("security").args(["unlock-keychain", "-p", password]).arg(&keychain))
+        security(format!("unlock-keychain -p {password} \"{keychain_text}\""))
             && Command::new("security")
                 .args(["find-identity", "-p", "codesigning"])
                 .arg(&keychain)
@@ -317,7 +342,6 @@ fn signing_keychain() -> Option<PathBuf> {
         }
     }
     // Make it (again: a half-made one from an earlier failure is replaced).
-    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&folder).ok()?;
     let _ = quiet(Command::new("security").arg("delete-keychain").arg(&keychain));
     let _ = fs::remove_file(&keychain);
     let mut bytes = [0u8; 16];
@@ -336,19 +360,21 @@ fn signing_keychain() -> Option<PathBuf> {
             ),
         )
         .ok()?;
-        let openssl = |args: &[&str]| quiet(Command::new("/usr/bin/openssl").current_dir(&work).args(args));
+        let openssl =
+            |args: &[&str]| quiet(Command::new("/usr/bin/openssl").current_dir(&work).env("UNLAW_P12_PASS", &password).args(args));
         // 20 years; LibreSSL's legacy PKCS#12 algorithms are the ones `security import` reads.
         let ok = openssl(&["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "key.pem", "-out", "cert.pem",
             "-days", "7300", "-config", "cert.cnf"])
             && openssl(&["pkcs12", "-export", "-inkey", "key.pem", "-in", "cert.pem", "-out", "id.p12",
-                "-passout", &format!("pass:{password}"), "-name", SIGNING_NAME,
+                "-passout", "env:UNLAW_P12_PASS", "-name", SIGNING_NAME,
                 "-keypbe", "PBE-SHA1-3DES", "-certpbe", "PBE-SHA1-3DES", "-macalg", "sha1"])
-            && quiet(Command::new("security").args(["create-keychain", "-p", &password]).arg(&keychain))
+            && security(format!("create-keychain -p {password} \"{keychain_text}\""))
             // No auto-lock, so later builds sign without asking.
             && quiet(Command::new("security").arg("set-keychain-settings").arg(&keychain))
-            && quiet(Command::new("security").args(["unlock-keychain", "-p", &password]).arg(&keychain))
-            && quiet(Command::new("security").arg("import").arg(work.join("id.p12"))
-                .args(["-P", &password, "-T", "/usr/bin/codesign", "-k"]).arg(&keychain));
+            && security(format!("unlock-keychain -p {password} \"{keychain_text}\""))
+            && work.join("id.p12").to_str().filter(|path| !path.contains(['"', '\\', '\n', '\r'])).is_some_and(|p12| {
+                security(format!("import \"{p12}\" -P {password} -T /usr/bin/codesign -k \"{keychain_text}\""))
+            });
         ok.then_some(())
     })();
     let _ = fs::remove_dir_all(&work);
@@ -385,8 +411,11 @@ fn build_bundle(binary: &Path, bundle: &Path) -> io::Result<()> {
                     .arg(&staging),
             )
         });
+        // Unsigned, Apple Silicon kills it at start and launchd would restart it forever: refuse.
         if !signed && !quiet(Command::new("codesign").args(["--force", "--sign", "-"]).arg(&staging)) {
-            eprintln!("unlaw gui: codesign failed; macOS may refuse to start Unlaw.app (xcode-select --install adds codesign).");
+            return Err(io::Error::other(
+                "codesign failed, and macOS does not start an unsigned app (xcode-select --install adds codesign)",
+            ));
         }
         // The old bundle moves aside first and is deleted only once the new one
         // is in place, so a failed rename never leaves no app at all.

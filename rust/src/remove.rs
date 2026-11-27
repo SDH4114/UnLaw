@@ -300,8 +300,10 @@ fn remove_everything(yes: bool) -> i32 {
             println!("  - {what} ({label})");
         }
     }
-    let app = crate::gui::installed_bundle();
-    if let Some(bundle) = &app {
+    // Every copy of ours is removed, so every one is listed.
+    let bundles = crate::gui::our_bundles();
+    let app = bundles.first().cloned();
+    for bundle in &bundles {
         println!("  - {} and its login job ({})", bundle.display(), crate::gui::LABEL);
     }
     if shell_block.is_some() {

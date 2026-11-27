@@ -4,7 +4,7 @@
   {
    "name": "agent",
    "summary": "Your local AI agent: files, TODO board and schedule, in the console or Telegram.",
-   "sha256": "2f362d7699f4e5b275abdd00e1ab05cbd7d04b38d57fe1dc08fecb8d1821312e"
+   "sha256": "c6fe1f2b43f99df153958d95fb2c0c4c8e23c40febf2a641b33d184014356596"
   },
   {
    "name": "awake",
@@ -14,7 +14,7 @@
   {
    "name": "capture",
    "summary": "Screenshots, screen/camera/audio recording projects and video export on macOS.",
-   "sha256": "63dc2eb59e06498b8a2cec3d8db1713d8bbd93be51b2e6378adaa1cc8f810aeb"
+   "sha256": "e9996ad6598cc0ecb52f8c745c4e743da98bcbffbda6dc7fbc189a568dca665d"
   },
   {
    "name": "claude",
@@ -24,7 +24,7 @@
   {
    "name": "clip",
    "summary": "Clipboard history in the background: list, search and copy again.",
-   "sha256": "3d36c3f0570d85e06fb1196bd815c1484b36fc85a13c1fbd08e961acdc616eca"
+   "sha256": "65b1c4a5553a4ccb64cff3230e2863debd5d58b1e5a2cec7b9b9b50180e618dc"
   },
   {
    "name": "cpp",
@@ -62,11 +62,6 @@
    "sha256": "dc43ae7bd02a6f6bec09328218362ea4462be6d33fb3f08e8d2911aec6fec90d"
   },
   {
-   "name": "music",
-   "summary": "Open Spotify, or search for a track and attempt to play it.",
-   "sha256": "d7348136d3657f20b2e5e93d0e23b72a2e8fd0f89189cf3a2b217497e9f6d5fc"
-  },
-  {
    "name": "netflix",
    "summary": "Open Netflix in your default browser.",
    "sha256": "38e1a6839e12369d20012f5bfdc19c60b4d95511c80b5cf606d4c61d5888a64c"
@@ -87,6 +82,11 @@
    "sha256": "11dca21812881b5e076e8ecfddaf63548444d5ad4ad8c8d107d4266f8275841d"
   },
   {
+   "name": "spotify",
+   "summary": "Open Spotify, or search for a track and play it (was `ul music`).",
+   "sha256": "c780ba7f872e72e5a08021d29927aa31bc2784aa10ce086dbaa8f33275130371"
+  },
+  {
    "name": "steam",
    "summary": "Open the Steam macOS application.",
    "sha256": "577bb17e2452c055e961da61348642f62e6cbd5bc9b1bceb2f2aab6885bcac6d"
@@ -94,12 +94,12 @@
   {
    "name": "sys",
    "summary": "Computer stats: CPU per core, GPU, RAM, network, disk, battery and power.",
-   "sha256": "8ab85281d31262d0889bbd58370d62d01534269a9f3795ebef517a71cc587a8e"
+   "sha256": "a7384f56676ec215fb783ea1b59861f4ff0aa78a8530a40f2cb97d58d0a265d3"
   },
   {
    "name": "tg",
    "summary": "Open Telegram, or send and download messages/files through your bot.",
-   "sha256": "217c6d28d8a0ceec66ce6de1f302d7c242e33156d54378c555cca7ee1f32e40d"
+   "sha256": "6e0a52727f4d3d79b0d985ca929a802ddf43ef4f14f8826aa8c99bc3e951ebdd"
   },
   {
    "name": "timer",
@@ -109,7 +109,7 @@
   {
    "name": "weather",
    "summary": "Weather now and the forecast from Open-Meteo (no API key).",
-   "sha256": "9c031cdc04fc8b2a9cb8485976fb5303183d61f841803e56bb90d293566448c0"
+   "sha256": "e81904e4e09d014e44d7c8dc42ae9b85afca16e451e3d3f713320a52e0860104"
   },
   {
    "name": "work",

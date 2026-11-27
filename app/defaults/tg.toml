@@ -1,3 +1,31 @@
 title = "Telegram"
 icon = "chat"
-summary = "Open Telegram (sending and setup: ul tg in the terminal)"
+brand = "telegram"
+summary = "Send a message or a file to your chat through your bot"
+
+[[action]]
+id = "launch"
+label = "Open Telegram"
+args = ["open"]
+
+[[action]]
+id = "capture"
+label = "Send the latest capture"
+args = ["capture"]
+
+[[action]]
+id = "status"
+label = "Check the bot"
+args = ["status"]
+
+[panel]
+[[panel.field]]
+id = "message"
+type = "text"
+label = "Message"
+placeholder = "Text or a file path"
+required = true
+
+[[panel.button]]
+label = "Send"
+args = ["send", "{message}"]

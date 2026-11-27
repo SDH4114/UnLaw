@@ -32,13 +32,13 @@ class ConfigTests(unittest.TestCase):
     def test_python_seeder_preserves_replaced_and_non_utf8_commands(self) -> None:
         from unlawful.config import ensure_layout
         root = self.config_home / "unlaw"
-        for name, entry, data in (("music", "main.sh", b"#!/bin/sh\n"), ("yt", "main.py", b"\xff")):
+        for name, entry, data in (("spotify", "main.sh", b"#!/bin/sh\n"), ("yt", "main.py", b"\xff")):
             directory = root / "commands" / name
             directory.mkdir(parents=True)
             (directory / entry).write_bytes(data)
         with patch.dict(os.environ, self.env):
             ensure_layout()
-        self.assertFalse((root / "commands/music/main.py").exists())
+        self.assertFalse((root / "commands/spotify/main.py").exists())
         self.assertEqual((root / "commands/yt/main.py").read_bytes(), b"\xff")
 
     def test_bootstrap_creates_complete_layout_on_first_run(self) -> None:
@@ -74,7 +74,7 @@ class ConfigTests(unittest.TestCase):
             "lofi",
             "mac",
             "minecraft",
-            "music",
+            "spotify",
             "netflix",
             "obsidian",
             "py",
@@ -121,7 +121,7 @@ class ConfigTests(unittest.TestCase):
             "cpp": {"projects": {"cpp": {"standard": 20, "initialize_git": False}}},
             "lofi": {"apps": {"lofi_url": "https://lofi-engine.vercel.app/"}},
             "mac": {"mac": {"executable": "macos-harness", "timeout": 30}},
-            "music": {
+            "spotify": {
                 "apps": {
                     "spotify": "Spotify",
                     "spotify_autoplay_delay": 2.0,
@@ -231,7 +231,7 @@ class ConfigTests(unittest.TestCase):
     def test_bootstrap_does_not_overwrite_customized_seed_command(self) -> None:
         from unlawful.config import ensure_layout
 
-        custom = self.config_home / "unlaw" / "commands" / "music" / "main.py"
+        custom = self.config_home / "unlaw" / "commands" / "spotify" / "main.py"
         custom.parent.mkdir(parents=True)
         custom.write_text("print('mine')\n", encoding="utf-8")
         with patch.dict(os.environ, self.env, clear=False):

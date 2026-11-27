@@ -23,7 +23,7 @@ where = "both"                 # "terminal": not shown in the app at all (works 
                                # (system, clipboard, games, board, today, canvas, studio)
 # view = "awake"               # a panel the app draws itself; only for the command it was
                                # made for: "awake" (ul awake), "system" (ul sys, the menu
-                               # bar item's popover with a tab per part)
+                               # bar item's popover with a tab per part), "weather" (ul weather)
 
 [[action]]                     # entries in the palette and in the menu bar item's menu;
                                # a command with one action, no confirm and no [panel] runs
@@ -39,7 +39,9 @@ args = ["2h"]                  # runs `ul <name> 2h`
 id = "time"
 type = "choice"                # choice | toggle | text | number | duration | time | date
 label = "For"
-options = ["30m", "1h", "2h"]  # choice only
+options = ["30m", "1h", "2h"]  # choice only; up to 6 show as a segmented control
+# values = ["30m", "60m", ""]  # optional, one per option: what argv gets instead of the
+                               # label ("MP3" -> "--audio"; "" puts nothing)
 default = "1h"                 # toggle: true/false
 # required = true              # a button that uses this field does not run while it is empty
 [[panel.field]]
@@ -70,6 +72,30 @@ args = ["--no-open"]           # the app shows the first http://127.0.0.1 or htt
                                # URL the command prints in its own window, and stops the
                                # command when the window's app quits
 ```
+
+When every part of a panel is such a row (no toggle, no second text field, no action
+that asks first), the panel is never shown: opening the command from the menu bar, a
+hotkey or a tile lists its rows in the palette. Results are small notes in the screen's
+corner; a long output opens the panel with it.
+
+## How the panel is laid out
+
+The fields form one card (label left, control right); the first button is the main
+one. A later button with a typed field (text, number, duration, time, date) that no
+other button uses sits in that field's row (a search next to its Search button).
+
+## Typing into the palette
+
+A command whose first suitable button takes one typed thing (its one required
+text, number or duration field, or its only one, while every other field it uses
+has a default) gets an inline input in the palette: Enter on the command turns the
+search bar into that field, and `<name> <text>` (`tg hello`, `app Safari`) runs it
+straight away. Text typed with the Russian layout on is matched too. A command with several
+things to do lists them all there instead: one row per button (a choice the button
+uses becomes one row per option, `Download MP3`) and one per action; the typed text
+goes into the chosen row. A short answer
+is a notification; a long one or an error opens the panel with it. A file dropped
+on the palette fills the input with its path (Telegram sends the file).
 
 ## Placeholders in `args`
 

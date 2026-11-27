@@ -377,6 +377,26 @@ for _name, _source, _normalized in (
 ):
     LEGACY_SOURCE_HASHES.setdefault(_name, set()).add(_source)
     LEGACY_NORMALIZED_HASHES.setdefault(_name, set()).add(_normalized)
+# Official weather seed of release 3.22.0 (ec24bea, also the copy on the maintainer machine), before Cyrillic city names.
+LEGACY_SOURCE_HASHES.setdefault("weather", set()).add("9c031cdc04fc8b2a9cb8485976fb5303183d61f841803e56bb90d293566448c0")
+LEGACY_NORMALIZED_HASHES.setdefault("weather", set()).add("5ca69b4852d4f5bd0e42f7d0f20f261f40b1451957732a6f81b95e70af3874d3")
+# clip and sys seeds of the 4.0.0 dev builds (installed on the maintainer machine), before the audit fixes.
+LEGACY_SOURCE_HASHES.setdefault("clip", set()).add("3d36c3f0570d85e06fb1196bd815c1484b36fc85a13c1fbd08e961acdc616eca")
+LEGACY_NORMALIZED_HASHES.setdefault("clip", set()).add("3f260afa4f078b3de55b60110e71580502b32ca3ce65403602c0dc167927f805")
+LEGACY_SOURCE_HASHES.setdefault("sys", set()).add("61a9e3c83f60611ad69a35feb288385ee067779efba3df7e782d4d2ac1fa08bd")
+LEGACY_NORMALIZED_HASHES.setdefault("sys", set()).add("12471810d0e3e85e1f0c56896d955c8a727dc5f7472b395ab3925daf00c6d7b7")
+LEGACY_SOURCE_HASHES.setdefault("sys", set()).add("5b41238913625236128b05ca98d4a3245ab127a475a71a0547b34ce5bb7bcd59")
+LEGACY_NORMALIZED_HASHES.setdefault("sys", set()).add("88a3f632be10c7caa0ec082fe939dbf6eb8514ca71740d1f8d98bba6a5beb037")
+LEGACY_SOURCE_HASHES.setdefault("sys", set()).add("3a8e372da99d6014e87d00c63cd7ea66d657e5e4b3f0c4a22690a9280a634080")
+LEGACY_NORMALIZED_HASHES.setdefault("sys", set()).add("754c65f687547d8fd743ce3a305243f393c561e20fd58fe7948aca49ea14b00e")
+LEGACY_SOURCE_HASHES.setdefault("sys", set()).add("e0e94be6ade71cfbe57037367ffed3b00150e2006afbe386d6a166c94422859e")
+LEGACY_NORMALIZED_HASHES.setdefault("sys", set()).add("2a0f3dac9d9813ae41d74847b4c5f3f5bc9ebca725945df8444904ce5d0220e5")
+# Capture seed of the 4.0.0 dev build (2d342c0, also the copy on the maintainer machine), before `ul capture folder`.
+LEGACY_SOURCE_HASHES.setdefault("capture", set()).add("63dc2eb59e06498b8a2cec3d8db1713d8bbd93be51b2e6378adaa1cc8f810aeb")
+LEGACY_NORMALIZED_HASHES.setdefault("capture", set()).add("097aeb75523ef973509d9d921251c6093fb7146dc901ca610f556ae6a0b3655a")
+# Official tg seed of release 3.22.0 (5496046, also the copy on the maintainer machine), before `ul tg open`.
+LEGACY_SOURCE_HASHES.setdefault("tg", set()).add("217c6d28d8a0ceec66ce6de1f302d7c242e33156d54378c555cca7ee1f32e40d")
+LEGACY_NORMALIZED_HASHES.setdefault("tg", set()).add("7fc4e15898bf26c406bac6135e8e11e92247d5269db29b5f29cff9da8c3b48e3")
 # Official clip seed of release 3.22.0 (ac24843, also the copy on the maintainer machine), before images and files.
 LEGACY_SOURCE_HASHES.setdefault("clip", set()).add("f7b620624a7baacc000c9f9399909cff7a887733dc61a959567791c6d0caa277")
 LEGACY_NORMALIZED_HASHES.setdefault("clip", set()).add("c77ec2cb71975989b88131a6fe78d69282ce26b843bac47a54254b8404d10812")
@@ -526,7 +546,11 @@ LEGACY_NORMALIZED_HASHES.setdefault("zed", set()).add("f15eaf936fcd831a691a273c7
 # Commands now built into the Rust core, or removed (`todo`, replaced by
 # `ul desk`). Untouched seeds with these hashes are removed so the built-in
 # runs; edited copies stay and override it.
-RETIRED_COMMANDS = ("game", "zip", "lm", "app", "browser", "todo")
+# `music` was renamed `spotify` in 4.0.0: its last seed (4.0.0 development, the same as
+# 3.22.0's code) is listed so an untouched copy goes; an edited one stays and keeps working.
+LEGACY_SOURCE_HASHES["music"].add("d7348136d3657f20b2e5e93d0e23b72a2e8fd0f89189cf3a2b217497e9f6d5fc")
+LEGACY_NORMALIZED_HASHES["music"].add("5a43957be94eab0e23c936e4c6e1fc198763b5fba04b0dc7eaf852b63ac4cf3d")
+RETIRED_COMMANDS = ("game", "zip", "lm", "app", "browser", "todo", "music")
 LEGACY_SOURCE_HASHES["game"].add("4eb7ad4f73245d473ae986086fc5943893fb9656d350703018e97f57a7b292e7")
 LEGACY_SOURCE_HASHES["zip"].add("e69649db613965b2d5a2235467e4e5e4d5a2b8cb5f694bcb1c9a0132eecc34e6")
 # The LM Studio client of release 3.0.0; `lm` now runs its own MLX engine.
@@ -546,6 +570,8 @@ LEGACY_SOURCE_HASHES["browser"].add("db814ce6b36d767e3a59c0edea8e5b00b54daebc070
 # `normalized_source`): some installs got copies that differ only in blank lines
 # or the summary docstring, which are untouched code, not user edits.
 RETIRED_NORMALIZED_HASHES = {
+    # Every music seed by its normalized hash, plus the current one with only blank lines removed.
+    "music": LEGACY_NORMALIZED_HASHES["music"] | {"92bebfc28f21a91baf87945897b1e58400fca34bcbc00fbff0567129d829d8b3"},
     # Every todo seed: the normalized hashes of earlier releases, then 3.16.1
     # with `normalized_source` and with only blank lines removed.
     "todo": LEGACY_NORMALIZED_HASHES["todo"] | {
@@ -600,7 +626,7 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
             "model": "auto",
             "roots": ["~"],
             "allowed_ids": [],
-            "commands": ["desk", "capture", "music", "yt", "zip", "tg"],
+            "commands": ["desk", "capture", "spotify", "yt", "zip", "tg"],
             "max_steps": 12,
             "confirm_timeout": 300,
             "digest_time": "",
@@ -628,7 +654,7 @@ _CONFIG_DEFAULTS: dict[str, dict[str, object]] = {
     "cpp": {"projects": {"cpp": {"standard": 20, "initialize_git": False}}},
     "lofi": {"apps": {"lofi_url": "https://lofi-engine.vercel.app/"}},
     "mac": {"mac": {"executable": "macos-harness", "timeout": 30}},
-    "music": {"apps": {"spotify": "Spotify", "spotify_autoplay_delay": 2.0}},
+    "spotify": {"apps": {"spotify": "Spotify", "spotify_autoplay_delay": 2.0}},
     "py": {"projects": {"python": {"environment": "auto", "initialize_git": False}}},
     "rust": {"projects": {"rust": {"initialize_git": False}}},
     "tg": {
@@ -811,11 +837,11 @@ _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "lofi": ("built_in_commands/lofi/main.py",),
     "mac": ("harness.py", "built_in_commands/mac/main.py"),
     "minecraft": ("built_in_commands/minecraft/main.py",),
-    "music": ("desktop/music.py",),
     "netflix": ("built_in_commands/netflix/main.py",),
     "obsidian": ("built_in_commands/obsidian/main.py",),
     "py": ("project_templates.py", "built_in_commands/py/main.py"),
     "rust": ("project_templates.py", "built_in_commands/rust/main.py"),
+    "spotify": ("desktop/music.py",),
     "steam": ("built_in_commands/steam/main.py",),
     "tg": ("telegram.py",),
     "desk": ("kanban.py", "reminders.py", "canvas.py", "studio_edit.py", "studio_ui.py", "desk_ui.py", "desk.py"),
