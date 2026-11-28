@@ -22,6 +22,7 @@ use crate::workspace;
 
 const COMMAND_TEMPLATE: &str = include_str!("../assets/command_main.py");
 const AGENTS_TEMPLATE: &str = include_str!("../assets/command_agents.md");
+const APP_TEMPLATE: &str = include_str!("../assets/command_app.toml");
 /// Written into every new command folder so an agent opened there knows the rules.
 const CLAUDE_TEMPLATE: &str = "@AGENTS.md\n";
 
@@ -560,7 +561,7 @@ fn reserved_name(name: &str) -> Option<&'static str> {
     aliased.then_some("one of your aliases")
 }
 
-/// AGENTS.md and CLAUDE.md for the new folder; files that exist are kept.
+/// AGENTS.md, CLAUDE.md and app.toml (how it looks in Unlaw.app) for the new folder; files that exist are kept.
 fn write_agent_files(name: &str, directory: &Path) -> Result<(), i32> {
     let custom = templates_dir().join("commands").join("AGENTS.md");
     let rules = if custom.is_file() {
@@ -571,7 +572,11 @@ fn write_agent_files(name: &str, directory: &Path) -> Result<(), i32> {
     } else {
         AGENTS_TEMPLATE.to_string()
     };
-    let files = [("AGENTS.md", rules.replace("{{command_name}}", name)), ("CLAUDE.md", CLAUDE_TEMPLATE.to_string())];
+    let files = [
+        ("AGENTS.md", rules.replace("{{command_name}}", name)),
+        ("CLAUDE.md", CLAUDE_TEMPLATE.to_string()),
+        ("app.toml", APP_TEMPLATE.replace("{{command_name}}", name)),
+    ];
     for (file, text) in files {
         let path = directory.join(file);
         if path.exists() || path.is_symlink() {
@@ -895,6 +900,9 @@ fn apply_fixes() -> Result<Vec<String>, String> {
         changes.push("Added current defaults and removed deprecated storage settings in config.toml".into());
     }
     let config = config::load().map_err(|error| error.0)?;
+    if !crate::skills::home_status().0 && crate::skills::install_home(&config) {
+        changes.push("Installed the unlaw skill for coding agents".into());
+    }
     let storage = config.storage_root();
     for parts in STORAGE_SUBDIRECTORIES {
         let path = parts.iter().fold(storage.clone(), |path, part| path.join(part));
@@ -1057,6 +1065,11 @@ fn doctor_checks() -> Vec<Check> {
             Check { name: "Local model engine", available: ready, required: false, detail }
         },
         Check { name: "Local model server", available: lm_server, required: false, detail: lm_detail },
+        {
+            // Agents (Claude Code, Codex, Gemini CLI, ...) learn ul and how to add commands without touching the core.
+            let (installed, detail) = crate::skills::home_status();
+            Check { name: "Agent skill", available: installed, required: false, detail }
+        },
     ]
 }
 

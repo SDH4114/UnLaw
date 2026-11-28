@@ -180,3 +180,58 @@ inherits = "onedark"
 "ui.mode.visual" = { fg = "#ffffff", bg = "purple", modifiers = ["bold"] }
 "ui.mode.command" = { fg = "#ffffff", bg = "orange", modifiers = ["bold"] }
 "ui.mode.replace" = { fg = "#ffffff", bg = "red", modifiers = ["bold"] }
+
+[one-light]
+inherits = "light"
+palette = { bg = "#fafafa", bg1 = "#f0f0f1", bg2 = "#e5e5e6", bg3 = "#a0a1a7", fg = "#383a42", gray = "#a0a1a7", red = "#e45649", orange = "#986801", yellow = "#c18401", green = "#50a14f", cyan = "#0184bc", blue = "#4078f2", purple = "#a626a4", white = "#202227" }
+
+[ayu]
+inherits = "onedark"
+palette = { bg = "#0b0e14", bg1 = "#11151c", bg2 = "#1b2029", bg3 = "#2d3640", fg = "#bfbdb6", gray = "#5c6773", red = "#f07178", orange = "#ff8f40", yellow = "#e6b450", green = "#aad94c", cyan = "#95e6cb", blue = "#59c2ff", purple = "#d2a6ff", white = "#e6e1cf" }
+"syntax.keyword" = "orange"
+"syntax.function" = "yellow"
+"syntax.type" = "blue"
+"syntax.property" = "blue"
+"syntax.operator" = "orange"
+"ui.mode.normal" = { fg = "bg", bg = "yellow", modifiers = ["bold"] }
+
+[nord]
+inherits = "onedark"
+palette = { bg = "#2e3440", bg1 = "#3b4252", bg2 = "#434c5e", bg3 = "#4c566a", fg = "#d8dee9", gray = "#616e88", red = "#bf616a", orange = "#d08770", yellow = "#ebcb8b", green = "#a3be8c", cyan = "#88c0d0", blue = "#81a1c1", purple = "#b48ead", white = "#eceff4" }
+"syntax.keyword" = "blue"
+"syntax.function" = "cyan"
+"syntax.type" = "cyan"
+"syntax.property" = "fg"
+"syntax.operator" = "blue"
+"ui.mode.normal" = { fg = "bg", bg = "cyan", modifiers = ["bold"] }
+
+[dracula]
+inherits = "onedark"
+palette = { bg = "#282a36", bg1 = "#2f3241", bg2 = "#44475a", bg3 = "#565a73", fg = "#f8f8f2", gray = "#6272a4", red = "#ff5555", orange = "#ffb86c", yellow = "#f1fa8c", green = "#50fa7b", cyan = "#8be9fd", blue = "#bd93f9", purple = "#ff79c6", white = "#ffffff" }
+"syntax.keyword" = "purple"
+"syntax.function" = "green"
+"syntax.type" = "cyan"
+"syntax.string" = "yellow"
+"syntax.property" = "fg"
+"syntax.number" = "blue"
+"syntax.constant" = "blue"
+"ui.mode.normal" = { fg = "bg", bg = "blue", modifiers = ["bold"] }
+
+[rose-pine]
+inherits = "onedark"
+palette = { bg = "#191724", bg1 = "#1f1d2e", bg2 = "#26233a", bg3 = "#403d52", fg = "#e0def4", gray = "#6e6a86", red = "#eb6f92", orange = "#f6c177", yellow = "#f6c177", green = "#31748f", cyan = "#9ccfd8", blue = "#9ccfd8", purple = "#c4a7e7", white = "#e0def4" }
+"syntax.keyword" = "green"
+"syntax.function" = "red"
+"syntax.type" = "cyan"
+"syntax.string" = "yellow"
+"syntax.property" = "purple"
+"syntax.number" = "orange"
+"ui.mode.normal" = { fg = "bg", bg = "purple", modifiers = ["bold"] }
+
+[solarized-light]
+inherits = "light"
+palette = { bg = "#fdf6e3", bg1 = "#eee8d5", bg2 = "#e4ddc8", bg3 = "#93a1a1", fg = "#586e75", gray = "#93a1a1", red = "#dc322f", orange = "#cb4b16", yellow = "#b58900", green = "#859900", cyan = "#2aa198", blue = "#268bd2", purple = "#6c71c4", white = "#073642" }
+"syntax.keyword" = "green"
+"syntax.function" = "blue"
+"syntax.type" = "yellow"
+"syntax.string" = "cyan"

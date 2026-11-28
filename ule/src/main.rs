@@ -17,6 +17,12 @@ Options:
   --clean          ignore ule.toml (defaults only)
   --health [lang]  which language servers, formatters and tools are installed
   --config         print the path of ule.toml
+  --stream [--size RxC] [--light]
+                   draw into a host window over JSON lines (Unlaw.app's Edit), not a terminal
+  --theme-colors [name]
+                   the colors of a theme (default: the one ule.toml picks) as JSON, for
+                   Unlaw.app; themes are built in, [themes.*] in ule.toml or
+                   ~/.config/unlaw/themes/<name>.toml
   -h, --help       this help
   -V, --version    version
 
@@ -82,6 +88,8 @@ fn main() -> ExitCode {
     let mut launch = Launch { files: Vec::new(), stdin: None, readonly: false, clean: false };
     let mut next_line: Option<usize> = None;
     let mut only_files = false;
+    let mut stream: Option<(u16, u16)> = None;
+    let mut light = false;
     while let Some(arg) = args.next() {
         if !only_files {
             match arg.as_str() {
@@ -97,6 +105,23 @@ fn main() -> ExitCode {
                     health(args.next().as_deref());
                     return ExitCode::SUCCESS;
                 }
+                "--theme-colors" => {
+                    let config = ule::config::Config::load(&ule::commands::names());
+                    let themes = ule::theme::Themes::new(config.themes.as_ref());
+                    let name = args.next().unwrap_or_else(|| config.options.theme.clone());
+                    return match themes.load(&name) {
+                        Ok(theme) => {
+                            let mut colors = ule::stream::theme_colors(&theme);
+                            colors["themes"] = themes.names().into();
+                            println!("{colors}");
+                            ExitCode::SUCCESS
+                        }
+                        Err(error) => {
+                            eprintln!("ule: {error}");
+                            ExitCode::from(1)
+                        }
+                    };
+                }
                 "--config" => {
                     println!("{}", ule::config::config_path().display());
                     return ExitCode::SUCCESS;
@@ -105,6 +130,24 @@ fn main() -> ExitCode {
                     launch.readonly = true;
                     continue;
                 }
+                "--stream" => {
+                    stream.get_or_insert((40, 120));
+                    continue;
+                }
+                "--light" => {
+                    light = true;
+                    continue;
+                }
+                "--size" => match args.next().as_deref().and_then(ule::stream::parse_size) {
+                    Some(size) => {
+                        stream = Some(size);
+                        continue;
+                    }
+                    None => {
+                        eprintln!("ule: --size expects ROWSxCOLS, like 40x120");
+                        return ExitCode::from(2);
+                    }
+                },
                 "--clean" => {
                     launch.clean = true;
                     continue;
@@ -154,6 +197,19 @@ fn main() -> ExitCode {
         };
         let line = next_line.take().or(line);
         launch.files.push((file, line, col));
+    }
+    if let Some((rows, cols)) = stream {
+        if launch.stdin.is_some() {
+            eprintln!("ule: --stream reads its input from stdin; `-` cannot be used with it");
+            return ExitCode::from(2);
+        }
+        return match ule::stream::run(launch, rows, cols, light) {
+            Ok(code) => ExitCode::from(code as u8),
+            Err(error) => {
+                eprintln!("ule: {error}");
+                ExitCode::from(1)
+            }
+        };
     }
     if !std::io::stdout().is_terminal() {
         eprintln!("ule: stdout is not a terminal");

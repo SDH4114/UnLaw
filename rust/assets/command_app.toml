@@ -1,0 +1,22 @@
+# How `ul {{command_name}}` looks in Unlaw.app: the palette (Ctrl+Space), its panel and
+# the menu bar. Every key is optional; without [panel] and [[action]] the app shows a
+# Run entry. Full format: `ul skills show app-integration`. Check with `ul gui check`.
+
+title = "{{command_name}}"
+icon = "command"
+# summary = "One line shown under the title"   # default: the command's description
+# terminal = true                               # it asks questions or draws a terminal UI
+
+# [[action]]                  # an entry in the palette and the menu bar item's menu
+# id = "go"                   # letters, digits, - and _ (not panel, open or run)
+# label = "Do it"
+# args = ["do"]               # runs `ul {{command_name}} do`
+
+# [panel]                     # a form shown when the command is opened
+# [[panel.field]]
+# id = "text"
+# type = "text"               # choice | toggle | text | number | duration | time | date
+# label = "Text"
+# [[panel.button]]
+# label = "Send"
+# args = ["{text}"]

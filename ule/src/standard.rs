@@ -65,7 +65,7 @@ fn selected_text(ed: &Editor) -> Option<(String, bool)> {
 }
 
 /// Leaves select/visual mode back to where the selection started.
-fn end_selection(ed: &mut Editor) {
+pub(crate) fn end_selection(ed: &mut Editor) {
     let back_to_insert = ed.vim.select_mode && ed.vim.select_from_insert;
     if let Mode::Visual(kind) = ed.mode {
         ed.last_visual = Some((ed.view().doc, ed.anchor, ed.cursor(), kind));
@@ -147,7 +147,7 @@ fn paste(ed: &mut Editor) {
     ed.clamp_cursor();
 }
 
-fn word_right(ed: &Editor, pos: Pos) -> Pos {
+pub(crate) fn word_right(ed: &Editor, pos: Pos) -> Pos {
     let text = &ed.doc().text;
     let mut current = pos;
     // Skip what is not a word, then the word: ends right after it.
@@ -175,7 +175,7 @@ fn word_right(ed: &Editor, pos: Pos) -> Pos {
     current
 }
 
-fn word_left(ed: &Editor, pos: Pos) -> Pos {
+pub(crate) fn word_left(ed: &Editor, pos: Pos) -> Pos {
     if pos.col == 0 && pos.line > 0 {
         return Pos::new(pos.line - 1, ed.doc().text.line_len(pos.line - 1));
     }
@@ -187,7 +187,7 @@ fn smart_home(ed: &Editor, pos: Pos) -> Pos {
     Pos::new(pos.line, if pos.col == first { 0 } else { first })
 }
 
-enum Move {
+pub(crate) enum Move {
     Left,
     Right,
     Up,
@@ -202,7 +202,7 @@ enum Move {
     FileEnd,
 }
 
-fn target(ed: &mut Editor, movement: &Move) -> Pos {
+pub(crate) fn target(ed: &mut Editor, movement: &Move) -> Pos {
     let cursor = ed.cursor();
     let text = &ed.doc().text;
     match movement {
@@ -290,7 +290,7 @@ fn go(ed: &mut Editor, movement: Move) {
     ed.clamp_cursor();
 }
 
-fn lines_of_selection(ed: &Editor) -> (usize, usize) {
+pub(crate) fn lines_of_selection(ed: &Editor) -> (usize, usize) {
     match ed.mode {
         Mode::Visual(_) => {
             let cursor = ed.cursor();
@@ -469,6 +469,8 @@ fn handle_key(ed: &mut Editor, key: Key) -> bool {
         return true;
     }
     if ctrl('a') {
+        // Typing, Ctrl-A is the line start (Ghostty sends it for Cmd-Left); select all
+        // without modes is Ctrl-Shift-A (modeless.rs), and Cmd-A in the app window.
         if insert {
             go(ed, Move::Home);
         } else {
@@ -635,5 +637,8 @@ fn handle_key(ed: &mut Editor, key: Key) -> bool {
 
 /// Turning Ctrl-C/V into clipboard keys must not trap vim users: these stay vim.
 pub fn enabled(ed: &Editor) -> bool {
-    ed.options.standard_keys && ed.vim.pending.is_empty() && ed.vim.insert_pending.is_empty() && !ed.vim.insert_register
+    (ed.options.standard_keys || crate::modeless::on(ed))
+        && ed.vim.pending.is_empty()
+        && ed.vim.insert_pending.is_empty()
+        && !ed.vim.insert_register
 }

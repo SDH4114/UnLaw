@@ -185,7 +185,7 @@ fn skill_markdown(records: &[Record]) -> String {
     let mut text = String::from(
         "---
 name: unlaw
-description: Use the `ul` (Unlaw) command line on this Mac. It runs the user's personal commands (Kanban boards and tasks with `ul desk show`, Telegram, screen capture, YouTube downloads, archives, local AI models with `ul lm`, a local agent with `ul agent`, project templates, app launchers) and manages Unlaw configuration. Use it when the user mentions ul or unlaw, or asks for one of these tasks.
+description: Use the `ul` (Unlaw) command line on this Mac. It runs the user's personal commands (Kanban boards and tasks with `ul desk show`, Telegram, screen capture, YouTube downloads, archives, local AI models with `ul lm`, a local agent with `ul agent`, project templates, app launchers) and manages Unlaw configuration. Use it when the user mentions ul or unlaw, or asks for one of these tasks, and always before creating, adding or changing a ul/Unlaw command or anything shown in Unlaw.app: commands plug in as their own folders, never by editing Unlaw's core.
 ---
 
 # Unlaw (`ul`)
@@ -207,7 +207,18 @@ description: Use the `ul` (Unlaw) command line on this Mac. It runs the user's p
 
 ## Creating or changing commands and templates
 
-Read `reference/authoring.md` (or run `ul skills show authoring`) before you write anything for Unlaw. Hard rules:
+A command is a plug-in: its own folder under `commands/`, found by the CLI, the shell completion, the agent and Unlaw.app with no change to Unlaw. Read `reference/authoring.md` (or run `ul skills show authoring`) before you write anything for Unlaw.
+
+Recipe for a new command:
+
+1. `ul create command <name>` (`--lang rust` for Rust) and `cd` into the folder it prints.
+2. Write the logic in the entry file; keep `--help` (first, no side effects) and the one-line description accurate.
+3. Edit the `app.toml` it wrote for the app's palette, panel, actions or menu bar text (`reference/app-integration.md`), then `ul gui check`.
+4. `ul commands check <name>`, run `ul <name> --help` and the command itself, `ul commands --describe`.
+
+If a task seems to need a change to Unlaw itself (the dispatcher, a built-in, a default command, the app), stop and tell the user instead of editing it: a broken core breaks every command, and the next `ul update` replaces such edits anyway.
+
+Hard rules:
 
 - Create a command only with `ul create command <name>` (`--lang rust` for Rust); never make its folder by hand. It lives in `${XDG_CONFIG_HOME:-~/.config}/unlaw/commands/<name>/`; work only inside that folder.
 - Never edit Unlaw itself (its source repository, installed binaries, the core) or `config.toml` by hand (use `ul config get|set`).
@@ -663,8 +674,14 @@ pub fn refresh_if_stale(config: &Config) {
     let Some(mut manifest) = read_manifest() else {
         return;
     };
+    let linked = link_new_agents(&mut manifest);
     let current = fingerprint(&records(config, false));
     if manifest.fingerprint == current {
+        if linked {
+            if let Err(error) = write_manifest(&manifest) {
+                eprintln!("unlaw: Could not save {}: {error}", manifest_path().display());
+            }
+        }
         return;
     }
     manifest.installs.retain(|install| owned(&install.path));
@@ -689,6 +706,52 @@ pub fn refresh_if_stale(config: &Config) {
 fn fail(message: impl std::fmt::Display) -> i32 {
     eprintln!("unlaw skills: {message}");
     1
+}
+
+/// An agent installed after the skill (Claude Code, Kimi CLI) gets its link on the next
+/// run, so every agent on the Mac has the skill; a folder the user put there is left alone.
+fn link_new_agents(manifest: &mut Manifest) -> bool {
+    let (target, _) = locations(&Place::Home);
+    let Some(install) = manifest.installs.iter_mut().find(|install| install.path == target) else {
+        return false;
+    };
+    if !owned(&target) {
+        return false;
+    }
+    let mut changed = false;
+    for link in agent_links() {
+        if install.links.contains(&link) || link.exists() || link.is_symlink() {
+            continue;
+        }
+        if link_claude(&link, &target, &Place::Home).is_ok() {
+            install.links.push(link);
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// For `ul doctor`: whether the home skill is installed, and where.
+pub fn home_status() -> (bool, String) {
+    let (target, _) = locations(&Place::Home);
+    let manifest = read_manifest().unwrap_or_default();
+    match manifest.installs.iter().find(|install| install.path == target) {
+        Some(install) if owned(&target) => {
+            let agents: Vec<&str> =
+                install.links.iter().filter(|link| link.is_symlink()).map(|link| agent_name(link)).collect();
+            let mut detail = target.display().to_string();
+            if !agents.is_empty() {
+                detail.push_str(&format!(" (linked for {})", agents.join(", ")));
+            }
+            (true, detail)
+        }
+        _ => (false, "not installed for coding agents: `ul doctor --fix` or `ul skills install`".into()),
+    }
+}
+
+/// `ul doctor --fix`: the home skill, linked into every agent found.
+pub fn install_home(config: &Config) -> bool {
+    install(&[], config) == 0
 }
 
 fn usage() -> i32 {

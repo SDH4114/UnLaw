@@ -166,6 +166,22 @@ class ValidationTests(unittest.TestCase):
         bad["nodes"][1]["unlawHidden"] = 1
         self.rejects(bad, "unlawHidden")
 
+    def test_layer_names_and_thread_bends(self) -> None:
+        data = sample()
+        data["nodes"][0]["unlawName"] = "Main suspect"
+        data["edges"][0]["unlawPoints"] = [[10, 20.5], [-3, 4]]
+        data["unlaw"] = {"version": 1, "elements": [
+            {"id": "x", "type": "rectangle", "x": 0, "y": 0, "width": 1, "height": 1, "unlawName": "Box"}]}
+        self.assertEqual(canvas.validate_canvas(copy.deepcopy(data)), data)
+        for name in ("", "   ", 3, "a\nb", "x" * (canvas.MAX_LAYER_NAME + 1)):
+            bad = sample()
+            bad["nodes"][1]["unlawName"] = name
+            self.rejects(bad, "unlawName")
+        for points in ("1,2", [[1]], [[1, "2"]], [[1, True]], [[1, float("inf")]], [[0, 0]] * (canvas.MAX_THREAD_POINTS + 1)):
+            bad = sample()
+            bad["edges"][0]["unlawPoints"] = points
+            self.rejects(bad, "unlawPoints")
+
     def test_node_rules(self) -> None:
         good = sample()["nodes"][0]
         for key, value in (

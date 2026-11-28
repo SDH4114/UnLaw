@@ -141,6 +141,28 @@ pub struct Settings {
     pub show_status: bool,
     pub theme: Theme,
     pub dock: bool,
+    /// Size of the main window's pages (`look.zoom`, 1 = 100%).
+    pub zoom: f64,
+    /// `look.colors = "editor"` (default): every window takes the colors of the editor theme
+    /// (ule.toml's `theme`); "unlaw" keeps Unlaw's own amber look.
+    pub editor_colors: bool,
+}
+
+/// Interface sizes ⌘+ and ⌘− step through.
+pub const ZOOM_STEPS: [f64; 9] = [0.8, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0];
+
+pub fn zoom_ok(zoom: f64) -> bool {
+    zoom.is_finite() && (ZOOM_STEPS[0]..=ZOOM_STEPS[ZOOM_STEPS.len() - 1]).contains(&zoom)
+}
+
+/// The next size up (`up`) or down from `zoom`.
+pub fn zoom_step(zoom: f64, up: bool) -> f64 {
+    let next = if up {
+        ZOOM_STEPS.iter().copied().find(|step| *step > zoom + 0.001)
+    } else {
+        ZOOM_STEPS.iter().rev().copied().find(|step| *step < zoom - 0.001)
+    };
+    next.unwrap_or(zoom)
 }
 
 pub fn path() -> PathBuf {
@@ -228,6 +250,8 @@ fn parse_document(document: &DocumentMut, warnings: &mut Vec<String>) -> (Settin
         show_status: true,
         theme: Theme::Auto,
         dock: true,
+        zoom: 1.0,
+        editor_colors: true,
     };
     for (key, _) in document.iter() {
         if !["hotkeys", "hotkey", "menubar", "look"].contains(&key) {
@@ -360,6 +384,25 @@ fn parse_document(document: &DocumentMut, warnings: &mut Vec<String>) -> (Settin
     }
     if let Some(table) = section(document, "look", warnings) {
         for (key, item) in table.iter() {
+            if key == "zoom" {
+                match item
+                    .as_float()
+                    .or_else(|| item.as_integer().map(|value| value as f64))
+                    .filter(|zoom| zoom_ok(*zoom))
+                {
+                    Some(zoom) => settings.zoom = zoom,
+                    None => warnings.push(format!("{FILE}: look.zoom must be a number from 0.8 to 2")),
+                }
+                continue;
+            }
+            if key == "colors" {
+                match item.as_str() {
+                    Some("editor") => settings.editor_colors = true,
+                    Some("unlaw") => settings.editor_colors = false,
+                    _ => warnings.push(format!("{FILE}: look.colors must be editor or unlaw")),
+                }
+                continue;
+            }
             if key == "dock" {
                 match item.as_bool() {
                     Some(on) => settings.dock = on,
@@ -379,6 +422,26 @@ fn parse_document(document: &DocumentMut, warnings: &mut Vec<String>) -> (Settin
     (settings, ())
 }
 
+/// The app's colors from `ule --theme-colors`: every surface color must be `#rrggbb` (a theme
+/// drawn with the terminal's own colors, like `unlaw`, has none, and the app keeps its look).
+/// `dark` comes from the background's lightness.
+pub fn editor_palette(colors: &serde_json::Value) -> Option<serde_json::Value> {
+    let hex = |key: &str| {
+        let text = colors[key].as_str()?;
+        (text.len() == 7 && text.starts_with('#') && text[1..].bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .then(|| text.to_ascii_lowercase())
+    };
+    let bg = hex("bg")?;
+    let fg = hex("fg")?;
+    let channel = |at: usize| u8::from_str_radix(&bg[at..at + 2], 16).map(f64::from).unwrap_or(0.0);
+    let lightness = 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+    let mut palette = serde_json::json!({"name": colors["name"], "bg": bg, "fg": fg, "dark": lightness < 128.0});
+    for key in ["panel", "line", "selection", "muted", "border", "accent"] {
+        palette[key] = hex(key).map(serde_json::Value::String).unwrap_or(serde_json::Value::Null);
+    }
+    Some(palette)
+}
+
 /// What the Settings page shows and sends back: plain values, no TOML.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Form {
@@ -390,6 +453,9 @@ pub struct Form {
     pub show_status: bool,
     pub theme: String,
     pub dock: bool,
+    pub zoom: f64,
+    /// "editor" or "unlaw" (look.colors).
+    pub colors: String,
 }
 
 fn target_word(target: &Target) -> String {
@@ -415,6 +481,8 @@ impl Form {
             show_status: settings.show_status,
             theme: settings.theme.name().into(),
             dock: settings.dock,
+            zoom: settings.zoom,
+            colors: if settings.editor_colors { "editor" } else { "unlaw" }.into(),
         }
     }
 }
@@ -468,6 +536,12 @@ pub fn apply(text: &str, form: &Form) -> Result<String, String> {
     if let Some(id) = form.sys.iter().find(|id| !SYS_METRICS.iter().any(|(known, _, _)| known == id)) {
         return Err(format!("{id:?} is not a System reading"));
     }
+    if !zoom_ok(form.zoom) {
+        return Err("Interface size must be from 80% to 200%".into());
+    }
+    if !["editor", "unlaw"].contains(&form.colors.as_str()) {
+        return Err("Colors must come from the editor theme or be Unlaw's own".into());
+    }
     if !["auto", "light", "dark"].contains(&form.theme.as_str()) {
         return Err("Theme must be auto, light or dark".into());
     }
@@ -514,6 +588,9 @@ pub fn apply(text: &str, form: &Form) -> Result<String, String> {
     table(&mut document, "look")?;
     document["look"]["theme"] = toml_edit::value(form.theme.as_str());
     document["look"]["dock"] = toml_edit::value(form.dock);
+    document["look"]["colors"] = toml_edit::value(form.colors.as_str());
+    // Kept short in the file: 1.25, not 1.2500000000000002.
+    document["look"]["zoom"] = toml_edit::value((form.zoom * 100.0).round() / 100.0);
     Ok(document.to_string())
 }
 
@@ -735,5 +812,52 @@ theme = "pink"
         assert_eq!(parse(&pin("[hotkeys]\n", "timer").unwrap()).0.menubar, vec!["sys", "awake", "desk", "timer"]);
         assert_eq!(parse(&unpin("", "sys").unwrap()).0.menubar, vec!["awake", "desk"]);
         assert!(pin(DEFAULT, "a b").is_err());
+    }
+
+    #[test]
+    fn the_interface_size_is_kept_and_checked() {
+        assert_eq!(parse("").0.zoom, 1.0);
+        assert_eq!(parse("[look]\nzoom = 1.25\n").0.zoom, 1.25);
+        assert_eq!(parse("[look]\nzoom = 2\n").0.zoom, 2.0);
+        let (settings, warnings) = parse("[look]\nzoom = 9\n");
+        assert_eq!(settings.zoom, 1.0);
+        assert!(warnings[0].contains("look.zoom"));
+        let saved = apply(DEFAULT, &Form { zoom: 1.1 + 0.15, ..form() }).unwrap();
+        assert!(saved.contains("zoom = 1.25"), "{saved}");
+        assert_eq!(parse(&saved).0.zoom, 1.25);
+        assert!(apply(DEFAULT, &Form { zoom: 0.2, ..form() }).is_err());
+        assert!(apply(DEFAULT, &Form { zoom: f64::NAN, ..form() }).is_err());
+        assert_eq!(zoom_step(1.0, true), 1.1);
+        assert_eq!(zoom_step(1.0, false), 0.9);
+        assert_eq!(zoom_step(2.0, true), 2.0);
+        assert_eq!(zoom_step(1.05, true), 1.1);
+        assert_eq!(zoom_step(0.8, false), 0.8);
+    }
+
+    #[test]
+    fn the_editor_palette_needs_real_colors() {
+        let nord =
+            serde_json::json!({"name": "nord", "bg": "#2E3440", "fg": "#d8dee9", "accent": "#88c0d0", "panel": "a236"});
+        let palette = editor_palette(&nord).unwrap();
+        assert_eq!(palette["bg"], "#2e3440");
+        assert_eq!(palette["dark"], true);
+        assert!(palette["panel"].is_null(), "terminal colors are left out");
+        let light = serde_json::json!({"bg": "#fafafa", "fg": "#383a42"});
+        assert_eq!(editor_palette(&light).unwrap()["dark"], false);
+        assert!(editor_palette(&serde_json::json!({"bg": "", "fg": "a7"})).is_none(), "the terminal-colored theme");
+        assert!(editor_palette(&serde_json::json!({"bg": "#12345g", "fg": "#ffffff"})).is_none());
+        assert!(editor_palette(&serde_json::json!({"bg": "url(x)", "fg": "#ffffff"})).is_none());
+    }
+
+    #[test]
+    fn colors_follow_the_editor_theme_unless_asked_not_to() {
+        assert!(parse("").0.editor_colors);
+        assert!(!parse("[look]\ncolors = \"unlaw\"\n").0.editor_colors);
+        let (settings, warnings) = parse("[look]\ncolors = \"pink\"\n");
+        assert!(settings.editor_colors);
+        assert!(warnings[0].contains("look.colors"));
+        let saved = apply(DEFAULT, &Form { colors: "unlaw".into(), ..form() }).unwrap();
+        assert!(!parse(&saved).0.editor_colors);
+        assert!(apply(DEFAULT, &Form { colors: "pink".into(), ..form() }).is_err());
     }
 }

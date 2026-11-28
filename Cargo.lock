@@ -2658,6 +2658,7 @@ dependencies = [
 name = "unlaw-app"
 version = "4.0.0"
 dependencies = [
+ "block2",
  "global-hotkey",
  "libc",
  "objc2",

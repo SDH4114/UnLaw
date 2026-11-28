@@ -9,12 +9,15 @@ const SECTIONS = [
   { id: "templates", label: "Templates", icon: "layout", key: "2" },
   { id: "system", label: "System", icon: "cpu", key: "3" },
   { id: "clipboard", label: "Clipboard", icon: "clipboard", key: "4" },
-  { id: "games", label: "Games", icon: "game", key: "5" },
+  // Shown as Arcade; the id stays "games" (app.toml `section = "games"`, saved settings).
+  { id: "games", label: "Arcade", icon: "game", key: "5" },
   // The parts of `ul desk`, each its own item: one embedded desk page serves them.
   { id: "board", label: "Board", icon: "board", key: "6", desk: true },
   { id: "today", label: "Today", icon: "today", key: "7", desk: true },
   { id: "canvas", label: "Canvas", icon: "canvas", key: "8", desk: true },
   { id: "studio", label: "Studio", icon: "studio", key: "9", desk: true },
+  // Code, text and documents (edit.js): ule in the window plus viewers.
+  { id: "edit", label: "Edit", icon: "pencil", key: "e" },
 ];
 
 const home = { section: "commands", items: [], version: "", sys: null, sysError: "", history: { cpu: [], mem: [], gpu: [], down: [], up: [], read: [], write: [], power: [] }, clip: null, clipStatus: null, clipError: "", filter: "", chosen: -1, copied: "", desk: { state: "idle", text: "" } };
@@ -26,21 +29,80 @@ function $(selector) { return document.querySelector(selector); }
 function build() {
   const nav = el("nav");
   for (const section of SECTIONS) {
-    nav.appendChild(el("button", { "data-section": section.id, onclick: () => go(section.id) },
-      icon(section.icon), el("span", { text: section.label }), el("kbd", { text: "⌘" + section.key })));
+    nav.appendChild(el("button", { "data-section": section.id, title: section.label, onclick: () => go(section.id) },
+      icon(section.icon), el("span", { text: section.label }), el("kbd", { text: "⌘" + section.key.toUpperCase() })));
   }
   const side = el("aside", { class: "side" },
-    dragArea(el("div", { class: "lights" })),
+    // Top right of the sidebar, beside the traffic lights (under them when folded).
+    dragArea(el("div", { class: "lights" },
+      el("button", { class: "ghost sidetoggle", title: "Hide or show the sidebar (⌃⌘S)", "aria-label": "Sidebar", onclick: toggleSide }, icon("sidebar")))),
     nav,
     el("div", { class: "grow" }),
     el("div", { class: "foot" },
       el("span", { class: "version" }),
       el("button", { class: "update", hidden: "", title: "", text: "Update", onclick: () => send({ op: "update" }) }),
-      el("button", { class: "ghost", "data-section": "settings", title: "⌘,", text: "Settings", onclick: () => go("settings") })));
+      el("button", { class: "ghost settings", "data-section": "settings", title: "Settings (⌘,)", onclick: () => go("settings") }, icon("gear"), el("span", { text: "Settings" }))));
   const main = el("div", { class: "main" },
     dragArea(el("header", { class: "top" })),
     el("section", { class: "content" }));
-  document.body.replaceChildren(el("div", { class: "app" }, side, main));
+  const grip = el("div", { class: "grip", title: "Drag to resize; double-click folds", ondblclick: toggleSide });
+  const app = el("div", { class: "app" + (sideFolded() ? " side-folded" : "") }, side, grip, main);
+  app.style.setProperty("--side-w", sideWidth() + "px");
+  document.body.replaceChildren(app);
+  dragWidth(grip, {
+    start: () => (sideFolded() ? 52 : sideWidth()),
+    // Dragged narrower than SIDE_SNAP it folds to the icon column; wider it opens at that width.
+    move: (width) => {
+      const folded = width < SIDE_SNAP;
+      if (folded !== sideFolded()) { store("side-folded", folded ? "1" : "0"); $(".app").classList.toggle("side-folded", folded); }
+      if (!folded) $(".app").style.setProperty("--side-w", clampWidth(width, SIDE_MIN, SIDE_MAX) + "px");
+    },
+    end: (width) => { if (width >= SIDE_SNAP) store("side-width", String(clampWidth(width, SIDE_MIN, SIDE_MAX))); },
+  });
+}
+
+const SIDE_MIN = 150, SIDE_MAX = 420, SIDE_SNAP = 110;
+function sideWidth() { return clampWidth(Number(stored("side-width", "208")) || 208, SIDE_MIN, SIDE_MAX); }
+function clampWidth(width, min, max) { return Math.round(Math.min(max, Math.max(min, width))); }
+
+// A vertical grip that resizes the panel on its left: `move(width)` while dragging,
+// `end(width)` on release. Parts that measure themselves (desk view, editor, arcade)
+// hear a resize event at most once a frame.
+function dragWidth(grip, { start, move, end }) {
+  grip.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const x = event.clientX, from = start();
+    let width = from, pending = false;
+    document.body.classList.add("resizing");
+    const moved = (next) => {
+      width = from + next.clientX - x;
+      move(width);
+      if (!pending) { pending = true; requestAnimationFrame(() => { pending = false; window.dispatchEvent(new Event("resize")); }); }
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", moved);
+      window.removeEventListener("mouseup", up);
+      document.body.classList.remove("resizing");
+      end(width);
+      window.dispatchEvent(new Event("resize"));
+    };
+    window.addEventListener("mousemove", moved);
+    window.addEventListener("mouseup", up);
+  });
+}
+
+// The sidebar folds to a column of icons (not away: the desk parts cover the whole
+// right side, so the way back must stay on the left). Remembered between launches.
+function sideFolded() { return stored("side-folded", "0") === "1"; }
+
+function toggleSide() {
+  const folded = !sideFolded();
+  store("side-folded", folded ? "1" : "0");
+  $(".app").classList.toggle("side-folded", folded);
+  // The parts that measure themselves (arcade, sparklines, the desk view, the editor) redo it.
+  window.dispatchEvent(new Event("resize"));
 }
 
 // GitHub has a newer Unlaw (`ul update --check --json`, asked when the window opens).
@@ -82,6 +144,7 @@ function go(section, tell = true) {
   if (section !== "settings" && !SECTIONS.some((item) => item.id === section)) section = "commands";
   const changed = section !== home.section;
   if (changed && home.recording) stopRecording();
+  if (changed && home.sheet) closeSheet();
   home.section = section;
   for (const button of document.querySelectorAll(".side [data-section]")) button.classList.toggle("on", button.dataset.section === section);
   if (tell) send({ op: "section", section });
@@ -95,9 +158,11 @@ function header(title, sub, ...tools) {
 function render() {
   const content = $(".content");
   const desk = isDeskPart(home.section);
-  content.classList.toggle("flush", home.section === "games" || desk);
+  content.classList.toggle("flush", home.section === "games" || home.section === "edit" || desk);
   // The desk page has its own header: it takes the whole right side.
   $(".main").classList.toggle("desk-on", desk);
+  // Edit draws its own title bar (Zed-like).
+  $(".main").classList.toggle("edit-on", home.section === "edit");
   if (home.section === "commands") renderCommands();
   else if (home.section === "templates") renderTemplates();
   else if (home.section === "system") renderSystem();
@@ -106,6 +171,7 @@ function render() {
   // and asking again from there looped and replaced the buttons under the mouse.
   else if (home.section === "games") { renderGames(); send({ op: "games" }); }
   else if (desk) renderDesk();
+  else if (home.section === "edit") renderEdit();
   else if (home.section === "settings") { renderSettings(); send({ op: "settings" }); }
 }
 
@@ -133,7 +199,8 @@ function drawTiles() {
     const pin = el("button", { class: "pin" + (item.pinned ? " on" : ""), title: item.pinned ? "Remove from the menu bar" : "Pin to the menu bar",
       "aria-label": item.pinned ? `Unpin ${item.title}` : `Pin ${item.title}`, "aria-pressed": String(!!item.pinned),
       onclick: (event) => { event.stopPropagation(); send({ op: item.pinned ? "unpin" : "pin", name: item.name }); } }, icon("pin"));
-    const tile = el("div", { class: "tile", role: "button", tabindex: "0", title: `ul ${item.name}`, onclick: () => openCommand(item),
+    const tile = el("div", { class: "tile", role: "button", tabindex: "0", title: `ul ${item.name} · right-click for its shortcut and settings`, onclick: () => openCommand(item),
+      oncontextmenu: (event) => { event.preventDefault(); openSheet(item.name); },
       onkeydown: (event) => { if ((event.key === "Enter" || event.key === " ") && event.target === tile) { event.preventDefault(); openCommand(item); } } },
       el("div", { class: "glyph" }, commandIcon(item)),
       el("div", { class: "what" }, el("b", { text: item.title }), el("span", { text: item.summary || `ul ${item.name}` })),
@@ -146,6 +213,64 @@ function drawTiles() {
 function openCommand(item) {
   if (item.section) go(item.section);
   else send({ op: "default", name: item.name });
+}
+
+// ---------- a command's sheet ----------
+// Right-click on a tile (or "Shortcut and settings…" in the palette's menu): the command's own
+// shortcuts, its place in the menu bar and how to run it, without the Settings page.
+
+function openSheet(name) {
+  if (!home.items.some((item) => item.name === name)) return;
+  home.sheet = name;
+  if (!home.prefs) send({ op: "settings" });
+  renderSheet();
+}
+
+function closeSheet() {
+  if (home.recording) stopRecording();
+  home.sheet = null;
+  $(".sheetback")?.remove();
+}
+
+function renderSheet() {
+  $(".sheetback")?.remove();
+  const item = home.items.find((entry) => entry.name === home.sheet);
+  if (!item) { home.sheet = null; return; }
+  const prefs = home.prefs, rows = [];
+  if (!prefs) rows.push(el("div", { class: "note", text: "Reading the settings…" }));
+  else {
+    if (prefs.error) rows.push(el("div", { class: "preferror", text: "Not saved: " + prefs.error }));
+    prefs.settings.hotkeys.forEach((binding, index) => {
+      if (binding.command !== item.name) return;
+      const edit = (change) => savePrefs((next) => change(next.hotkeys[index]));
+      rows.push(el("div", { class: "prefrow" },
+        recorder(binding.keys, (keys) => edit((entry) => { entry.keys = keys; })),
+        actionSelect(item.name, binding.action, (action) => edit((entry) => { entry.action = action; })),
+        el("div", { class: "grow" }),
+        el("button", { class: "ghost danger", text: "Remove", onclick: () => savePrefs((next) => next.hotkeys.splice(index, 1)) })));
+    });
+    const adding = recorder("", (keys) => savePrefs((next) => next.hotkeys.push({ keys, command: item.name, action: "panel" })));
+    adding.textContent = "Add a shortcut…";
+    rows.push(el("div", { class: "prefrow" }, adding, el("small", { class: "muted", text: "then type the keys; Esc cancels" })));
+  }
+  const pinned = !!item.pinned;
+  const card = el("div", { class: "sheet", role: "dialog", "aria-label": `${item.title} settings` },
+    el("div", { class: "sheethead" },
+      el("span", { class: "glyph" }, commandIcon(item)),
+      el("div", { class: "what" }, el("b", { text: item.title }), el("small", { text: item.summary || `ul ${item.name}` })),
+      el("button", { class: "ghost", "aria-label": "Close", onclick: closeSheet }, icon("close"))),
+    el("div", { class: "sheetlabel", text: "Shortcuts" }),
+    el("div", { class: "prefgroup" }, ...rows),
+    el("div", { class: "prefgroup" },
+      prefRow("Menu bar", pinned ? "Shown next to the UL menu" : "Not in the menu bar",
+        toggle(pinned, (on) => send({ op: on ? "pin" : "unpin", name: item.name })))),
+    el("div", { class: "sheetbuttons" },
+      el("button", { class: "primary", text: "Open", onclick: () => { closeSheet(); openCommand(item); } }),
+      el("button", { class: "ghost", text: "Run in terminal", onclick: () => send({ op: "terminal", name: item.name }) }),
+      el("div", { class: "grow" }),
+      el("button", { class: "ghost", text: "All settings…", onclick: () => { closeSheet(); go("settings"); } })));
+  const back = el("div", { class: "sheetback", onclick: (event) => { if (event.target === back) closeSheet(); } }, card);
+  document.body.appendChild(back);
 }
 
 // ---------- templates ----------
@@ -508,7 +633,7 @@ const GRID = { rows: 30, cols: 116 };
 const arcade = { id: 0, game: null, level: stored("arcade-level", "normal"), frame: null, records: {}, box: null, view: null, hint: "", ended: "", hover: "" };
 
 function renderGames() {
-  header("Games", "Played right here; keys go to the game while it runs");
+  header("Arcade", "Played right here; keys go to the game while it runs");
   const list = el("div", { class: "list" });
   const levels = el("div", { class: "seg" });
   for (const level of ["easy", "normal", "hard"]) {
@@ -767,12 +892,32 @@ function renderDesk() {
 function deskArea() {
   if (!isDeskPart(home.section)) return;
   const rect = $(".main").getBoundingClientRect();
-  send({ op: "desk-area", x: rect.left, y: rect.top, width: rect.width, height: rect.height });
+  // With the sidebar folded the window's traffic lights stick out over the right side,
+  // so a thin title strip stays above the desk page (see home.css).
+  const strip = $(".top").offsetHeight;
+  send({ op: "desk-area", x: rect.left, y: rect.top + strip, width: rect.width, height: rect.height - strip });
 }
 
 // ---------- keys and messages ----------
 
 document.addEventListener("keydown", (event) => {
+  if (home.sheet && event.key === "Escape") { event.preventDefault(); closeSheet(); return; }
+  if (event.metaKey && event.ctrlKey && event.code === "KeyS") { event.preventDefault(); toggleSide(); return; }
+  // ⌘+ ⌘− ⌘0 on a PDF or picture zoom the pages, not the whole window.
+  if (home.section === "edit" && pvZoomKey(event)) return;
+  // ⌘W in Edit closes the tab; with none open the menu's Close Window takes it.
+  if (event.metaKey && !event.shiftKey && !event.altKey && !event.ctrlKey && event.code === "KeyW" && home.section === "edit") {
+    if (closeEditTab()) event.preventDefault();
+    return;
+  }
+  if (event.metaKey && !event.shiftKey && !event.altKey && !event.ctrlKey && event.code === "KeyB" && home.section === "edit") {
+    event.preventDefault(); toggleEditTree(); return;
+  }
+  // Edit's ⌘P/⌘⇧P/⌘⇧F also work before a file is open (the editor's own input takes them after).
+  const editKey = event.code + (event.shiftKey ? "+" : "");
+  if (home.section === "edit" && event.metaKey && !event.altKey && !event.ctrlKey && EDIT_MENU_KEYS[editKey]) {
+    event.preventDefault(); editCommand(EDIT_MENU_KEYS[editKey]); return;
+  }
   if (event.metaKey && !event.shiftKey && !event.altKey) {
     const section = SECTIONS.find((item) => item.key === event.key);
     if (section) { event.preventDefault(); go(section.id); return; }
@@ -886,7 +1031,8 @@ function savePrefs(change) {
   const next = prefsCopy();
   change(next);
   home.prefs.settings = next; // shown at once; Rust answers with the stored values
-  renderSettings();
+  if (home.section === "settings") renderSettings();
+  if (home.sheet) renderSheet();
   send({ op: "settings-save", settings: next });
 }
 
@@ -1015,8 +1161,18 @@ function renderSettings() {
       }))));
 
   const restart = prefs.running_dock !== settings.dock ? "Takes effect the next time Unlaw starts" : "Off: a menu bar app only, no window in the Dock";
+  const zoom = Number(settings.zoom) || 1;
+  const sizes = [0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8, 2];
+  const sizeSelect = el("select", {}, ...sizes.map((size) => el("option", { value: String(size), text: Math.round(size * 100) + "%", selected: Math.abs(size - zoom) < 0.001 ? "" : null })));
+  sizeSelect.addEventListener("change", () => savePrefs((next) => { next.zoom = Number(sizeSelect.value); }));
   const look = el("div", { class: "prefgroup" },
-    prefRow("Appearance", null, segmented([["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]], settings.theme, (theme) => savePrefs((next) => { next.theme = theme; }))),
+    prefRow("Interface size", "Text and everything in this window, the desk and Edit too. ⌘+ bigger, ⌘− smaller, ⌘⇧0 back to 100%", sizeSelect),
+    prefRow("Colors", (settings.colors || "editor") === "editor"
+      ? "Every window takes the editor theme's colors (Settings › Editor › Theme); a terminal-colored theme keeps Unlaw's own"
+      : "Unlaw's own amber look, whatever the editor theme",
+    segmented([["editor", "Editor theme"], ["unlaw", "Unlaw"]], settings.colors || "editor", (colors) => savePrefs((next) => { next.colors = colors; }))),
+    prefRow("Appearance", (settings.colors || "editor") === "editor" ? "Light or dark comes from the editor theme while Colors follow it" : null,
+      segmented([["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]], settings.theme, (theme) => savePrefs((next) => { next.theme = theme; }))),
     prefRow("Show in the Dock", restart, toggle(settings.dock, (on) => savePrefs((next) => { next.dock = on; }))));
 
   const count = el("input", { type: "number", min: "0", max: "1000", value: String(prefs.clip_files ?? 15), class: "count" });
@@ -1029,6 +1185,27 @@ function renderSettings() {
   const clipboard = el("div", { class: "prefgroup" },
     prefRow("Images and files to keep", home.prefsNote || "Pictures and copied files are saved as files; older ones are deleted (0 keeps none)", count));
 
+  // Edit's editor: the same ule.toml the terminal ule reads.
+  if (!edit.places) send({ op: "edit-places" });
+  const places = edit.places || {};
+  const themes = places.themes || [places.theme || "unlaw"];
+  const themeSelect = el("select", {}, ...themes.map((name) => el("option", { value: name, text: name, selected: name === places.theme ? "" : null })));
+  themeSelect.addEventListener("change", () => setEditPrefs({ theme: themeSelect.value }));
+  const editor = el("div", { class: "prefgroup" },
+    prefRow("Keys", (places.editing || "vim") === "vim"
+      ? "Vim: normal, insert and visual modes, as in the terminal ule"
+      : "Standard: no modes, typing always types; ⌘P files, ⌘⇧P commands, as in Zed or VS Code",
+    segmented([["vim", "Vim"], ["standard", "Standard"]], places.editing || "vim", (editing) => setEditPrefs({ editing }))),
+    prefRow("Theme", "Colors Edit, the terminal ule and every window (saved in ule.toml)", themeSelect),
+    prefRow("Your own theme", "A file in ~/.config/unlaw/themes that starts from the theme above; saving it shows the change at once",
+      themeMaker(places)),
+    prefRow("File types", (places.type_warnings && places.type_warnings.length) ? places.type_warnings.join("; ")
+      : "Icon, color and how each kind of file opens in Edit (filetypes.toml)",
+      el("button", { class: "ghost", text: "Edit file types", onclick: () => send({ op: "edit-config-file", what: "filetypes" }) })),
+    prefRow("Icons", (places.icons && places.icons.length) ? `${places.icons.length} of yours: ${places.icons.slice(0, 6).join(", ")}${places.icons.length > 6 ? "…" : ""}`
+      : "Drop .svg or .png pictures here, then name them in file types (vue.svg = icon \"vue\")",
+      el("button", { class: "ghost", text: "Open icons folder", onclick: () => send({ op: "edit-config-file", what: "icons" }) })));
+
   const files = el("div", { class: "prefgroup" },
     prefRow("Settings file", prefs.path, el("button", { class: "ghost", text: "Open in editor", onclick: () => send({ op: "settings-file" }) })));
 
@@ -1036,8 +1213,24 @@ function renderSettings() {
     el("h2", { text: "Keyboard shortcuts" }), hotkeys,
     el("h2", { text: "Menu bar" }), menubar,
     el("h2", { text: "Clipboard" }), clipboard,
+    el("h2", { text: "Editor" }), editor,
     el("h2", { text: "Look" }), look,
     el("h2", { text: "Advanced" }), files));
+}
+
+// "New theme…": a name, then the file opens in Edit.
+function themeMaker(places) {
+  const name = el("input", { class: "themename", placeholder: "my-theme", spellcheck: "false", autocomplete: "off" });
+  const make = () => {
+    const value = name.value.trim();
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(value)) { name.focus(); name.classList.add("bad"); return; }
+    send({ op: "edit-new-theme", name: value, base: places.theme || "onedark" });
+    name.value = "";
+  };
+  name.addEventListener("keydown", (event) => { event.stopPropagation(); name.classList.remove("bad"); if (event.key === "Enter") make(); });
+  return el("div", { class: "row" }, name,
+    el("button", { class: "ghost", text: "New theme", onclick: make }),
+    el("button", { class: "ghost", text: "Folder", title: "Open the themes folder", onclick: () => send({ op: "edit-config-file", what: "themes" }) }));
 }
 
 function addShortcut() {
@@ -1052,10 +1245,12 @@ window.ul = {
     switch (message.type) {
       case "init":
         applyTheme(message.theme);
+        applyColors(message.colors);
         home.items = message.items || [];
         home.version = message.version || "";
         build();
-        $(".version").textContent = "Unlaw " + home.version;
+        $(".version").textContent = "v" + home.version;
+        $(".version").title = "Unlaw " + home.version;
         if (message.update) showUpdate(message.update);
         home.section = "";
         go(message.section || "commands");
@@ -1063,12 +1258,18 @@ window.ul = {
       case "theme":
         applyTheme(message.theme);
         break;
+      case "colors":
+        applyTheme(message.theme);
+        applyColors(message.colors);
+        if (home.section === "edit") applyEditTheme();
+        break;
       case "update":
         showUpdate(message);
         break;
       case "list":
         home.items = message.items || [];
         if (home.section === "commands") drawTiles();
+        if (home.sheet && !home.recording) renderSheet();
         break;
       case "section":
         go(message.section, false);
@@ -1148,11 +1349,17 @@ window.ul = {
       case "settings":
         home.prefs = message;
         if (home.section === "settings") renderSettings();
+        if (home.sheet && !home.recording) renderSheet();
+        break;
+      case "command-sheet":
+        openSheet(message.name);
         break;
       case "desk":
         home.desk = { state: message.state, text: message.text || "" };
         if (isDeskPart(home.section)) renderDesk();
         break;
+      default:
+        editReceive(message);
     }
   },
 };

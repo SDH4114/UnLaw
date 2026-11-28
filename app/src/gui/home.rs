@@ -31,10 +31,12 @@ fn canonical(section: &str) -> &str {
 }
 
 /// The served desk address, embedded: no tabs, starting at `view`.
-fn embed_url(url: &str, view: &str) -> String {
+/// The desk page inside the app: its part and the app's look (auto, light, dark),
+/// so the page matches the app instead of its own browser setting.
+fn embed_url(url: &str, view: &str, theme: &str) -> String {
     let (base, _) = url.split_once('#').unwrap_or((url, ""));
     let joiner = if base.contains('?') { '&' } else { '?' };
-    format!("{base}{joiner}embed=1#{view}")
+    format!("{base}{joiner}embed=1&theme={theme}#{view}")
 }
 const GAMES: &[&str] = &["tetris", "snake", "minesweeper", "invaders", "chomp", "dash", "pingpong", "chess"];
 const LEVELS: &[&str] = &["easy", "normal", "hard"];
@@ -116,11 +118,18 @@ pub(super) fn home_window(target: &EventLoopWindowTarget<UserEvent>) -> Glass {
 /// The main window's page with its blur (see `page_for`).
 pub(super) fn home_webview(window: &Window, proxy: &EventLoopProxy<UserEvent>) -> WebView {
     let ipc = proxy.clone();
+    let drop_proxy = proxy.clone();
     let webview = WebViewBuilder::new()
         .with_transparent(true)
-        .with_custom_protocol("ulapp".into(), |_, request| match request.uri().path().strip_prefix("/clip/") {
-            Some(name) => serve_clip_picture(name),
-            None => serve_asset(request),
+        .with_custom_protocol("ulapp".into(), |_, request| {
+            let path = request.uri().path();
+            if let Some(name) = path.strip_prefix("/clip/") {
+                serve_clip_picture(name)
+            } else if path.starts_with("/edit/") {
+                editor::serve_edit(&request)
+            } else {
+                serve_asset(request)
+            }
         })
         .with_url("ulapp://localhost/home.html")
         .with_ipc_handler(move |request: Request<String>| {
@@ -130,6 +139,15 @@ pub(super) fn home_webview(window: &Window, proxy: &EventLoopProxy<UserEvent>) -
         })
         .with_navigation_handler(|url| url.starts_with("ulapp://"))
         .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
+        // Files dropped on the window open in Edit; a drop never navigates.
+        .with_drag_drop_handler(move |event| match event {
+            // A drag inside the page (a file row onto a folder) carries no paths: the page's own.
+            wry::DragDropEvent::Drop { paths, .. } if !paths.is_empty() => {
+                let _ = drop_proxy.send_event(UserEvent::HomeDropped(paths));
+                true
+            }
+            _ => false,
+        })
         .build(window)
         .expect("a web view");
     #[cfg(target_os = "macos")]
@@ -197,7 +215,7 @@ fn serve_clip_picture(name: &str) -> Response<Cow<'static, [u8]>> {
 }
 
 /// `<storage.root>` from config.toml (default `data` in the config folder).
-fn storage_root() -> PathBuf {
+pub(super) fn storage_root() -> PathBuf {
     let config = settings::config_dir();
     let text = fs::read_to_string(config.join("config.toml")).unwrap_or_default();
     let root = text
@@ -505,7 +523,8 @@ impl App {
             View::Home,
             json!({"type": "settings", "settings": {
                 "palette": form.palette, "hotkeys": hotkeys, "menubar": form.menubar, "sys": form.sys,
-                "show_status": form.show_status, "theme": form.theme, "dock": form.dock,
+                "show_status": form.show_status, "theme": form.theme, "dock": form.dock, "zoom": form.zoom,
+                "colors": form.colors,
             }, "running_dock": self.home_state.dock, "warnings": warnings, "error": error,
                "path": settings::path().display().to_string(), "clip_files": clip_max_files(),
                "sys_metrics": settings::SYS_METRICS.iter().map(|(id, label, _)| json!({"id": id, "label": label})).collect::<Vec<_>>()}),
@@ -807,7 +826,7 @@ impl App {
     pub(super) fn on_desk_served(&mut self, result: Result<(Child, String), String>) {
         self.home_state.desk_opening = false;
         let (mut child, url) = match result {
-            Ok((child, url)) => (child, embed_url(&url, &self.home_state.section)),
+            Ok((child, url)) => (child, embed_url(&url, &self.home_state.section, self.theme())),
             Err(error) => {
                 self.send(
                     View::Home,
@@ -816,8 +835,7 @@ impl App {
                 return;
             }
         };
-        let (x, y, width, height) =
-            self.home_state.desk_area.unwrap_or((208.0, 52.0, HOME_SIZE.0 - 208.0, HOME_SIZE.1 - 52.0));
+        let (x, y, width, height) = self.desk_rect().unwrap_or((208.0, 52.0, HOME_SIZE.0 - 208.0, HOME_SIZE.1 - 52.0));
         let built = page_builder(&url, self.proxy.clone(), HOME_DESK.into())
             .with_bounds(wry::Rect {
                 position: LogicalPosition::new(x, y).into(),
@@ -827,6 +845,7 @@ impl App {
             .build_as_child(&self.home.window);
         match built {
             Ok(webview) => {
+                let _ = webview.zoom(self.settings.zoom);
                 self.home_state.desk = Some(DeskView { webview, child, url, opened: None });
                 self.send(View::Home, json!({"type": "desk", "state": "ready"}));
                 self.place_desk();
@@ -838,11 +857,61 @@ impl App {
         }
     }
 
+    /// A changed Appearance setting reaches the desk page at once.
+    /// The desk's place in window points: the page measures it in its own (zoomed) pixels.
+    fn desk_rect(&self) -> Option<(f64, f64, f64, f64)> {
+        let zoom = self.settings.zoom;
+        self.home_state.desk_area.map(|(x, y, width, height)| (x * zoom, y * zoom, width * zoom, height * zoom))
+    }
+
+    /// The interface size (`look.zoom`) on the main window's page and the desk inside it.
+    pub(super) fn apply_zoom(&self) {
+        let zoom = self.settings.zoom;
+        if let Some(webview) = &self.home.webview {
+            let _ = webview.zoom(zoom);
+        }
+        if let Some(desk) = &self.home_state.desk {
+            let _ = desk.webview.zoom(zoom);
+        }
+        self.place_desk();
+    }
+
+    /// ⌘+ / ⌘− / ⌘⇧0: one step bigger, smaller, or back to 100%, saved in app.toml.
+    pub(super) fn change_zoom(&mut self, how: &str) {
+        let now = self.settings.zoom;
+        let zoom = match how {
+            "in" => settings::zoom_step(now, true),
+            "out" => settings::zoom_step(now, false),
+            _ => 1.0,
+        };
+        if (zoom - now).abs() < 0.001 {
+            return;
+        }
+        let form = settings::Form { zoom, ..settings::Form::of(&self.settings) };
+        let result =
+            settings_text().and_then(|text| settings::apply(&text, &form)).and_then(|text| write_settings(&text));
+        match result {
+            Ok(()) => {
+                self.own_write = modified(&settings::path());
+                self.apply_settings();
+                self.send_settings(None);
+            }
+            Err(error) => self.toast("Interface size", &error, false, None),
+        }
+    }
+
+    pub(super) fn desk_theme(&self) {
+        if let Some(desk) = &self.home_state.desk {
+            let theme = self.theme();
+            let _ = desk.webview.evaluate_script(&format!("window.deskTheme && window.deskTheme({theme:?})"));
+        }
+    }
+
     /// The desk page covers the content area while the Desk part is shown.
     pub(super) fn place_desk(&self) {
         let Some(desk) = &self.home_state.desk else { return };
         let shown = self.home.window.is_visible() && DESK_PARTS.contains(&self.home_state.section.as_str());
-        if let Some((x, y, width, height)) = self.home_state.desk_area {
+        if let Some((x, y, width, height)) = self.desk_rect() {
             let _ = desk.webview.set_bounds(wry::Rect {
                 position: LogicalPosition::new(x, y).into(),
                 size: LogicalSize::new(width, height).into(),
@@ -1033,6 +1102,8 @@ fn settings_form(value: &Json) -> settings::Form {
         show_status: value["show_status"].as_bool().unwrap_or(true),
         theme: text(&value["theme"]),
         dock: value["dock"].as_bool().unwrap_or(true),
+        zoom: value["zoom"].as_f64().unwrap_or(1.0),
+        colors: value["colors"].as_str().unwrap_or("editor").to_string(),
     }
 }
 
@@ -1081,10 +1152,13 @@ mod tests {
     #[test]
     fn desk_parts_open_the_embedded_page_at_their_view() {
         assert_eq!(
-            embed_url("http://127.0.0.1:8765/?token=abc", "canvas"),
-            "http://127.0.0.1:8765/?token=abc&embed=1#canvas"
+            embed_url("http://127.0.0.1:8765/?token=abc", "canvas", "auto"),
+            "http://127.0.0.1:8765/?token=abc&embed=1&theme=auto#canvas"
         );
-        assert_eq!(embed_url("http://127.0.0.1:8765/#board", "today"), "http://127.0.0.1:8765/?embed=1#today");
+        assert_eq!(
+            embed_url("http://127.0.0.1:8765/#board", "today", "light"),
+            "http://127.0.0.1:8765/?embed=1&theme=light#today"
+        );
         assert_eq!(canonical("desk"), "board");
         assert_eq!(canonical("canvas"), "canvas");
     }

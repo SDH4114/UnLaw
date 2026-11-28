@@ -2,7 +2,7 @@
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item, Table, Value};
 
@@ -26,6 +26,13 @@ pub enum Bufferline {
     Always,
     Multiple,
     Never,
+}
+
+/// How keys work: vim's modes, or an ordinary editor where typing always types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Editing {
+    Vim,
+    Standard,
 }
 
 #[derive(Clone, Debug)]
@@ -69,6 +76,7 @@ pub struct Options {
     pub incsearch: bool,
     pub hlsearch: bool,
     pub standard_keys: bool,
+    pub editing: Editing,
 }
 
 impl Default for Options {
@@ -112,13 +120,14 @@ impl Default for Options {
             incsearch: true,
             hlsearch: true,
             standard_keys: true,
+            editing: Editing::Vim,
         }
     }
 }
 
 /// Every option `:set` and ule.toml know, with a one-line description.
 pub const OPTIONS: &[(&str, &str)] = &[
-    ("theme", "color theme: unlaw (terminal colors), onedark, gruvbox, catppuccin, tokyonight, light"),
+    ("theme", "color theme: unlaw (terminal colors), onedark, one-light, gruvbox, catppuccin, tokyonight, ayu, nord, dracula, rose-pine, solarized-light, light"),
     ("line_numbers", "relative, absolute or off"),
     ("cursorline", "highlight the cursor's line"),
     ("scrolloff", "lines kept visible above and below the cursor"),
@@ -155,6 +164,7 @@ pub const OPTIONS: &[(&str, &str)] = &[
     ("incsearch", "jump to matches while typing a search"),
     ("hlsearch", "highlight all search matches"),
     ("standard_keys", "Ctrl-Z/C/V/X, Shift-select, word/line deletion like other editors (:help standard)"),
+    ("editing", "vim (modes) or standard (no modes: typing always types, like VS Code or Zed)"),
 ];
 
 fn parse_bool(value: &str) -> Option<bool> {
@@ -237,6 +247,13 @@ impl Options {
             "incsearch" | "is" => self.incsearch = boolean()?,
             "hlsearch" | "hls" => self.hlsearch = boolean()?,
             "standard_keys" => self.standard_keys = boolean()?,
+            "editing" => {
+                self.editing = match value {
+                    "vim" => Editing::Vim,
+                    "standard" | "modeless" => Editing::Standard,
+                    _ => return Err("editing is vim or standard".into()),
+                }
+            }
             _ => return Err(format!("unknown option {name:?} (:help options)")),
         }
         Ok(())
@@ -311,6 +328,7 @@ impl Options {
             "incsearch" | "is" => self.incsearch.to_string(),
             "hlsearch" | "hls" => self.hlsearch.to_string(),
             "standard_keys" => self.standard_keys.to_string(),
+            "editing" => (if self.editing == Editing::Vim { "vim" } else { "standard" }).to_string(),
             _ => return None,
         })
     }
@@ -350,6 +368,11 @@ pub fn config_dir() -> PathBuf {
 
 pub fn home() -> PathBuf {
     env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+}
+
+/// Theme files beside ule.toml (`~/.config/unlaw/themes`), shared with Unlaw.app.
+pub fn themes_dir() -> PathBuf {
+    config_path().parent().map(|dir| dir.join("themes")).unwrap_or_else(|| config_dir().join("themes"))
 }
 
 pub fn config_path() -> PathBuf {
@@ -417,10 +440,45 @@ impl Config {
         match fs::read_to_string(&path) {
             Ok(text) => {
                 let mut config = Config::parse(&text, commands);
+                config.add_theme_files(&themes_dir());
                 config.path = Some(path);
                 config
             }
-            Err(_) => Config { path: Some(path), ..Config::default() },
+            Err(_) => {
+                let mut config = Config { path: Some(path), ..Config::default() };
+                config.add_theme_files(&themes_dir());
+                config
+            }
+        }
+    }
+
+    /// Themes as files: `<config dir>/themes/<name>.toml`, each holding what a `[themes.<name>]`
+    /// table would (inherits, palette, styles). A `[themes.<name>]` in ule.toml wins over a file
+    /// of the same name; a file that does not parse is reported and skipped.
+    pub fn add_theme_files(&mut self, dir: &Path) {
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        let mut files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|suffix| suffix == "toml"))
+            .collect();
+        files.sort();
+        for file in files {
+            let Some(name) = file.file_stem().and_then(|stem| stem.to_str()).map(str::to_string) else { continue };
+            if name.is_empty() || name.starts_with('.') {
+                continue;
+            }
+            match fs::read_to_string(&file).map_err(|error| error.to_string()).and_then(|text| {
+                text.parse::<DocumentMut>().map_err(|error| error.to_string().lines().next().unwrap_or("").to_string())
+            }) {
+                Ok(document) => {
+                    let themes = self.themes.get_or_insert_with(Table::new);
+                    if !themes.contains_key(&name) {
+                        themes.insert(&name, Item::Table(document.as_table().clone()));
+                    }
+                }
+                Err(error) => self.errors.push(format!("themes/{name}.toml: {error}")),
+            }
         }
     }
 
@@ -533,6 +591,7 @@ pub const TEMPLATE: &str = r##"# ule settings. Changes apply after :config-reloa
 # explorer_width = 30
 # panel_height = 12
 # standard_keys = true      # Ctrl-Z/C/V/X, Shift+arrows, Ctrl+Backspace…; false = pure vim
+# editing = "vim"           # "standard": no modes, typing always types (Ctrl-P files, Ctrl-Shift-P commands)
 
 # Key bindings: a command name (see :commands), ":ex command", or keys.
 # Lists run in order. "nop" removes a default binding.

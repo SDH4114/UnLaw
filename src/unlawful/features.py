@@ -28,6 +28,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("timer", "Productivity", "Countdown timers and alarms with macOS notifications"),
     ("clip", "Productivity", "Clipboard history in the background: list, search, copy again"),
     ("weather", "Productivity", "Weather now and the forecast (Open-Meteo, no key)"),
+    ("doc", "Productivity", "Documents for Edit and ule: text, images, PDF, Office, CSV, SQLite"),
     ("git", "Development", "Stage, commit and push in one command"),
     ("py", "Development", "New Python project from a template"),
     ("rust", "Development", "New Rust project from a template"),

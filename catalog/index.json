@@ -34,7 +34,12 @@
   {
    "name": "desk",
    "summary": "Kanban boards (Obsidian .md files), Apple Reminders, pomodoro and canvas in the browser.",
-   "sha256": "70ca692485e10c7383a6682e1e7aa5784ce09cefe907f01902c89e32319b0920"
+   "sha256": "5d2fa2b5f2c91ba464fbf42863996e924aaa655911c86198f087cd2bcddc6600"
+  },
+  {
+   "name": "doc",
+   "summary": "Open, convert and save documents: the formats behind Unlaw.app's Edit and ule.",
+   "sha256": "523eba3eb727946dcd9aad2c90461cc4936fe44187f7032d46151e2a1e732717"
   },
   {
    "name": "git",

@@ -312,5 +312,4 @@ mod tests {
         // No reading (no city yet): the description's own icon stays.
         assert_eq!(status_text(&status, "{}").icon, None);
     }
-
 }

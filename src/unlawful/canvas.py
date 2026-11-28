@@ -75,10 +75,20 @@ def _id(item: object, what: str, seen: set[str]) -> dict:
     return item
 
 
+MAX_LAYER_NAME = 200
+MAX_THREAD_POINTS = 64
+
+
 def _hidden(item: dict, what: str) -> None:
-    """unlawHidden: the eye of the Layers panel (Obsidian ignores the key and still shows the item)."""
+    """unlawHidden: the eye of the Layers panel; unlawName: the name given in it (Obsidian ignores both keys)."""
     if "unlawHidden" in item and not isinstance(item["unlawHidden"], bool):
         raise ValueError(f"{what}: unlawHidden must be true or false")
+    if "unlawName" in item:
+        name = item["unlawName"]
+        if not isinstance(name, str) or not name.strip() or len(name) > MAX_LAYER_NAME:
+            raise ValueError(f"{what}: unlawName must be 1-{MAX_LAYER_NAME} characters")
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
+            raise ValueError(f"{what}: unlawName must not contain control characters")
 
 
 def _validate_node(node: dict) -> None:
@@ -107,6 +117,15 @@ def _validate_edge(edge: dict) -> None:
             isinstance(spot, list) and len(spot) == 2 and all(_canvas_number(v) and 0 <= v <= 1 for v in spot)
         ):
             raise ValueError(f"{what}: {key} must be [x, y] with numbers 0-1")
+    # Pins the thread passes on its way, in canvas coordinates (Obsidian draws the edge straight).
+    if "unlawPoints" in edge:
+        points = edge["unlawPoints"]
+        if not (
+            isinstance(points, list)
+            and len(points) <= MAX_THREAD_POINTS
+            and all(isinstance(p, list) and len(p) == 2 and all(_canvas_number(v) for v in p) for p in points)
+        ):
+            raise ValueError(f"{what}: unlawPoints must be at most {MAX_THREAD_POINTS} [x, y] points")
 
 
 def _validate_element(element: dict) -> int:

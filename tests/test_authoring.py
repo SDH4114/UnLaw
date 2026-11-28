@@ -46,6 +46,17 @@ class CreateCommandScaffoldTests(CoreTestCase):
             len(rules.splitlines()), 40, "short and specific to this folder"
         )
 
+    def test_a_new_command_has_an_app_toml_to_edit(self) -> None:
+        import tomllib
+
+        self.ok("create", "command", "hello")
+        text = (self.folder("hello") / "app.toml").read_text()
+        self.assertNotIn("{{", text)
+        self.assertEqual(tomllib.loads(text), {"title": "hello", "icon": "command"})
+        self.assertIn("ul skills show app-integration", text)
+        rules = (self.folder("hello") / "AGENTS.md").read_text()
+        self.assertIn("app.toml", rules)
+
     def test_the_python_template_is_a_good_starting_point(self) -> None:
         self.ok("create", "command", "hello")
         source = (self.folder("hello") / "main.py").read_text()

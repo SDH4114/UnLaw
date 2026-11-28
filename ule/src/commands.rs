@@ -111,7 +111,12 @@ pub const COMMANDS: &[(&str, &str)] = &[
 ];
 
 pub fn names() -> Vec<&'static str> {
-    COMMANDS.iter().map(|(name, _)| *name).collect()
+    all().into_iter().map(|(name, _)| name).collect()
+}
+
+/// `COMMANDS` and the text actions of `actions.rs`.
+pub fn all() -> Vec<(&'static str, &'static str)> {
+    COMMANDS.iter().chain(crate::actions::ACTIONS).copied().collect()
 }
 
 fn word_under_cursor(ed: &Editor) -> Option<String> {
@@ -530,6 +535,7 @@ pub fn run(
             Mode::Visual(_) => crate::vim::exit_visual(ed),
             Mode::Normal => {}
         },
+        name if crate::actions::is(name) => crate::actions::run(ed, name)?,
         "undo" => {
             let cursor = ed.cursor();
             if let Some(pos) = ed.doc_mut().undo(cursor) {

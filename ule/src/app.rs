@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crossterm::event::{
     self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
-    EnableMouseCapture, Event as TermEvent, KeyboardEnhancementFlags, MouseButton, MouseEventKind,
+    EnableMouseCapture, Event as TermEvent, KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEventKind,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -105,7 +105,7 @@ extern "C" fn record_termination(signal: libc::c_int) {
     TERMINATED.store(signal, std::sync::atomic::Ordering::SeqCst);
 }
 
-fn catch_termination() {
+pub(crate) fn catch_termination() {
     let handler = record_termination as *const () as libc::sighandler_t;
     // SAFETY: the handler only stores into an atomic.
     unsafe {
@@ -129,7 +129,7 @@ fn terminal_hung_up() -> bool {
     })
 }
 
-fn terminated() -> Option<i32> {
+pub(crate) fn terminated() -> Option<i32> {
     match TERMINATED.load(std::sync::atomic::Ordering::SeqCst) {
         0 => None,
         signal => Some(signal),
@@ -211,6 +211,8 @@ pub fn prepare(launch: &Launch) -> Editor {
             ed.show_doc(id);
         }
     }
+    // `editing = "standard"`: the first screen already types.
+    crate::modeless::settle(&mut ed);
     ed
 }
 
@@ -260,13 +262,7 @@ fn event_loop(ed: &mut Editor, screen: &mut Screen, renderer: &mut Terminal) -> 
         }
         let surface = crate::ui::draw(ed);
         renderer.draw(&surface, &mut out)?;
-        let busy = ed.jobs.busy().is_some()
-            || ed.picker.as_ref().is_some_and(|picker| picker.loading)
-            || !ed.vim.pending.is_empty()
-            || !ed.vim.insert_pending.is_empty()
-            || ed.lsp.clients.iter().any(|client| !client.initialized || !client.progress.is_empty());
-        let timeout = if busy { Duration::from_millis(80) } else { Duration::from_millis(500) };
-        if event::poll(timeout)? {
+        if event::poll(wait_time(ed))? {
             loop {
                 let terminal_event = event::read()?;
                 handle_terminal(ed, terminal_event, renderer, &mut mouse_anchor);
@@ -275,18 +271,7 @@ fn event_loop(ed: &mut Editor, screen: &mut Screen, renderer: &mut Terminal) -> 
                 }
             }
         }
-        // Background results, including any a synchronous LSP request put aside.
-        for deferred in std::mem::take(&mut ed.lsp.deferred) {
-            dispatch(ed, deferred);
-        }
-        while let Ok(background) = ed.rx.try_recv() {
-            dispatch(ed, background);
-        }
-        crate::vim::tick(ed);
-        {
-            let docs: Vec<&crate::document::Document> = ed.docs.values().collect();
-            ed.lsp.sync_throttled(&docs);
-        }
+        background(ed);
         if ed.suspend_requested {
             ed.suspend_requested = false;
             screen.leave();
@@ -309,6 +294,37 @@ fn event_loop(ed: &mut Editor, screen: &mut Screen, renderer: &mut Terminal) -> 
             return Ok(());
         }
     }
+}
+
+/// How long to wait for input: short while something runs in the background.
+pub(crate) fn wait_time(ed: &Editor) -> Duration {
+    let busy = ed.jobs.busy().is_some()
+        || ed.picker.as_ref().is_some_and(|picker| picker.loading)
+        || !ed.vim.pending.is_empty()
+        || !ed.vim.insert_pending.is_empty()
+        || ed.lsp.clients.iter().any(|client| !client.initialized || !client.progress.is_empty());
+    if busy {
+        Duration::from_millis(80)
+    } else {
+        Duration::from_millis(500)
+    }
+}
+
+/// Background results (LSP, jobs, pickers), vim timers and LSP document sync: every
+/// host runs this once per turn of its loop.
+pub(crate) fn background(ed: &mut Editor) {
+    // Including any result a synchronous LSP request put aside.
+    for deferred in std::mem::take(&mut ed.lsp.deferred) {
+        dispatch(ed, deferred);
+    }
+    while let Ok(background) = ed.rx.try_recv() {
+        dispatch(ed, background);
+    }
+    crate::vim::tick(ed);
+    // A picker, a mouse click or a command may leave normal mode behind.
+    crate::modeless::settle(ed);
+    let docs: Vec<&crate::document::Document> = ed.docs.values().collect();
+    ed.lsp.sync_throttled(&docs);
 }
 
 fn hand_off(handoff: &crate::jobs::Handoff) {
@@ -354,19 +370,7 @@ fn handle_terminal(
     match event {
         TermEvent::Key(key_event) => {
             if let Some(key) = Key::from_event(key_event) {
-                // Output buffers: Enter opens the file:line on the cursor line.
-                if key == Key::plain(crate::keys::Code::Enter)
-                    && ed.mode == Mode::Normal
-                    && ed.vim.pending.is_empty()
-                    && ed.prompt.is_none()
-                    && ed.picker.is_none()
-                    && ed.focus_area == Focus::View
-                    && ed.doc().kind == crate::document::DocKind::Output
-                    && crate::jobs::open_under_cursor(ed)
-                {
-                    return;
-                }
-                crate::vim::handle_key(ed, key);
+                key_input(ed, key);
             }
         }
         TermEvent::Paste(text) => paste(ed, &text),
@@ -380,11 +384,53 @@ fn handle_terminal(
                 ed.save_all_quietly();
             }
         }
-        TermEvent::Mouse(mouse) => mouse_event(ed, mouse, mouse_anchor),
+        TermEvent::Mouse(mouse) => {
+            let kind = match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) if mouse.modifiers.contains(KeyModifiers::ALT) => {
+                    MouseKind::AddCursor
+                }
+                MouseEventKind::Down(MouseButton::Left) => MouseKind::Down,
+                MouseEventKind::Drag(MouseButton::Left) => MouseKind::Drag,
+                MouseEventKind::Up(MouseButton::Left) => MouseKind::Up,
+                MouseEventKind::ScrollDown => MouseKind::ScrollDown,
+                MouseEventKind::ScrollUp => MouseKind::ScrollUp,
+                _ => return,
+            };
+            mouse_event(ed, kind, mouse.column, mouse.row, mouse_anchor);
+        }
     }
 }
 
-fn paste(ed: &mut Editor, text: &str) {
+/// A key from any host.
+pub(crate) fn key_input(ed: &mut Editor, key: Key) {
+    // Output buffers: Enter opens the file:line on the cursor line.
+    if key == Key::plain(crate::keys::Code::Enter)
+        && ed.mode == Mode::Normal
+        && ed.vim.pending.is_empty()
+        && ed.prompt.is_none()
+        && ed.picker.is_none()
+        && ed.focus_area == Focus::View
+        && ed.doc().kind == crate::document::DocKind::Output
+        && crate::jobs::open_under_cursor(ed)
+    {
+        return;
+    }
+    crate::vim::handle_key(ed, key);
+}
+
+/// The mouse events ule acts on (left button and the wheel), from any host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseKind {
+    Down,
+    /// Alt/Option-click: another cursor there, the others stay (like Zed).
+    AddCursor,
+    Drag,
+    Up,
+    ScrollUp,
+    ScrollDown,
+}
+
+pub(crate) fn paste(ed: &mut Editor, text: &str) {
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
     if ed.prompt.is_some() {
         crate::ex::paste(ed, &text);
@@ -392,6 +438,10 @@ fn paste(ed: &mut Editor, text: &str) {
     }
     if ed.picker.is_some() {
         crate::picker::paste(ed, &text);
+        return;
+    }
+    if crate::actions::multi_active(ed) {
+        crate::actions::type_text(ed, &text);
         return;
     }
     crate::edit::commit(ed);
@@ -447,13 +497,12 @@ fn position_at(ed: &Editor, view_id: usize, x: u16, y: u16) -> Option<Pos> {
     Some(Pos::new(doc.text.last_line(), 0))
 }
 
-fn mouse_event(ed: &mut Editor, mouse: event::MouseEvent, anchor: &mut Option<(usize, Pos)>) {
-    let (x, y) = (mouse.column, mouse.row);
+pub(crate) fn mouse_event(ed: &mut Editor, kind: MouseKind, x: u16, y: u16, anchor: &mut Option<(usize, Pos)>) {
     let (areas, explorer) = ed.view_areas();
     let in_view = areas.iter().find(|(_, rect)| rect.contains(x, y)).map(|(id, _)| *id);
-    match mouse.kind {
-        MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
-            let delta: isize = if mouse.kind == MouseEventKind::ScrollDown { 3 } else { -3 };
+    match kind {
+        MouseKind::ScrollDown | MouseKind::ScrollUp => {
+            let delta: isize = if kind == MouseKind::ScrollDown { 3 } else { -3 };
             if let Some(picker) = ed.picker.as_mut() {
                 if !picker.matches.is_empty() {
                     let len = picker.matches.len() as isize;
@@ -497,8 +546,15 @@ fn mouse_event(ed: &mut Editor, mouse: event::MouseEvent, anchor: &mut Option<(u
                 }
             }
         }
-        MouseEventKind::Down(MouseButton::Left) => {
+        MouseKind::AddCursor => {
+            let before = crate::actions::snapshot(ed);
+            mouse_event(ed, MouseKind::Down, x, y, anchor);
+            *anchor = None;
+            crate::actions::add_to(ed, before);
+        }
+        MouseKind::Down => {
             ed.popup = None;
+            crate::actions::clear(ed);
             if ed.picker.is_some() {
                 return;
             }
@@ -540,7 +596,7 @@ fn mouse_event(ed: &mut Editor, mouse: event::MouseEvent, anchor: &mut Option<(u
                 *anchor = Some((id, ed.cursor()));
             }
         }
-        MouseEventKind::Drag(MouseButton::Left) => {
+        MouseKind::Drag => {
             let Some((id, start)) = *anchor else {
                 return;
             };
@@ -561,8 +617,7 @@ fn mouse_event(ed: &mut Editor, mouse: event::MouseEvent, anchor: &mut Option<(u
                 ed.scroll_to_cursor(focus);
             }
         }
-        MouseEventKind::Up(MouseButton::Left) => *anchor = None,
-        _ => {}
+        MouseKind::Up => *anchor = None,
     }
 }
 

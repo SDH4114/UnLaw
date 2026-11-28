@@ -2,6 +2,8 @@
 //! shell (`gui`, built only for the `ul-app` binary) uses them.
 
 pub mod args;
+pub mod edit;
+pub mod files;
 pub mod hotkey;
 pub mod runner;
 pub mod settings;

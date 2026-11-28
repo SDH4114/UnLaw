@@ -283,8 +283,8 @@ pub fn open_buffers(ed: &mut Editor) {
 }
 
 pub fn open_commands(ed: &mut Editor) {
-    let mut items: Vec<Item> = crate::commands::COMMANDS
-        .iter()
+    let mut items: Vec<Item> = crate::commands::all()
+        .into_iter()
         .map(|(name, description)| Item {
             label: format!("{name} — {description}"),
             detail: String::new(),

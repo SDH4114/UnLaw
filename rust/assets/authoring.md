@@ -48,7 +48,8 @@ The working directory is where the user ran `ul`. Arguments are passed as typed.
 ## In Unlaw.app
 
 Every command shows up in the menu bar app's palette and can be pinned to the menu bar.
-For a panel (a form), actions or live menu bar text, add `app.toml` next to the entry file;
+`ul create command` writes an `app.toml` next to the entry file (title and icon, the rest
+commented out). For a panel (a form), actions or live menu bar text, edit that file;
 the format is in `reference/app-integration.md` (`ul skills show app-integration`) and
 `ul gui check` validates it. The app runs `ul <name> <args>` with stdin closed and
 `UNLAW_APP=1`, so a command that prompts or draws a terminal UI must set `terminal = true`.

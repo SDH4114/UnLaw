@@ -114,6 +114,7 @@ DEFAULT_COMMAND_NAMES = (
     "clip",
     "cpp",
     "desk",
+    "doc",
     "git",
     "gpt",
     "lofi",

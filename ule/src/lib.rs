@@ -6,6 +6,7 @@
 //! Language servers (lsp.rs), jobs (jobs.rs), pickers (picker.rs) and ul
 //! (ul.rs) report back through Editor::rx.
 
+pub mod actions;
 pub mod app;
 pub mod clipboard;
 pub mod commands;
@@ -24,11 +25,13 @@ pub mod jobs;
 pub mod keymap;
 pub mod keys;
 pub mod lsp;
+pub mod modeless;
 pub mod motion;
 pub mod picker;
 pub mod render;
 pub mod standard;
 pub mod state;
+pub mod stream;
 pub mod syntax;
 pub mod text;
 pub mod theme;

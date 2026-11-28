@@ -450,6 +450,8 @@ fn prefix(keys: &[Key]) -> Option<(Option<char>, Option<usize>, usize)> {
 /// The main key entry point.
 pub fn handle_key(ed: &mut Editor, key: Key) {
     ed.needs_redraw = true;
+    // Without modes the first key must already type (ule starts in normal mode).
+    crate::modeless::settle(ed);
     if ed.vim.replaying == 0 {
         if let Some((_, keys)) = ed.vim.macro_recording.as_mut() {
             keys.push(key);
@@ -457,6 +459,12 @@ pub fn handle_key(ed: &mut Editor, key: Key) {
     }
     if ed.message.is_some() && ed.message.as_ref().is_some_and(|message| message.at.elapsed().as_millis() > 100) {
         ed.message = None;
+    }
+    if ed.prompt.is_none() && ed.picker.is_none() && ed.popup.is_none() && crate::actions::key(ed, key) {
+        ed.clamp_all_views();
+        let focus = ed.focus;
+        ed.scroll_to_cursor(focus);
+        return;
     }
     if ed.prompt.is_some() {
         crate::ex::prompt_key(ed, key);
@@ -491,7 +499,15 @@ pub fn handle_key(ed: &mut Editor, key: Key) {
             _ => ed.popup = None,
         }
     }
+    if crate::modeless::handle(ed, key) {
+        crate::modeless::settle(ed);
+        ed.clamp_all_views();
+        let focus = ed.focus;
+        ed.scroll_to_cursor(focus);
+        return;
+    }
     if crate::standard::enabled(ed) && crate::standard::handle(ed, key) {
+        crate::modeless::settle(ed);
         ed.clamp_all_views();
         let focus = ed.focus;
         ed.scroll_to_cursor(focus);
@@ -504,6 +520,7 @@ pub fn handle_key(ed: &mut Editor, key: Key) {
         Mode::Insert | Mode::Replace => insert_key(ed, key),
         Mode::Normal | Mode::Visual(_) => normal_key(ed, key),
     }
+    crate::modeless::settle(ed);
     if !matches!(ed.mode, Mode::Insert | Mode::Replace) {
         ed.completion = None;
     }
@@ -1033,6 +1050,11 @@ fn visual_operator(ed: &mut Editor, op: Op, kind: VisualKind, register: Option<c
         let line_len = ed.doc().text.line_len(cursor.line);
         ed.view_mut().cursor = Pos::new(cursor.line, cursor.col.min(line_len.saturating_sub(1)));
     }
+}
+
+/// Insert mode at the cursor, as `i` starts it (the standard editing mode lives there).
+pub fn begin_insert(ed: &mut Editor) {
+    start_insert(ed, 1);
 }
 
 fn start_insert(ed: &mut Editor, count: usize) {

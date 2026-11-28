@@ -65,6 +65,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("clip", include_str!("../defaults/clip.toml")),
     ("cpp", include_str!("../defaults/cpp.toml")),
     ("desk", include_str!("../defaults/desk.toml")),
+    ("doc", include_str!("../defaults/doc.toml")),
     ("doctor", include_str!("../defaults/doctor.toml")),
     ("game", include_str!("../defaults/game.toml")),
     ("git", include_str!("../defaults/git.toml")),
@@ -435,7 +436,7 @@ pub const VIEWS: &[(&str, &str)] = &[("awake", "awake"), ("system", "sys"), ("we
 
 /// Parts of the main window a command may open (`section = "..."`).
 pub const SECTIONS: &[&str] =
-    &["templates", "system", "clipboard", "games", "board", "today", "canvas", "studio", "desk", "timer"];
+    &["templates", "system", "clipboard", "games", "board", "today", "canvas", "studio", "desk", "timer", "edit"];
 
 /// Parse an `app.toml` for command `name`.
 /// The palette's inline input for a command: type into the search bar and Enter
@@ -1369,5 +1370,22 @@ otherwise = "off"
         let json = to_json(&parse("awake", AWAKE).unwrap()).to_string();
         assert!(!json.contains("{dur}"));
         assert!(json.contains("\"type\":\"choice\""));
+    }
+
+    #[test]
+    fn the_app_toml_of_ul_create_command_is_valid() {
+        let text = include_str!("../../rust/assets/command_app.toml").replace("{{command_name}}", "hello");
+        let spec = parse("hello", &text).unwrap();
+        assert_eq!(spec.title, "hello");
+        // The commented examples must also be valid once uncommented.
+        let setting =
+            |line: &str| line.starts_with('[') || line.split_once(" = ").is_some_and(|(key, _)| !key.contains(' '));
+        let open = text
+            .lines()
+            .map(|line| line.strip_prefix("# ").filter(|rest| setting(rest)).unwrap_or(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(parse("hello", &open).is_ok(), "{open}");
+        assert!(open.contains("[[panel.button]]") && !open.contains("# [[action]]"), "the examples were uncommented");
     }
 }

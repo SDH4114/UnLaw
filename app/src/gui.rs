@@ -35,7 +35,9 @@ use unlaw_app::views;
 
 use crate::platform;
 
+mod editor;
 mod home;
+use editor::{EditEvent, EditState};
 use home::{HomeState, HOME_DESK};
 
 const PAGE: &str = include_str!("../ui/index.html");
@@ -46,6 +48,9 @@ const VIEWS_JS: &str = include_str!("../ui/views.js");
 const HOME_PAGE: &str = include_str!("../ui/home.html");
 const HOME_CSS: &str = include_str!("../ui/home.css");
 const HOME_JS: &str = include_str!("../ui/home.js");
+const EDIT_CSS: &str = include_str!("../ui/edit.css");
+const EDIT_JS: &str = include_str!("../ui/edit.js");
+const PDF_JS: &str = include_str!("../ui/pdf.js");
 const PALETTE_SIZE: (f64, f64) = (680.0, 460.0);
 const PANEL_WIDTH: f64 = 360.0;
 const TOAST_WIDTH: f64 = 340.0;
@@ -70,7 +75,7 @@ const SERVE_WAIT: Duration = Duration::from_secs(25);
 enum View {
     Palette,
     Panel,
-    /// The main window (Dock icon): Commands, System, Clipboard, Games, Desk.
+    /// The main window (Dock icon): Commands, System, Clipboard, Arcade, Desk.
     Home,
     /// A small note in the screen's top-right corner ("Copied", an error), instead of
     /// macOS notifications: one look everywhere, gone by itself, never takes the focus.
@@ -90,6 +95,8 @@ impl View {
 
 enum UserEvent {
     Loaded(Result<Vec<Record>, String>),
+    /// `ule --theme-colors` answered (None: no editor colors to use).
+    Colors(Option<Json>),
     Status {
         name: String,
         generation: u64,
@@ -143,6 +150,10 @@ enum UserEvent {
     },
     /// Files dropped on the palette (full paths, which a page never gets).
     Dropped(Vec<PathBuf>),
+    /// Files dropped on the main window (for Edit).
+    HomeDropped(Vec<PathBuf>),
+    /// The Edit part's background work (a dialog's answer, the editor ending).
+    Edit(EditEvent),
     /// A round of `ul sys --json --watch` (None: the watch ended).
     SysData {
         id: u64,
@@ -245,7 +256,11 @@ struct App {
     own_write: Option<SystemTime>,
     home: Glass,
     home_state: HomeState,
+    /// The Edit part: its folders, recent files and the editor process.
+    edit: EditState,
     toast: Glass,
+    /// The editor theme's colors every window paints with (look.colors = "editor"), if any.
+    ui_colors: Option<Json>,
     /// Counts notes shown: a timer hides only its own note, not a newer one.
     toast_generation: u64,
     /// What a click on the note opens: the command's panel with the whole output.
@@ -264,6 +279,9 @@ fn content(path: &str) -> Option<(&'static str, &'static str)> {
         "/home.html" => Some((HOME_PAGE, "text/html; charset=utf-8")),
         "/home.css" => Some((HOME_CSS, "text/css; charset=utf-8")),
         "/home.js" => Some((HOME_JS, "text/javascript; charset=utf-8")),
+        "/edit.css" => Some((EDIT_CSS, "text/css; charset=utf-8")),
+        "/edit.js" => Some((EDIT_JS, "text/javascript; charset=utf-8")),
+        "/pdf.js" => Some((PDF_JS, "text/javascript; charset=utf-8")),
         _ => None,
     }
 }
@@ -523,6 +541,9 @@ impl App {
             glass.ready = false;
             glass.pending.clear();
             glass.webview = Some(page_for(&glass.window, &proxy, view));
+            if view == View::Home {
+                self.apply_zoom();
+            }
         }
     }
 
@@ -547,6 +568,7 @@ impl App {
             if view == View::Home {
                 // The desk view lives in the main window's content view, which goes with the page.
                 self.unload_desk();
+                self.edit_hidden();
             } else {
                 self.panel_for = None;
             }
@@ -554,7 +576,57 @@ impl App {
     }
 
     fn theme(&self) -> &'static str {
-        self.settings.theme.name()
+        match &self.ui_colors {
+            Some(colors) if colors["dark"] == true => "dark",
+            Some(_) => "light",
+            None => self.settings.theme.name(),
+        }
+    }
+
+    /// Asks ule for the colors of the editor theme (off the UI thread; ~10 ms).
+    fn refresh_colors(&self) {
+        let proxy = self.proxy.clone();
+        if !self.settings.editor_colors {
+            let _ = proxy.send_event(UserEvent::Colors(None));
+            return;
+        }
+        let ule = editor::ule_path(self.ul.as_deref());
+        thread::spawn(move || {
+            let colors = ule.and_then(|ule| {
+                let outcome =
+                    runner::run_capped(&ule, &["--theme-colors".to_string()], Duration::from_secs(5), 1 << 16);
+                serde_json::from_str::<Json>(outcome.stdout.trim()).ok().filter(|_| outcome.ok())
+            });
+            let _ = proxy.send_event(UserEvent::Colors(colors.as_ref().and_then(settings::editor_palette)));
+        });
+    }
+
+    fn set_colors(&mut self, colors: Option<Json>) {
+        if self.ui_colors == colors {
+            return;
+        }
+        self.ui_colors = colors;
+        self.window_theme();
+        let message = json!({"type": "colors", "colors": self.ui_colors, "theme": self.theme()});
+        for view in [View::Home, View::Palette, View::Panel, View::Toast] {
+            self.send(view, message.clone());
+        }
+        self.desk_theme();
+    }
+
+    /// Windows take the appearance of the colors in use (dark glass under a dark theme).
+    fn window_theme(&self) {
+        let window_theme = match (&self.ui_colors, self.settings.theme) {
+            (Some(colors), _) if colors["dark"] == true => Some(WindowTheme::Dark),
+            (Some(_), _) => Some(WindowTheme::Light),
+            (None, Theme::Auto) => None,
+            (None, Theme::Light) => Some(WindowTheme::Light),
+            (None, Theme::Dark) => Some(WindowTheme::Dark),
+        };
+        self.palette.window.set_theme(window_theme);
+        self.panel.window.set_theme(window_theme);
+        self.home.window.set_theme(window_theme);
+        self.toast.window.set_theme(window_theme);
     }
 
     fn load_settings(&mut self) {
@@ -567,13 +639,7 @@ impl App {
             // Keep what is running; the file stays as it is.
             Err(error) => self.warnings = vec![format!("could not read {error}")],
         }
-        let window_theme = match self.settings.theme {
-            Theme::Auto => None,
-            Theme::Light => Some(WindowTheme::Light),
-            Theme::Dark => Some(WindowTheme::Dark),
-        };
-        self.palette.window.set_theme(window_theme);
-        self.panel.window.set_theme(window_theme);
+        self.window_theme();
     }
 
     fn reload_commands(&self) {
@@ -893,6 +959,7 @@ impl App {
             Some("palette") => self.show_palette(),
             Some("home") => self.show_home(None),
             Some(job) if job.starts_with("section:") => self.show_home(job.strip_prefix("section:")),
+            Some(job) if job.starts_with("zoom:") => self.change_zoom(job.strip_prefix("zoom:").unwrap_or("reset")),
             Some("settings") => self.open_settings(),
             Some("reload") => {
                 self.apply_settings();
@@ -1600,11 +1667,16 @@ impl App {
             &item(&mut ids, "Templates", "section:templates", Some("CmdOrCtrl+2")),
             &item(&mut ids, "System", "section:system", Some("CmdOrCtrl+3")),
             &item(&mut ids, "Clipboard", "section:clipboard", Some("CmdOrCtrl+4")),
-            &item(&mut ids, "Games", "section:games", Some("CmdOrCtrl+5")),
+            &item(&mut ids, "Arcade", "section:games", Some("CmdOrCtrl+5")),
             &item(&mut ids, "Board", "section:board", Some("CmdOrCtrl+6")),
             &item(&mut ids, "Today", "section:today", Some("CmdOrCtrl+7")),
             &item(&mut ids, "Canvas", "section:canvas", Some("CmdOrCtrl+8")),
             &item(&mut ids, "Studio", "section:studio", Some("CmdOrCtrl+9")),
+            &item(&mut ids, "Edit", "section:edit", Some("CmdOrCtrl+E")),
+            &PredefinedMenuItem::separator(),
+            &item(&mut ids, "Bigger", "zoom:in", Some("CmdOrCtrl+Equal")),
+            &item(&mut ids, "Smaller", "zoom:out", Some("CmdOrCtrl+Minus")),
+            &item(&mut ids, "Actual Size", "zoom:reset", Some("CmdOrCtrl+Shift+Digit0")),
         ]);
         let window = Submenu::new("Window", true);
         let _ = window.append_items(&[
@@ -1627,11 +1699,14 @@ impl App {
     /// open panel's Pin button all follow it.
     fn apply_settings(&mut self) {
         self.load_settings();
+        self.refresh_colors();
         self.register_hotkeys();
         self.main_tray = None;
         self.rebuild_trays();
         self.restart_status();
         self.send_list();
+        self.desk_theme();
+        self.apply_zoom();
         if let Some(name) = self.panel_for.clone() {
             let pinned = self.settings.menubar.contains(&name);
             self.send(View::Panel, json!({"type": "pinned", "name": name, "pinned": pinned}));
@@ -1690,7 +1765,7 @@ impl App {
         debug(&format!("{} says {body}", view.name()));
         let Ok(message) = serde_json::from_str::<Json>(&body) else { return };
         let op = message["op"].as_str().unwrap_or("");
-        if view == View::Home && self.on_home_op(op, &message) {
+        if view == View::Home && (self.on_edit_op(op, &message) || self.on_home_op(op, &message)) {
             return;
         }
         let name = message["name"].as_str().unwrap_or("").to_string();
@@ -1704,8 +1779,19 @@ impl App {
         if !name.is_empty() && !app_pin && !self.specs.get(&name).is_some_and(|(spec, _)| spec.in_app) {
             return;
         }
-        let needs_name =
-            matches!(op, "run" | "terminal" | "action" | "submit" | "quick" | "panel" | "default" | "pin" | "unpin");
+        let needs_name = matches!(
+            op,
+            "run"
+                | "terminal"
+                | "action"
+                | "submit"
+                | "quick"
+                | "panel"
+                | "default"
+                | "pin"
+                | "unpin"
+                | "command-settings"
+        );
         if needs_name && name.is_empty() {
             return;
         }
@@ -1716,6 +1802,7 @@ impl App {
                 let mut init = self.list_json();
                 init["type"] = json!("init");
                 init["theme"] = json!(self.theme());
+                init["colors"] = self.ui_colors.clone().unwrap_or(Json::Null);
                 init["version"] = json!(env!("CARGO_PKG_VERSION"));
                 init["update"] = self.home_state.update.clone().unwrap_or(Json::Null);
                 init["section"] = json!(self.home_state.section);
@@ -1730,7 +1817,11 @@ impl App {
                 let glass = self.glass_mut(view);
                 glass.ready = true;
                 let pending = std::mem::take(&mut glass.pending);
-                self.send(view, json!({"type": "init", "view": view.name(), "theme": self.theme()}));
+                self.send(
+                    view,
+                    json!({"type": "init", "view": view.name(), "theme": self.theme(),
+                           "colors": self.ui_colors.clone().unwrap_or(Json::Null)}),
+                );
                 if view == View::Palette {
                     let list = self.list_json();
                     self.send(view, list);
@@ -1790,6 +1881,11 @@ impl App {
                 }
             }
             "settings" => self.open_settings(),
+            // Right-click in the palette: the command's sheet (shortcuts, menu bar) in the main window.
+            "command-settings" => {
+                self.show_home(Some("commands"));
+                self.send(View::Home, json!({"type": "command-sheet", "name": name}));
+            }
             "resize" if view == View::Palette => {
                 // As tall as its rows; the top edge stays where it is (macOS keeps the bottom).
                 let height = message["height"].as_f64().unwrap_or(PALETTE_SIZE.1).clamp(96.0, PALETTE_SIZE.1);
@@ -2000,6 +2096,7 @@ impl App {
         // within one 5 s deadline.
         let mut children: Vec<Child> = self.pages.drain().map(|(_, page)| page.child).collect();
         children.extend(self.home_children());
+        children.extend(self.edit_children());
         let stopping: Vec<_> = children
             .into_iter()
             .map(|mut child| thread::spawn(move || runner::stop_group(&mut child, Duration::from_secs(5))))
@@ -2318,15 +2415,19 @@ pub fn run() -> i32 {
                     own_write: None,
                     home: home::home_window(target),
                     home_state: HomeState::new(dock),
+                    edit: EditState::default(),
                     app_menu: None,
                     toast: glass(target, &proxy, View::Toast),
+                    ui_colors: None,
                     toast_generation: 0,
                     toast_more: None,
                 };
                 if dock {
                     state.build_app_menu();
+                    platform::pages_first_for_shortcuts();
                 }
                 state.load_settings();
+                state.refresh_colors();
                 state.register_hotkeys();
                 state.rebuild_trays();
                 if !state.install_bundled_cli() {
@@ -2343,11 +2444,18 @@ pub fn run() -> i32 {
                 let Some(state) = app.as_mut() else { return };
                 match user {
                     UserEvent::Loaded(result) => state.on_loaded(result),
+                    UserEvent::Colors(colors) => state.set_colors(colors),
                     UserEvent::Status { name, generation, text } => state.on_status(name, generation, text),
                     UserEvent::Finished { name, label, argv, outcome, quiet, quick } => {
                         state.on_finished(name, label, argv, outcome, quiet, quick)
                     }
                     UserEvent::Dropped(paths) => state.on_dropped(paths),
+                    UserEvent::HomeDropped(paths) => {
+                        if state.home_state.section == "edit" {
+                            state.on_home_dropped(paths);
+                        }
+                    }
+                    UserEvent::Edit(event) => state.on_edit_event(event),
                     UserEvent::Served { name, result } => state.on_served(target, name, result),
                     UserEvent::PageLeft { name, url } => state.on_page_left(&name, &url),
                     UserEvent::Home(message) => {

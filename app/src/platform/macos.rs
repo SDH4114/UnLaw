@@ -147,6 +147,54 @@ pub fn set_in_dock(visible: bool) {
     }
 }
 
+/// ⌘ shortcuts go to the focused page before the menu. The desk is a child web
+/// view, and wry's child web views refuse every key equivalent, so ⌘A, ⌘Z, ⌘C
+/// and ⌘V went straight to the Edit menu (canvas undo, select all, copy and
+/// paste did nothing). The
+/// monitor hands such a key to the web view that has the keyboard; WebKit gives
+/// it to the page and, when the page leaves it alone, sends it again through
+/// the application, where the menu takes it (text fields keep copy/paste).
+/// A re-sent event does not pass the monitor again (monitors see events only
+/// as they leave the queue).
+pub fn pages_first_for_shortcuts() {
+    use block2::RcBlock;
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_app_kit::{NSApplication, NSEvent, NSEventMask, NSEventModifierFlags};
+    use std::ptr::NonNull;
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let Some(web_view) = AnyClass::get(c"WKWebView") else { return };
+    let handler = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
+        // SAFETY: AppKit calls the monitor on the main thread with a live event.
+        let event_ref = unsafe { event.as_ref() };
+        let flags = event_ref.modifierFlags();
+        if !flags.contains(NSEventModifierFlags::Command) {
+            return event.as_ptr();
+        }
+        let app = NSApplication::sharedApplication(mtm);
+        let Some(window) = app.keyWindow() else { return event.as_ptr() };
+        let Some(responder) = window.firstResponder() else { return event.as_ptr() };
+        let responder: &AnyObject = &responder;
+        // SAFETY: isKindOfClass: and performKeyEquivalent: exist on every NSResponder/NSObject.
+        let is_page: bool = unsafe { msg_send![responder, isKindOfClass: web_view] };
+        if !is_page {
+            return event.as_ptr();
+        }
+        // WebKit's own method, not wry's: wry answers NO for every child web view (its
+        // workaround for tauri#9426), so a page shown as a child never saw a ⌘ key.
+        let taken: bool = unsafe { msg_send![super(responder, web_view), performKeyEquivalent: event_ref] };
+        if taken {
+            std::ptr::null_mut()
+        } else {
+            event.as_ptr()
+        }
+    });
+    // SAFETY: the block lives as long as the monitor (both kept for the app's life).
+    let monitor = unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &handler) };
+    std::mem::forget(handler);
+    std::mem::forget(monitor);
+}
+
 /// Show a window above the others without making it the key window or activating
 /// the app: a note must not take the keyboard from what the user is typing in.
 pub fn show_without_focus(window: &tao::window::Window) {
@@ -230,4 +278,15 @@ pub fn open_link(url: &str) {
 /// A text file in the default text editor.
 pub fn open_text(path: &Path) {
     detached(Command::new("/usr/bin/open").arg("-t").arg(path));
+}
+
+/// Moves a file or folder to the Trash the way Finder does (Put Back works, other
+/// volumes use their own .Trashes): NSFileManager, never a delete.
+pub fn move_to_trash(path: &Path) -> Result<(), String> {
+    use objc2_foundation::{NSFileManager, NSURL};
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+    let manager = NSFileManager::defaultManager();
+    manager
+        .trashItemAtURL_resultingItemURL_error(&url, None)
+        .map_err(|error| format!("could not move it to the Trash: {}", error.localizedDescription()))
 }

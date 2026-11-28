@@ -82,6 +82,10 @@ fn text(ed: &Editor, topic: &str) -> String {
             for (keys, description) in crate::standard::KEYS {
                 out.push_str(&format!("- `{keys}` {description}\n"));
             }
+            out.push_str("\n## Without modes (`editing = \"standard\"`)\n\n`:set editing=standard` (or `editing = \"standard\"` in `[editor]` of ule.toml) makes ule an ordinary editor: there is no normal mode, typing always types, Esc never leaves it. `:set editing=vim` brings the modes back.\n\n");
+            for (keys, description) in crate::modeless::KEYS {
+                out.push_str(&format!("- `{keys}` {description}\n"));
+            }
             out
         }
         "vim" => {
@@ -97,7 +101,7 @@ fn text(ed: &Editor, topic: &str) -> String {
                 out.push_str(&format!("- `:{name}` {description}\n"));
             }
             out.push_str("\nNamed commands (also `:name`, bindable in ule.toml, listed by `<space>:`):\n\n");
-            for (name, description) in crate::commands::COMMANDS {
+            for (name, description) in crate::commands::all() {
                 out.push_str(&format!("- `{name}` {description}\n"));
             }
             out

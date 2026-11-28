@@ -795,6 +795,13 @@ fn set(ed: &mut Editor, args: &str) -> Result<(), String> {
             Some(crate::widgets::Popup::new(crate::widgets::PopupKind::Info, "Options", &text.join("\n"), false));
         return Ok(());
     }
+    let was = ed.options.editing;
+    let result = set_items(ed, args);
+    crate::modeless::switched(ed, was);
+    result
+}
+
+fn set_items(ed: &mut Editor, args: &str) -> Result<(), String> {
     for item in args.split_whitespace() {
         if let Some((name, value)) = item.split_once(['=', ':']) {
             ed.options.set(name, value)?;

@@ -829,6 +829,7 @@ _COMMAND_FILES: dict[str, tuple[str, ...]] = {
     "sys": ("sysinfo.py",),
     "timer": ("timer.py",),
     "weather": ("weather.py",),
+    "doc": ("doc.py",),
     "capture": ("capture_project.py", "capture_mac.py", "capture_export.py", "capture_tui.py", "capture.py"),
     "cpp": ("project_templates.py", "built_in_commands/cpp/main.py"),
     "git": ("git_hosts.py", "built_in_commands/git/main.py"),
@@ -979,3 +980,16 @@ LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).update({"e58689072e857554e461
 # desk from a 3.22.0 development build installed on the maintainer's Mac (2026-11-23), so it is upgraded, not kept as edited.
 LEGACY_SOURCE_HASHES["desk"].add("86c5b40d6ce503d115848dde616aba9b9ee6022a9c7fa00df5d10eea326f0931")
 LEGACY_NORMALIZED_HASHES["desk"].add("8406cb6e2b08195a0931cff21ff7cd6f39156ed119f61f14e6d45a280aba9719")
+# desk as installed on the maintainer's Mac from the 4.0.0 development build (2026-11-27), before the canvas fixes.
+LEGACY_SOURCE_HASHES.setdefault("desk", set()).add("70ca692485e10c7383a6682e1e7aa5784ce09cefe907f01902c89e32319b0920")
+LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("48cba0c537dfcb7b49ad4502648975d62e91d54df592b63af266d5e76404a45d")
+# desk from a 4.0.0 development build installed on the maintainer's Mac (2026-11-27, theme and board key fixes), so it is upgraded.
+LEGACY_SOURCE_HASHES.setdefault("desk", set()).add("5d2fa2b5f2c91ba464fbf42863996e924aaa655911c86198f087cd2bcddc6600")
+LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("c2a19ac33c61d06cf75eabd9c79771d0bd222b2c7c54b1d719c6e73c4957e008")
+LEGACY_SOURCE_HASHES.setdefault("desk", set()).add("3bffb313fcf40d44d96d4a4f8974d9d2a3d491e8655012184ffeb377de5d2b57")
+LEGACY_NORMALIZED_HASHES.setdefault("desk", set()).add("d696a4c590a1513084ea3429cd7809e6161029648942facb73a4d73382454813")
+# Dev builds of the doc seed installed on the maintainer machine (before UTF-8 detection).
+LEGACY_SOURCE_HASHES.setdefault("doc", set()).add("bcbc62ad25f94f8099de884e297667d915ded228471d6fa1e43e0e77ab276d8c")
+LEGACY_NORMALIZED_HASHES.setdefault("doc", set()).add("db3b1623cadb9e1be8325275bd8bec42320a0a185eaee78e723cd6779fa637dc")
+LEGACY_SOURCE_HASHES.setdefault("doc", set()).add("fbf5da25fc3fec5f72c0300c477118dc716ec59370c3a110d5f2c2a0faeee079")
+LEGACY_NORMALIZED_HASHES.setdefault("doc", set()).add("af15b095b0aeb2b39e7232cdd55ff35f7fc367514ca367923fbd1d6c2199b300")

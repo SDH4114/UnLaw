@@ -43,6 +43,9 @@ const ICONS = {
   git: ["M6 3v12", "M6 21a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM18 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z", "M18 9a9 9 0 0 1-9 9"],
   terminal: ["M3 5h18v14H3z", "M7 10l3 2.5L7 15M12.5 15H17"],
   folder: ["M3 6h6l2 2h10v11H3z"],
+  folderPlus: ["M3 6h6l2 2h10v11H3z", "M12 11v5M9.5 13.5h5"],
+  filePlus: ["M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z", "M14 3v5h5", "M12 11v6M9 14h6"],
+  collapse: ["M7 9l5-5 5 5", "M7 15l5 5 5-5"],
   code: ["M9 7l-5 5 5 5M15 7l5 5-5 5"],
   chat: ["M4 5h16v11H9l-5 4z"],
   spark: ["M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z", "M19 16l.7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7z"],
@@ -60,6 +63,7 @@ const ICONS = {
   layout: ["M3.5 5h17v14h-17z", "M10 5v14", "M10 12h10.5"],
   plus: ["M12 5v14M5 12h14"],
   pencil: ["M4 20l4-1 11-11-3-3L5 16z", "M14 7l3 3"],
+  sidebar: ["M4 5h16v14H4z", "M9.5 5v14", "M6 8.5h1.5M6 11h1.5"],
   trash: ["M5 7h14", "M9 7V4.5h6V7", "M7 7l1 13h8l1-13"],
   chevron: ["M10 7l5 5-5 5"],
   check: ["M5 12.5l4.5 4.5L19 7.5"],
@@ -161,6 +165,38 @@ function el(tag, props, ...children) {
 
 function send(message) {
   window.ipc.postMessage(JSON.stringify(message));
+}
+
+// The editor theme's colors on every window (look.colors = "editor"): the app's own CSS
+// variables are set from them; without colors the stylesheet's amber look comes back.
+const COLOR_VARS = ["--tint", "--raise", "--raise-2", "--hover", "--select", "--text", "--muted", "--line", "--accent", "--accent-ink",
+  "--accent-soft", "--accent-soft-2", "--accent-line", "--ring", "--second", "--page"];
+
+function alpha(hex, amount) {
+  const value = parseInt(hex.slice(1), 16);
+  return `rgba(${value >> 16 & 255}, ${value >> 8 & 255}, ${value & 255}, ${amount})`;
+}
+
+function applyColors(colors) {
+  const root = document.documentElement;
+  if (!colors || !/^#[0-9a-f]{6}$/i.test(colors.bg || "") || !/^#[0-9a-f]{6}$/i.test(colors.fg || "")) {
+    for (const name of COLOR_VARS) root.style.removeProperty(name);
+    root.classList.remove("editor-colors");
+    return;
+  }
+  const hex = (value, fallback) => (/^#[0-9a-f]{6}$/i.test(value || "") ? value : fallback);
+  const { bg, fg } = colors;
+  const accent = hex(colors.accent, fg);
+  const panel = hex(colors.panel, bg);
+  const vars = {
+    "--page": bg, "--tint": alpha(bg, 0.86), "--raise": alpha(panel, 0.78), "--raise-2": panel,
+    "--hover": alpha(fg, 0.07), "--select": alpha(fg, 0.1), "--text": fg, "--muted": alpha(fg, 0.62),
+    "--line": alpha(fg, 0.1), "--accent": accent, "--accent-ink": accent, "--accent-soft": alpha(accent, 0.16),
+    "--accent-soft-2": alpha(accent, 0.26), "--accent-line": alpha(accent, 0.45), "--ring": alpha(fg, 0.2), "--second": accent,
+  };
+  for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
+  root.classList.add("editor-colors");
+  root.classList.toggle("dark", !!colors.dark);
 }
 
 function applyTheme(theme) {

@@ -1,0 +1,5 @@
+title = "Documents"
+icon = "folder"
+# The engine behind Edit and ule: the app does not list it as a command.
+where = "terminal"
+terminal = true

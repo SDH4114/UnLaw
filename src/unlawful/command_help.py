@@ -113,6 +113,31 @@ Examples: ul clip on
   ul clip search token
   ul clip copy 3
 ''',
+    "doc": '''Open, convert and save documents: the formats behind Unlaw.app's Edit and ule.
+Usage: ul doc info|read|write|render|pages FILE [options] [--json]
+  info FILE            Kind (text, markdown, image, pdf, document, sheet, database, ...), size,
+                       version and whether it opens as text
+  read FILE            Print a text file (--json adds its version)
+  write FILE --version V
+                       Replace FILE with stdin unless it changed since version V (from info or
+                       read); --version new creates a file that must not exist yet
+  render FILE [--width W] [--page N] [--to M]
+                       A PNG picture of the file W pixels wide (default 1024; 16-4096): images
+                       through sips, PDF pages N..M through PDFKit (at most 500 at once),
+                       everything else through Quick Look; prints the path(s)
+  pages FILE           A PDF's page count and page sizes in points
+  --json               Answer as one JSON line
+Saving never overwrites a change another program made meanwhile: exit 3 (conflict), nothing is
+written. Exit codes: 0 ok, 1 failed, 2 wrong call, 3 conflict.
+Pictures are cached in <storage.root>/doc/cache (a week, at most 500 MB).
+Needs macOS sips, qlmanage and osascript (PDFKit) for render. Unlaw.app's Edit and ule call this command; you rarely
+need it yourself.
+Examples:
+  ul doc info notes.md --json
+  ul doc render photo.heic --width 800
+  ul doc render book.pdf --page 1 --to 20 --width 200 --json
+  ul doc read notes.md --json
+''',
     "weather": '''Weather now and the forecast from Open-Meteo (no API key).
 Usage: ul weather [city...] [--days N] [--units metric|imperial] [--json]
   city...            City name, several words allowed (default: weather.city)

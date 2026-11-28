@@ -801,3 +801,207 @@ fn very_long_lines_are_highlighted_quickly() {
     assert!(spans.is_empty());
     assert!(started.elapsed() < std::time::Duration::from_millis(500), "{:?}", started.elapsed());
 }
+
+fn modeless(text: &str, input: &str) -> Editor {
+    let mut ed = editor(text);
+    ed.options.editing = crate::config::Editing::Standard;
+    crate::modeless::settle(&mut ed);
+    if !input.is_empty() {
+        keys(&mut ed, input);
+        crate::modeless::settle(&mut ed);
+    }
+    ed
+}
+
+#[test]
+fn standard_editing_always_types() {
+    let ed = modeless("", "hello");
+    assert_eq!((content(&ed), ed.mode), ("hello".to_string(), Mode::Insert), "letters type, no `i` needed");
+    let ed = modeless("abc", "<esc><esc>x");
+    assert_eq!(content(&ed), "xabc", "Esc never leaves typing and never moves the cursor");
+    assert_eq!(ed.mode, Mode::Insert);
+    assert_eq!(content(&modeless("hello world", "<S-right><S-right>XY")), "XYllo world", "typing replaces a selection");
+    let ed = modeless("hello", "<S-right><esc>");
+    assert_eq!(ed.mode, Mode::Insert, "Esc on a selection drops it and keeps typing");
+    assert_eq!(content(&modeless("one", "<end> two<C-z>")), "one", "Ctrl-Z undoes the typing");
+    assert_eq!(content(&modeless("a\nb", "<C-S-a>x")), "x", "Ctrl-Shift-A selects all");
+    assert_eq!(content(&modeless("ab", "<end><C-a>x")), "xab", "Ctrl-A is the line start (Cmd-Left in Ghostty)");
+    assert_eq!(content(&modeless("ab", "<right><bs>")), "b");
+}
+
+#[test]
+fn switching_editing_modes_starts_each_clean() {
+    use crate::config::Editing;
+    // Typing in standard, then back to vim: normal mode, the text kept, `x` deletes again.
+    let mut ed = modeless("abc", "zz<S-right>");
+    assert_eq!(ed.mode, Mode::Visual(crate::editor::VisualKind::Char));
+    ed.options.editing = Editing::Vim;
+    crate::modeless::switched(&mut ed, Editing::Standard);
+    assert_eq!(ed.mode, Mode::Normal, "vim starts in normal mode, no selection");
+    assert!(ed.multi.is_empty() && !ed.vim.select_mode);
+    keys(&mut ed, "0x");
+    assert_eq!(content(&ed), "zabc");
+    // And to standard again: typing at once.
+    ed.options.editing = Editing::Standard;
+    crate::modeless::switched(&mut ed, Editing::Vim);
+    assert_eq!(ed.mode, Mode::Insert);
+    keys(&mut ed, "q");
+    assert_eq!(content(&ed), "qzabc");
+}
+
+#[test]
+fn standard_editing_shortcuts_open_pickers() {
+    let ed = modeless("x", "<C-S-p>");
+    assert!(ed.picker.is_some(), "Ctrl-Shift-P lists every command");
+    let ed = modeless("x", "<F1>");
+    assert!(ed.picker.is_some());
+    let mut ed = modeless("x", "<C-S-p>");
+    keys(&mut ed, "<esc>");
+    crate::modeless::settle(&mut ed);
+    assert!(ed.picker.is_none());
+    assert_eq!(ed.mode, Mode::Insert, "closing a picker comes back to typing");
+}
+
+#[test]
+fn editing_option_parses_and_switches_back() {
+    let mut options = crate::config::Options::default();
+    assert_eq!(options.get("editing").as_deref(), Some("vim"));
+    options.set("editing", "standard").unwrap();
+    assert_eq!(options.editing, crate::config::Editing::Standard);
+    assert!(options.set("editing", "emacs").is_err());
+    let mut ed = modeless("abc", "");
+    ed.options.editing = crate::config::Editing::Vim;
+    keys(&mut ed, "<esc>x");
+    assert_eq!((content(&ed), ed.mode), ("bc".to_string(), Mode::Normal), "vim again: Esc leaves, x deletes");
+}
+
+#[test]
+fn every_shipped_theme_loads() {
+    let themes = crate::theme::Themes::new(None);
+    for name in ["one-light", "ayu", "nord", "dracula", "rose-pine", "solarized-light"] {
+        assert!(themes.names().contains(&name.to_string()), "{name} is listed");
+        let theme = themes.load(name).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert!(theme.text().bg.is_some(), "{name} has its own background");
+    }
+}
+
+#[test]
+fn standard_editing_types_from_the_first_key() {
+    let mut ed = editor("x");
+    ed.options.editing = crate::config::Editing::Standard;
+    // No settle first: the editor is still in normal mode, as right after start.
+    keys(&mut ed, "q");
+    assert_eq!(content(&ed), "qx", "q types instead of starting a macro");
+}
+
+fn act(ed: &mut Editor, name: &str) {
+    crate::commands::run(ed, name, &[], None, None).unwrap();
+    crate::modeless::settle(ed);
+}
+
+#[test]
+fn several_cursors_type_delete_and_move_together() {
+    let mut ed = modeless("foo bar foo baz foo", "");
+    act(&mut ed, "select_next_occurrence");
+    act(&mut ed, "select_next_occurrence");
+    act(&mut ed, "select_next_occurrence");
+    keys(&mut ed, "x");
+    assert_eq!(content(&ed), "x bar x baz x", "Cmd-D three times, then typing replaces all three");
+    keys(&mut ed, "<bs>yz");
+    assert_eq!(content(&ed), "yz bar yz baz yz");
+    keys(&mut ed, "<esc>q");
+    assert_eq!(content(&ed), "yzq bar yz baz yz", "Esc keeps one cursor");
+}
+
+#[test]
+fn cursors_above_below_and_on_every_match() {
+    let mut ed = modeless("ab\ncd\nef", "");
+    act(&mut ed, "add_cursor_below");
+    act(&mut ed, "add_cursor_below");
+    keys(&mut ed, "-");
+    assert_eq!(content(&ed), "-ab\n-cd\n-ef");
+    keys(&mut ed, "<end>!");
+    assert_eq!(content(&ed), "-ab!\n-cd!\n-ef!", "End moves every cursor");
+    let mut ed = modeless("let a = a + a;", "<right><right><right><right>");
+    act(&mut ed, "select_all_occurrences");
+    keys(&mut ed, "b");
+    assert_eq!(content(&ed), "let b = b + b;");
+    let mut ed = modeless("one\ntwo\nthree", "");
+    keys(&mut ed, "<C-c>");
+    let mut ed2 = modeless("x\ny", "");
+    act(&mut ed2, "add_cursor_below");
+    crate::app::paste(&mut ed2, "1\n2");
+    assert_eq!(content(&ed2), "1x\n2y", "as many pasted lines as cursors: one each");
+    keys(&mut ed, "<esc>");
+}
+
+#[test]
+fn zed_line_and_selection_actions() {
+    let mut ed = modeless("a\nb\nc", "");
+    act(&mut ed, "select_line");
+    act(&mut ed, "select_line");
+    keys(&mut ed, "<bs>");
+    assert_eq!(content(&ed), "c", "select line twice takes two lines");
+    let mut ed = modeless("x", "");
+    act(&mut ed, "indent");
+    assert_eq!(content(&ed), "    x");
+    act(&mut ed, "outdent");
+    assert_eq!(content(&ed), "x");
+    let mut ed = modeless("  one\ntwo", "<right>");
+    act(&mut ed, "newline_below");
+    keys(&mut ed, "z");
+    assert_eq!(content(&ed), "  one\n  z\ntwo");
+    act(&mut ed, "newline_above");
+    keys(&mut ed, "y");
+    assert_eq!(content(&ed), "  one\n  y\n  z\ntwo");
+    let mut ed = modeless("hello world", "");
+    act(&mut ed, "uppercase");
+    assert_eq!(content(&ed), "HELLO world");
+    let mut ed = modeless("ab", "<right>");
+    act(&mut ed, "transpose");
+    assert_eq!(content(&ed), "ba");
+    let mut ed = modeless("one\ntwo", "");
+    act(&mut ed, "join_lines");
+    assert_eq!(content(&ed), "one two");
+}
+
+#[test]
+fn expand_selection_grows_word_brackets_line() {
+    let mut ed = modeless("f(a, b)", "<right><right>");
+    act(&mut ed, "expand_selection");
+    keys(&mut ed, "<C-c>");
+    assert_eq!(ed.get_register(None).unwrap().text, "a");
+    act(&mut ed, "expand_selection");
+    keys(&mut ed, "<C-c>");
+    assert_eq!(ed.get_register(None).unwrap().text, "a, b", "inside the brackets");
+    act(&mut ed, "expand_selection");
+    keys(&mut ed, "<C-c>");
+    assert_eq!(ed.get_register(None).unwrap().text, "(a, b)");
+    act(&mut ed, "shrink_selection");
+    keys(&mut ed, "<C-c>");
+    assert_eq!(ed.get_register(None).unwrap().text, "a, b");
+}
+
+#[test]
+fn themes_can_be_files_in_the_themes_folder() {
+    let dir = std::env::temp_dir().join(format!("ule-theme-files-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("mine.toml"),
+        "inherits = \"dracula\"\n\"ui.text\" = { fg = \"#101010\", bg = \"#fafafa\" }\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("nord.toml"), "\"ui.text\" = { bg = \"#000000\" }\n").unwrap();
+    std::fs::write(dir.join("broken.toml"), "this is = = not toml").unwrap();
+    let mut config = crate::config::Config::parse("[themes.nord]\n\"ui.text\" = { bg = \"#2e3440\" }\n", &[]);
+    config.add_theme_files(&dir);
+    let themes = crate::theme::Themes::new(config.themes.as_ref());
+    let mine = themes.load("mine").expect("a theme from a file");
+    assert_eq!(crate::stream::theme_colors(&mine)["bg"], "#fafafa");
+    assert_eq!(crate::stream::theme_colors(&mine)["accent"], "#bd93f9", "inherits from a built-in theme");
+    let nord = themes.load("nord").unwrap();
+    assert_eq!(crate::stream::theme_colors(&nord)["bg"], "#2e3440", "ule.toml wins over a file of the same name");
+    assert!(config.errors.iter().any(|error| error.contains("themes/broken.toml")));
+    let _ = std::fs::remove_dir_all(&dir);
+}

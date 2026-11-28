@@ -48,6 +48,34 @@ class SkillsTests(CoreTestCase):
         self.ok("skills", "remove")
         self.assertFalse(claude.exists() or claude.is_symlink())
 
+    def test_an_agent_installed_later_gets_the_skill_on_the_next_run(self) -> None:
+        self.ok("skills", "install")
+        (self.home / ".claude").mkdir()
+        self.ok("commands")
+        link = self.home / ".claude" / "skills" / "unlaw"
+        self.assertTrue(link.is_symlink(), "linked without another `ul skills install`")
+        self.assertEqual(link.resolve(), self.skill().resolve())
+        # A folder the user made there is never replaced.
+        (self.home / ".kimi").mkdir()
+        self.ok("skills", "remove")
+        self.ok("skills", "install")
+        link.unlink()
+        link.mkdir()
+        self.ok("commands")
+        self.assertFalse(link.is_symlink())
+
+    def test_doctor_reports_and_fixes_a_missing_skill(self) -> None:
+        report = json.loads(self.ul("doctor", "--json").stdout)
+        rows = report if isinstance(report, list) else report.get("checks", report)
+        row = next(item for item in rows if item.get("name") == "Agent skill")
+        self.assertFalse(row["available"])
+        self.assertIn("ul doctor --fix", row["detail"])
+        self.ul("doctor", "--fix")
+        self.assertTrue((self.skill() / "SKILL.md").is_file(), "doctor --fix installs the skill")
+        text = (self.skill() / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("always before creating, adding or changing a ul/Unlaw command", text)
+        self.assertIn("stop and tell the user", text)
+
     def test_a_symlinked_agent_folder_gets_a_link_that_works(self) -> None:
         # ~/.claude kept in a dotfiles folder: `../../.agents` from there is elsewhere.
         dotfiles = self.root / "dotfiles" / "claude"

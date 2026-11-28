@@ -90,6 +90,7 @@ function harness() {
       snapAngle, applyStyle, containedIds, groupAround, moveItems, removeItems, copyItems, pasteItems, makeHistory,
       histCommit, histUndo, histRedo, cvLoad, cvCommit, cvUndo, cvRedo, saveCanvas, pollCanvas,
       renderCanvas, cvDown, cvMove, cvUp, cvWheel, cvSetTool, cvEndEdit, cvSelect, cvGroup, cvExport, paintScene, cvPalette,
+      cvDouble, cvRenameLayer, cvApplyName, curveSegs, hitEdge, moveItems, layerName, pinSpot,
       fillable, fillTarget, applyFill, setBackground, cvBackground, canvasKey, cvStyle, cvNew, cvRename, cvChoose, CV_BY_KEY,
       floodRegion, growMask, traceMask, paintFromMask, paintContains, cutElement, eraseAt, cvBucket, cvToolClick,
       widthToSlider, sliderToWidth, cvStepWidth, cvBuildBar, cvTypedWidth,
@@ -1447,6 +1448,14 @@ const tests = {
   press('canvas', {key: 'z', metaKey: true, shiftKey: true});
   assert.equal(a.cv.doc.nodes.length, 0, 'redo');
   assert.equal(a.cv.sel.length, 0);
+  // Board keys go by the physical key, so a Russian layout ("/" types ".", "n" types "т") works too.
+  let searched = 0;
+  h.ids.get('search').focus = () => { searched++; };
+  const slash = press('board', {key: '.', code: 'Slash'});
+  assert.equal(searched, 1, 'the / key focuses the search in any layout');
+  assert.equal(slash.prevented, true);
+  press('board', {key: '?', code: 'Slash', shiftKey: true});
+  assert.equal(searched, 1, 'Shift+/ is the help, not the search');
   press('canvas', {key: '1'});
   assert.equal(a.state.view, 'board', 'number keys still switch tabs');
  },
@@ -2035,7 +2044,7 @@ const tests = {
   a.canvasKey({key: 'k', code: 'KeyK', preventDefault() {}});
   assert.equal(a.cv.tool, 'thread', 'K picks the thread tool');
   click(50, 80);
-  assert.deepEqual(plain(a.cv.thread), {node: 'n1', frac: [0.25, 0.8]}, 'the first click pins the start where it was');
+  assert.deepEqual(plain(a.cv.thread), {node: 'n1', frac: [0.25, 0.8], points: []}, 'the first click pins the start where it was');
   a.cvMove(at(500, 20));
   click(580, 90);
   const thread = a.cv.doc.edges.at(-1);
@@ -2043,7 +2052,9 @@ const tests = {
   assert.deepEqual(plain(thread.unlawFrom), [0.25, 0.8]);
   assert.deepEqual(plain(thread.unlawTo), [0.9, 0.9]);
   assert.equal(thread.fromSide, 'bottom', 'Obsidian still gets the nearest side');
-  assert.equal(a.cv.thread, null);
+  assert.deepEqual(plain(a.cv.thread), {node: 'n2', frac: [0.9, 0.9], points: []}, 'the next thread starts where this one ended (a chain)');
+  a.canvasKey({key: 'Escape', code: 'Escape', preventDefault() {}});
+  assert.equal(a.cv.thread, null, 'Esc stops the chain');
   const curve = a.edgeCurveFor(new Map(a.docNodes(a.cv.doc).map(n => [n.id, n])), thread, false);
   assert.deepEqual(plain(curve.p0), {x: 50, y: 80}, 'the line starts at that spot');
   const cork = a.edgeCurveFor(new Map(a.docNodes(a.cv.doc).map(n => [n.id, n])), thread, true);
@@ -2052,15 +2063,16 @@ const tests = {
   assert.ok(Math.abs(back[0] - 0.25) < 1e-3 && Math.abs(back[1] - 0.8) < 1e-3, 'fracAt undoes anchorPoint');
   assert.equal(a.edgeAnchor({unlawTo: [2, 0]}, 'to'), null, 'a bad spot is ignored');
 
-  // Escape drops a started thread; a thread ending on empty canvas makes a card there.
+  // Escape drops a started thread; a double click on empty canvas ends the thread on a new card there.
   click(100, 50);
   assert.ok(a.cv.thread);
   a.canvasKey({key: 'Escape', code: 'Escape', preventDefault() {}});
   assert.equal(a.cv.thread, null, 'Esc drops the started thread');
   assert.equal(a.cv.tool, 'thread', 'and keeps the tool');
   const edges = a.cv.doc.edges.length, nodes = a.cv.doc.nodes.length;
-  click(100, 50); click(300, 500);
+  click(100, 50); click(300, 500); click(300, 500); a.cvDouble(at(300, 500));
   assert.equal(a.cv.doc.nodes.length, nodes + 1, 'a new card where the thread ended');
+  assert.equal('unlawPoints' in a.cv.doc.edges.at(-1), false, 'the clicks of the double click are not bends');
   const made = a.cv.doc.nodes.at(-1);
   assert.deepEqual([made.x, made.y, made.type], [170, 440, 'text']);
   assert.equal(a.cv.doc.edges.at(-1).toNode, made.id);
@@ -2068,6 +2080,65 @@ const tests = {
   assert.ok(a.cv.editing, 'the new card opens for typing');
   a.cv.ui.editor.value = 'suspect';
   a.cvEndEdit();
+
+  // Bends: clicks on the canvas pin the thread on its way; Backspace takes the last one back.
+  click(100, 50); click(300, 300); click(320, 320);
+  assert.deepEqual(plain(a.cv.thread.points), [[300, 300], [320, 320]], 'clicks on the canvas pin bends');
+  a.canvasKey({key: 'Backspace', code: 'Backspace', preventDefault() {}});
+  assert.deepEqual(plain(a.cv.thread.points), [[300, 300]], 'Backspace takes the last bend back');
+  click(580, 90);
+  const bent = a.cv.doc.edges.at(-1), bentMap = new Map(a.docNodes(a.cv.doc).map(n => [n.id, n]));
+  assert.deepEqual(plain(bent.unlawPoints), [[300, 300]]);
+  assert.equal(a.edgeCurveFor(bentMap, bent, true).segs.length, 2, 'a thread with one bend is two pieces on cork');
+  assert.equal(a.edgeCurveFor(bentMap, bent, false).segs.length, 2, 'and off it');
+  assert.ok(a.hitEdge(a.edgeCurveFor(bentMap, bent, false), 300, 300, 2), 'the thread passes its bend');
+  a.canvasKey({key: 'Escape', code: 'Escape', preventDefault() {}});
+  // One click with the thread tool removes a thread.
+  const before = a.cv.doc.edges.length;
+  click(200, 175);
+  assert.equal(a.cv.doc.edges.length, before - 1, 'a click on a thread removes it');
+  assert.ok(!a.cv.doc.edges.includes(bent));
+  // A selected thread: drag a bend, drag the dot in the middle of a segment to add one, double-click to remove.
+  click(100, 50); click(300, 300); click(580, 90);
+  a.canvasKey({key: 'Escape', code: 'Escape', preventDefault() {}});
+  const edit = a.cv.doc.edges.at(-1);
+  a.cvSetTool('select');
+  a.cvSelect(['e:' + edit.id]);
+  a.cvDown(at(300, 300));
+  assert.equal(a.cv.drag.mode, 'bend');
+  a.cvMove(at(310, 280)); a.cvUp(at(310, 280));
+  assert.deepEqual(plain(edit.unlawPoints), [[310, 280]], 'a bend drags');
+  const ring = a.bezierPoint(a.curveSegs(a.edgeCurveFor(new Map(a.docNodes(a.cv.doc).map(n => [n.id, n])), edit, false))[1], 0.5);
+  a.cvDown(at(ring.x, ring.y));
+  assert.equal(a.cv.drag.insert, true, 'the ring in a segment adds a bend');
+  a.cvMove(at(450, 250)); a.cvUp(at(450, 250));
+  assert.deepEqual(plain(edit.unlawPoints), [[310, 280], [450, 250]]);
+  a.moveItems(a.cv.doc, ['e:' + edit.id], 10, 10);
+  assert.deepEqual(plain(edit.unlawPoints), [[320, 290], [460, 260]], 'bends move with their thread');
+  a.cvDouble(at(320, 290));
+  assert.deepEqual(plain(edit.unlawPoints), [[460, 260]], 'a double click removes a bend');
+  a.cvDouble(at(460, 260));
+  assert.equal('unlawPoints' in edit, false, 'the last one takes the key away');
+  a.canvasKey({key: 'k', code: 'KeyK', preventDefault() {}});
+
+  // A thread end tied right next to the card's own pin uses that pin: no second pin over the first.
+  assert.equal(a.pinSpot(n1, [0.5, 0]), null, 'the top dot is the pin itself');
+  assert.deepEqual(plain(a.pinSpot(n1, [0.25, 0.8])), [0.25, 0.8], 'a spot elsewhere keeps its own pin');
+
+  // Layers can be renamed: a group's label, anything else unlawName (also the caption of a file card).
+  a.cvRenameLayer('n:n2');
+  assert.equal(a.cv.renaming, 'n:n2');
+  assert.equal(a.cv.layers, true, 'renaming shows the Layers panel');
+  a.cvApplyName('n:n2', '  Main\u0007suspect ');
+  const n2 = a.cv.doc.nodes.find(n => n.id === 'n2');
+  assert.equal(n2.unlawName, 'Main suspect', 'trimmed, control characters gone');
+  assert.equal(a.layerName('n:n2', n2), 'Main suspect');
+  a.cvApplyName('n:n2', '');
+  assert.equal('unlawName' in n2, false, 'an empty name goes back to the file name');
+  a.cvApplyName('n:g1', 'Case');
+  assert.equal(a.cv.doc.nodes.find(n => n.id === 'g1').label, 'Case', 'a group keeps its name as its label');
+  a.cv.renaming = null;
+  a.cv.layers = false;
 
   // Dragging from a side dot onto empty canvas makes a connected card too.
   a.cvSetTool('select');

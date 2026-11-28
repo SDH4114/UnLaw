@@ -4,7 +4,7 @@
 body.home { -webkit-user-select: none; user-select: none; }
 .home .app { height: 100%; display: flex; }
 
-.side { width: 208px; flex: none; display: flex; flex-direction: column; padding: 0 10px 12px; border-right: 0.5px solid var(--line); }
+.side { width: var(--side-w, 208px); flex: none; display: flex; flex-direction: column; padding: 0 10px 12px; border-right: 0.5px solid var(--line); }
 .side .lights { height: 52px; flex: none; cursor: grab; }
 .side nav { display: flex; flex-direction: column; gap: 2px; }
 .side nav button { display: flex; align-items: center; gap: 10px; text-align: left; background: transparent; padding: 7px 10px; border-radius: 7px; font-weight: 500; color: var(--text); }
@@ -15,7 +15,43 @@ body.home { -webkit-user-select: none; user-select: none; }
 .side nav button kbd { margin-left: auto; opacity: 0; transition: opacity .12s; }
 .side nav button:hover kbd { opacity: 1; }
 .side .grow { flex: 1; }
-.side .foot { display: flex; align-items: center; justify-content: space-between; font-size: 11.5px; color: var(--muted); padding: 0 4px; border: none; }
+.side .foot { display: flex; align-items: center; justify-content: space-between; gap: 4px; font-size: 11.5px; color: var(--muted); padding: 0 4px; border: none; }
+.side .foot .version { flex: none; white-space: nowrap; }
+.side .foot .settings { min-width: 0; }
+/* A narrow side bar keeps the version whole and drops the word "Settings" (the gear stays). */
+.side { container-type: inline-size; }
+@container (max-width: 190px) { .side .foot .settings span { display: none; } }
+/* Editor colors: the side bar is the theme's panel, like Zed's. */
+:root.editor-colors .side { background: color-mix(in srgb, var(--raise-2) 94%, transparent); }
+.prefs input.themename { width: 130px; font: inherit; font-size: 12.5px; padding: 4px 7px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--raise); color: var(--text); }
+.prefs input.themename.bad { border-color: var(--danger); }
+.side .foot .settings span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side .foot button svg.icon { width: 15px; height: 15px; }
+.side .foot .settings { display: inline-flex; align-items: center; gap: 6px; }
+.side .lights { display: flex; align-items: center; justify-content: flex-end; }
+.side .sidetoggle { padding: 5px 6px; display: inline-flex; cursor: pointer; }
+.side .sidetoggle svg.icon { width: 17px; height: 17px; color: var(--muted); }
+.side .sidetoggle:hover svg.icon { color: var(--text); }
+/* Folded: a column of icons, wide enough for the window's traffic lights above it. */
+/* Narrower than the traffic lights (62 pt from x = 8): they stick out over the right side,
+   whose header moves past them; on the desk parts a 30 pt title strip stays for them. */
+.app.side-folded .side { width: 52px; padding: 0 6px 10px; }
+/* The grip between a panel and what is right of it: drag to resize (dragWidth). */
+.grip { flex: none; width: 7px; margin: 0 -4px 0 -3px; cursor: col-resize; position: relative; z-index: 5; }
+.grip::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent; transition: background .12s; }
+.grip:hover::after, .resizing .grip::after { background: var(--accent); }
+body.resizing, body.resizing * { cursor: col-resize !important; user-select: none !important; }
+.app.side-folded .side .lights { height: 64px; justify-content: center; align-items: flex-end; padding-bottom: 4px; box-sizing: border-box; }
+.app.side-folded .top { padding-left: 30px; }
+.app.side-folded .main.desk-on .top { display: flex; height: 30px; }
+.app.side-folded .main.desk-on .top h1 { font-size: 12.5px; }
+.app.side-folded .main.desk-on .top .sub { display: none; }
+.app.side-folded .side nav { gap: 0; }
+.app.side-folded .side nav button { justify-content: center; padding: 6px 0; }
+.app.side-folded .side nav button span, .app.side-folded .side nav button kbd { display: none; }
+.app.side-folded .side .foot { flex-direction: column; gap: 6px; padding: 0; }
+.app.side-folded .side .foot .version, .app.side-folded .side .foot .update, .app.side-folded .side .foot .settings span { display: none; }
 
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--page); }
 :root { --page: rgba(255, 255, 255, 0.72); --well: rgba(0, 0, 0, 0.035); }
@@ -124,18 +160,21 @@ table.procs td + td { text-align: right; color: var(--muted); padding-left: 12px
 .prefrow + .prefrow, .prefgroup > .prefadd { border-top: 0.5px solid var(--line); }
 .prefrow.column { flex-direction: column; align-items: stretch; }
 .preflabel { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.preflabel b { white-space: nowrap; }
 .preflabel small { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prefcontrols { display: flex; align-items: center; gap: 8px; flex: none; }
 .prefcontrols select { max-width: 220px; }
 .prefadd { display: flex; align-items: center; gap: 10px; padding: 9px 14px; }
 .prefs .muted, .prefadd small { color: var(--muted); font-size: 12px; }
-.prefs button.keys { min-width: 120px; font-variant-numeric: tabular-nums; font-weight: 600; letter-spacing: .04em; background: var(--well); box-shadow: inset 0 0 0 0.5px var(--line); }
-.prefs button.keys.recording { box-shadow: inset 0 0 0 1.5px var(--accent); color: var(--accent-ink); letter-spacing: 0; font-weight: 500; }
+.prefs button.keys, .sheet button.keys { min-width: 120px; font-variant-numeric: tabular-nums; font-weight: 600; letter-spacing: .04em; background: var(--well); box-shadow: inset 0 0 0 0.5px var(--line); }
+.prefs button.keys.recording, .sheet button.keys.recording { box-shadow: inset 0 0 0 1.5px var(--accent); color: var(--accent-ink); letter-spacing: 0; font-weight: 500; }
 .prefs button.danger { color: var(--danger); }
 .preferror { padding: 10px 14px; border-radius: 10px; background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
 .prefwarn { padding: 8px 14px; border-radius: 10px; background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--text); font-size: 12px; }
 .seg { display: inline-flex; padding: 2px; border-radius: 8px; background: var(--well); box-shadow: inset 0 0 0 0.5px var(--line); }
 .seg button { background: transparent; padding: 4px 14px; border-radius: 6px; }
+/* app.css makes segments share the width equally; a long label (Standard) then ran out of its box. */
+.prefs .seg button, .sheet .seg button { flex: none; white-space: nowrap; }
 .seg button.on { background: var(--raise); box-shadow: 0 0.5px 2px rgba(0, 0, 0, .18); font-weight: 600; }
 .pinned { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 8px; }
 .pin { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; background: var(--well); }
@@ -239,3 +278,14 @@ svg.icon.brand path.line { fill: none; stroke: currentColor; }
 /* Update, beside the version: only while GitHub has a newer Unlaw. */
 .foot .update { margin: 0 auto 0 8px; padding: 3px 10px; border-radius: 999px; background: var(--accent); color: var(--on-accent, #1b1300); font-weight: 600; font-size: 12px; }
 .foot .update[hidden] { display: none; }
+
+/* A command's sheet (right-click on a tile): its shortcuts and menu bar place over the page. */
+.sheetback { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(0, 0, 0, 0.22); }
+.sheet { width: min(560px, calc(100vw - 48px)); max-height: calc(100vh - 64px); overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 14px; background: var(--raise-2); backdrop-filter: blur(30px) saturate(1.6); -webkit-backdrop-filter: blur(30px) saturate(1.6); box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28), inset 0 0 0 0.5px var(--line); }
+.sheethead { display: flex; gap: 12px; align-items: center; }
+.sheethead .glyph { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; background: var(--well); }
+.sheethead .what { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sheethead .what small { color: var(--muted); }
+.sheetlabel { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: -6px; }
+.sheet .prefrow .grow, .sheetbuttons .grow { flex: 1; }
+.sheetbuttons { display: flex; gap: 8px; align-items: center; }

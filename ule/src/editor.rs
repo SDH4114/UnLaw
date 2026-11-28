@@ -209,6 +209,11 @@ pub struct Editor {
     pub explorer: Option<Explorer>,
     pub mode: Mode,
     pub anchor: Pos,
+    /// Other cursors as (anchor, head), exclusive end (`actions.rs`), for `multi_doc`.
+    pub multi: Vec<(Pos, Pos)>,
+    pub multi_doc: usize,
+    /// Selections before each expand_selection, for shrink_selection.
+    pub expand_stack: Vec<(Pos, Pos)>,
     pub last_visual: Option<(usize, Pos, Pos, VisualKind)>,
     pub registers: HashMap<char, Register>,
     pub clipboard_cache: Option<String>,
@@ -272,6 +277,9 @@ impl Editor {
             explorer: None,
             mode: Mode::Normal,
             anchor: Pos::default(),
+            multi: Vec::new(),
+            multi_doc: 0,
+            expand_stack: Vec::new(),
             last_visual: None,
             registers: HashMap::new(),
             clipboard_cache: None,
@@ -1148,7 +1156,30 @@ impl Editor {
         if let Some(check) = crate::ul::check_after_save(&target) {
             text = format!("{text} · {check}");
         }
+        if self.reload_themes_after_saving(&target) {
+            text = format!("{text} · theme {} reloaded", self.theme.name);
+        }
         Ok(text)
+    }
+
+    /// Saving a theme file (`themes/<name>.toml`) or ule.toml shows its colors at once.
+    fn reload_themes_after_saving(&mut self, target: &Path) -> bool {
+        let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let themes = real(&crate::config::themes_dir());
+        let is_theme = target.parent().is_some_and(|dir| real(dir) == themes)
+            && target.extension().is_some_and(|suffix| suffix == "toml");
+        if !is_theme && real(target) != real(&crate::config::config_path()) {
+            return false;
+        }
+        let config = crate::config::Config::load(&crate::commands::names());
+        self.themes = crate::theme::Themes::new(config.themes.as_ref());
+        match self.themes.load(&self.theme.name) {
+            Ok(theme) => {
+                self.theme = theme;
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     fn trim_trailing(&mut self, id: usize) {

@@ -218,6 +218,15 @@ fn draw_view(ed: &mut Editor, surface: &mut Surface, theme: &Theme, id: usize, r
         None
     };
     let mut overlays: Vec<Overlay> = Vec::new();
+    // The other cursors (actions.rs): their selections and a block where each stands.
+    let extras = if focused { crate::actions::extra_for(ed, doc_id) } else { Vec::new() };
+    let extra_cursor = Style { reverse: true, ..Style::default() };
+    for (start, end, head) in &extras {
+        if start != end {
+            overlays.push(Overlay { start: *start, end: *end, style: theme.get("ui.selection") });
+        }
+        overlays.push(Overlay { start: *head, end: Pos::new(head.line, head.col + 1), style: extra_cursor });
+    }
     let last_visible = (scroll + area.h as usize).min(ed.docs[&doc_id].text.len_lines());
     if ed.options.hlsearch && ed.hlsearch_active {
         if let Some(regex) = ed.search_regex.clone() {
@@ -411,6 +420,15 @@ fn draw_view(ed: &mut Editor, surface: &mut Surface, theme: &Theme, id: usize, r
                     }
                 }
             }
+            // Another cursor at the end of this line.
+            if segment_end == chars.len()
+                && extras.iter().any(|(_, _, head)| head.line == line && head.col == chars.len())
+            {
+                let screen = x_display.saturating_sub(row_origin);
+                if screen < text_width {
+                    surface.style(area.x + screen as u16, y, extra_cursor);
+                }
+            }
             // Rulers.
             for ruler in &ed.options.rulers {
                 if *ruler > row_origin && *ruler - 1 - row_origin < text_width {
@@ -462,6 +480,9 @@ fn draw_view(ed: &mut Editor, surface: &mut Surface, theme: &Theme, id: usize, r
 fn mode_name(ed: &Editor) -> (&'static str, &'static str) {
     if ed.vim.select_mode && matches!(ed.mode, Mode::Visual(_)) {
         return ("SELECT", "ui.mode.visual");
+    }
+    if crate::modeless::on(ed) && ed.mode == Mode::Insert {
+        return ("EDIT", "ui.mode.insert");
     }
     match ed.mode {
         Mode::Normal => ("NORMAL", "ui.mode.normal"),

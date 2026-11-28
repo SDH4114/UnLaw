@@ -18,7 +18,7 @@ sys.path.insert(0, str(HERE))
 from ulbin import CoreTestCase  # noqa: E402
 
 SEEDED = {
-    "agent", "awake", "capture", "claude", "clip", "cpp", "desk", "git", "gpt", "lofi", "mac", "minecraft",
+    "agent", "awake", "capture", "claude", "clip", "cpp", "desk", "doc", "git", "gpt", "lofi", "mac", "minecraft",
     "spotify", "netflix", "obsidian", "py", "rust", "steam", "sys", "tg", "timer", "weather", "work", "yt", "zed",
 }
 
@@ -41,7 +41,7 @@ class FeatureListTests(unittest.TestCase):
         self.assertEqual(namespace["CORE"], features.CORE)
         self.assertEqual(namespace["REQUIRES"], features.REQUIRES)
         self.assertEqual(namespace["CARGO"], features.CARGO)
-        self.assertEqual(len(features.FEATURES), 28)
+        self.assertEqual(len(features.FEATURES), 29)
         self.assertEqual(set(DEFAULT_COMMAND_NAMES), SEEDED)
         # menubar is Unlaw.app, a package of its own: neither a seed nor a cargo feature of ul.
         self.assertEqual(set(features.NAMES) - set(features.CARGO) - {"menubar"}, SEEDED - {"agent", "capture"})
@@ -153,7 +153,7 @@ class FeatureListTests(unittest.TestCase):
         self.assertIn("Core (always)", text)
         selection, cargo = self.result(text)
         self.assertEqual(cargo, "capture,game")
-        self.assertEqual(selection, "gpt claude yt spotify lofi netflix capture desk obsidian work timer clip weather git py rust cpp zed awake sys menubar mac steam minecraft game")
+        self.assertEqual(selection, "gpt claude yt spotify lofi netflix capture desk obsidian work timer clip weather doc git py rust cpp zed awake sys menubar mac steam minecraft game")
         code, _ = self.interactive([b"q"])
         self.assertEqual(code, 1)
         code, text = self.interactive([b"a", b" ", b"\r"])

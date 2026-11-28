@@ -731,10 +731,20 @@ def _id(item: object, what: str, seen: set[str]) -> dict:
     return item
 
 
+MAX_LAYER_NAME = 200
+MAX_THREAD_POINTS = 64
+
+
 def _hidden(item: dict, what: str) -> None:
-    """unlawHidden: the eye of the Layers panel (Obsidian ignores the key and still shows the item)."""
+    """unlawHidden: the eye of the Layers panel; unlawName: the name given in it (Obsidian ignores both keys)."""
     if "unlawHidden" in item and not isinstance(item["unlawHidden"], bool):
         raise ValueError(f"{what}: unlawHidden must be true or false")
+    if "unlawName" in item:
+        name = item["unlawName"]
+        if not isinstance(name, str) or not name.strip() or len(name) > MAX_LAYER_NAME:
+            raise ValueError(f"{what}: unlawName must be 1-{MAX_LAYER_NAME} characters")
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
+            raise ValueError(f"{what}: unlawName must not contain control characters")
 
 
 def _validate_node(node: dict) -> None:
@@ -763,6 +773,15 @@ def _validate_edge(edge: dict) -> None:
             isinstance(spot, list) and len(spot) == 2 and all(_canvas_number(v) and 0 <= v <= 1 for v in spot)
         ):
             raise ValueError(f"{what}: {key} must be [x, y] with numbers 0-1")
+    # Pins the thread passes on its way, in canvas coordinates (Obsidian draws the edge straight).
+    if "unlawPoints" in edge:
+        points = edge["unlawPoints"]
+        if not (
+            isinstance(points, list)
+            and len(points) <= MAX_THREAD_POINTS
+            and all(isinstance(p, list) and len(p) == 2 and all(_canvas_number(v) for v in p) for p in points)
+        ):
+            raise ValueError(f"{what}: unlawPoints must be at most {MAX_THREAD_POINTS} [x, y] points")
 
 
 def _validate_element(element: dict) -> int:
@@ -6370,6 +6389,7 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width
 .cvlayers .row.hidden .name, .cvlayers .row.hidden > svg { opacity: .4; }
 .cvlayers .row > svg { width: 16px; height: 16px; flex: none; color: var(--muted); }
 .cvlayers .row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cvlayers .row input.rename { min-width: 0; width: 100%; font: inherit; padding: 1px 5px; border-radius: 5px; border: 1px solid var(--accent); background: var(--panel); color: var(--text); outline: none; }
 .cvlayers .eye { border: none; background: transparent; padding: 2px; color: var(--muted); display: inline-flex; }
 .cvlayers .eye svg { width: 16px; height: 16px; }
 .cvlayers .eye:hover { color: var(--text); }
@@ -6430,7 +6450,7 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width
     <dt>double-click</dt><dd>Edit a card; drag cards between columns</dd>
     <dt>Games</dt><dd>While a game runs every key goes to it: arrows/WASD, Space, P pause, Esc leaves. Mouse works as in the terminal.</dd>
     <dt>Studio</dt><dd>Record tab: <kbd>r</kbd> start (after the countdown) / stop, <kbd>p</kbd> pause / resume, <kbd>m</kbd> mark, <kbd>1</kbd> … <kbd>9</kbd> scenes. Drag a source to move it (corners and edges snap; a corner pins it), drag its yellow corner to resize, <kbd>⌥</kbd>-drag to pan inside it. Recording runs <code>ul capture</code>, so it keeps going when the page is closed; every recording becomes a project you export from the Projects tab.</dd>
-    <dt>Canvas</dt><dd>Photoshop-style keys; a tool stays until you pick another. <kbd>v</kbd> select, <kbd>h</kbd> hand (or hold <kbd>space</kbd>), <kbd>n</kbd> card, <kbd>t</kbd> text, <kbd>u</kbd> shapes (<kbd>Shift</kbd>+<kbd>u</kbd> cycles rectangle, ellipse, diamond, line, arrow; also <kbd>r</kbd> <kbd>o</kbd> <kbd>l</kbd> <kbd>a</kbd>), <kbd>b</kbd> brush, <kbd>g</kbd> fill (<kbd>Alt</kbd>+click clears; open space reaching the edge of the view fills the background), <kbd>e</kbd> eraser (<kbd>Shift</kbd>+<kbd>e</kbd> switches whole object / only where it passes). Click an active eraser or shape tool again for its options (shape evenness 3 perfect, 2, 1 rougher). The fill tool floods the area of the clicked color like a paint program. <kbd>[</kbd> <kbd>]</kbd> or <kbd>-</kbd> <kbd>=</kbd> stroke width (slider 1-100; click the number to type one), <kbd>d</kbd> default color, <kbd>Cmd/Ctrl</kbd>+<kbd>G</kbd> group, <kbd>Cmd/Ctrl</kbd>+<kbd>0</kbd> fit, <kbd>Cmd/Ctrl</kbd>+<kbd>+</kbd> <kbd>-</kbd> zoom, <kbd>Del</kbd> delete, arrows nudge, <kbd>Cmd/Ctrl</kbd>+<kbd>Z</kbd> <kbd>C</kbd> <kbd>V</kbd> <kbd>D</kbd> <kbd>A</kbd>. Wheel pans, <kbd>Ctrl</kbd>+wheel or pinch zooms, double-click edits text, drag a side dot of a card to connect (let go on empty canvas for a new card). <kbd>k</kbd> thread: click a spot on one card, then on another; drag the end of a selected edge to move it. <kbd>F7</kbd> or the layers button: Layers, the eye hides a card, group or drawing, drag rows to reorder. The name left of the tools renames the file.</dd>
+    <dt>Canvas</dt><dd>Photoshop-style keys; a tool stays until you pick another. <kbd>v</kbd> select, <kbd>h</kbd> hand (or hold <kbd>space</kbd>), <kbd>n</kbd> card, <kbd>t</kbd> text, <kbd>u</kbd> shapes (<kbd>Shift</kbd>+<kbd>u</kbd> cycles rectangle, ellipse, diamond, line, arrow; also <kbd>r</kbd> <kbd>o</kbd> <kbd>l</kbd> <kbd>a</kbd>), <kbd>b</kbd> brush, <kbd>g</kbd> fill (<kbd>Alt</kbd>+click clears; open space reaching the edge of the view fills the background), <kbd>e</kbd> eraser (<kbd>Shift</kbd>+<kbd>e</kbd> switches whole object / only where it passes). Click an active eraser or shape tool again for its options (shape evenness 3 perfect, 2, 1 rougher). The fill tool floods the area of the clicked color like a paint program. <kbd>[</kbd> <kbd>]</kbd> or <kbd>-</kbd> <kbd>=</kbd> stroke width (slider 1-100; click the number to type one), <kbd>d</kbd> default color, <kbd>Cmd/Ctrl</kbd>+<kbd>G</kbd> group, <kbd>Cmd/Ctrl</kbd>+<kbd>0</kbd> fit, <kbd>Cmd/Ctrl</kbd>+<kbd>+</kbd> <kbd>-</kbd> zoom, <kbd>Del</kbd> delete, arrows nudge, <kbd>Cmd/Ctrl</kbd>+<kbd>Z</kbd> <kbd>C</kbd> <kbd>V</kbd> <kbd>D</kbd> <kbd>A</kbd>. Wheel pans, <kbd>Ctrl</kbd>+wheel or pinch zooms, double-click edits text, drag a side dot of a card to connect (let go on empty canvas for a new card). <kbd>k</kbd> thread: click a spot on one card, click the cork to pin bends, click another card to end it (the next thread starts there; <kbd>Esc</kbd> stops, <kbd>Backspace</kbd> takes a bend back, double-click empty canvas ends on a new card); a click on a thread removes it. On a selected thread drag its ends or bends, drag the dot in the middle of a segment to add a bend, double-click a bend to remove it. <kbd>F7</kbd> or the layers button: Layers, the eye hides a card, group or drawing, drag rows to reorder, double-click a name (or <kbd>F2</kbd>) to rename. The name left of the tools renames the file.</dd>
     <dt><kbd>?</kbd></dt><dd>This list</dd>
   </dl>
 </div></div>
@@ -7631,6 +7651,14 @@ function pinPoint(node, frac) {
   const tilt = nodeTilt(node), dy = -node.height / 2 + Math.min(14, node.height / 4);
   return { x: node.x + node.width / 2 - Math.sin(tilt) * dy, y: node.y + node.height / 2 + Math.cos(tilt) * dy };
 }
+// A pin head is 7.5 units wide; a thread end tied this close to the card's own pin uses that pin, and spot pins
+// this close to each other are one pin (a thread pulled from the top dot used to show two pins, one over the other).
+const CV_PIN_MERGE = 20;
+function pinSpot(node, frac) {
+  if (!frac) return null;
+  const p = anchorPoint(node, frac, true), pin = pinPoint(node);
+  return Math.hypot(p.x - pin.x, p.y - pin.y) < CV_PIN_MERGE ? null : frac;
+}
 // The thread hangs: a quadratic sag written as a cubic, so hit-testing and labels use the edge code as is.
 function threadCurve(a, b, fa, fb) {
   return sagCurve(pinPoint(a, fa), pinPoint(b, fb));
@@ -7841,14 +7869,47 @@ function bezierPoint(c, t) {
 }
 function hitEdge(curve, x, y, tol) {
   const pts = [];
-  for (let i = 0; i <= 32; i++) { const p = bezierPoint(curve, i / 32); pts.push([p.x, p.y]); }
+  for (const seg of curveSegs(curve)) for (let i = 0; i <= 32; i++) { const p = bezierPoint(seg, i / 32); pts.push([p.x, p.y]); }
   return polyDist(pts, x, y, false) <= tol + 1;
+}
+// A thread may pass pins on its way (unlawPoints, canvas coordinates): its curve is then a chain of segments,
+// with p0/c1 of the first and c2/p3 of the last, so ends, arrows and handles read it like a single curve.
+function edgePoints(edge) {
+  const list = edge && edge.unlawPoints;
+  if (!Array.isArray(list)) return [];
+  return list.filter((p) => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite)).map(([x, y]) => ({ x, y }));
+}
+const curveSegs = (curve) => curve.segs || [curve];
+function lineCurve(p0, p3) {
+  return { p0, c1: { x: p0.x + (p3.x - p0.x) / 3, y: p0.y + (p3.y - p0.y) / 3 }, c2: { x: p0.x + ((p3.x - p0.x) * 2) / 3, y: p0.y + ((p3.y - p0.y) * 2) / 3 }, p3 };
+}
+function chainCurve(stops, piece) {
+  const segs = stops.slice(1).map((p, i) => piece(stops[i], p));
+  if (segs.length === 1) return segs[0];
+  return { p0: segs[0].p0, c1: segs[0].c1, c2: segs[segs.length - 1].c2, p3: segs[segs.length - 1].p3, segs };
+}
+function tracePath(ctx, curve, dx = 0, dy = 0) {
+  ctx.beginPath();
+  ctx.moveTo(curve.p0.x + dx, curve.p0.y + dy);
+  for (const c of curveSegs(curve)) ctx.bezierCurveTo(c.c1.x + dx, c.c1.y + dy, c.c2.x + dx, c.c2.y + dy, c.p3.x + dx, c.p3.y + dy);
+}
+// Where a label hangs: the middle of the middle segment.
+function curveMid(curve) {
+  const segs = curveSegs(curve);
+  return bezierPoint(segs[Math.floor(segs.length / 2)], 0.5);
 }
 function edgeCurveFor(map, edge, cork) {
   const a = map.get(edge.fromNode), b = map.get(edge.toNode);
   if (!a || !b) return null;
-  const fa = edgeAnchor(edge, "from"), fb = edgeAnchor(edge, "to");
-  if (cork) return threadCurve(a, b, fa, fb);
+  const fa = edgeAnchor(edge, "from"), fb = edgeAnchor(edge, "to"), points = edgePoints(edge);
+  if (cork && points.length) return chainCurve([pinPoint(a, pinSpot(a, fa)), ...points, pinPoint(b, pinSpot(b, fb))], sagCurve);
+  if (cork) return threadCurve(a, b, pinSpot(a, fa), pinSpot(b, fb));
+  if (points.length) {
+    const first = points[0], last = points[points.length - 1];
+    const p0 = fa ? anchorPoint(a, fa, false) : sideAnchor(a, nearestSide(a, first.x, first.y));
+    const p3 = fb ? anchorPoint(b, fb, false) : sideAnchor(b, nearestSide(b, last.x, last.y));
+    return chainCurve([p0, ...points, p3], lineCurve);
+  }
   const ca = { x: a.x + a.width / 2, y: a.y + a.height / 2 }, cb = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
   const p0 = fa ? anchorPoint(a, fa, false) : undefined, p3 = fb ? anchorPoint(b, fb, false) : undefined;
   const from = p0 ? nearestSide(a, p0.x, p0.y) : CV_SIDE_NAMES.includes(edge.fromSide) ? edge.fromSide : nearestSide(a, cb.x, cb.y);
@@ -8326,9 +8387,12 @@ function applyStyle(doc, keys, patch) {
 }
 function moveItems(doc, keys, dx, dy) {
   for (const key of keys) {
-    if (key[0] === "e") continue;
     const item = cvLookup(doc, key);
     if (!item) continue;
+    if (key[0] === "e") {
+      if (Array.isArray(item.unlawPoints)) item.unlawPoints = item.unlawPoints.map((p) => (Array.isArray(p) && p.length === 2 ? [p[0] + dx, p[1] + dy] : p));
+      continue;
+    }
     item.x += dx;
     item.y += dy;
   }
@@ -8770,7 +8834,7 @@ function paintNode(ctx, node, pal, hideText, image) {
       ctx.font = "600 13px " + CV_FONT;
       ctx.textBaseline = "middle";
       ctx.fillStyle = pal.text;
-      ctx.fillText(fileLabel(node.file), node.x + 10, node.y + node.height - 17, Math.max(10, node.width - 20));
+      ctx.fillText(node.unlawName || fileLabel(node.file), node.x + 10, node.y + node.height - 17, Math.max(10, node.width - 20));
     }
   } else if (!hideText) {
     ctx.beginPath();
@@ -9074,7 +9138,7 @@ function paintCorkNode(ctx, node, pal, hideText, image) {
         ctx.fillStyle = ink;
         ctx.textBaseline = "middle";
         ctx.textAlign = "center";
-        ctx.fillText(fileLabel(node.file), x + w / 2, y + h - 20, Math.max(10, w - 20));
+        ctx.fillText(node.unlawName || fileLabel(node.file), x + w / 2, y + h - 20, Math.max(10, w - 20));
         ctx.textAlign = "left";
       }
       return;
@@ -9109,11 +9173,7 @@ function paintCorkNode(ctx, node, pal, hideText, image) {
 // The red thread: its shadow on the cork, a darker body, a lighter twist.
 function paintThread(ctx, curve, edge, pal, selected, hideLabel) {
   const color = nodeColor(edge.color) || CV_THREAD;
-  const path = (dx, dy) => {
-    ctx.beginPath();
-    ctx.moveTo(curve.p0.x + dx, curve.p0.y + dy);
-    ctx.bezierCurveTo(curve.c1.x + dx, curve.c1.y + dy, curve.c2.x + dx, curve.c2.y + dy, curve.p3.x + dx, curve.p3.y + dy);
-  };
+  const path = (dx, dy) => tracePath(ctx, curve, dx, dy);
   ctx.save();
   ctx.lineCap = "round";
   path(3, 6);
@@ -9144,7 +9204,7 @@ function paintThread(ctx, curve, edge, pal, selected, hideLabel) {
   ctx.setLineDash([]);
   if (edge.label && !hideLabel) {
     // A paper tag hanging on the thread.
-    const mid = bezierPoint(curve, 0.5), text = String(edge.label).slice(0, 120);
+    const mid = curveMid(curve), text = String(edge.label).slice(0, 120);
     ctx.font = "16px " + CV_HAND;
     const width = ctx.measureText(text).width + 18;
     ctx.translate(mid.x, mid.y);
@@ -9174,25 +9234,33 @@ function paintEndHandle(ctx, p, pal, z) {
   ctx.restore();
 }
 
+function paintBendHandle(ctx, p, pal, z) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, 3.5 / z, 0, Math.PI * 2);
+  ctx.globalAlpha = 0.85;
+  ctx.fillStyle = pal.accent;
+  ctx.fill();
+  ctx.restore();
+}
+
 // The thread tool between its first click and the second: a pin and thread (or a dashed line) to the pointer.
 function paintThreadDraft(ctx, t, pal, cork, z) {
+  const stops = [t.a, ...(t.points || []), t.b];
   ctx.save();
   if (cork) {
-    const c = sagCurve(t.a, t.b);
-    ctx.beginPath();
-    ctx.moveTo(c.p0.x, c.p0.y);
-    ctx.bezierCurveTo(c.c1.x, c.c1.y, c.c2.x, c.c2.y, c.p3.x, c.p3.y);
+    tracePath(ctx, chainCurve(stops, sagCurve));
     ctx.strokeStyle = CV_THREAD;
     ctx.lineWidth = 2.4;
     ctx.stroke();
     ctx.restore();
-    paintPin(ctx, t.a, CV_PINS[0]);
+    for (const p of stops.slice(0, -1)) paintPin(ctx, p, CV_PINS[0]);
     return;
   }
   ctx.setLineDash([6 / z, 5 / z]);
   ctx.beginPath();
   ctx.moveTo(t.a.x, t.a.y);
-  ctx.lineTo(t.b.x, t.b.y);
+  for (const p of stops.slice(1)) ctx.lineTo(p.x, p.y);
   ctx.strokeStyle = pal.accent;
   ctx.lineWidth = 2 / z;
   ctx.stroke();
@@ -9279,15 +9347,13 @@ function paintEdge(ctx, curve, edge, pal, selected, hideLabel) {
   ctx.lineCap = "round";
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.moveTo(curve.p0.x, curve.p0.y);
-  ctx.bezierCurveTo(curve.c1.x, curve.c1.y, curve.c2.x, curve.c2.y, curve.p3.x, curve.p3.y);
+  tracePath(ctx, curve);
   ctx.stroke();
   const toward = (from, tip) => Math.atan2(tip.y - from.y, tip.x - from.x);
   if (edge.toEnd !== "none") fillTriangle(ctx, curve.p3, toward(curve.c2, curve.p3), 12);
   if (edge.fromEnd === "arrow") fillTriangle(ctx, curve.p0, toward(curve.c1, curve.p0), 12);
   if (edge.label && !hideLabel) {
-    const mid = bezierPoint(curve, 0.5), text = String(edge.label).slice(0, 120);
+    const mid = curveMid(curve), text = String(edge.label).slice(0, 120);
     ctx.font = "13px " + CV_FONT;
     ctx.textBaseline = "middle";
     ctx.textAlign = "center";
@@ -9427,14 +9493,25 @@ function paintScene(o) {
       if (!curve) continue;
       paintThread(ctx, curve, edge, pal, selected(edge), editing === cvKey("e", edge));
       for (const [id, end] of [[edge.fromNode, "from"], [edge.toNode, "to"]]) {
-        const spot = edgeAnchor(edge, end);
-        if (spot) spots.push([map.get(id), spot]); else pinned.add(id);
+        const node = map.get(id), spot = pinSpot(node, edgeAnchor(edge, end));
+        if (spot) spots.push([node, spot]); else pinned.add(id);
       }
     }
     for (const node of nodes) {
       if ((node.type !== "group" || pinned.has(node.id)) && rectsIntersect(node, vis)) paintPin(ctx, pinPoint(node), pinColor(node));
     }
-    for (const [node, spot] of spots) paintPin(ctx, pinPoint(node, spot), pinColor(node));
+    const placed = [];
+    for (const edge of edges) for (const p of edgePoints(edge)) {
+      if (placed.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < CV_PIN_MERGE)) continue;
+      placed.push(p);
+      paintPin(ctx, p, CV_PINS[Math.floor(idHash(edge.id, "pin") * CV_PINS.length)]);
+    }
+    for (const [node, spot] of spots) {
+      const p = pinPoint(node, spot);
+      if (placed.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < CV_PIN_MERGE)) continue;
+      placed.push(p);
+      paintPin(ctx, p, pinColor(node));
+    }
   }
   for (const el of docElements(doc)) if (rectsIntersect(el, vis)) paintElement(ctx, el, pal, editing === cvKey("x", el));
   if (ui && ui.draft) paintElement(ctx, ui.draft, pal, false);
@@ -9442,7 +9519,11 @@ function paintScene(o) {
     // The ends of a selected edge can be dragged to another spot of their card.
     for (const edge of edges) {
       const curve = selected(edge) && edgeCurveFor(map, edge, cork);
-      if (curve) for (const p of [curve.p0, curve.p3]) paintEndHandle(ctx, p, pal, view.z);
+      if (!curve) continue;
+      for (const p of [curve.p0, curve.p3]) paintEndHandle(ctx, p, pal, view.z);
+      // Bends can be dragged; the small ring in the middle of a segment adds one.
+      for (const p of edgePoints(edge)) paintEndHandle(ctx, p, pal, view.z);
+      for (const seg of curveSegs(curve)) paintBendHandle(ctx, bezierPoint(seg, 0.5), pal, view.z);
     }
     if (ui.thread) paintThreadDraft(ctx, ui.thread, pal, cork, view.z);
   }
@@ -9473,7 +9554,8 @@ function cvDraw() {
 function cvThreadDraft() {
   const start = cv.tool === "thread" && cv.thread && cvLookup(cv.doc, "n:" + cv.thread.node);
   if (!validBox(start) || !cv.threadAt) return null;
-  return { a: anchorPoint(start, cv.thread.frac, cvCork(cv.doc)), b: cv.threadAt };
+  const cork = cvCork(cv.doc), a = cork ? pinPoint(start, pinSpot(start, cv.thread.frac)) : anchorPoint(start, cv.thread.frac, false);
+  return { a, b: cv.threadAt, points: (cv.thread.points || []).map(([x, y]) => ({ x, y })) };
 }
 
 function cvResize() {
@@ -9602,6 +9684,8 @@ function cvStyle(patch) {
 
 function cvPoint(event) {
   const box = cv.el.getBoundingClientRect();
+  // Never map the mouse with an old size: the bitmap is stretched to the element, so it would land elsewhere.
+  if (Math.floor(box.width) !== cv.w || Math.floor(box.height) !== cv.h) cvResize();
   const s = { x: event.clientX - box.left, y: event.clientY - box.top };
   return { s, w: toWorld(cv.view, s.x, s.y) };
 }
@@ -9696,6 +9780,8 @@ function cvDownSelect(event, s, w) {
   if (handle) { cv.drag = { mode: "resize", handle, key: cv.sel[0], orig: cvClone(solo), start: w, moved: false }; return; }
   const end = cvEdgeEndAt(s);
   if (end) { cv.drag = { mode: "anchor", key: end.key, end: end.end, moved: false }; return; }
+  const bend = cvBendAt(s);
+  if (bend) { cv.drag = { mode: "bend", key: bend.key, index: bend.index, insert: Boolean(bend.insert), moved: false }; return; }
   const side = cvSideHandle(s);
   if (side) { cv.drag = { mode: "connect", from: side.node, side: side.side, s, s2: null }; return; }
   const key = hitTest(cv.doc, w.x, w.y, cv.view.z);
@@ -9715,6 +9801,8 @@ function cvDownSelect(event, s, w) {
     const item = cvLookup(cv.doc, k);
     if (k[0] === "n" && item && item.type === "group") for (const inner of containedIds(cv.doc, item)) keys.add(inner);
   }
+  // A thread's bends go along when both its cards move.
+  for (const edge of docEdges(cv.doc)) if (edgePoints(edge).length && keys.has("n:" + edge.fromNode) && keys.has("n:" + edge.toNode)) keys.add(cvKey("e", edge));
   cv.drag = { mode: "move", keys: [...keys], s, last: w, armed: false, key };
 }
 
@@ -9747,6 +9835,8 @@ function cvMove(event) {
     d.moved = true;
   } else if (d.mode === "anchor") {
     if (cvMoveEnd(d, w)) d.moved = true;
+  } else if (d.mode === "bend") {
+    if (cvMoveBend(d, w)) d.moved = true;
   } else if (d.mode === "marquee" || d.mode === "connect") {
     d.s2 = s;
     d.w2 = w;
@@ -9775,6 +9865,8 @@ function cvUp(event) {
     if (d.moved) cvCommit("resize");
   } else if (d.mode === "anchor") {
     if (d.moved) cvCommit("thread end");
+  } else if (d.mode === "bend") {
+    if (d.moved) cvCommit("thread bend");
   } else if (d.mode === "marquee") {
     const box = normRect(d.w.x, d.w.y, w.x, w.y), picked = [];
     for (const node of docNodes(cv.doc)) if (node.type === "group" ? boxInside(node, box) : rectsIntersect(node, box)) picked.push(cvKey("n", node));
@@ -9803,7 +9895,7 @@ function cvCancelDrag() {
   if (!cv.drag) return;
   const mode = cv.drag.mode;
   cv.drag = null;
-  if ((mode === "move" || mode === "resize" || mode === "erase" || mode === "anchor") && cv.hist) cv.doc = JSON.parse(cv.hist.cur);
+  if ((mode === "move" || mode === "resize" || mode === "erase" || mode === "anchor" || mode === "bend") && cv.hist) cv.doc = JSON.parse(cv.hist.cur);
   cv.sel = cv.doc ? cv.sel.filter((key) => cvLookup(cv.doc, key)) : [];
   cvCursor();
   cvDraw();
@@ -9912,32 +10004,105 @@ function cvNewCardAt(w) {
   return node;
 }
 
-// Thread tool: the first click pins the start on a card at that spot, the second ends it on another card's
-// spot, or on empty canvas makes a new card there. Esc or another tool drops a started thread.
+// Thread tool: the first click pins the start on a card at that spot; clicks on the cork pin bends on the way;
+// a click on another card ends it there and the next thread starts from that spot (a chain, card to card; Esc
+// stops); a double click on empty canvas ends it on a new card there. Backspace takes the last bend back.
+// Without a started thread a click on a thread removes it (Cmd+Z brings it back).
+const CV_THREAD_POINTS = 64;
 function cvThreadClick(w) {
-  const cork = cvCork(cv.doc), node = cvNodeAt(w);
+  const cork = cvCork(cv.doc), node = cvNodeAt(w), hit = hitTest(cv.doc, w.x, w.y, cv.view.z);
   const start = cv.thread && cvLookup(cv.doc, "n:" + cv.thread.node);
   if (!validBox(start)) {
-    cv.thread = node ? { node: node.id, frac: fracAt(node, w, cork) } : null;
+    if (hit && hit[0] === "e") {
+      removeItems(cv.doc, [hit]);
+      cv.sel = cv.sel.filter((key) => key !== hit);
+      cvCommit("remove thread");
+      toast("Thread removed \u00b7 Cmd+Z brings it back");
+      cvDraw();
+      return;
+    }
+    cv.thread = node ? { node: node.id, frac: fracAt(node, w, cork), points: [] } : null;
     cv.threadAt = w;
     if (!node) toast("Click the spot on a card where the thread starts");
     cvDraw();
     return;
   }
-  const from = cv.thread.frac;
-  cv.thread = null;
-  if (node && node.id === start.id) { cvDraw(); return; }
-  const a = anchorPoint(start, from, cork), target = node || cvNewCardAt(w);
-  const edge = { id: cvId(), fromNode: start.id, fromSide: nearestSide(start, a.x, a.y), toNode: target.id, toSide: nearestSide(target, a.x, a.y), toEnd: "arrow", unlawFrom: from };
-  if (node) {
-    edge.unlawTo = fracAt(node, w, cork);
-    const b = anchorPoint(node, edge.unlawTo, cork);
-    edge.toSide = nearestSide(node, b.x, b.y);
+  const points = cv.thread.points || [];
+  const target = node && node.type !== "group" ? node : null;
+  if (!target || (target.id === start.id && !points.length)) {
+    if (target) { cvDraw(); return; }
+    if (points.length < CV_THREAD_POINTS) points.push([Math.round(w.x * 10) / 10, Math.round(w.y * 10) / 10]);
+    cv.thread.points = points;
+    if (!cv.bendHinted) { cv.bendHinted = true; toast("Bend pinned \u00b7 click a card to end, double-click for a new card, Esc stops"); }
+    cvDraw();
+    return;
   }
+  const edge = cvThreadEdge(start, target, w, cork);
+  cv.thread = { node: target.id, frac: edge.unlawTo, points: [] };
+  cvSelect([cvKey("e", edge)]);
+  cvCommit("thread");
+}
+// The finished thread from the started one to `target`, tied where it was clicked.
+function cvThreadEdge(start, target, w, cork) {
+  const from = cv.thread.frac, points = cv.thread.points || [];
+  const a = anchorPoint(start, from, cork), toward = points.length ? { x: points[0][0], y: points[0][1] } : w;
+  const edge = { id: cvId(), fromNode: start.id, fromSide: nearestSide(start, toward.x, toward.y), toNode: target.id, toSide: "top", toEnd: "arrow", unlawFrom: from };
+  edge.unlawTo = fracAt(target, w, cork);
+  const b = anchorPoint(target, edge.unlawTo, cork);
+  edge.toSide = nearestSide(target, b.x, b.y);
+  if (!points.length) edge.fromSide = nearestSide(start, a.x, a.y);
+  if (points.length) edge.unlawPoints = points.map((p) => p.slice());
   ensureList(cv.doc, "edges").push(edge);
-  cvSelect([cvKey(node ? "e" : "n", node ? edge : target)]);
-  if (!node) cvStartEdit(cvKey("n", target));
+  return edge;
+}
+// Double click on empty canvas with a started thread: a new card there, the thread tied to it, its editor open.
+function cvThreadToNewCard(w) {
+  const start = cv.thread && cvLookup(cv.doc, "n:" + cv.thread.node);
+  if (!validBox(start)) return;
+  // The two clicks of the double click pinned bends here; they are not bends.
+  const near = 8 / cv.view.z, points = cv.thread.points || [];
+  while (points.length && Math.hypot(points[points.length - 1][0] - w.x, points[points.length - 1][1] - w.y) <= near) points.pop();
+  const card = cvNewCardAt(w), cork = cvCork(cv.doc), c = { x: start.x + start.width / 2, y: start.y + start.height / 2 };
+  const side = nearestSide(card, c.x, c.y), spot = CV_SIDE_SPOTS[side].slice(), at = anchorPoint(card, spot, false);
+  cvThreadEdge(start, card, at, cork);
+  cv.thread = null;
+  cvSelect([cvKey("n", card)]);
+  cvStartEdit(cvKey("n", card));
   if (!cv.editing) cvCommit("thread");
+}
+
+// A bend of the single selected thread under the pointer (screen point): {key, index} for an existing bend,
+// {key, index, insert} for the ring in the middle of segment `index` (dragging it adds a bend there).
+function cvBendAt(s) {
+  if (cv.sel.length !== 1 || cv.sel[0][0] !== "e") return null;
+  const edge = cvLookup(cv.doc, cv.sel[0]), curve = edge && edgeCurveFor(nodeMap(cv.doc), edge, cvCork(cv.doc));
+  if (!curve) return null;
+  const near = (p) => { const at = toScreen(cv.view, p.x, p.y); return Math.hypot(at.x - s.x, at.y - s.y) <= 9; };
+  const points = edgePoints(edge);
+  for (let i = 0; i < points.length; i++) if (near(points[i])) return { key: cv.sel[0], index: i };
+  const segs = curveSegs(curve);
+  for (let i = 0; i < segs.length; i++) if (near(bezierPoint(segs[i], 0.5))) return { key: cv.sel[0], index: i, insert: true };
+  return null;
+}
+function cvMoveBend(d, w) {
+  const edge = cvLookup(cv.doc, d.key);
+  if (!edge) return false;
+  const points = Array.isArray(edge.unlawPoints) ? edge.unlawPoints : (edge.unlawPoints = []);
+  if (d.insert) {
+    if (points.length >= CV_THREAD_POINTS) return false;
+    points.splice(d.index, 0, [w.x, w.y]);
+    d.insert = false;
+  }
+  if (!points[d.index]) return false;
+  points[d.index] = [Math.round(w.x * 10) / 10, Math.round(w.y * 10) / 10];
+  return true;
+}
+function cvRemoveBend(bend) {
+  const edge = cvLookup(cv.doc, bend.key);
+  if (!edge || !Array.isArray(edge.unlawPoints) || !edge.unlawPoints[bend.index]) return;
+  edge.unlawPoints.splice(bend.index, 1);
+  if (!edge.unlawPoints.length) delete edge.unlawPoints;
+  cvCommit("remove bend");
 }
 
 // An end of the single selected edge under the pointer (screen point), as {key, end}.
@@ -10322,8 +10487,16 @@ function cvToggleCork() {
 }
 
 function cvDouble(event) {
-  if (!cv.doc || cv.tool !== "select") return;
-  const { w } = cvPoint(event);
+  if (!cv.doc) return;
+  if (cv.tool === "thread") {
+    const at = cvPoint(event).w, under = cvNodeAt(at);
+    if (cv.thread && (!under || under.type === "group")) cvThreadToNewCard(at);
+    return;
+  }
+  if (cv.tool !== "select") return;
+  const { s, w } = cvPoint(event);
+  const bend = cvBendAt(s);
+  if (bend && !bend.insert) { cvRemoveBend(bend); return; }
   const key = hitTest(cv.doc, w.x, w.y, cv.view.z), item = key && key[0] === "n" ? cvLookup(cv.doc, key) : null;
   if (item && (item.type === "file" || item.type === "link")) { cvCardDouble(key); return; }
   if (key) { cvSelect([key]); cvStartEdit(key); }
@@ -10818,6 +10991,7 @@ const CV_LAYERS_PREF = "desk-canvas-layers";
 const CV_MAX_LAYER_ROWS = 500;
 function layerName(key, item) {
   const clip = (text) => { const t = String(text || "").replace(/\s+/g, " ").trim(); return t.length > 40 ? t.slice(0, 39) + "\u2026" : t; };
+  if (item.type !== "group" && typeof item.unlawName === "string" && item.unlawName.trim()) return clip(item.unlawName);
   if (key[0] === "x") return item.type === "text" ? clip(item.text) || "Text" : item.type === "paint" ? "Fill" : CV_LABELS[item.type] || item.type;
   if (item.type === "group") return clip(item.label) || "Group";
   if (item.type === "file") return clip(fileLabel(item.file)) || "File";
@@ -10938,7 +11112,7 @@ function cvLayerRow(row) {
   const eye = h("button", { class: "eye", title: hidden ? "Show" : "Hide", "aria-label": hidden ? "Show" : "Hide" }, cvIcon(hidden ? "eyeOff" : "eye"));
   eye.addEventListener("click", (event) => { event.stopPropagation(); cvToggleHidden(row.key); });
   const node = h("div", { class: "row" + (hidden ? " hidden" : "") + (picked ? " on" : "") + (row.depth ? " inner" : "") + (group ? " group" : ""), draggable: "true", title: "Click to select (Shift adds); drag onto another row to change the order" },
-    group ? cvFoldArrow(row) : null, eye, cvIcon(layerIcon(row)), h("span", { class: "name", text: layerName(row.key, row.item) }),
+    group ? cvFoldArrow(row) : null, eye, cvIcon(layerIcon(row)), cv.renaming === row.key ? cvRenameField(row) : h("span", { class: "name", text: layerName(row.key, row.item), title: "Double-click (or F2) to rename" }),
     group && row.folded ? h("span", { class: "count", text: String(row.count) }) : null);
   node.addEventListener("click", (event) => {
     if (hidden) return;
@@ -10953,7 +11127,57 @@ function cvLayerRow(row) {
     if (from) cvReorderLayer(from, row.key);
   });
   node.addEventListener("dragend", () => { cv.layerDrag = null; });
+  node.addEventListener("dblclick", (event) => { event.stopPropagation(); cvRenameLayer(row.key); });
   return node;
+}
+// Renaming a layer: a group's label (Obsidian shows it too), anything else gets unlawName, shown here and as the
+// caption of a file card; an empty name goes back to the default one. The field survives redraws of the panel.
+const CV_NAME_LIMIT = 200;
+function cvRenameLayer(key) {
+  const item = cv.doc && cvLookup(cv.doc, key);
+  if (!item) return;
+  if (!cv.layers) { cv.layers = true; localStorage.setItem(CV_LAYERS_PREF, "1"); }
+  cv.renaming = key;
+  cv.renameValue = item.type === "group" ? String(item.label ?? "") : String(item.unlawName ?? layerName(key, item));
+  cvRenderLayers();
+  cvResize();
+}
+function cvRenameField(row) {
+  const input = h("input", { class: "name rename", type: "text", maxlength: String(CV_NAME_LIMIT), "aria-label": "Layer name" });
+  input.value = cv.renameValue ?? "";
+  let done = false;
+  const finish = (keep) => {
+    if (done) return;
+    done = true;
+    cv.renaming = null;
+    if (keep) cvApplyName(row.key, input.value);
+    cvRenderLayers();
+    if (cv.el) cv.el.focus();
+  };
+  input.addEventListener("input", () => { cv.renameValue = input.value; });
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") { event.preventDefault(); finish(true); }
+    else if (event.key === "Escape") { event.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("click", (event) => event.stopPropagation());
+  setTimeout(() => { if (input.isConnected) { input.focus(); input.select(); } }, 0);
+  return input;
+}
+function cvApplyName(key, value) {
+  const item = cv.doc && cvLookup(cv.doc, key);
+  if (!item) return;
+  const name = String(value).replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, CV_NAME_LIMIT);
+  if (item.type === "group") {
+    if (name === String(item.label ?? "")) return;
+    item.label = name;
+  } else {
+    const before = item.unlawName;
+    if (name && name !== layerName(key, { ...item, unlawName: undefined })) item.unlawName = name; else delete item.unlawName;
+    if (before === item.unlawName) return;
+  }
+  cvCommit("rename");
 }
 function cvRenderLayers() {
   const panel = cv.ui.layers;
@@ -11113,6 +11337,8 @@ function canvasKey(event) {
   const code = event.code || "", physical = code.startsWith("Key") ? code.slice(3).toLowerCase() : code.startsWith("Digit") ? code.slice(5) : "";
   if (key === " " && !mod) { event.preventDefault(); cv.space = true; cvCursor(); return true; }
   if (code === "F7" || key === "F7") { event.preventDefault(); cvToggleLayers(); return true; }
+  if (cv.thread && (key === "Backspace" || key === "Delete") && (cv.thread.points || []).length) { event.preventDefault(); cv.thread.points.pop(); cvDraw(); return true; }
+  if ((code === "F2" || key === "F2") && cv.sel.length === 1 && cv.sel[0][0] !== "e") { event.preventDefault(); cvRenameLayer(cv.sel[0]); return true; }
   if (key === "Escape") {
     if ($("help").classList.contains("on")) return false;
     if (cv.thread) { cv.thread = null; cvDraw(); return true; }
@@ -11555,6 +11781,9 @@ function renderCanvas(main) {
     cvSetView(zoomAt(cv.view, event.clientX - box.left, event.clientY - box.top, (cv.gesture * event.scale) / cv.view.z));
   });
   ui.editor.addEventListener("blur", cvEndEdit);
+  // The stage also changes size without a window resize (the layers panel drawn by cvSync, the toolbar wrapping);
+  // a stale size stretched the picture, so the mouse and what it drew drifted apart.
+  if (typeof ResizeObserver === "function") new ResizeObserver(() => { if (cv.el === canvas) cvResize(); }).observe(canvas);
   cvResize();
   cvSync();
   cvCursor();
@@ -11587,6 +11816,14 @@ document.addEventListener("paste", (event) => {
 });
 
 // ---- theme, search, keys ----
+// Inside Unlaw.app the page follows the app's Appearance (auto, light, dark), never
+// its own saved choice: a dark desk next to a light app sidebar looked broken.
+if (EMBED && params.get("theme")) sessionStorage.setItem("desk-app-theme", params.get("theme"));
+function savedTheme() {
+  if (!EMBED) return localStorage.getItem("desk-theme");
+  const app = sessionStorage.getItem("desk-app-theme");
+  return app === "light" || app === "dark" ? app : null;
+}
 function applyTheme(theme) {
   const dark = theme ? theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = dark ? "dark" : "light";
@@ -11594,11 +11831,22 @@ function applyTheme(theme) {
   const icon = $("favicon");
   if (icon) icon.href = icon.dataset[dark ? "dark" : "light"];
 }
-applyTheme(localStorage.getItem("desk-theme"));
+applyTheme(savedTheme());
+// "Auto" follows the system as it changes (macOS switches at sunset).
+const colorScheme = matchMedia("(prefers-color-scheme: dark)");
+if (colorScheme.addEventListener) colorScheme.addEventListener("change", () => { if (!savedTheme()) { applyTheme(null); if (state.view === "canvas") cvDraw(); } });
+window.deskTheme = (theme) => {
+  if (!EMBED || !["auto", "light", "dark"].includes(theme)) return;
+  sessionStorage.setItem("desk-app-theme", theme);
+  applyTheme(savedTheme());
+  if (state.view === "canvas") cvDraw();
+};
 $("theme").addEventListener("click", () => {
   const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-  localStorage.setItem("desk-theme", next);
+  if (EMBED) sessionStorage.setItem("desk-app-theme", next);
+  else localStorage.setItem("desk-theme", next);
   applyTheme(next);
+  if (state.view === "canvas") cvDraw();
 });
 
 $("search").addEventListener("input", (event) => { state.query = event.target.value.trim(); render(); });
@@ -11619,13 +11867,15 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
-  if (event.key === "?") { $("help").classList.toggle("on"); return; }
+  // Physical keys (event.code), like the canvas: with a Russian layout "n" types "т" and "/" types ".".
+  const code = event.code;
+  if (code === "Slash" && event.shiftKey) { $("help").classList.toggle("on"); return; }
   if (state.view === "canvas") {
     if (!EMBED && event.key >= "1" && event.key <= "5") setView(VIEWS[Number(event.key) - 1]);
     return;
   }
-  if (event.key === "/") { event.preventDefault(); if (state.view === "games") setView("board"); $("search").focus(); }
-  else if (event.key === "n") {
+  if (code === "Slash") { event.preventDefault(); if (state.view === "games") setView("board"); $("search").focus(); }
+  else if (code === "KeyN") {
     event.preventDefault();
     if (state.view === "today") document.querySelector(".quick input")?.focus();
     else { if (state.view !== "board") setView("board"); document.querySelector(".add input")?.focus(); }

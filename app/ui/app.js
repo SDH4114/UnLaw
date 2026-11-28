@@ -471,9 +471,10 @@ function contextMenu(event, row) {
     entry("Open panel", "panel"),
     item.open ? entry("Open window", "open") : null,
     entry("Run in terminal", "terminal"),
-    entry(item.pinned ? "Unpin from the menu bar" : "Pin to the menu bar", item.pinned ? "unpin" : "pin"));
-  menu.style.left = `${Math.min(event.clientX, innerWidth - 200)}px`;
-  menu.style.top = `${Math.min(event.clientY, innerHeight - 150)}px`;
+    entry(item.pinned ? "Unpin from the menu bar" : "Pin to the menu bar", item.pinned ? "unpin" : "pin"),
+    entry("Shortcut and settings\u2026", "command-settings"));
+  menu.style.left = `${Math.min(event.clientX, innerWidth - 220)}px`;
+  menu.style.top = `${Math.min(event.clientY, innerHeight - 185)}px`;
   document.body.appendChild(menu);
 }
 
@@ -757,6 +758,7 @@ window.ul = {
       case "init":
         state.view = message.view;
         applyTheme(message.theme);
+        applyColors(message.colors);
         if (state.view === "palette") buildPalette();
         break;
       case "toast":
@@ -781,6 +783,10 @@ window.ul = {
         if (item) { leaveQuick(false); enterQuick(item); }
         break;
       }
+      case "colors":
+        applyTheme(message.theme);
+        applyColors(message.colors);
+        break;
       case "theme":
         applyTheme(message.theme);
         break;
