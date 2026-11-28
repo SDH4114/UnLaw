@@ -232,6 +232,83 @@ function closeSheet() {
   $(".sheetback")?.remove();
 }
 
+// ---------- which commands are installed (`ul features`) ----------
+// The same choice the terminal installer offers, for a Mac that got Unlaw from the .dmg
+// (shown once after the app installs the command line) and from Settings later.
+function openFeatures(first) {
+  home.features = { data: null, chosen: null, busy: false, error: "", first: !!first, done: "" };
+  send({ op: "features-list" });
+  renderFeatures();
+}
+
+function closeFeatures() {
+  home.features = null;
+  $(".featuresback")?.remove();
+}
+
+function featureToggle(name, on) {
+  const { data, chosen } = home.features;
+  const byName = new Map(data.features.map((item) => [item.name, item]));
+  if (on) {
+    const add = (feature) => { if (chosen.has(feature)) return; chosen.add(feature); for (const need of byName.get(feature)?.requires || []) add(need); };
+    add(name);
+  } else {
+    // Off, with everything that needs it.
+    const drop = (feature) => { chosen.delete(feature); for (const item of data.features) if (chosen.has(item.name) && item.requires.includes(feature)) drop(item.name); };
+    drop(name);
+  }
+  chosen.add("menubar");
+  renderFeatures();
+}
+
+function renderFeatures() {
+  $(".featuresback")?.remove();
+  const state = home.features;
+  if (!state) return;
+  const body = [];
+  body.push(el("div", { class: "sheethead" },
+    el("div", { class: "glyph" }, icon("command")),
+    el("div", { class: "what" }, el("b", { text: state.first ? "Welcome to Unlaw" : "Commands" }),
+      el("small", { text: state.first
+        ? "The command line is installed. Choose the commands you want; you can change this later in Settings or with `ul features`."
+        : "Which commands Unlaw installs, the same list as the terminal installer (`ul features`)." }))));
+  if (state.error) body.push(el("div", { class: "preferror", text: state.error }));
+  if (!state.data) body.push(el("div", { class: "note", text: state.error ? "" : "Reading the list…" }));
+  else {
+    const list = el("div", { class: "featurelist" });
+    let group = "";
+    for (const item of state.data.features) {
+      if (item.group !== group) { group = item.group; list.appendChild(el("div", { class: "sheetlabel", text: group })); }
+      const locked = item.name === "menubar";
+      const box = el("input", { type: "checkbox", class: "switch", disabled: locked ? "" : null });
+      box.checked = state.chosen.has(item.name);
+      box.addEventListener("change", () => featureToggle(item.name, box.checked));
+      const needs = item.requires.length && !/needs /.test(item.summary) ? ` · needs ${item.requires.join(", ")}` : "";
+      list.appendChild(el("label", { class: "featurerow" + (locked ? " locked" : "") },
+        el("div", { class: "what" }, el("b", { text: item.name }), el("small", { text: item.summary + needs + (locked ? " · this app, always on" : "") })), box));
+    }
+    body.push(el("div", { class: "featurecore", text: "Always installed: " + state.data.core }), list);
+  }
+  if (state.done) body.push(el("pre", { class: "featuredone", text: state.done }));
+  const count = state.chosen ? state.chosen.size : 0;
+  const total = state.data ? state.data.features.length : 0;
+  body.push(el("div", { class: "sheetbuttons" },
+    el("button", { class: "ghost", text: "All", disabled: !state.data || state.busy ? "" : null, onclick: () => { for (const item of state.data.features) state.chosen.add(item.name); renderFeatures(); } }),
+    el("button", { class: "ghost", text: "Only this app", disabled: !state.data || state.busy ? "" : null, onclick: () => { state.chosen = new Set(["menubar"]); renderFeatures(); } }),
+    el("div", { class: "grow" }),
+    el("small", { class: "muted", text: state.data ? `${count} of ${total}` : "" }),
+    el("button", { class: "ghost", text: state.first ? "Keep everything" : "Close", disabled: state.busy ? "" : null, onclick: closeFeatures }),
+    el("button", { class: "primary", text: state.busy ? "Saving…" : "Save", disabled: !state.data || state.busy ? "" : null, onclick: () => {
+      state.busy = true;
+      state.done = "";
+      send({ op: "features-set", names: [...state.chosen] });
+      renderFeatures();
+    } })));
+  const back = el("div", { class: "sheetback featuresback", onclick: (event) => { if (event.target === back && !state.busy) closeFeatures(); } },
+    el("div", { class: "sheet features", role: "dialog", "aria-label": "Commands" }, ...body));
+  document.body.appendChild(back);
+}
+
 function renderSheet() {
   $(".sheetback")?.remove();
   const item = home.items.find((entry) => entry.name === home.sheet);
@@ -892,8 +969,7 @@ function renderDesk() {
 function deskArea() {
   if (!isDeskPart(home.section)) return;
   const rect = $(".main").getBoundingClientRect();
-  // With the sidebar folded the window's traffic lights stick out over the right side,
-  // so a thin title strip stays above the desk page (see home.css).
+  // The header is hidden on desk parts (offsetHeight 0); kept in case it shows.
   const strip = $(".top").offsetHeight;
   send({ op: "desk-area", x: rect.left, y: rect.top + strip, width: rect.width, height: rect.height - strip });
 }
@@ -1192,10 +1268,10 @@ function renderSettings() {
   const themeSelect = el("select", {}, ...themes.map((name) => el("option", { value: name, text: name, selected: name === places.theme ? "" : null })));
   themeSelect.addEventListener("change", () => setEditPrefs({ theme: themeSelect.value }));
   const editor = el("div", { class: "prefgroup" },
-    prefRow("Keys", (places.editing || "vim") === "vim"
+    prefRow("Keys", editingMode() === "vim"
       ? "Vim: normal, insert and visual modes, as in the terminal ule"
       : "Standard: no modes, typing always types; ⌘P files, ⌘⇧P commands, as in Zed or VS Code",
-    segmented([["vim", "Vim"], ["standard", "Standard"]], places.editing || "vim", (editing) => setEditPrefs({ editing }))),
+    keyModeSwitch(editingMode())),
     prefRow("Theme", "Colors Edit, the terminal ule and every window (saved in ule.toml)", themeSelect),
     prefRow("Your own theme", "A file in ~/.config/unlaw/themes that starts from the theme above; saving it shows the change at once",
       themeMaker(places)),
@@ -1215,6 +1291,9 @@ function renderSettings() {
     el("h2", { text: "Clipboard" }), clipboard,
     el("h2", { text: "Editor" }), editor,
     el("h2", { text: "Look" }), look,
+    el("h2", { text: "Commands" }), el("div", { class: "prefgroup" },
+      prefRow("Installed commands", "Which commands Unlaw installs, like the terminal installer (ul features)",
+        el("button", { class: "ghost", text: "Choose…", onclick: () => openFeatures(false) }))),
     el("h2", { text: "Advanced" }), files));
 }
 
@@ -1244,6 +1323,7 @@ window.ul = {
   receive(message) {
     switch (message.type) {
       case "init":
+        document.documentElement.style.setProperty("--zoom", String(Number(message.zoom) || 1));
         applyTheme(message.theme);
         applyColors(message.colors);
         home.items = message.items || [];
@@ -1258,10 +1338,34 @@ window.ul = {
       case "theme":
         applyTheme(message.theme);
         break;
+      case "zoom":
+        document.documentElement.style.setProperty("--zoom", String(Number(message.zoom) || 1));
+        break;
       case "colors":
         applyTheme(message.theme);
         applyColors(message.colors);
         if (home.section === "edit") applyEditTheme();
+        break;
+      case "choose-features":
+        openFeatures(!!message.first);
+        break;
+      case "features":
+        if (!home.features) break;
+        if (message.error !== undefined || !message.data) { home.features.error = "Could not read the list: " + (message.error || "no answer"); }
+        else {
+          home.features.data = message.data;
+          home.features.chosen = new Set(message.data.features.filter((item) => item.installed).map((item) => item.name));
+          home.features.chosen.add("menubar");
+        }
+        renderFeatures();
+        break;
+      case "features-done":
+        if (!home.features) break;
+        home.features.busy = false;
+        if (message.ok) { closeFeatures(); break; }
+        home.features.error = "Not saved.";
+        home.features.done = message.output || "";
+        renderFeatures();
         break;
       case "update":
         showUpdate(message);

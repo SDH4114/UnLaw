@@ -30,4 +30,4 @@ window-vibrancy = "0.8"
 objc2 = "0.6"
 block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSGeometry", "NSData", "NSDictionary", "NSFileManager", "NSURL", "NSError"] }
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplication", "NSImage", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSControl", "NSView", "NSResponder", "NSCell", "NSWindow", "NSWorkspace", "NSBitmapImageRep", "NSImageRep", "NSEvent", "block2"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplication", "NSImage", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSControl", "NSView", "NSResponder", "NSCell", "NSWindow", "NSWorkspace", "NSBitmapImageRep", "NSImageRep", "NSEvent", "NSPanel", "NSSavePanel", "NSOpenPanel", "block2"] }

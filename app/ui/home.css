@@ -34,19 +34,16 @@ body.home { -webkit-user-select: none; user-select: none; }
 .side .sidetoggle svg.icon { width: 17px; height: 17px; color: var(--muted); }
 .side .sidetoggle:hover svg.icon { color: var(--text); }
 /* Folded: a column of icons, wide enough for the window's traffic lights above it. */
-/* Narrower than the traffic lights (62 pt from x = 8): they stick out over the right side,
-   whose header moves past them; on the desk parts a 30 pt title strip stays for them. */
-.app.side-folded .side { width: 52px; padding: 0 6px 10px; }
+/* The traffic lights sit 9-69 pt from the window's left edge: a 78 pt column keeps the same
+   9 pt on both sides of them (in points, so divided by the page zoom). */
+.app.side-folded .side { width: calc(78px / var(--zoom, 1)); padding: 0 0 10px; box-sizing: border-box; align-items: stretch; }
+.app.side-folded .side nav button { margin: 0 6px; }
 /* The grip between a panel and what is right of it: drag to resize (dragWidth). */
 .grip { flex: none; width: 7px; margin: 0 -4px 0 -3px; cursor: col-resize; position: relative; z-index: 5; }
 .grip::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent; transition: background .12s; }
 .grip:hover::after, .resizing .grip::after { background: var(--accent); }
 body.resizing, body.resizing * { cursor: col-resize !important; user-select: none !important; }
 .app.side-folded .side .lights { height: 64px; justify-content: center; align-items: flex-end; padding-bottom: 4px; box-sizing: border-box; }
-.app.side-folded .top { padding-left: 30px; }
-.app.side-folded .main.desk-on .top { display: flex; height: 30px; }
-.app.side-folded .main.desk-on .top h1 { font-size: 12.5px; }
-.app.side-folded .main.desk-on .top .sub { display: none; }
 .app.side-folded .side nav { gap: 0; }
 .app.side-folded .side nav button { justify-content: center; padding: 6px 0; }
 .app.side-folded .side nav button span, .app.side-folded .side nav button kbd { display: none; }
@@ -289,3 +286,16 @@ svg.icon.brand path.line { fill: none; stroke: currentColor; }
 .sheetlabel { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: -6px; }
 .sheet .prefrow .grow, .sheetbuttons .grow { flex: 1; }
 .sheetbuttons { display: flex; gap: 8px; align-items: center; }
+
+/* The commands chooser (ul features), a sheet like the command sheet. */
+.sheet.features { width: min(620px, calc(100vw - 48px)); }
+.featurelist { display: flex; flex-direction: column; gap: 2px; max-height: 52vh; overflow: auto; padding-right: 4px; }
+.featurelist .sheetlabel { margin: 10px 0 2px; }
+.featurerow { display: flex; align-items: center; gap: 12px; padding: 7px 10px; border-radius: 8px; cursor: pointer; }
+.featurerow:hover { background: var(--hover); }
+.featurerow .what { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.featurerow small { color: var(--muted); }
+.featurerow.locked { cursor: default; opacity: .75; }
+.featurecore { font-size: 12px; color: var(--muted); }
+.featuredone { margin: 0; max-height: 140px; overflow: auto; font-size: 11.5px; white-space: pre-wrap; color: var(--muted); }
+.sheetbuttons small.muted { color: var(--muted); font-variant-numeric: tabular-nums; }

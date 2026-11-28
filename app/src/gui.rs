@@ -1819,7 +1819,7 @@ impl App {
                 let pending = std::mem::take(&mut glass.pending);
                 self.send(
                     view,
-                    json!({"type": "init", "view": view.name(), "theme": self.theme(),
+                    json!({"type": "init", "view": view.name(), "theme": self.theme(), "zoom": self.settings.zoom,
                            "colors": self.ui_colors.clone().unwrap_or(Json::Null)}),
                 );
                 if view == View::Palette {
@@ -2038,6 +2038,9 @@ impl App {
         match result {
             Ok(copied) => {
                 self.ul = runner::find_ul();
+                // A first start from the .dmg: choose which commands to keep, like the installer.
+                self.show_home(Some("settings"));
+                self.send(View::Home, json!({"type": "choose-features", "first": true}));
                 self.toast(
                     "Unlaw",
                     &format!(
@@ -2462,6 +2465,10 @@ pub fn run() -> i32 {
                         // Kept for a page loaded again later (`init` carries it).
                         if message["type"] == "update" {
                             state.home_state.update = Some(message.clone());
+                        }
+                        // The chosen commands are seeded or removed: the lists follow.
+                        if message["type"] == "features-done" {
+                            state.reload_commands();
                         }
                         state.send(View::Home, message)
                     }

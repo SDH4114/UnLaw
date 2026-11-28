@@ -1,10 +1,13 @@
 #!/bin/sh
 # Build the downloadable Unlaw.app: the menu bar app with the whole command line
 # inside (Contents/Resources/bin). Started without `ul` on the Mac, the app
-# installs those programs into ~/.local/bin (app/src/setup.rs). The result is
-# dist/Unlaw-<version>-arm64.zip, signed ad hoc: without an Apple Developer ID a
-# downloaded copy needs one "Open Anyway" in System Settings > Privacy & Security.
-# Usage: scripts/make-app-zip.sh   (from anywhere; needs cargo, Python 3.11+, ditto)
+# installs those programs into ~/.local/bin (app/src/setup.rs) and asks which
+# commands to keep (`ul features`, like the terminal installer). The results are
+# dist/Unlaw-<version>-<arch>.dmg (the app and a link to /Applications: drag one
+# onto the other) and the same app as a .zip. Signed ad hoc: without an Apple
+# Developer ID a downloaded copy needs one "Open Anyway" in System Settings >
+# Privacy & Security.
+# Usage: scripts/make-app-zip.sh   (from anywhere; needs cargo, Python 3.11+, ditto, hdiutil)
 set -eu
 cd "$(dirname "$0")/.."
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
@@ -28,3 +31,12 @@ out="dist/Unlaw-$version-$arch.zip"
 rm -f "$out"
 ditto -c -k --keepParent "$bundle" "$out"
 echo "Built $out"
+# The disk image: Unlaw.app beside a link to /Applications, the usual drag-to-install window.
+stage="$work/dmg"
+mkdir -p "$stage"
+ditto "$bundle" "$stage/Unlaw.app"
+ln -s /Applications "$stage/Applications"
+dmg="dist/Unlaw-$version-$arch.dmg"
+rm -f "$dmg"
+hdiutil create -quiet -volname "Unlaw $version" -srcfolder "$stage" -fs HFS+ -format UDZO -ov "$dmg"
+echo "Built $dmg"

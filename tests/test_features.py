@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import os
 import pty
 import select
@@ -188,6 +190,23 @@ class FeatureCommandTests(CoreTestCase):
         self.assertIn("[x] yt", listing)
         self.assertIn("[ ] spotify", listing)
         self.assertIn("Core (always installed)", listing)
+
+    def test_list_as_json_for_the_app(self) -> None:
+        self.choose("yt", "lm", "agent")
+        self.ok("init")
+        listing = json.loads(self.ok("features", "list", "--json").stdout)
+        self.assertIn("ul", listing["core"])
+        features = {item["name"]: item for item in listing["features"]}
+        sys.path.insert(0, str(ROOT / "src"))
+        from unlawful import features as package
+
+        self.assertEqual(set(features), {feature[0] for feature in package.FEATURES})
+        self.assertTrue(features["yt"]["installed"])
+        self.assertFalse(features["spotify"]["installed"])
+        self.assertEqual(features["agent"]["requires"], ["lm"])
+        self.assertTrue(features["lm"]["compiled"])
+        self.assertTrue(features["lm"]["built"], "test builds have every cargo feature")
+        self.assertEqual(features["yt"]["group"], "Media")
 
     def test_default_is_everything(self) -> None:
         self.ok("init")

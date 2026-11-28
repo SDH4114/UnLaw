@@ -67,41 +67,41 @@ function isDark() { return document.documentElement.classList.contains("dark"); 
 function renderEdit() {
   header("Edit", "");
   const title = dragArea(el("div", { class: "etitle" },
-    el("button", { class: "ghost icon", title: "Project panel (⌘B)", "aria-label": "Project panel", onclick: toggleEditTree }, icon("sidebar")),
     el("span", { class: "project" }),
     el("div", { class: "grow" }),
     el("button", { class: "esearch", title: "Find a file (⌘P)", onclick: () => editCommand("file_picker") },
       icon("search"), el("span", { text: "Search files…" }), el("kbd", { text: "⌘P" })),
     el("div", { class: "grow" }),
-    el("button", { class: "ghost icon", title: "All commands (⌘⇧P)", "aria-label": "Commands", onclick: () => editCommand("command_palette") }, icon("command")),
-    el("button", { class: "ghost icon", title: "Open a file", "aria-label": "Open a file", onclick: () => send({ op: "edit-open-dialog" }) }, icon("file")),
-    el("button", { class: "ghost icon", title: "Add a folder to the project", "aria-label": "Add a folder", onclick: () => send({ op: "edit-add-folder" }) }, icon("folder"))));
+    el("button", { class: "ghost icon", title: "Run the open file in the terminal (⌘R)", "aria-label": "Run", onclick: termRunFile }, icon("run")),
+    el("button", { class: "ghost icon", title: "All commands (⌘⇧P)", "aria-label": "Commands", onclick: () => editCommand("command_palette") }, icon("command"))));
   const tree = el("aside", { class: "etree", tabindex: "0" });
   tree.addEventListener("keydown", treeKey);
-  tree.addEventListener("contextmenu", (event) => { if (event.target === tree) treeMenu(event, null); });
+  // Anywhere in the panel that is not a row or a button: the panel's own menu.
+  tree.addEventListener("contextmenu", (event) => { if (!event.target.closest(".erow, button, input")) treeMenu(event, null); });
+  edit.treeNode = tree;
   const pane = el("div", { class: "epane" },
     el("div", { class: "etabs" }),
     el("div", { class: "eerror", hidden: "" }),
     el("div", { class: "ebody" }));
-  const grip = el("div", { class: "grip", title: "Drag to resize; double-click hides", ondblclick: toggleEditTree });
-  const box = el("div", { class: "edit" + (treeHidden() ? " tree-hidden" : "") },
-    title, el("div", { class: "ework" }, tree, grip, pane), el("div", { class: "estatus" }));
+  // Docks like Zed's: left, right and bottom; the project panel and the terminal can sit in
+  // any of them (dragged by their header), each dock resized by its inner edge.
+  const work = el("div", { class: "ework" },
+    el("div", { class: "edock", "data-dock": "left" }), dockGrip("left"),
+    el("div", { class: "ecenter" }, pane, dockGrip("bottom"), el("div", { class: "edock", "data-dock": "bottom" })),
+    dockGrip("right"), el("div", { class: "edock", "data-dock": "right" }));
+  const box = el("div", { class: "edit" }, title, work, el("div", { class: "estatus" }));
   $(".content").replaceChildren(box);
-  box.style.setProperty("--tree-w", treeWidth() + "px");
-  dragWidth(grip, {
-    start: () => (treeHidden() ? 0 : treeWidth()),
-    // Narrower than TREE_SNAP hides the project panel; wider shows it at that width.
-    move: (width) => {
-      const hidden = width < TREE_SNAP;
-      if (hidden !== treeHidden()) { store("edit-tree-hidden", hidden ? "1" : "0"); $(".edit").classList.toggle("tree-hidden", hidden); }
-      if (!hidden) $(".edit").style.setProperty("--tree-w", clampWidth(width, TREE_MIN, TREE_MAX) + "px");
-    },
-    end: (width) => { if (width >= TREE_SNAP) store("edit-tree-width", String(clampWidth(width, TREE_MIN, TREE_MAX))); },
-  });
+  // The editor's grid follows its box, not only the window: the tab strip appearing with the
+  // first file, an error line or a dock changing size resize it too (the last rows, ule's
+  // own status line, were cut off).
+  const body = pane.querySelector(".ebody");
+  new ResizeObserver(() => { clearTimeout(uleResizeTimer); uleResizeTimer = setTimeout(() => { resizeUle(); scheduleUleDraw(); }, 30); }).observe(body);
   applyEditTheme();
   if (!edit.places) send({ op: "edit-places" });
   drawTree();
   drawPane();
+  term.node = null;
+  placePanels();
 }
 
 // File search and project search look in the first folder of the project.
@@ -121,45 +121,197 @@ function editCommand(name) {
 }
 
 function setEditPrefs(change) {
+  // Shown at once: the editor's next frame confirms it (a second click before that must not
+  // flip it back, which made the switch look broken).
+  if (change.editing) edit.wantEditing = change.editing;
   send({ op: "edit-prefs", ...change });
+  if (change.editing) { drawStatus(edit.info[currentPath()] || null); if (home.section === "settings") renderSettings(); }
 }
 
-// The editor theme's colors on every surface of the part (CSS variables on `.edit`).
+// The key mode shown everywhere: the one just chosen until the editor says it took it.
+function editingMode() {
+  const frame = edit.ule.frame && edit.ule.frame.editing;
+  const saved = edit.places && edit.places.editing;
+  if (edit.wantEditing && (frame === edit.wantEditing || (!edit.ule.id && saved === edit.wantEditing))) edit.wantEditing = null;
+  return edit.wantEditing || frame || (edit.places && edit.places.editing) || "vim";
+}
+
+function keyModeSwitch(editing) {
+  const box = segmented([["vim", "Vim"], ["standard", "Standard"]], editing, (mode) => setEditPrefs({ editing: mode }));
+  box.title = "Vim: modes (normal, insert, visual). Standard: type at once, like Zed or VS Code. The terminal ule follows too.";
+  return box;
+}
+
+// The editor theme colors only the code (its own background and text); every other surface
+// of the part uses the app's tokens, which follow the theme only with Look > Colors =
+// "Editor theme". A theme without real colors (`unlaw`: terminal colors) draws on the glass.
 function applyEditTheme() {
   const box = $(".edit");
-  const theme = edit.ule.frame && edit.ule.frame.theme;
   if (!box) return;
-  const names = ["--ed-bg", "--ed-fg", "--ed-panel", "--ed-line", "--ed-sel", "--ed-muted", "--ed-border", "--ed-accent", "--ed-dir"];
-  // Only the theme's own variables: the style also holds the panel width (--tree-w).
-  if (!theme) { for (const name of names) box.style.removeProperty(name); return; }
-  const dark = isDark();
-  const bg = uleColor(theme.bg, dark ? "#16171a" : "#ffffff");
-  const fg = uleColor(theme.fg, dark ? "#e4e5e9" : "#1d1d1f");
-  const vars = {
-    "--ed-bg": bg, "--ed-fg": fg,
-    "--ed-panel": uleColor(theme.panel, dark ? "#1f2023" : "#f4f4f5"),
-    "--ed-line": uleColor(theme.line, dark ? "#232428" : "#f0f0f2"),
-    "--ed-sel": uleColor(theme.selection, dark ? "#2f3440" : "#dbe4f0"),
-    "--ed-muted": uleColor(theme.muted, dark ? "#7c7f88" : "#8a8d94"),
-    "--ed-border": uleColor(theme.border, dark ? "#2c2d31" : "#e2e2e5"),
-    "--ed-accent": uleColor(theme.accent, dark ? "#61afef" : "#0550ae"),
-    "--ed-dir": uleColor(theme.dir, fg),
-  };
-  for (const [name, value] of Object.entries(vars)) {
-    if (box.style.getPropertyValue(name) !== value) box.style.setProperty(name, value);
+  const theme = edit.ule.frame && edit.ule.frame.theme;
+  const hex = (value) => (/^#[0-9a-f]{6}$/i.test(value || "") ? value : null);
+  for (const [name, value] of [["--code-bg", hex(theme && theme.bg)], ["--code-fg", hex(theme && theme.fg)]]) {
+    if (value) { if (box.style.getPropertyValue(name) !== value) box.style.setProperty(name, value); }
+    else box.style.removeProperty(name);
   }
 }
 
-const TREE_MIN = 160, TREE_MAX = 640, TREE_SNAP = 90;
-function treeWidth() { return clampWidth(Number(stored("edit-tree-width", "240")) || 240, TREE_MIN, TREE_MAX); }
+// ---------- docks ----------
+const DOCKS = ["left", "right", "bottom"];
+const PANELS = { tree: "Project", term: "Terminal" };
+
+function dockOf() {
+  let saved = {};
+  try { saved = JSON.parse(stored("edit-docks", "{}")) || {}; } catch { saved = {}; }
+  const pick = (value, fallback) => (DOCKS.includes(value) ? value : fallback);
+  return { tree: pick(saved.tree, "left"), term: pick(saved.term, "bottom") };
+}
+
+function dockSizes() {
+  let saved = {};
+  try { saved = JSON.parse(stored("edit-dock-size", "{}")) || {}; } catch { saved = {}; }
+  const number = (value, fallback) => (Number.isFinite(value) && value > 0 ? value : fallback);
+  return { left: number(saved.left, Number(stored("edit-tree-width", "240")) || 240), right: number(saved.right, 300),
+    bottom: number(saved.bottom, Number(stored("edit-term-height", "240")) || 240) };
+}
+
+function clampDock(dock, size) {
+  const work = $(".ework");
+  const room = work ? (dock === "bottom" ? work.clientHeight - 120 : work.clientWidth - 280) : 800;
+  return Math.round(Math.max(dock === "bottom" ? 90 : 150, Math.min(Math.max(150, room), size)));
+}
 
 function treeHidden() { return stored("edit-tree-hidden", "0") === "1"; }
 
 function toggleEditTree() {
-  const hidden = !treeHidden();
-  store("edit-tree-hidden", hidden ? "1" : "0");
-  $(".edit")?.classList.toggle("tree-hidden", hidden);
+  store("edit-tree-hidden", treeHidden() ? "0" : "1");
+  placePanels();
+}
+
+// Puts each shown panel in its dock; empty docks and their grips are hidden.
+function placePanels() {
+  const box = $(".edit");
+  if (!box) return;
+  const where = dockOf(), sizes = dockSizes();
+  if (term.open && !term.sessions.length) termNew();
+  if (term.open && !term.node) termBuild();
+  const shown = { tree: !treeHidden() && edit.treeNode, term: term.open && term.node };
+  for (const dock of DOCKS) {
+    const holder = box.querySelector(`.edock[data-dock="${dock}"]`);
+    const panels = Object.keys(PANELS).filter((id) => shown[id] && where[id] === dock).map((id) => shown[id]);
+    for (const child of [...holder.children]) if (!panels.includes(child)) child.remove();
+    for (const panel of panels) if (panel.parentNode !== holder) holder.appendChild(panel);
+    holder.hidden = !panels.length;
+    box.querySelector(`.dgrip[data-dock="${dock}"]`).hidden = !panels.length;
+    holder.style[dock === "bottom" ? "height" : "width"] = clampDock(dock, sizes[dock]) + "px";
+  }
   window.dispatchEvent(new Event("resize"));
+}
+
+function dockGrip(dock) {
+  const grip = el("div", { class: "dgrip", "data-dock": dock, title: "Drag to resize" });
+  grip.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    grip.setPointerCapture(event.pointerId);
+    const sizes = dockSizes(), from = sizes[dock], x = event.clientX, y = event.clientY;
+    const holder = $(`.edock[data-dock="${dock}"]`);
+    document.body.classList.add(dock === "bottom" ? "resizing-v" : "resizing");
+    const move = (next) => {
+      const delta = dock === "left" ? next.clientX - x : dock === "right" ? x - next.clientX : y - next.clientY;
+      sizes[dock] = clampDock(dock, from + delta);
+      holder.style[dock === "bottom" ? "height" : "width"] = sizes[dock] + "px";
+    };
+    const up = () => {
+      grip.removeEventListener("pointermove", move);
+      document.body.classList.remove("resizing", "resizing-v");
+      store("edit-dock-size", JSON.stringify(sizes));
+      window.dispatchEvent(new Event("resize"));
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", up, { once: true });
+    grip.addEventListener("pointercancel", up, { once: true });
+  });
+  grip.addEventListener("dblclick", () => {
+    const sizes = dockSizes();
+    sizes[dock] = dock === "bottom" ? 240 : dock === "left" ? 240 : 300;
+    store("edit-dock-size", JSON.stringify(sizes));
+    placePanels();
+  });
+  return grip;
+}
+
+function movePanelTo(id, dock) {
+  const where = dockOf();
+  where[id] = dock;
+  store("edit-docks", JSON.stringify(where));
+  placePanels();
+}
+
+// Dragging a panel by its header: zones light up over the editor; letting go over one
+// moves the panel there. A short press stays a click.
+function panelDrag(header, id) {
+  header.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.target.closest("button, input, select")) return;
+    const startX = event.clientX, startY = event.clientY;
+    let overlay = null, zone = null, label = null;
+    const zoneAt = (x, y) => {
+      const rect = $(".ework").getBoundingClientRect();
+      if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return null;
+      if (x < rect.left + rect.width * 0.25) return "left";
+      if (x > rect.right - rect.width * 0.25) return "right";
+      if (y > rect.bottom - rect.height * 0.4) return "bottom";
+      return null;
+    };
+    const move = (next) => {
+      if (!overlay) {
+        if (Math.hypot(next.clientX - startX, next.clientY - startY) < 6) return;
+        overlay = el("div", { class: "edrop" }, ...DOCKS.map((dock) => el("div", { class: "edropzone", "data-dock": dock }, el("span", { text: dock[0].toUpperCase() + dock.slice(1) }))));
+        $(".ework").appendChild(overlay);
+        label = el("div", { class: "edraglabel", text: PANELS[id] });
+        document.body.appendChild(label);
+        document.body.classList.add("dragging-panel");
+      }
+      zone = zoneAt(next.clientX, next.clientY);
+      for (const item of overlay.children) item.classList.toggle("on", item.dataset.dock === zone);
+      label.style.left = next.clientX + 12 + "px";
+      label.style.top = next.clientY + 12 + "px";
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (!overlay) return;
+      overlay.remove();
+      label.remove();
+      document.body.classList.remove("dragging-panel");
+      if (zone) movePanelTo(id, zone);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  });
+  header.addEventListener("contextmenu", (event) => {
+    if (event.target.closest("button, input")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeTreeMenu();
+    const here = dockOf()[id];
+    const item = (label, run, off) => el("button", { class: "emi", disabled: off ? "" : null, onclick: () => { closeTreeMenu(); run(); } }, el("span", { text: label }));
+    const menu = el("div", { class: "emenu", role: "menu" },
+      ...DOCKS.map((dock) => item(`Move to the ${dock}`, () => movePanelTo(id, dock), dock === here)),
+      el("hr"),
+      item(id === "tree" ? "Hide the project panel (⌘B)" : "Hide the terminal (⌃`)", () => (id === "tree" ? toggleEditTree() : showTerminal(false))));
+    openMenuAt(menu, event);
+  });
+}
+
+function openMenuAt(menu, event) {
+  ($(".edit") || document.body).appendChild(menu);
+  menu.style.left = Math.min(event.clientX, innerWidth - menu.offsetWidth - 6) + "px";
+  menu.style.top = Math.min(event.clientY, innerHeight - menu.offsetHeight - 6) + "px";
+  setTimeout(() => document.addEventListener("mousedown", function away(click) {
+    if (!menu.contains(click.target)) closeTreeMenu();
+    document.removeEventListener("mousedown", away, true);
+  }, true));
 }
 
 function showEditError(text) {
@@ -206,11 +358,14 @@ function drawTree() {
   if (!places) { tree.replaceChildren(el("div", { class: "note", text: "Loading…" })); return; }
   const parts = [];
   const tool = (name, title, run) => el("button", { class: "ghost tiny", title, "aria-label": title, onclick: (event) => { event.stopPropagation(); run(); } }, icon(name));
-  parts.push(el("div", { class: "ehead" }, el("h4", { text: "Project" }), el("div", { class: "grow" }),
-    tool("filePlus", "New file (⌘N)", () => startNaming("new-file", selectedEntry())),
-    tool("folderPlus", "New folder (⇧⌘N)", () => startNaming("new-folder", selectedEntry())),
-    tool("collapse", "Collapse all", () => { edit.open.clear(); rememberOpen(); drawTree(); })));
-  if (!places.roots.length) parts.push(el("p", { class: "muted small", text: "Add a folder to see its files here. Files dropped on the window open too." }));
+  const head = el("div", { class: "ehead", title: "Drag to move the panel; right-click for more" }, el("h4", { text: "Project" }), el("div", { class: "grow" }),
+    // Each asks where first (a macOS dialog); new files and folders inside the project stay on
+    // the right-click menu, ⌘N and ⇧⌘N.
+    tool("filePlus", "New file: choose where it goes", () => send({ op: "edit-new-file-dialog" })),
+    tool("folderPlus", "New project folder: choose its name and place", () => send({ op: "edit-new-project-dialog" })),
+    tool("search", "Add a folder to the project, or open a file", () => send({ op: "edit-pick-dialog" })));
+  panelDrag(head, "tree");
+  parts.push(head);
   for (const root of places.roots) {
     const open = edit.open.has(root.path);
     const head = el("div", { class: "erow root" + (open ? " open" : "") + (edit.selected === root.path ? " sel" : ""), title: root.path,
@@ -224,13 +379,17 @@ function drawTree() {
     if (edit.naming && edit.naming.dir === root.path && edit.naming.kind !== "rename") { if (!open) toggleFolder(root.path); }
     if (open) parts.push(...folderRows(root.path, 1));
   }
-  // Below the folders: opening a file reorders this list, and the tree must not move
-  // under the mouse.
-  if (places.recent.length) {
+  // Recent files (5), each with × to take it off; below the folders, so opening a file
+  // (which reorders the list) never moves the tree under the mouse.
+  const recent = (places.recent || []).slice(0, 5);
+  if (recent.length) {
     parts.push(el("h4", { text: "Recent" }));
-    for (const item of places.recent.slice(0, 8)) {
+    for (const item of recent) {
       const row = fileRow(item.path, item.name, 0);
       if (!item.exists) row.classList.add("gone");
+      row.appendChild(el("button", { class: "ghost x", title: "Take off the list (the file stays)", text: "×", onclick: (event) => {
+        event.stopPropagation(); send({ op: "edit-forget", path: item.path });
+      } }));
       parts.push(row);
     }
   }
@@ -448,16 +607,29 @@ function closeTreeMenu() { $(".emenu")?.remove(); }
 function treeMenu(event, entry) {
   event.preventDefault();
   event.stopPropagation();
-  if (!entry) {
-    const root = edit.places && edit.places.roots.find((item) => item.exists);
-    if (!root) return;
-    entry = { path: root.path, dir: true, root: true };
-  }
-  edit.selected = entry.path;
   closeTreeMenu();
   const item = (label, keys, run, danger) => el("button", { class: "emi" + (danger ? " danger" : ""), onclick: () => { closeTreeMenu(); run(); } },
     el("span", { text: label }), keys ? el("kbd", { text: keys }) : null);
   const line = () => el("hr");
+  if (!entry) {
+    // The empty part of the panel: what can be made or added, and the panel itself.
+    const root = edit.places && edit.places.roots.find((place) => place.exists);
+    const parts = [];
+    if (root) {
+      const rootEntry = { path: root.path, dir: true, root: true };
+      parts.push(item(`New File in ${root.name}…`, "⌘N", () => startNaming("new-file", rootEntry)),
+        item(`New Folder in ${root.name}…`, "⇧⌘N", () => startNaming("new-folder", rootEntry)), line());
+    }
+    parts.push(item("New File Somewhere…", "", () => send({ op: "edit-new-file-dialog" })),
+      item("New Project Folder…", "", () => send({ op: "edit-new-project-dialog" })),
+      item("Add a Folder or Open a File…", "", () => send({ op: "edit-pick-dialog" })), line());
+    if (root) parts.push(item("Collapse All", "", () => { edit.open.clear(); rememberOpen(); drawTree(); }));
+    parts.push(item("Open the Terminal", "⌃`", () => showTerminal(true)),
+      item("Hide the Project Panel", "⌘B", toggleEditTree));
+    openMenuAt(el("div", { class: "emenu", role: "menu" }, ...parts), event);
+    return;
+  }
+  edit.selected = entry.path;
   const parts = [
     item("New File…", "⌘N", () => startNaming("new-file", entry)),
     item("New Folder…", "⇧⌘N", () => startNaming("new-folder", entry)),
@@ -675,7 +847,7 @@ function drawStatus(info) {
   const status = $(".estatus");
   if (!status) return;
   const places = edit.places || {};
-  const editing = (edit.ule.frame && edit.ule.frame.editing) || places.editing || "vim";
+  const editing = editingMode();
   const themes = places.themes || [];
   const chosen = places.theme || (edit.ule.frame && edit.ule.frame.theme && edit.ule.frame.theme.name) || "unlaw";
   const theme = el("select", { class: "etheme", title: "Editor theme (Edit and the terminal ule)" },
@@ -686,11 +858,9 @@ function drawStatus(info) {
     el("button", { class: "ghost icon", title: "Project panel (⌘B)", "aria-label": "Project panel", onclick: toggleEditTree }, icon("sidebar")),
     ...left,
     el("div", { class: "grow" }),
+    el("button", { class: "ghost icon", title: "Terminal (⌃`)", "aria-label": "Terminal", onclick: () => showTerminal(!term.open) }, icon("terminal")),
     el("button", { class: "ghost keysbtn", title: "Keyboard shortcuts (⌘K ⌘S)", text: "Keys", onclick: toggleKeys }),
-    el("button", { class: "ghost mode" + (editing === "vim" ? " vim" : ""),
-      title: editing === "vim" ? "Vim keys (modes). Click for ordinary editor keys" : "Ordinary editor keys, no modes. Click for vim",
-      text: editing === "vim" ? "Vim" : "Standard",
-      onclick: () => setEditPrefs({ editing: editing === "vim" ? "standard" : "vim" }) }),
+    keyModeSwitch(editing),
     theme);
 }
 
@@ -976,7 +1146,7 @@ function drawKeys() {
   if (!work) return;
   let panel = $(".ekeys");
   if (!edit.keysOpen) { if (panel) panel.remove(); return; }
-  const editing = (edit.ule.frame && edit.ule.frame.editing) || (edit.places && edit.places.editing) || "vim";
+  const editing = editingMode();
   const filter = el("input", { class: "efilter", placeholder: "Filter keys…", value: edit.keysFilter || "" });
   const list = el("div", { class: "elist" });
   const fill = () => {
@@ -1007,7 +1177,7 @@ function keyName(event) {
 // A Zed binding for this key (or the second key of a ⌘K chord): true when it was used.
 function zedKey(event) {
   const name = keyName(event);
-  const editing = (edit.ule.frame && edit.ule.frame.editing) || (edit.places && edit.places.editing) || "vim";
+  const editing = editingMode();
   if (edit.chord) {
     const first = edit.chord;
     edit.chord = null;
@@ -1113,8 +1283,10 @@ function drawUle() {
   const context = canvas.getContext("2d");
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   const style = getComputedStyle(canvas);
-  const baseBg = style.getPropertyValue("--code-bg").trim() || (isDark() ? "#16171a" : "#ffffff");
-  const baseFg = style.getPropertyValue("--code-fg").trim() || (isDark() ? "#e4e5e9" : "#1d1d1f");
+  // The theme's own background, or (a theme of terminal colors) the window's glass.
+  const baseBg = style.getPropertyValue("--code-bg").trim() || style.getPropertyValue("--page").trim() || (isDark() ? "#18181a" : "#ffffff");
+  const baseFg = style.getPropertyValue("--code-fg").trim() || style.getPropertyValue("--text").trim() || (isDark() ? "#f2f2f4" : "#1d1d1f");
+  context.clearRect(0, 0, width, height);
   context.fillStyle = baseBg;
   context.fillRect(0, 0, width, height);
   if (!frame) return;
@@ -1183,6 +1355,7 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
 
 function editReceive(message) {
   if (["edit-pages", "edit-ink", "edit-render"].includes(message.type) && pvReceive(message)) return true;
+  if (message.type.startsWith("term-")) return termReceive(message);
   switch (message.type) {
     case "edit-places":
       edit.places = message;
@@ -1279,3 +1452,381 @@ function editReceive(message) {
   }
   return false;
 }
+
+// ---------- terminal (a dock panel, several sessions as tabs) ----------
+// Command lines run one at a time per session on a pseudo-terminal in Rust (`term-*` ops,
+// each with its `session`); this side draws their output: colors (SGR), carriage
+// returns, erase-line and cursor steps within a line. Full-screen programs (vim, top)
+// are not drawn: those belong in a real terminal.
+const TERM_MAX_LINES = 5000;
+const term = { open: stored("edit-term-open", "0") === "1", sessions: [], active: 0, nextSid: 1, node: null, drawQueued: false };
+
+function termSession(sid) { return term.sessions.find((session) => session.sid === sid) || null; }
+function termActive() { return termSession(term.active); }
+
+function termNew() {
+  const session = { sid: term.nextSid++, lines: [[]], row: 0, col: 0, style: {}, dirty: 0, rebuild: true, running: false, id: 0,
+    cwd: "", shown: "", history: [], back: 0, pending: "", command: "", unseen: false };
+  term.sessions.push(session);
+  term.active = session.sid;
+  send({ op: "term-cwd", session: session.sid });
+  return session;
+}
+
+function termClose(sid) {
+  const index = term.sessions.findIndex((session) => session.sid === sid);
+  if (index < 0) return;
+  send({ op: "term-close", session: sid });
+  term.sessions.splice(index, 1);
+  if (!term.sessions.length) { showTerminal(false); return; }
+  if (term.active === sid) term.active = term.sessions[Math.max(0, index - 1)].sid;
+  termShow();
+}
+
+function termSwitch(sid) {
+  const session = termSession(sid);
+  if (!session) return;
+  term.active = sid;
+  session.unseen = false;
+  session.rebuild = true;
+  termShow();
+}
+
+function termStyleKey(style) {
+  const parts = [];
+  if (style.fg) parts.push("color:" + style.fg);
+  if (style.bg) parts.push("background:" + style.bg);
+  if (style.bold) parts.push("font-weight:700");
+  if (style.dim) parts.push("opacity:.65");
+  if (style.italic) parts.push("font-style:italic");
+  if (style.underline) parts.push("text-decoration:underline");
+  return parts.join(";");
+}
+
+function termColor(n) { return uleColor("a" + n, null); }
+
+function termSgr(s, params) {
+  const list = params.length ? params : [0];
+  for (let i = 0; i < list.length; i += 1) {
+    const p = list[i], st = s.style;
+    if (p === 0) { s.style = {}; continue; }
+    if (p === 1) st.bold = true; else if (p === 2) st.dim = true; else if (p === 3) st.italic = true; else if (p === 4) st.underline = true;
+    else if (p === 22) { st.bold = false; st.dim = false; } else if (p === 23) st.italic = false; else if (p === 24) st.underline = false;
+    else if (p === 7) st.inverse = true; else if (p === 27) st.inverse = false;
+    else if (p >= 30 && p <= 37) st.fg = termColor(p - 30); else if (p >= 90 && p <= 97) st.fg = termColor(p - 90 + 8);
+    else if (p >= 40 && p <= 47) st.bg = termColor(p - 40); else if (p >= 100 && p <= 107) st.bg = termColor(p - 100 + 8);
+    else if (p === 39) st.fg = null; else if (p === 49) st.bg = null;
+    else if (p === 38 || p === 48) {
+      let color = null;
+      if (list[i + 1] === 5) { color = termColor(list[i + 2] || 0); i += 2; }
+      else if (list[i + 1] === 2) { color = `rgb(${list[i + 2] || 0},${list[i + 3] || 0},${list[i + 4] || 0})`; i += 4; }
+      if (p === 38) st.fg = color; else st.bg = color;
+    }
+  }
+}
+
+function termPut(s, char) {
+  const line = s.lines[s.row];
+  while (line.length < s.col) line.push({ ch: " ", st: "" });
+  const style = s.style.inverse ? { ...s.style, fg: s.style.bg || "var(--page)", bg: s.style.fg || "var(--text)" } : s.style;
+  line[s.col] = { ch: char, st: termStyleKey(style) };
+  s.col += 1;
+}
+
+function termNewline(s) {
+  s.row += 1;
+  s.col = 0;
+  if (s.row >= s.lines.length) s.lines.push([]);
+  if (s.lines.length > TERM_MAX_LINES) {
+    const drop = s.lines.length - TERM_MAX_LINES;
+    s.lines.splice(0, drop);
+    s.row -= drop;
+    s.rebuild = true;
+  }
+}
+
+function termWrite(s, text) {
+  const first = s.row;
+  const data = s.pending + text;
+  s.pending = "";
+  for (let i = 0; i < data.length; i += 1) {
+    const c = data[i];
+    if (c === "\x1b") {
+      const next = data[i + 1];
+      if (next === undefined) { s.pending = data.slice(i); break; }
+      if (next === "[") {
+        let j = i + 2;
+        while (j < data.length && !/[@-~]/.test(data[j])) j += 1;
+        if (j >= data.length) { s.pending = data.slice(i); break; }
+        const body = data.slice(i + 2, j), final = data[j];
+        const nums = body.replace(/^[?>=]/, "").split(";").filter((x) => x !== "").map(Number);
+        const n = nums[0] || 0;
+        if (final === "m") termSgr(s, body === "" ? [] : nums);
+        else if (final === "K") {
+          const line = s.lines[s.row];
+          if (n === 0) line.length = Math.min(line.length, s.col);
+          else if (n === 1) for (let k = 0; k < Math.min(s.col, line.length); k += 1) line[k] = { ch: " ", st: "" };
+          else line.length = 0;
+        } else if (final === "G") s.col = Math.max(0, (n || 1) - 1);
+        else if (final === "C") s.col += n || 1;
+        else if (final === "D") s.col = Math.max(0, s.col - (n || 1));
+        else if (final === "A") s.row = Math.max(0, s.row - (n || 1));
+        else if (final === "B") { for (let k = 0; k < (n || 1); k += 1) termNewline(s); }
+        else if (final === "J" && (n === 2 || n === 3)) termClear(s);
+        i = j;
+        continue;
+      }
+      if (next === "]") {
+        // OSC (window title, links): up to BEL or ESC \.
+        const end = data.slice(i + 2).search(/\x07|\x1b\\/);
+        if (end < 0) { s.pending = data.slice(i); break; }
+        i += 2 + end + (data[i + 2 + end] === "\x07" ? 0 : 1);
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (c === "\r") s.col = 0;
+    else if (c === "\n") termNewline(s);
+    else if (c === "\b") s.col = Math.max(0, s.col - 1);
+    else if (c === "\t") s.col = (Math.floor(s.col / 8) + 1) * 8;
+    else if (c >= " ") termPut(s, c);
+  }
+  s.dirty = Math.min(s.dirty, first, s.row);
+  if (s.sid !== term.active) { s.unseen = true; termTabs(); }
+  termScheduleDraw();
+}
+
+function termClear(s) {
+  s.lines = [[]];
+  s.row = 0;
+  s.col = 0;
+  s.rebuild = true;
+  termScheduleDraw();
+}
+
+function termScheduleDraw() {
+  if (term.drawQueued) return;
+  term.drawQueued = true;
+  requestAnimationFrame(() => { term.drawQueued = false; termDraw(); });
+}
+
+function termLineNode(line) {
+  const node = el("div", { class: "tline" });
+  let text = "", style = null;
+  const flush = () => {
+    if (!text) return;
+    const span = document.createElement("span");
+    if (style) span.style.cssText = style;
+    span.textContent = text;
+    node.appendChild(span);
+    text = "";
+  };
+  for (const cell of line) {
+    if (cell.st !== style) { flush(); style = cell.st; }
+    text += cell.ch;
+  }
+  flush();
+  if (!node.childNodes.length) node.textContent = "​";
+  return node;
+}
+
+function termDraw() {
+  const s = termActive();
+  const out = term.node && term.node.querySelector(".tout");
+  if (!out || !s) return;
+  const atBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 24;
+  if (s.rebuild) { out.replaceChildren(); s.rebuild = false; s.dirty = 0; }
+  const nodes = out.children;
+  for (let row = s.dirty; row < s.lines.length; row += 1) {
+    const node = termLineNode(s.lines[row]);
+    if (row < nodes.length) out.replaceChild(node, nodes[row]); else out.appendChild(node);
+  }
+  while (nodes.length > s.lines.length) out.lastChild.remove();
+  s.dirty = s.lines.length - 1;
+  if (atBottom || s.stick) { out.scrollTop = out.scrollHeight; s.stick = false; }
+}
+
+// A line of our own (the command that runs, notes): on its own line.
+function termNote(s, text, kind) {
+  if (s.col > 0 || s.lines[s.row].length) termNewline(s);
+  const saved = s.style;
+  s.style = kind === "cmd" ? { fg: "var(--accent-ink)", bold: true } : kind === "bad" ? { fg: "var(--danger)" } : { dim: true };
+  for (const char of text) termPut(s, char);
+  s.style = saved;
+  s.dirty = Math.min(s.dirty, s.row);
+  termNewline(s);
+  s.stick = true;
+  termScheduleDraw();
+}
+
+function termSize() {
+  const out = term.node && term.node.querySelector(".tout");
+  const cell = cellSize();
+  if (!out || !out.clientWidth) return { cols: 80, rows: 24 };
+  return { cols: Math.max(20, Math.floor((out.clientWidth - 24) / cell.w)), rows: Math.max(4, Math.floor(out.clientHeight / cell.h)) };
+}
+
+function termTabs() {
+  const strip = term.node && term.node.querySelector(".ttabs");
+  if (!strip) return;
+  strip.replaceChildren(...term.sessions.map((session, index) => {
+    const name = session.running ? session.command.split(/\s+/)[0] : (session.shown.split("/").pop() || "~");
+    const tab = el("div", { class: "ttab" + (session.sid === term.active ? " on" : "") + (session.unseen ? " unseen" : ""),
+      title: (session.running ? session.command + " — " : "") + (session.cwd || ""), onclick: () => termSwitch(session.sid) },
+      session.running ? el("span", { class: "tdot" }) : null,
+      el("span", { class: "tname", text: `${index + 1} ${name}` }),
+      el("button", { class: "ghost x", title: "Close this terminal", text: "×", onclick: (event) => { event.stopPropagation(); termClose(session.sid); } }));
+    return tab;
+  }), el("button", { class: "ghost icon tnew", title: "New terminal (⌃⇧`)", "aria-label": "New terminal", onclick: () => { termNew(); termShow(); } }, icon("plus")));
+}
+
+function termPrompt() {
+  const s = termActive();
+  if (!term.node || !s) return;
+  term.node.querySelector(".tprompt").textContent = s.running ? "›" : (s.shown || "~") + " ❯";
+  term.node.querySelector(".tstop").hidden = !s.running;
+  term.node.querySelector(".tinput").placeholder = s.running ? "Input for the running program (Enter sends, ⌃C stops)" : "Type a command, or Run";
+}
+
+// The active session on screen: tabs, output, prompt.
+function termShow() {
+  if (!term.node) return;
+  const s = termActive();
+  if (s) s.rebuild = true;
+  termTabs();
+  termDraw();
+  termPrompt();
+  term.node.querySelector(".tinput").focus();
+}
+
+function termRun(line) {
+  const s = termActive();
+  if (!s) return;
+  if (!s.running && line.trim() === "clear") { termClear(s); return; }
+  if (!s.running && line.trim()) { s.history.push(line); if (s.history.length > 200) s.history.shift(); }
+  s.back = 0;
+  send({ op: "term-run", session: s.sid, text: line, ...termSize() });
+}
+
+// Runs the file shown in the editor (saved first), in a free terminal: the active one, or
+// a new one when a command still runs there.
+function termRunFile() {
+  const path = currentPath();
+  showTerminal(true);
+  let s = termActive();
+  if (!path) { termNote(s, "Open a file to run it.", "bad"); return; }
+  if (s.running) { s = termNew(); termShow(); }
+  if (edit.showing === "code") uleSend({ command: "save_all" });
+  const sid = s.sid;
+  setTimeout(() => send({ op: "term-run-file", session: sid, path, ...termSize() }), edit.showing === "code" ? 200 : 0);
+}
+
+function showTerminal(open) {
+  term.open = open;
+  store("edit-term-open", open ? "1" : "0");
+  if (open && !term.sessions.length) termNew();
+  placePanels();
+  if (open) { termShow(); }
+  else if (codeNodes && edit.showing === "code") codeNodes.input.focus();
+}
+
+function termBuild() {
+  const input = el("input", { class: "tinput", spellcheck: "false", autocomplete: "off", autocapitalize: "off", "aria-label": "Terminal input" });
+  input.addEventListener("keydown", (event) => {
+    if (event.metaKey) return;
+    event.stopPropagation();
+    const s = termActive();
+    if (!s) return;
+    if (event.key === "Enter") { event.preventDefault(); termRun(input.value); input.value = ""; return; }
+    if (event.ctrlKey && event.code === "KeyC") {
+      event.preventDefault();
+      if (s.running) send({ op: "term-input", session: s.sid, text: "\x03" }); else input.value = "";
+      return;
+    }
+    if (event.ctrlKey && event.code === "KeyD" && s.running) { event.preventDefault(); send({ op: "term-input", session: s.sid, text: "\x04" }); return; }
+    if (event.ctrlKey && event.code === "KeyL") { event.preventDefault(); termClear(s); return; }
+    if (event.ctrlKey && event.code === "Backquote") {
+      event.preventDefault();
+      if (event.shiftKey) { termNew(); termShow(); } else showTerminal(false);
+      return;
+    }
+    if (!s.running && (event.key === "ArrowUp" || event.key === "ArrowDown") && s.history.length) {
+      event.preventDefault();
+      s.back = Math.max(0, Math.min(s.history.length, s.back + (event.key === "ArrowUp" ? 1 : -1)));
+      input.value = s.back ? s.history[s.history.length - s.back] : "";
+    }
+  });
+  const button = (glyph, title, run, extra) => el("button", { class: "ghost icon" + (extra ? " " + extra : ""), title, "aria-label": title, onclick: run }, icon(glyph));
+  const head = el("div", { class: "thead", title: "Drag to move the panel; right-click for more" },
+    el("span", { class: "ttitle", text: "Terminal" }),
+    el("div", { class: "ttabs" }),
+    el("div", { class: "grow" }),
+    el("button", { class: "trun", title: "Run the open file (⌘R)", onclick: termRunFile }, icon("run"), el("span", { text: "Run" })),
+    button("stop", "Stop the command (⌃C)", () => { const s = termActive(); if (s) send({ op: "term-input", session: s.sid, text: "\x03" }); }, "tstop"),
+    button("trash", "Clear (⌃L)", () => { const s = termActive(); if (s) termClear(s); }),
+    button("x", "Hide the terminal (⌃`)", () => showTerminal(false)));
+  panelDrag(head, "term");
+  const node = el("section", { class: "eterm", "aria-label": "Terminal" }, head,
+    el("div", { class: "tout", onclick: () => { if (!getSelection().toString()) input.focus(); } }),
+    el("label", { class: "tline tinputrow" }, el("span", { class: "tprompt" }), input));
+  term.node = node;
+  new ResizeObserver(() => {
+    clearTimeout(term.resizeTimer);
+    const s = termActive();
+    term.resizeTimer = setTimeout(() => s && send({ op: "term-resize", session: s.sid, ...termSize() }), 80);
+  }).observe(node.querySelector(".tout"));
+  requestAnimationFrame(termShow);
+}
+
+function termReceive(message) {
+  const s = termSession(message.session);
+  if (!s) return true;
+  switch (message.type) {
+    case "term-output":
+      if (message.id === s.id) termWrite(s, message.text);
+      break;
+    case "term-start":
+      s.id = message.id;
+      s.running = true;
+      s.command = message.line;
+      s.style = {};
+      termNote(s, (s.shown || "~") + " ❯ " + message.line, "cmd");
+      break;
+    case "term-exit":
+      if (message.id !== s.id) break;
+      s.running = false;
+      s.pending = "";
+      if (message.code === null || message.code === undefined) termNote(s, "stopped");
+      else if (message.code !== 0) termNote(s, "exit " + message.code, "bad");
+      break;
+    case "term-cwd":
+      s.cwd = message.path;
+      s.shown = message.shown;
+      break;
+    case "term-note":
+      if (!term.open) showTerminal(true);
+      termNote(s, message.text, "bad");
+      break;
+    default:
+      return false;
+  }
+  if (s.sid === term.active) termPrompt();
+  termTabs();
+  return true;
+}
+
+// ⌃` shows or hides the terminal, ⌃⇧` opens another, ⌘R / F5 run the open file: before
+// the editor gets the key.
+document.addEventListener("keydown", (event) => {
+  if (home.section !== "edit") return;
+  if (event.ctrlKey && !event.metaKey && event.code === "Backquote") {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.shiftKey) { if (!term.open) showTerminal(true); else { termNew(); termShow(); } }
+    else showTerminal(!term.open);
+    return;
+  }
+  const run = (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.code === "KeyR") || (event.key === "F5" && !event.metaKey);
+  if (run) { event.preventDefault(); event.stopPropagation(); termRunFile(); }
+}, true);

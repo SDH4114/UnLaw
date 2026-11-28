@@ -536,11 +536,62 @@ impl App {
     }
 
     /// Page requests of the main window; true when `op` was one of them.
+    fn features_list(&self) {
+        let Some(ul) = self.ul.clone() else { return };
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            let args = ["features", "list", "--json"].map(String::from);
+            let outcome = runner::run_capped(&ul, &args, Duration::from_secs(20), runner::MAX_LIST_OUTPUT);
+            let data = serde_json::from_str::<Json>(outcome.stdout.trim()).ok().filter(|_| outcome.ok());
+            let message = match data {
+                Some(data) => json!({"type": "features", "data": data}),
+                None => json!({"type": "features", "error": outcome.stderr.trim()}),
+            };
+            let _ = proxy.send_event(UserEvent::Home(message));
+        });
+    }
+
+    /// `ul features set ... --no-build`: the app's own binaries carry every compiled part, and a
+    /// Mac from the .dmg has no Rust to rebuild with. `menubar` (this app) always stays.
+    fn features_set(&self, names: Vec<String>) {
+        let Some(ul) = self.ul.clone() else { return };
+        let plain = |name: &String| {
+            !name.is_empty()
+                && name.len() <= 32
+                && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        };
+        let mut chosen: Vec<String> = names.into_iter().filter(plain).take(64).collect();
+        if !chosen.iter().any(|name| name == "menubar") {
+            chosen.push("menubar".to_string());
+        }
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            let mut args = vec!["features".to_string(), "set".to_string()];
+            args.extend(chosen);
+            args.push("--no-build".to_string());
+            let outcome = runner::run(&ul, &args, Duration::from_secs(120));
+            let text = format!("{}{}", outcome.stdout, outcome.stderr);
+            let _ = proxy.send_event(UserEvent::Home(
+                json!({"type": "features-done", "ok": outcome.ok(), "output": text.trim()}),
+            ));
+        });
+    }
+
     pub(super) fn on_home_op(&mut self, op: &str, message: &Json) -> bool {
         match op {
             // The Update button: `ul update` in a terminal, where the build shows (it
             // restarts this app when it is done).
             "update" => self.terminal("update", Vec::new()),
+            // Which commands are installed (`ul features`), chosen in the app: first start of a
+            // downloaded app, and Settings.
+            "features-list" => self.features_list(),
+            "features-set" => {
+                let names: Vec<String> = message["names"]
+                    .as_array()
+                    .map(|list| list.iter().filter_map(|name| name.as_str().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                self.features_set(names);
+            }
             "section" => {
                 let section = message["section"].as_str().unwrap_or("commands").to_string();
                 self.set_section(&section);
@@ -865,7 +916,7 @@ impl App {
     }
 
     /// The interface size (`look.zoom`) on the main window's page and the desk inside it.
-    pub(super) fn apply_zoom(&self) {
+    pub(super) fn apply_zoom(&mut self) {
         let zoom = self.settings.zoom;
         if let Some(webview) = &self.home.webview {
             let _ = webview.zoom(zoom);
@@ -873,6 +924,9 @@ impl App {
         if let Some(desk) = &self.home_state.desk {
             let _ = desk.webview.zoom(zoom);
         }
+        // The page sizes things that must match the window in points (the folded side bar
+        // under the traffic lights) by this.
+        self.send(View::Home, json!({"type": "zoom", "zoom": zoom}));
         self.place_desk();
     }
 

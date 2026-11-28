@@ -150,6 +150,20 @@ fn print_list(selection: &[&str]) {
     }
 }
 
+/// `ul features list --json`, for Unlaw.app's chooser: every feature with its group,
+/// summary, whether it is chosen, built into this ul and what it needs.
+fn print_json(selection: &[&str]) {
+    let features: Vec<serde_json::Value> = FEATURES
+        .iter()
+        .map(|feature| {
+            serde_json::json!({"name": feature.name, "group": feature.group, "summary": feature.summary,
+                "installed": selection.contains(&feature.name), "compiled": feature.cargo,
+                "built": in_binary(feature.name), "requires": feature.requires})
+        })
+        .collect();
+    println!("{}", serde_json::json!({"core": CORE, "features": features}));
+}
+
 fn unknown_names<'a>(names: &[&'a str], allow_all: bool) -> Vec<&'a str> {
     names.iter().copied().filter(|name| find(name).is_none() && !(allow_all && ["all", "none"].contains(name))).collect()
 }
@@ -173,7 +187,7 @@ pub(crate) fn without(selection: &[&'static str], names: &[&str]) -> Vec<&'stati
 }
 
 fn usage() -> i32 {
-    eprintln!("Usage: ul features [list|add <name>...|remove <name>...|set <name>...|all|none|choose] [--no-build]");
+    eprintln!("Usage: ul features [list [--json]|add <name>...|remove <name>...|set <name>...|all|none|choose] [--no-build]");
     2
 }
 
@@ -182,7 +196,8 @@ pub fn run(args: &[String]) -> i32 {
         return 0;
     }
     let no_build = args.iter().any(|arg| arg == "--no-build");
-    let words: Vec<&str> = args.iter().map(String::as_str).filter(|arg| *arg != "--no-build").collect();
+    let json = args.iter().any(|arg| arg == "--json");
+    let words: Vec<&str> = args.iter().map(String::as_str).filter(|arg| *arg != "--no-build" && *arg != "--json").collect();
     let config = match config::load() {
         Ok(config) => config,
         Err(error) => {
@@ -193,7 +208,11 @@ pub fn run(args: &[String]) -> i32 {
     let current = selected(&config);
     let next = match words.as_slice() {
         [] | ["list"] => {
-            print_list(&current);
+            if json {
+                print_json(&current);
+            } else {
+                print_list(&current);
+            }
             return 0;
         }
         [action @ ("add" | "remove" | "set"), names @ ..] if !names.is_empty() => {

@@ -290,3 +290,23 @@ pub fn move_to_trash(path: &Path) -> Result<(), String> {
         .trashItemAtURL_resultingItemURL_error(&url, None)
         .map_err(|error| format!("could not move it to the Trash: {}", error.localizedDescription()))
 }
+
+/// The open panel taking a file or a folder (AppleScript's dialogs take one kind only, and an
+/// osascript JXA NSOpenPanel never showed from the app). Runs modally on the main thread.
+pub fn choose_file_or_folder(message: &str) -> Option<std::path::PathBuf> {
+    use objc2_app_kit::{NSApplication, NSModalResponseOK, NSOpenPanel};
+    let mtm = MainThreadMarker::new()?;
+    let panel = NSOpenPanel::openPanel(mtm);
+    panel.setCanChooseFiles(true);
+    panel.setCanChooseDirectories(true);
+    panel.setAllowsMultipleSelection(false);
+    panel.setMessage(Some(&NSString::from_str(message)));
+    panel.setPrompt(Some(&NSString::from_str("Add")));
+    #[allow(deprecated)]
+    NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+    if panel.runModal() != NSModalResponseOK {
+        return None;
+    }
+    let path = panel.URL()?.path()?.to_string();
+    (!path.is_empty()).then(|| std::path::PathBuf::from(path))
+}

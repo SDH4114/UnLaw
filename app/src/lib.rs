@@ -10,4 +10,5 @@ pub mod settings;
 pub mod setup;
 pub mod spec;
 pub mod template;
+pub mod term;
 pub mod views;

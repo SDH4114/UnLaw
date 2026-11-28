@@ -12,6 +12,7 @@ use std::sync::{Mutex, OnceLock};
 
 use unlaw_app::edit::{self, Places};
 use unlaw_app::files;
+use unlaw_app::term;
 
 use super::*;
 
@@ -70,14 +71,74 @@ pub(super) struct EditState {
     next_ule: u64,
     /// Files the editor had open when it was stopped for being idle.
     reopen: Vec<String>,
+    /// The terminal's sessions (tabs of the page, by its number): folder and running command.
+    terms: HashMap<u64, TermSession>,
+    next_term: u64,
+    term_size: (u16, u16),
+}
+
+#[derive(Default)]
+pub(super) struct TermSession {
+    run: Option<TermRun>,
+    cwd: Option<PathBuf>,
+}
+
+pub(super) struct TermRun {
+    id: u64,
+    child: Child,
+    master: fs::File,
 }
 
 /// Results of the Edit part's background work.
 pub(super) enum EditEvent {
     /// A folder or file picked in the macOS dialog (None: cancelled).
-    Chosen { folder: bool, path: Option<PathBuf> },
+    Chosen {
+        folder: bool,
+        path: Option<PathBuf>,
+    },
+    /// The project panel's three buttons: a place for a new file, a place and name for a new
+    /// project folder, or a file or folder to take into the project.
+    Asked {
+        ask: Ask,
+        path: PathBuf,
+    },
     /// ule ended by itself; `error` when it never drew.
-    UleEnded { id: u64, error: Option<String> },
+    UleEnded {
+        id: u64,
+        error: Option<String>,
+    },
+    /// Output of the terminal's command, and its end (the pty closed).
+    TermOutput {
+        session: u64,
+        id: u64,
+        text: String,
+    },
+    TermEnded {
+        session: u64,
+        id: u64,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Ask {
+    NewFile,
+    NewProject,
+    Pick,
+}
+
+/// Save dialogs (`choose file name`) for the new file and the new project folder, run by
+/// osascript off the UI thread; "take into the project" is the native open panel
+/// (`platform::choose_file_or_folder`), which takes files and folders at once.
+fn dialog(ask: Ask) -> Option<PathBuf> {
+    let mut command = Command::new("/usr/bin/osascript");
+    match ask {
+        Ask::NewFile => command.args(["-e", "POSIX path of (choose file name with prompt \"Where should the new file go?\" default name \"untitled.txt\")"]),
+        Ask::NewProject => command.args(["-e", "POSIX path of (choose file name with prompt \"Name and place of the new project folder\" default name \"New Project\")"]),
+        Ask::Pick => return None,
+    };
+    let output = command.stdin(Stdio::null()).output().ok().filter(|output| output.status.success())?;
+    let text = String::from_utf8_lossy(&output.stdout).trim().trim_end_matches('/').to_string();
+    (!text.is_empty()).then(|| PathBuf::from(text))
 }
 
 pub(super) fn ule_path(ul: Option<&Path>) -> Option<PathBuf> {
@@ -372,8 +433,68 @@ impl App {
         });
     }
 
+    fn ask(&mut self, ask: Ask) {
+        if let Ask::Pick = ask {
+            if let Some(path) =
+                platform::choose_file_or_folder("Choose a folder to add to the project, or a file to open")
+            {
+                self.asked(ask, path);
+            }
+            return;
+        }
+        let proxy = self.proxy.clone();
+        thread::spawn(move || {
+            if let Some(path) = dialog(ask) {
+                let _ = proxy.send_event(UserEvent::Edit(EditEvent::Asked { ask, path }));
+            }
+        });
+    }
+
+    /// What the project panel's dialogs answered: never replaces anything that exists.
+    fn asked(&mut self, ask: Ask, path: PathBuf) {
+        let (Some(parent), Some(name)) =
+            (path.parent(), path.file_name().map(|name| name.to_string_lossy().to_string()))
+        else {
+            return;
+        };
+        if let Some(reason) = parent.canonicalize().ok().and_then(|real| edit::denied(&real, &settings::home())) {
+            return self.edit_error(reason);
+        }
+        match ask {
+            Ask::NewFile => match files::new_file(parent, &name) {
+                Ok(made) => self.open_given(made),
+                Err(error) => self.edit_error(error),
+            },
+            Ask::NewProject => match files::new_folder(parent, &name) {
+                Ok(made) => self.on_edit_event(EditEvent::Chosen { folder: true, path: Some(made) }),
+                Err(error) => self.edit_error(error),
+            },
+            Ask::Pick => {
+                let folder = path.is_dir();
+                self.on_edit_event(EditEvent::Chosen { folder, path: Some(path) });
+            }
+        }
+    }
+
     pub(super) fn on_edit_event(&mut self, event: EditEvent) {
         match event {
+            EditEvent::Asked { ask, path } => self.asked(ask, path),
+            EditEvent::TermOutput { session, id, text } => {
+                self.send(View::Home, json!({"type": "term-output", "session": session, "id": id, "text": text}));
+            }
+            EditEvent::TermEnded { session, id } => {
+                let Some(state) = self.edit.terms.get_mut(&session) else { return };
+                if state.run.as_ref().map(|run| run.id) != Some(id) {
+                    return;
+                }
+                let Some(mut run) = state.run.take() else { return };
+                let code = run.child.try_wait().ok().flatten().and_then(|status| status.code());
+                if code.is_none() {
+                    // The pty closed but the shell has not been reaped yet: reap it off the UI thread.
+                    thread::spawn(move || drop(run.child.wait()));
+                }
+                self.send(View::Home, json!({"type": "term-exit", "session": session, "id": id, "code": code}));
+            }
             EditEvent::Chosen { path: None, .. } => {}
             EditEvent::Chosen { folder: true, path: Some(path) } => {
                 if let Some(reason) = path.canonicalize().ok().and_then(|real| edit::denied(&real, &settings::home())) {
@@ -459,6 +580,10 @@ impl App {
 
     /// Page requests of the Edit part; true when `op` was one of them.
     pub(super) fn on_edit_op(&mut self, op: &str, message: &Json) -> bool {
+        if op.starts_with("term-") {
+            self.on_term_op(op, message);
+            return true;
+        }
         if !op.starts_with("edit-") && !op.starts_with("ule-") {
             return false;
         }
@@ -477,6 +602,9 @@ impl App {
             }
             "edit-add-folder" => self.choose(true),
             "edit-open-dialog" => self.choose(false),
+            "edit-new-file-dialog" => self.ask(Ask::NewFile),
+            "edit-new-project-dialog" => self.ask(Ask::NewProject),
+            "edit-pick-dialog" => self.ask(Ask::Pick),
             "edit-remove-folder" => {
                 if let Ok(path) = edit::plain_absolute(&path_of("path")) {
                     self.edit.places.remove_root(&path);
@@ -892,6 +1020,8 @@ impl App {
     /// For shutdown: the editor's process with its stdin closed (it then keeps unsaved
     /// buffers as recovery copies and exits; the group is stopped after a grace).
     pub(super) fn edit_children(&mut self) -> Vec<Child> {
+        let terminal: Vec<Child> =
+            self.edit.terms.drain().filter_map(|(_, state)| state.run.map(|run| run.child)).collect();
         self.edit
             .ule
             .take()
@@ -900,7 +1030,158 @@ impl App {
                 run.child
             })
             .into_iter()
+            .chain(terminal)
             .collect()
+    }
+
+    /// The terminal under the editor, one session per tab of the page (`session`):
+    /// `term-run` (a command line, or input for the one running), `term-input` (raw keys:
+    /// Ctrl-C, Ctrl-D), `term-run-file`, `term-resize`, `term-stop`, `term-cwd`, `term-close`.
+    fn on_term_op(&mut self, op: &str, message: &Json) {
+        let size = |key: &str, fallback: u16| {
+            message[key].as_u64().map(|value| value.clamp(2, 1000) as u16).unwrap_or(fallback)
+        };
+        let Some(session) = message["session"].as_u64() else { return };
+        if message.get("cols").is_some() {
+            self.edit.term_size = (size("cols", 80), size("rows", 24));
+            let (cols, rows) = self.edit.term_size;
+            for state in self.edit.terms.values() {
+                if let Some(run) = &state.run {
+                    term::resize(&run.master, cols, rows);
+                }
+            }
+        }
+        if op == "term-close" {
+            if let Some(run) = self.edit.terms.remove(&session).and_then(|state| state.run) {
+                let mut child = run.child;
+                thread::spawn(move || runner::stop_group(&mut child, Duration::from_secs(3)));
+            }
+            return;
+        }
+        if self.edit.terms.len() >= 32 && !self.edit.terms.contains_key(&session) {
+            return self.term_note(session, "too many terminals: close some first");
+        }
+        let text = message["text"].as_str().unwrap_or("");
+        let state = self.edit.terms.entry(session).or_default();
+        match op {
+            "term-cwd" => self.send_term_cwd(session),
+            "term-input" => {
+                if let Some(run) = state.run.as_mut() {
+                    let _ = run.master.write_all(text.as_bytes());
+                }
+            }
+            "term-stop" => {
+                if let Some(run) = &state.run {
+                    // SAFETY: signals the session the command leads (setsid made pgid = pid).
+                    unsafe { libc::kill(-(run.child.id() as i32), libc::SIGHUP) };
+                }
+            }
+            "term-run" => {
+                if let Some(run) = state.run.as_mut() {
+                    let _ = run.master.write_all(format!("{text}\r").as_bytes());
+                    return;
+                }
+                let line = text.trim();
+                if line.is_empty() {
+                    return;
+                }
+                if line == "cd" || line.starts_with("cd ") {
+                    let cwd = self.term_cwd(session);
+                    match term::cd_target(&cwd, &line[2..], &settings::home()) {
+                        Ok(dir) => {
+                            self.edit.terms.entry(session).or_default().cwd = Some(dir);
+                            self.send_term_cwd(session);
+                        }
+                        Err(error) => self.term_note(session, &error),
+                    }
+                    return;
+                }
+                let cwd = self.term_cwd(session);
+                self.start_term(session, line, &cwd);
+            }
+            "term-run-file" => {
+                let busy = state.run.is_some();
+                let file = match self.allowed(message["path"].as_str().unwrap_or("")) {
+                    Ok(file) => file,
+                    Err(error) => return self.term_note(session, &error),
+                };
+                let Some((dir, line)) = term::run_line(&file) else {
+                    return self.term_note(
+                        session,
+                        "this kind of file has no run command (Python, Rust, C, C++, Go, JavaScript, shell, Ruby, Swift, Java... or an executable)",
+                    );
+                };
+                if busy {
+                    return self.term_note(
+                        session,
+                        "a command is still running here: stop it (Ctrl-C) or open another terminal",
+                    );
+                }
+                self.edit.terms.entry(session).or_default().cwd = Some(dir.clone());
+                self.send_term_cwd(session);
+                self.start_term(session, &line, &dir);
+            }
+            _ => {}
+        }
+    }
+
+    fn term_cwd(&self, session: u64) -> PathBuf {
+        let own = self.edit.terms.get(&session).and_then(|state| state.cwd.clone());
+        let cwd = own.or_else(|| self.edit.places.roots.iter().find(|root| root.is_dir()).cloned());
+        cwd.filter(|dir| dir.is_dir()).unwrap_or_else(settings::home)
+    }
+
+    fn send_term_cwd(&mut self, session: u64) {
+        let cwd = self.term_cwd(session);
+        let home = settings::home();
+        let shown = match cwd.strip_prefix(&home) {
+            Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+            Ok(rest) => format!("~/{}", rest.display()),
+            Err(_) => cwd.display().to_string(),
+        };
+        let running = self.edit.terms.get(&session).is_some_and(|state| state.run.is_some());
+        self.send(
+            View::Home,
+            json!({"type": "term-cwd", "session": session, "path": cwd.display().to_string(), "shown": shown,
+                   "running": running}),
+        );
+    }
+
+    fn term_note(&mut self, session: u64, text: &str) {
+        self.send(View::Home, json!({"type": "term-note", "session": session, "text": text}));
+    }
+
+    fn start_term(&mut self, session: u64, line: &str, cwd: &Path) {
+        let (cols, rows) = self.edit.term_size;
+        let pty = match term::spawn(line, cwd, cols.max(20), rows.max(4)) {
+            Ok(pty) => pty,
+            Err(error) => return self.term_note(session, &format!("could not start the shell: {error}")),
+        };
+        self.edit.next_term += 1;
+        let id = self.edit.next_term;
+        let reader = pty.master.try_clone();
+        self.edit.terms.entry(session).or_default().run = Some(TermRun { id, child: pty.child, master: pty.master });
+        self.send(View::Home, json!({"type": "term-start", "session": session, "id": id, "line": line}));
+        let proxy = self.proxy.clone();
+        let Ok(mut reader) = reader else { return };
+        thread::spawn(move || {
+            let mut pending = Vec::new();
+            let mut buffer = [0u8; 16384];
+            loop {
+                match reader.read(&mut buffer) {
+                    // 0, or EIO once every holder of the terminal closed it: the command is done.
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => {
+                        pending.extend_from_slice(&buffer[..count]);
+                        let text = term::take_text(&mut pending);
+                        if !text.is_empty() {
+                            let _ = proxy.send_event(UserEvent::Edit(EditEvent::TermOutput { session, id, text }));
+                        }
+                    }
+                }
+            }
+            let _ = proxy.send_event(UserEvent::Edit(EditEvent::TermEnded { session, id }));
+        });
     }
 }
 

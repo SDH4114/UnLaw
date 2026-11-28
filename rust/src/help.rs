@@ -200,7 +200,9 @@ Usage:
   ul features remove <name>...   Remove features (and what needs them)
   ul features set <name>...|all|none   Install exactly these (none: core only)
   ul features choose             Pick in a checklist (Space toggles, Enter saves)
-Options: --no-build saves the choice without rebuilding ul.
+Options: --no-build saves the choice without rebuilding ul; --json (list only)
+prints every feature as JSON (name, group, summary, installed, compiled, built,
+requires) for Unlaw.app.
 Always installed: ul, ule, system commands, zip, app, browser.
 Seeded commands are added to or removed from the commands folder; edited
 ones are never deleted. game, lm and agent's ula shortcut are built into ul,
